@@ -938,6 +938,59 @@ class PatternTab(QWidget):
             self._dxf_edit.setText(path)
             self._load_dxf(path)
 
+    def load_outline_polys(
+        self,
+        polys: list[list[tuple[float, float]]],
+        *,
+        source_label: str = "Draft selection",
+    ) -> None:
+        """Load outline polylines from another tab and prepare Pattern Fill."""
+        if not polys:
+            return
+
+        incoming = [[(x, y) for x, y in poly] for poly in polys]
+        self._suspend_state_changes = True
+
+        self._showing_preview = False
+        self._preview_btn.setChecked(False)
+        self._preview_btn.setProperty("active", False)
+        self._preview_btn.style().unpolish(self._preview_btn)
+        self._preview_btn.style().polish(self._preview_btn)
+
+        self._orig_polys = [list(poly) for poly in incoming]
+        self._edit_polys = [list(poly) for poly in incoming]
+        self._preview_polys_cache = []
+
+        self._canvas.set_polylines_state(self._edit_polys, fit=True)
+        self._canvas.set_mode("select")
+        self._canvas.deselect_all()
+
+        all_pts = [pt for p in self._orig_polys for pt in p]
+        if all_pts:
+            xs, ys = zip(*all_pts)
+            self._orig_w = max(xs) - min(xs)
+            self._orig_h = max(ys) - min(ys)
+            self._orig_dims_label.setText(f"{self._orig_w:.2f} × {self._orig_h:.2f} mm")
+            self._scale_w.blockSignals(True)
+            self._scale_h.blockSignals(True)
+            self._scale_w.setText(f"{self._orig_w:.3f}")
+            self._scale_h.setText(f"{self._orig_h:.3f}")
+            self._scale_w.blockSignals(False)
+            self._scale_h.blockSignals(False)
+        else:
+            self._orig_w = self._orig_h = 0.0
+            self._orig_dims_label.setText("—")
+
+        self._dxf_edit.setText(f"[{source_label}]")
+        self._set_status(
+            f"Loaded {len(self._edit_polys)} outline(s) from {source_label}", "#3fb950"
+        )
+
+        self._suspend_state_changes = False
+        self._refresh_canvas_panels()
+        self._schedule_preview()
+        self._emit_state_changed()
+
     def _reload_dxf(self) -> None:
         path = self._dxf_edit.text().strip()
         if path:

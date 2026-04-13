@@ -21,7 +21,14 @@ from PySide6.QtGui import (
     QPixmap,
     QWheelEvent,
 )
-from PySide6.QtWidgets import QGraphicsScene, QGraphicsView, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import (
+    QGraphicsScene,
+    QGraphicsView,
+    QInputDialog,
+    QLineEdit,
+    QMenu,
+    QWidget,
+)
 from shapely.geometry import LineString, Polygon
 from shapely.ops import split as shapely_split
 
@@ -590,6 +597,146 @@ class PolylineView(QGraphicsView):
         self._notify()
         self._fire_poly_change()
         return True
+
+    def _set_selected_width(self, width: float) -> bool:
+        indices = self._selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None or width <= 0:
+            return False
+        cur_w = bounds[2] - bounds[0]
+        if cur_w <= 1e-9:
+            return False
+        fx = width / cur_w
+        cx = (bounds[0] + bounds[2]) / 2.0
+        self._push_undo()
+        for idx in indices:
+            self._polys[idx] = [(cx + (x - cx) * fx, y) for x, y in self._polys[idx]]
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _set_selected_height(self, height: float) -> bool:
+        indices = self._selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None or height <= 0:
+            return False
+        cur_h = bounds[3] - bounds[1]
+        if cur_h <= 1e-9:
+            return False
+        fy = height / cur_h
+        cy = (bounds[1] + bounds[3]) / 2.0
+        self._push_undo()
+        for idx in indices:
+            self._polys[idx] = [(x, cy + (y - cy) * fy) for x, y in self._polys[idx]]
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _set_selected_line_length(self, length: float) -> bool:
+        indices = self._selected_indices()
+        if len(indices) != 1 or length <= 0:
+            return False
+        poly = self._polys[indices[0]]
+        if len(poly) != 2:
+            return False
+        ax, ay = poly[0]
+        bx, by = poly[1]
+        dx, dy = bx - ax, by - ay
+        cur_len = math.hypot(dx, dy)
+        if cur_len <= 1e-9:
+            return False
+        ux, uy = dx / cur_len, dy / cur_len
+        self._push_undo()
+        self._polys[indices[0]][1] = (ax + ux * length, ay + uy * length)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _distribute_selected(self, axis: str, spacing: float) -> bool:
+        indices = self._selected_indices()
+        if len(indices) < 2 or spacing < 0:
+            return False
+
+        keyed: list[tuple[int, tuple[float, float, float, float]]] = []
+        for idx in indices:
+            b = self._poly_bounds(self._polys[idx])
+            keyed.append((idx, b))
+
+        if axis == "horizontal":
+            keyed.sort(key=lambda x: x[1][0])
+            cur_edge = keyed[0][1][2]
+            self._push_undo()
+            for idx, b in keyed[1:]:
+                target_min = cur_edge + spacing
+                dx = target_min - b[0]
+                self._polys[idx] = [(x + dx, y) for x, y in self._polys[idx]]
+                nb = self._poly_bounds(self._polys[idx])
+                cur_edge = nb[2]
+        elif axis == "vertical":
+            keyed.sort(key=lambda x: x[1][1])
+            cur_edge = keyed[0][1][3]
+            self._push_undo()
+            for idx, b in keyed[1:]:
+                target_min = cur_edge + spacing
+                dy = target_min - b[1]
+                self._polys[idx] = [(x, y + dy) for x, y in self._polys[idx]]
+                nb = self._poly_bounds(self._polys[idx])
+                cur_edge = nb[3]
+        else:
+            return False
+
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _prompt_edit_dimensions(self) -> None:
+        indices = self._selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None:
+            self._show_flash("Select shapes/lines first", 1200)
+            return
+
+        cur_w = max(bounds[2] - bounds[0], 0.0)
+        cur_h = max(bounds[3] - bounds[1], 0.0)
+
+        new_w, ok_w = QInputDialog.getDouble(
+            self,
+            "Set Width",
+            "Width (mm):",
+            cur_w,
+            0.001,
+            1_000_000.0,
+            3,
+        )
+        if not ok_w:
+            return
+
+        new_h, ok_h = QInputDialog.getDouble(
+            self,
+            "Set Height",
+            "Height (mm):",
+            cur_h,
+            0.001,
+            1_000_000.0,
+            3,
+        )
+        if not ok_h:
+            return
+
+        changed_w = abs(new_w - cur_w) > 1e-9
+        changed_h = abs(new_h - cur_h) > 1e-9
+        if not changed_w and not changed_h:
+            return
+
+        if changed_w:
+            self._set_selected_width(new_w)
+        if changed_h:
+            self._set_selected_height(new_h)
+        self._show_flash("Dimensions updated", 900)
 
     @property
     def poly_count(self) -> int:
@@ -2052,6 +2199,9 @@ class PolylineView(QGraphicsView):
                 self._construction_lines.clear()
                 self._show_flash("Construction lines cleared")
                 return
+            elif key == Qt.Key.Key_D and shift_mod:
+                self._prompt_edit_dimensions()
+                return
 
         # Arrow key nudge
         if (
@@ -2937,32 +3087,134 @@ class PolylineView(QGraphicsView):
                 menu.addAction("Deselect", lambda: self._ctx_deselect(idx))
             menu.addAction("Delete", lambda: self._ctx_delete_poly(idx))
             menu.addSeparator()
+
+        context_idx = poly_hit
+
+        def _ensure_context_selection() -> bool:
+            if self._sel:
+                return True
+            if context_idx is None:
+                return False
+            self._sel = {context_idx}
+            self._redraw()
+            self._notify()
+            return True
+
+        def _run_transform(action) -> None:
+            if _ensure_context_selection():
+                action()
+            else:
+                self._show_flash("Select shape(s) first", 1000)
+
         if self._sel:
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
             menu.addAction("Invert selection", self.invert_selection)
             menu.addAction("Deselect all", self.deselect_all)
             menu.addAction("Duplicate  [⌘D]", self.duplicate_selected)
             menu.addAction("Fit selection", self.fit_selection)
-            transform_menu = menu.addMenu("Transform")
-            transform_menu.addAction("Rotate +90°", lambda: self.rotate_selected(90.0))
-            transform_menu.addAction("Rotate -90°", lambda: self.rotate_selected(-90.0))
-            transform_menu.addAction(
-                "Mirror horizontal",
-                lambda: self.mirror_selected("horizontal"),
-            )
-            transform_menu.addAction(
-                "Mirror vertical",
-                lambda: self.mirror_selected("vertical"),
-            )
-            align_menu = transform_menu.addMenu("Align")
-            align_menu.addAction("Left", lambda: self.align_selected("left"))
-            align_menu.addAction("Center X", lambda: self.align_selected("center-x"))
-            align_menu.addAction("Right", lambda: self.align_selected("right"))
-            align_menu.addAction("Top", lambda: self.align_selected("top"))
-            align_menu.addAction("Center Y", lambda: self.align_selected("center-y"))
-            align_menu.addAction("Bottom", lambda: self.align_selected("bottom"))
         else:
             menu.addAction("Select all", self.select_all)
+
+        transform_menu = menu.addMenu("Transform")
+        transform_menu.addAction(
+            "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0))
+        )
+        transform_menu.addAction(
+            "Rotate -90°", lambda: _run_transform(lambda: self.rotate_selected(-90.0))
+        )
+        transform_menu.addAction(
+            "Mirror horizontal",
+            lambda: _run_transform(lambda: self.mirror_selected("horizontal")),
+        )
+        transform_menu.addAction(
+            "Mirror vertical",
+            lambda: _run_transform(lambda: self.mirror_selected("vertical")),
+        )
+
+        dim_menu = transform_menu.addMenu("Dimensions / Spacing")
+        dim_menu.addAction(
+            "Edit width + height…  [⌘⇧D]",
+            lambda: _run_transform(self._prompt_edit_dimensions),
+        )
+        dim_menu.addAction(
+            "Set line length…",
+            lambda: _run_transform(
+                lambda: (
+                    lambda v: self._set_selected_line_length(v[0]) if v[1] else None
+                )(
+                    QInputDialog.getDouble(
+                        self,
+                        "Set Line Length",
+                        "Line length (mm):",
+                        10.0,
+                        0.001,
+                        1_000_000.0,
+                        3,
+                    )
+                )
+            ),
+        )
+        dim_menu.addAction(
+            "Distribute horizontal spacing…",
+            lambda: _run_transform(
+                lambda: (
+                    lambda v: (
+                        self._distribute_selected("horizontal", v[0]) if v[1] else None
+                    )
+                )(
+                    QInputDialog.getDouble(
+                        self,
+                        "Distribute Horizontal",
+                        "Spacing (mm):",
+                        1.0,
+                        0.0,
+                        1_000_000.0,
+                        3,
+                    )
+                )
+            ),
+        )
+        dim_menu.addAction(
+            "Distribute vertical spacing…",
+            lambda: _run_transform(
+                lambda: (
+                    lambda v: (
+                        self._distribute_selected("vertical", v[0]) if v[1] else None
+                    )
+                )(
+                    QInputDialog.getDouble(
+                        self,
+                        "Distribute Vertical",
+                        "Spacing (mm):",
+                        1.0,
+                        0.0,
+                        1_000_000.0,
+                        3,
+                    )
+                )
+            ),
+        )
+
+        align_menu = transform_menu.addMenu("Align")
+        align_menu.addAction(
+            "Left", lambda: _run_transform(lambda: self.align_selected("left"))
+        )
+        align_menu.addAction(
+            "Center X", lambda: _run_transform(lambda: self.align_selected("center-x"))
+        )
+        align_menu.addAction(
+            "Right", lambda: _run_transform(lambda: self.align_selected("right"))
+        )
+        align_menu.addAction(
+            "Top", lambda: _run_transform(lambda: self.align_selected("top"))
+        )
+        align_menu.addAction(
+            "Center Y", lambda: _run_transform(lambda: self.align_selected("center-y"))
+        )
+        align_menu.addAction(
+            "Bottom", lambda: _run_transform(lambda: self.align_selected("bottom"))
+        )
+
         menu.addSeparator()
         menu.addAction("Fit view  [F]", self.fit)
         grid_action = menu.addAction("Show grid")

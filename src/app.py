@@ -552,6 +552,9 @@ class App(QMainWindow):
             self._sketch_tab,
         ):
             tab.stateChanged.connect(self._schedule_workspace_dirty_check)
+        self._shape_tab.sendSelectedToPatternRequested.connect(
+            self._send_shape_selection_to_pattern
+        )
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
 
@@ -706,6 +709,16 @@ class App(QMainWindow):
 
     def _schedule_workspace_dirty_check(self) -> None:
         self._workspace_timer.start(150)
+
+    def _send_shape_selection_to_pattern(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if not polys:
+            return
+        self._pattern_tab.load_outline_polys(polys, source_label="Draft selection")
+        self._tabs.setCurrentWidget(self._pattern_tab)
+        self._schedule_workspace_dirty_check()
 
     def _update_workspace_dirty(self) -> None:
         if self._last_saved_document is None:

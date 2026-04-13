@@ -53,6 +53,9 @@ class EfficientDraftCanvas(DxfCanvas):
     _VALID_SHAPES = {"rectangle", "circle", "slot", "hexagon"}
 
     def __init__(self, *args, **kwargs) -> None:
+        self._send_selected_to_pattern_cb = kwargs.pop(
+            "on_send_selected_to_pattern", None
+        )
         super().__init__(*args, **kwargs)
         self._quick_shape_mode: str = "rectangle"
         self._quick_shape_enabled: bool = True
@@ -224,12 +227,135 @@ class EfficientDraftCanvas(DxfCanvas):
             menu.addAction("Delete", lambda: self._ctx_delete_poly(idx))
             menu.addSeparator()
 
+        context_idx = poly_hit
+
+        def _ensure_context_selection() -> bool:
+            if self._sel:
+                return True
+            if context_idx is None:
+                return False
+            self._sel = {context_idx}
+            self._redraw()
+            self._notify()
+            return True
+
+        def _run_transform(action) -> None:
+            if _ensure_context_selection():
+                action()
+            else:
+                self._show_flash("Select shape(s) first", 1000)
+
         if self._sel:
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
             menu.addAction("Duplicate", self.duplicate_selected)
             menu.addAction("Fit selection", self.fit_selection)
         else:
             menu.addAction("Select all", self.select_all)
+
+        menu.addAction(
+            "Send selected to Pattern Fill",
+            lambda: _run_transform(self._send_selected_to_pattern),
+        )
+
+        transform_menu = menu.addMenu("Transform")
+        transform_menu.addAction(
+            "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0))
+        )
+        transform_menu.addAction(
+            "Rotate -90°", lambda: _run_transform(lambda: self.rotate_selected(-90.0))
+        )
+        transform_menu.addAction(
+            "Mirror horizontal",
+            lambda: _run_transform(lambda: self.mirror_selected("horizontal")),
+        )
+        transform_menu.addAction(
+            "Mirror vertical",
+            lambda: _run_transform(lambda: self.mirror_selected("vertical")),
+        )
+
+        dim_menu = transform_menu.addMenu("Dimensions / Spacing")
+        dim_menu.addAction(
+            "Edit width + height…  [⌘⇧D]",
+            lambda: _run_transform(self._prompt_edit_dimensions),
+        )
+        dim_menu.addAction(
+            "Set line length…",
+            lambda: _run_transform(
+                lambda: (
+                    lambda v: self._set_selected_line_length(v[0]) if v[1] else None
+                )(
+                    QInputDialog.getDouble(
+                        self,
+                        "Set Line Length",
+                        "Line length (mm):",
+                        10.0,
+                        0.001,
+                        1_000_000.0,
+                        3,
+                    )
+                )
+            ),
+        )
+        dim_menu.addAction(
+            "Distribute horizontal spacing…",
+            lambda: _run_transform(
+                lambda: (
+                    lambda v: (
+                        self._distribute_selected("horizontal", v[0]) if v[1] else None
+                    )
+                )(
+                    QInputDialog.getDouble(
+                        self,
+                        "Distribute Horizontal",
+                        "Spacing (mm):",
+                        1.0,
+                        0.0,
+                        1_000_000.0,
+                        3,
+                    )
+                )
+            ),
+        )
+        dim_menu.addAction(
+            "Distribute vertical spacing…",
+            lambda: _run_transform(
+                lambda: (
+                    lambda v: (
+                        self._distribute_selected("vertical", v[0]) if v[1] else None
+                    )
+                )(
+                    QInputDialog.getDouble(
+                        self,
+                        "Distribute Vertical",
+                        "Spacing (mm):",
+                        1.0,
+                        0.0,
+                        1_000_000.0,
+                        3,
+                    )
+                )
+            ),
+        )
+
+        align_menu = transform_menu.addMenu("Align")
+        align_menu.addAction(
+            "Left", lambda: _run_transform(lambda: self.align_selected("left"))
+        )
+        align_menu.addAction(
+            "Center X", lambda: _run_transform(lambda: self.align_selected("center-x"))
+        )
+        align_menu.addAction(
+            "Right", lambda: _run_transform(lambda: self.align_selected("right"))
+        )
+        align_menu.addAction(
+            "Top", lambda: _run_transform(lambda: self.align_selected("top"))
+        )
+        align_menu.addAction(
+            "Center Y", lambda: _run_transform(lambda: self.align_selected("center-y"))
+        )
+        align_menu.addAction(
+            "Bottom", lambda: _run_transform(lambda: self.align_selected("bottom"))
+        )
 
         menu.addSeparator()
 
@@ -252,6 +378,17 @@ class EfficientDraftCanvas(DxfCanvas):
         mode_menu.addAction("Edit [E]", lambda: self.set_mode("edit"))
 
         menu.popup(self.mapToGlobal(QPoint(int(cx), int(cy))))
+
+    def _send_selected_to_pattern(self) -> None:
+        if not callable(self._send_selected_to_pattern_cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        self._send_selected_to_pattern_cb(payload)
+        self._show_flash("Sent to Pattern Fill", 900)
 
     # ── Shape-drag internals ─────────────────────────────────────────────
 
@@ -362,6 +499,7 @@ class ShapeTab(QWidget):
     """Canvas-first drafting tab optimized for interaction speed."""
 
     stateChanged = Signal()
+    sendSelectedToPatternRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -471,6 +609,7 @@ class ShapeTab(QWidget):
             on_mode_change=self._on_canvas_mode_change,
             on_poly_change=self._on_canvas_edit,
             on_action=self._on_canvas_action,
+            on_send_selected_to_pattern=self._on_send_selected_to_pattern,
         )
         self._canvas.quickShapeChanged.connect(self._on_quick_shape_changed)
         self._canvas.quickShapeEnabledChanged.connect(
@@ -531,6 +670,14 @@ class ShapeTab(QWidget):
             ),
             user_initiated=True,
         )
+
+    def _on_send_selected_to_pattern(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if not polys:
+            return
+        self.sendSelectedToPatternRequested.emit(polys)
 
     # ── Export ─────────────────────────────────────────────────────────────
 
