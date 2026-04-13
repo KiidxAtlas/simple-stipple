@@ -21,16 +21,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.core.document_graph import DocumentGraph
+from src.core.document_migration import graph_from_polylines, polylines_from_graph
 from src.core.dxf_fix import fix_dxf
 from src.core.dxf_io import load_dxf_polylines
 from src.core.dxf_svg import dxf_to_svg
 from src.core.fvi import convert_fvi_to_dxf
+from src.ui.action_maps import UTILITIES_ACTION_MAP
 from src.ui.canvas import DxfCanvas
 from src.ui.helpers import (
     _content_splitter,
     _section_label,
     _surface_frame,
 )
+
+ACTION_MAP = UTILITIES_ACTION_MAP
 
 
 class UtilitiesTab(QWidget):
@@ -70,38 +75,32 @@ class UtilitiesTab(QWidget):
         self._tool_combo.currentIndexChanged.connect(self._tool_stack.setCurrentIndex)
         left.addWidget(self._tool_stack, stretch=1)
 
-        # Small DXF preview at bottom of sidebar
-        preview_section = QWidget()
-        preview_section.setFixedHeight(180)
-        ps_layout = QVBoxLayout(preview_section)
-        ps_layout.setContentsMargins(6, 4, 6, 6)
-        ps_layout.setSpacing(2)
-        preview_lbl = QLabel("Preview")
-        preview_lbl.setStyleSheet("color: #8b949e; font-size: 11px;")
-        ps_layout.addWidget(preview_lbl)
-        self._preview_canvas = DxfCanvas(selectable=False)
-        self._preview_canvas.setFixedHeight(160)
-        ps_layout.addWidget(self._preview_canvas)
-        left.addWidget(preview_section)
-
-        # ── Right: shared log ─────────────────────────────────────────────────
-        right_w = _surface_frame("panel")
+        # ── Right: preview canvas + compact log ──────────────────────────────
+        right_w = _surface_frame("canvas")
         right = QVBoxLayout(right_w)
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
+
+        # Preview canvas — main content area
+        self._preview_canvas = DxfCanvas(selectable=False)
+        right.addWidget(self._preview_canvas, stretch=1)
+
+        # Log — compact panel below preview
         log_lbl = QLabel("Log")
         log_lbl.setStyleSheet("color: #8b949e; font-size: 11px;")
         right.addWidget(log_lbl)
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
+        self._log.setMaximumHeight(140)
         self._log.setStyleSheet("font-family: Menlo, Courier; font-size: 11px;")
         self._log.setPlaceholderText("Conversion output and repair details will appear here.")
-        right.addWidget(self._log, stretch=1)
+        right.addWidget(self._log)
 
-        left_w.setMinimumWidth(260)
-        left_w.setMaximumWidth(370)
-        splitter = _content_splitter(left_w, right_w, sizes=(280, 920))
-        root.addWidget(splitter)
+        left_w.setMinimumWidth(320)
+        left_w.setMaximumWidth(400)
+        self._left_panel = left_w
+        self._splitter = _content_splitter(left_w, right_w, sizes=(320, 920))
+        root.addWidget(self._splitter)
 
         # Connect sub-tab signals to shared log and preview
         for tab in (self._fvi_subtab, self._fix_subtab, self._svg_subtab):
@@ -109,6 +108,11 @@ class UtilitiesTab(QWidget):
             tab.preview_path.connect(self._load_preview)
 
     def get_workspace_state(self) -> dict:
+        doc_graph = graph_from_polylines(
+            self._preview_canvas.get_polylines_state(),
+            layer="convert_preview",
+            as_segments=False,
+        )
         return {
             "active_sub_tab": self._tool_stack.currentIndex(),
             "fvi_src": self._fvi_subtab._src_edit.text(),
@@ -120,6 +124,7 @@ class UtilitiesTab(QWidget):
             "svg_out": self._svg_subtab._out_edit.text(),
             "preview_polys": self._preview_canvas.get_polylines_state(),
             "preview_view": self._preview_canvas.get_view_state(),
+            "document_graph": doc_graph.snapshot(),
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
@@ -134,7 +139,15 @@ class UtilitiesTab(QWidget):
         self._fix_subtab._out_edit.setText(str(state.get("fix_out", "")))
         self._svg_subtab._src_edit.setText(str(state.get("svg_src", "")))
         self._svg_subtab._out_edit.setText(str(state.get("svg_out", "")))
-        preview_polys = [list(poly) for poly in state.get("preview_polys", [])]
+        graph_state = state.get("document_graph")
+        if isinstance(graph_state, dict):
+            doc_graph = DocumentGraph()
+            doc_graph.restore(graph_state)
+            preview_polys = polylines_from_graph(doc_graph, layer="convert_preview")
+            if not preview_polys:
+                preview_polys = polylines_from_graph(doc_graph, layer="geometry")
+        else:
+            preview_polys = [list(poly) for poly in state.get("preview_polys", [])]
         self._preview_canvas.set_polylines_state(preview_polys, fit=bool(preview_polys))
         if preview_polys and state.get("preview_view"):
             self._preview_canvas.set_view_state(state["preview_view"])

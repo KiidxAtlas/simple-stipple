@@ -6,6 +6,7 @@ Each generator clips its output to the provided Shapely outline polygon.
 from __future__ import annotations
 
 import math
+import random
 
 from scipy.stats.qmc import PoissonDisk  # type: ignore[import-untyped]
 from shapely import prepared  # type: ignore[import-untyped]
@@ -39,6 +40,32 @@ def _hex_verts(cx: float, cy: float, r: float) -> list[tuple[float, float]]:
     ]
 
 
+def _clip_to_outline(
+    shape: Polygon,
+    outline_poly,
+    prep,
+    result: list[list[tuple[float, float]]],
+    *,
+    shrink: float = 0.0,
+) -> None:
+    """Clip a polygon to the outline boundary and append valid pieces to result.
+
+    This consolidates the intersect→contains→clip pattern used across all
+    grid-based generators.  When *shrink* > 0 the shape is inset by that
+    amount before clipping (used for gap between tiles).
+    """
+    if not prep.intersects(shape):
+        return
+    if shrink > 0:
+        shape = shape.buffer(-shrink)
+        if shape is None or shape.is_empty:
+            return
+    if prep.contains(shape):
+        _extract_polys(shape, result)
+        return
+    _extract_polys(outline_poly.intersection(shape), result)
+
+
 def _collect_lines(geom, out: list) -> None:
     if geom is None or geom.is_empty:
         return
@@ -49,6 +76,53 @@ def _collect_lines(geom, out: list) -> None:
     elif hasattr(geom, "geoms"):
         for g in geom.geoms:
             _collect_lines(g, out)
+
+
+def apply_interlace(
+    polylines: list[list[tuple[float, float]]], spacing: float = 1.0
+) -> list[list[tuple[float, float]]]:
+    """Apply interlacing offset to pattern polylines.
+
+    Partitions polylines into rows based on Y-coordinate and offsets alternating
+    rows horizontally by spacing/2, creating a tessellating interlaced effect.
+    """
+    if not polylines or spacing <= 0:
+        return polylines
+
+    # Get Y bounds to define row spacing
+    all_y = []
+    for poly in polylines:
+        for x, y in poly:
+            all_y.append(y)
+
+    if not all_y:
+        return polylines
+
+    min_y = min(all_y)
+    max_y = max(all_y)
+    y_range = max_y - min_y
+    if y_range < 1e-6:
+        return polylines
+
+    # Group polylines into rows based on Y-coordinate
+    row_height = spacing
+    n_rows = max(1, int(y_range / row_height) + 1)
+
+    result = []
+    for poly in polylines:
+        # Determine which row this polyline belongs to (use median Y)
+        poly_y = sum(y for x, y in poly) / len(poly) if poly else min_y
+        row_idx = int((poly_y - min_y) / row_height)
+
+        # Apply offset for odd rows
+        if row_idx % 2 == 1:
+            offset_x = spacing / 2.0
+            offset_poly = [(x + offset_x, y) for x, y in poly]
+            result.append(offset_poly)
+        else:
+            result.append(poly)
+
+    return result
 
 
 # ── Public generators ─────────────────────────────────────────────────────────
@@ -76,25 +150,7 @@ def gen_honeycomb(
             cx = minx - pad + col * col_step + off
             cy = miny - pad + row * row_step
             verts = _hex_verts(cx, cy, r)
-            hp = Polygon(verts)
-            if not prep.intersects(hp):
-                continue
-            if prep.contains(hp):
-                result.append(verts + [verts[0]])
-                continue
-            clipped = outline_poly.intersection(hp)
-            if clipped.is_empty:
-                continue
-            geoms = (
-                [clipped]
-                if isinstance(clipped, Polygon)
-                else list(clipped.geoms)
-                if isinstance(clipped, MultiPolygon)
-                else []
-            )
-            for g in geoms:
-                if not g.is_empty and g.area >= 0.001:
-                    result.append(list(g.exterior.coords))
+            _clip_to_outline(Polygon(verts), outline_poly, prep, result)
     return result
 
 
@@ -125,28 +181,7 @@ def gen_diamond_checkering(
                 (x, y - hs),
                 (x - hs, y),
             ]
-            dp = Polygon(verts)
-            if not prep.intersects(dp):
-                x += step
-                continue
-            if prep.contains(dp):
-                result.append(verts + [verts[0]])
-                x += step
-                continue
-            clipped = outline_poly.intersection(dp)
-            if clipped.is_empty:
-                x += step
-                continue
-            geoms = (
-                [clipped]
-                if isinstance(clipped, Polygon)
-                else list(clipped.geoms)
-                if isinstance(clipped, MultiPolygon)
-                else []
-            )
-            for g in geoms:
-                if not g.is_empty and g.area >= 0.001:
-                    result.append(list(g.exterior.coords))
+            _clip_to_outline(Polygon(verts), outline_poly, prep, result)
             x += step
         y += step
     return result
@@ -245,6 +280,82 @@ def gen_stipple_dots(
     return result
 
 
+def gen_stipple_interlaced(
+    outline_poly, radius: float, spacing: float
+) -> list[list[tuple[float, float]]]:
+    """Interlaced (offset grid) filled circles clipped to the outline.
+
+    Arranges circles in rows where every other row is offset horizontally by
+    half the spacing, creating a brick-like or honeycomb visual effect.
+    This produces a regular, predictable pattern ideal for tessellation.
+    """
+    if radius <= 0 or spacing <= 0:
+        return []
+
+    minx, miny, maxx, maxy = outline_poly.bounds
+    w = maxx - minx
+    h = maxy - miny
+    if w <= 0 or h <= 0:
+        return []
+
+    prep = prepared.prep(outline_poly)
+    n_seg = 32  # circle approximation quality
+    result: list[list[tuple[float, float]]] = []
+
+    # Calculate row and column spacing for interlaced grid
+    col_spacing = spacing  # horizontal spacing between columns
+    row_spacing = (
+        spacing * math.sqrt(3) / 2.0
+    )  # vertical spacing between rows (for ~equilateral triangle arrangement)
+
+    # Calculate number of rows and columns needed
+    n_cols = int((w / col_spacing) + 2)
+    n_rows = int((h / row_spacing) + 2)
+
+    # Generate dot centers in interlaced grid
+    for row in range(n_rows):
+        for col in range(n_cols):
+            # X coordinate: base + offset for every other row
+            x = minx + col * col_spacing
+            if row % 2 == 1:
+                x += col_spacing / 2.0
+
+            # Y coordinate
+            y = miny + row * row_spacing
+
+            cx, cy = x, y
+
+            # Create circle polygon
+            pts = [
+                (
+                    cx + radius * math.cos(2 * math.pi * i / n_seg),
+                    cy + radius * math.sin(2 * math.pi * i / n_seg),
+                )
+                for i in range(n_seg)
+            ]
+            pts.append(pts[0])
+            circ = Polygon(pts)
+
+            # Clip to outline
+            if not prep.intersects(circ):
+                continue
+            clipped = outline_poly.intersection(circ)
+            if clipped.is_empty:
+                continue
+            geoms = (
+                [clipped]
+                if isinstance(clipped, Polygon)
+                else list(clipped.geoms)
+                if isinstance(clipped, MultiPolygon)
+                else []
+            )
+            for g in geoms:
+                if not g.is_empty and g.area >= radius * 0.05:
+                    result.append(list(g.exterior.coords))
+
+    return result
+
+
 def gen_gradient_honeycomb(
     outline_poly, r_min: float, r_max: float, gap: float, angle_deg: float = 0.0
 ) -> list[list[tuple[float, float]]]:
@@ -282,24 +393,7 @@ def gen_gradient_honeycomb(
                 continue
             verts = _hex_verts(cx, cy, r)
             hp = Polygon(verts)
-            if not prep.intersects(hp):
-                continue
-            if prep.contains(hp):
-                result.append(verts + [verts[0]])
-                continue
-            clipped = outline_poly.intersection(hp)
-            if clipped.is_empty:
-                continue
-            geoms = (
-                [clipped]
-                if isinstance(clipped, Polygon)
-                else list(clipped.geoms)
-                if isinstance(clipped, MultiPolygon)
-                else []
-            )
-            for g in geoms:
-                if not g.is_empty and g.area >= 0.001:
-                    result.append(list(g.exterior.coords))
+            _clip_to_outline(hp, outline_poly, prep, result)
     return result
 
 
@@ -342,24 +436,8 @@ def gen_image_halftone(
             # dark (0) → r_max, light (1) → r_min
             r = r_max - brightness * (r_max - r_min)
             if r >= r_min * 0.3:
-                verts = _hex_verts(x, y, r)
-                hp = Polygon(verts)
-                if prep.intersects(hp):
-                    if prep.contains(hp):
-                        result.append(verts + [verts[0]])
-                    else:
-                        clipped = outline_poly.intersection(hp)
-                        if not clipped.is_empty:
-                            geoms = (
-                                [clipped]
-                                if isinstance(clipped, Polygon)
-                                else list(clipped.geoms)
-                                if isinstance(clipped, MultiPolygon)
-                                else []
-                            )
-                            for g in geoms:
-                                if not g.is_empty and g.area >= 0.001:
-                                    result.append(list(g.exterior.coords))
+                hp = Polygon(_hex_verts(x, y, r))
+                _clip_to_outline(hp, outline_poly, prep, result)
             x += col_step
         y += row_step
         row += 1
@@ -413,24 +491,7 @@ def gen_custom_tile(
                         continue
                 except Exception:
                     continue
-                if not prep.intersects(shape):
-                    continue
-                if prep.contains(shape):
-                    result.append(transformed + [transformed[0]])
-                else:
-                    clipped = outline_poly.intersection(shape)
-                    if clipped.is_empty:
-                        continue
-                    geoms = (
-                        [clipped]
-                        if isinstance(clipped, Polygon)
-                        else list(clipped.geoms)
-                        if isinstance(clipped, MultiPolygon)
-                        else []
-                    )
-                    for g in geoms:
-                        if not g.is_empty and g.area >= 0.001:
-                            result.append(list(g.exterior.coords))
+                _clip_to_outline(shape, outline_poly, prep, result)
             x += col_step
         y += row_step
         row += 1
@@ -465,27 +526,7 @@ def gen_brick(
                 (x - hw, y + hh),
             ]
             bp = Polygon(verts)
-            if not prep.intersects(bp):
-                x += col_step
-                continue
-            if prep.contains(bp):
-                result.append(verts + [verts[0]])
-                x += col_step
-                continue
-            clipped = outline_poly.intersection(bp)
-            if clipped.is_empty:
-                x += col_step
-                continue
-            geoms = (
-                [clipped]
-                if isinstance(clipped, Polygon)
-                else list(clipped.geoms)
-                if isinstance(clipped, MultiPolygon)
-                else []
-            )
-            for g in geoms:
-                if not g.is_empty and g.area >= 0.001:
-                    result.append(list(g.exterior.coords))
+            _clip_to_outline(bp, outline_poly, prep, result)
             x += col_step
         y += row_step
         row += 1
@@ -865,28 +906,26 @@ def gen_penrose_tiling(
     # Pair half-triangles into kites and darts by merging pairs that share
     # an edge. For simplicity, just output each Robinson triangle as a polygon.
     # Merge triangles that share the same (B, C) edge into quadrilaterals.
-    edge_map: dict[
-        tuple[complex, complex], list[tuple[int, complex, complex, complex]]
-    ] = {}
-    for tri in triangles:
-        colour, A, B, C = tri
-        # Canonical edge key using sorted id-like comparison
+    # Map each triangle by its (B, C) edge so matching halves can be merged
+    # into quadrilaterals (kites/darts).  Track by list index, not id().
+    edge_map: dict[tuple[complex, complex], list[int]] = {}
+    for idx, tri in enumerate(triangles):
+        _colour, _A, B, C = tri
         key = (B, C) if (B.real, B.imag) <= (C.real, C.imag) else (C, B)
-        edge_map.setdefault(key, []).append(tri)
+        edge_map.setdefault(key, []).append(idx)
 
     shapes: list[list[tuple[float, float]]] = []
     seen: set[int] = set()
 
-    for key, tris in edge_map.items():
-        if len(tris) == 2:
-            # Merge into a quadrilateral (kite or dart)
-            id0, id1 = id(tris[0]), id(tris[1])
-            if id0 in seen or id1 in seen:
+    for _key, tri_indices in edge_map.items():
+        if len(tri_indices) == 2:
+            i0, i1 = tri_indices
+            if i0 in seen or i1 in seen:
                 continue
-            seen.add(id0)
-            seen.add(id1)
-            _, A1, B1, C1 = tris[0]
-            _, A2, B2, C2 = tris[1]
+            seen.add(i0)
+            seen.add(i1)
+            _, A1, B1, C1 = triangles[i0]
+            _, A2, B2, C2 = triangles[i1]
             quad = [
                 (A1.real, A1.imag),
                 (B1.real, B1.imag),
@@ -896,8 +935,8 @@ def gen_penrose_tiling(
             shapes.append(quad)
 
     # Any un-merged triangles
-    for tri in triangles:
-        if id(tri) not in seen:
+    for idx, tri in enumerate(triangles):
+        if idx not in seen:
             _, A, B, C = tri
             shapes.append([
                 (A.real, A.imag),
@@ -1244,45 +1283,182 @@ def gen_moroccan_zellige(
     return result
 
 
-# ── Topographic contour lines ────────────────────────────────────────────────
+# ── Tri-Weave (interlocking triangular pattern) ────────────────────────────
+
+
+def gen_tri_weave(
+    outline_poly, cell_size: float, stroke_width: float
+) -> list[list[tuple[float, float]]]:
+    """Triskelion Y-tile tessellation pattern (Escher-style tri-arm interlocking).
+
+    Creates a pattern of three-armed Y-shaped tiles arranged with 6-fold
+    rotational symmetry. Each Y-shape has three arms that rotate 120° apart,
+    creating a seamless interlocking tessellation.
+
+    cell_size     — approximate size of each Y-tile unit
+    stroke_width  — line thickness of the Y-shape arms
+    """
+    if cell_size <= 0 or stroke_width <= 0:
+        return []
+
+    minx, miny, maxx, maxy = outline_poly.bounds
+    w = maxx - minx
+    h = maxy - miny
+    if w <= 0 or h <= 0:
+        return []
+
+    prep = prepared.prep(outline_poly)
+    result: list[list[tuple[float, float]]] = []
+
+    # Hexagonal grid for triskelion tiling
+    # Use hexagonal lattice spacing
+    hex_width = cell_size
+    hex_height = cell_size * math.sqrt(3) / 2.0
+
+    col_spacing = hex_width * 0.75
+    row_spacing = hex_height
+
+    pad = cell_size * 2.0
+    n_cols = int((w + pad * 2) / col_spacing) + 2
+    n_rows = int((h + pad * 2) / row_spacing) + 2
+
+    def _make_y_tile(cx, cy, radius, rotation=0):
+        """Create a three-armed Y-shaped tile centered at (cx, cy).
+
+        Each arm is a rounded wedge shape extending from the center.
+        The Y has 3 arms at 120° angles (rotated by 'rotation' degrees).
+        """
+        arms = []
+
+        # Create 3 arms, each 120° apart
+        for arm_idx in range(3):
+            arm_angle = arm_idx * (2 * math.pi / 3.0) + math.radians(rotation)
+
+            # Arm extends from center outward
+            arm_radius = radius * 0.8
+            inner_radius = radius * 0.3
+
+            # Create a wedge shape for this arm
+            # The wedge has a small inner circle and tapers outward
+            wedge_angle = math.pi / 3.0  # 60° wide wedge
+
+            arm_pts = []
+
+            # Outer arc of the arm
+            num_arc_pts = 8
+            for i in range(num_arc_pts + 1):
+                angle_offset = (i / num_arc_pts - 0.5) * wedge_angle
+                pt_angle = arm_angle + angle_offset
+                x = cx + arm_radius * math.cos(pt_angle)
+                y = cy + arm_radius * math.sin(pt_angle)
+                arm_pts.append((x, y))
+
+            # Inner arc (tapers toward center)
+            for i in range(num_arc_pts, -1, -1):
+                angle_offset = (i / num_arc_pts - 0.5) * wedge_angle
+                pt_angle = arm_angle + angle_offset
+                x = cx + inner_radius * math.cos(pt_angle)
+                y = cy + inner_radius * math.sin(pt_angle)
+                arm_pts.append((x, y))
+
+            # Close the arm polygon
+            arm_pts.append(arm_pts[0])
+            arms.append(arm_pts)
+
+        return arms
+
+    # Generate Y-tiles in hexagonal grid
+    for row in range(n_rows):
+        for col in range(n_cols):
+            # Hexagonal grid position
+            x = minx + col * col_spacing
+            y = miny + row * row_spacing
+
+            # Offset odd rows
+            if row % 2 == 1:
+                x += col_spacing / 2.0
+
+            # Create Y-tile with rotation based on position for interlocking effect
+            rotation = (col + row) * 60.0  # Rotate by 60° increments
+            arms = _make_y_tile(x, y, cell_size / 2.0, rotation)
+
+            # Add each arm as a polygon
+            for arm_pts in arms:
+                if len(arm_pts) > 2:
+                    try:
+                        arm_poly = Polygon(arm_pts)
+                        if arm_poly.is_valid and not arm_poly.is_empty:
+                            _clip_to_outline(arm_poly, outline_poly, prep, result)
+                    except Exception:
+                        pass
+
+    return result
+
+
+# ── Topographic (elevation contour lines) ────────────────────────────
 
 
 def gen_topographic(outline_poly, spacing: float) -> list[list[tuple[float, float]]]:
-    """Concentric contour lines by repeatedly buffering inward from the outline.
+    """Topographic elevation contour lines pattern.
 
-    Creates a topographic/elevation-map look based on distance from edges.
+    Creates concentric contour lines based on distance from the polygon edge,
+    simulating elevation levels on a topographic map.
 
-    spacing — distance between successive contour lines (mm)
+    spacing   — distance between contour lines
     """
     if spacing <= 0:
         return []
+
+    minx, miny, maxx, maxy = outline_poly.bounds
+    w = maxx - minx
+    h = maxy - miny
+    if w <= 0 or h <= 0:
+        return []
+
+    prep = prepared.prep(outline_poly)
     result: list[list[tuple[float, float]]] = []
-    i = 1
-    while True:
-        offset = -spacing * i
-        contour = outline_poly.buffer(offset)
-        if contour is None or contour.is_empty:
-            break
-        # Extract boundary lines from the buffered polygon(s)
-        if isinstance(contour, Polygon):
-            coords = list(contour.exterior.coords)
-            if len(coords) >= 2:
-                result.append(coords)
-            # Include holes as separate contours
-            for interior in contour.interiors:
-                ic = list(interior.coords)
-                if len(ic) >= 2:
-                    result.append(ic)
-        elif isinstance(contour, MultiPolygon):
-            for poly in contour.geoms:
-                if poly.is_empty:
-                    continue
-                coords = list(poly.exterior.coords)
-                if len(coords) >= 2:
-                    result.append(coords)
-                for interior in poly.interiors:
-                    ic = list(interior.coords)
-                    if len(ic) >= 2:
-                        result.append(ic)
-        i += 1
+
+    # Generate contour lines at increasing distances from the outline
+    max_distance = math.sqrt(w * w + h * h) / 2.0
+    num_contours = max(1, int(max_distance / spacing))
+
+    for contour_idx in range(1, num_contours + 1):
+        distance = contour_idx * spacing
+
+        try:
+            # Create a buffer inward (negative buffer) to get contour line
+            # Use segments_per_quadrant for smoother curves
+            contour_line = outline_poly.buffer(-distance, resolution=16)
+
+            if contour_line.is_empty or not contour_line.is_valid:
+                continue
+
+            # Extract the exterior ring and any interiors
+            if hasattr(contour_line, "exterior"):
+                # It's a Polygon
+                coords = list(contour_line.exterior.coords)
+                if len(coords) > 2:
+                    _clip_to_outline(Polygon(coords), outline_poly, prep, result)
+
+                # Add holes (interior rings) if present
+                for interior in contour_line.interiors:
+                    interior_coords = list(interior.coords)
+                    if len(interior_coords) > 2:
+                        # Create thin line for the interior
+                        line = LineString(interior_coords)
+                        buffered = line.buffer(spacing * 0.1, resolution=8)
+                        if buffered.is_valid and not buffered.is_empty:
+                            _clip_to_outline(buffered, outline_poly, prep, result)
+            elif hasattr(contour_line, "geoms"):
+                # It's a MultiPolygon or GeometryCollection
+                for geom in contour_line.geoms:
+                    if hasattr(geom, "exterior"):
+                        coords = list(geom.exterior.coords)
+                        if len(coords) > 2:
+                            _clip_to_outline(
+                                Polygon(coords), outline_poly, prep, result
+                            )
+        except Exception:
+            pass
+
     return result

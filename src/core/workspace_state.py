@@ -6,8 +6,19 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-WORKSPACE_SCHEMA_VERSION = 1
+WORKSPACE_SCHEMA_VERSION = 2
 WORKSPACE_FILE_SUFFIX = ".simple-stipple-project.json"
+
+
+def _migrate_v1_to_v2(document: dict[str, Any]) -> dict[str, Any]:
+    migrated = deepcopy(document)
+    tabs = migrated.get("tabs")
+    if not isinstance(tabs, dict):
+        tabs = {}
+    tabs.setdefault("sketch", {})
+    migrated["tabs"] = tabs
+    migrated["schema_version"] = WORKSPACE_SCHEMA_VERSION
+    return migrated
 
 
 def empty_workspace_document() -> dict[str, Any]:
@@ -21,6 +32,7 @@ def empty_workspace_document() -> dict[str, Any]:
             "utilities": {},
             "pattern": {},
             "shape": {},
+            "sketch": {},
             "image": {},
         },
         "presets": {
@@ -35,6 +47,10 @@ def validate_workspace_document(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError("Workspace file must contain a JSON object.")
     version = int(document.get("schema_version", 0))
+    if version == 1:
+        document = _migrate_v1_to_v2(document)
+        version = WORKSPACE_SCHEMA_VERSION
+
     if version != WORKSPACE_SCHEMA_VERSION:
         raise ValueError(
             f"Unsupported workspace schema version: {version}. Expected {WORKSPACE_SCHEMA_VERSION}."
@@ -45,6 +61,13 @@ def validate_workspace_document(document: dict[str, Any]) -> dict[str, Any]:
         result["app"] = {"current_tab": 0}
     if not isinstance(result.get("tabs"), dict):
         result["tabs"] = empty_workspace_document()["tabs"]
+    else:
+        default_tabs = empty_workspace_document()["tabs"]
+        for key, value in default_tabs.items():
+            if key not in result["tabs"] or not isinstance(
+                result["tabs"].get(key), dict
+            ):
+                result["tabs"][key] = deepcopy(value)
     if not isinstance(result.get("presets"), dict):
         result["presets"] = empty_workspace_document()["presets"]
     if not isinstance(result.get("meta"), dict):
@@ -70,10 +93,10 @@ def build_workspace_document(
 
 def normalize_workspace_path(path: str | Path) -> Path:
     file_path = Path(path)
-    if file_path.suffix != ".json" and not str(file_path).endswith(
-        WORKSPACE_FILE_SUFFIX
-    ):
-        return file_path.with_suffix(WORKSPACE_FILE_SUFFIX)
-    if not str(file_path).endswith(WORKSPACE_FILE_SUFFIX):
-        return file_path.with_name(file_path.stem + WORKSPACE_FILE_SUFFIX)
-    return file_path
+    if str(file_path).endswith(WORKSPACE_FILE_SUFFIX):
+        return file_path
+    # Strip any existing extension(s) and append the canonical suffix
+    stem = file_path.stem
+    if file_path.suffix:
+        stem = file_path.with_suffix("").stem
+    return file_path.with_name(stem + WORKSPACE_FILE_SUFFIX)

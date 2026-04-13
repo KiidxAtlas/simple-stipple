@@ -20,7 +20,7 @@ def _to_coords(geom) -> list[tuple[float, float]]:
 
 def shape_rect(w: float, h: float) -> list[tuple[float, float]]:
     if w <= 0 or h <= 0:
-        return [(0, 0)]
+        return []
     hw, hh = w / 2, h / 2
     return [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh), (-hw, -hh)]
 
@@ -30,7 +30,7 @@ def shape_rect_rounded(
 ) -> list[tuple[float, float]]:
     """Rectangle with rounded corners, centred at origin."""
     if w <= 0 or h <= 0:
-        return [(0, 0)]
+        return []
     r = min(r, w / 2, h / 2)
     hw, hh = w / 2, h / 2
     # Shrink inner box by radius, then buffer outward with round joins
@@ -41,19 +41,21 @@ def shape_rect_rounded(
 
 def shape_circle(r: float, n: int = 64) -> list[tuple[float, float]]:
     if r <= 0:
-        return [(0, 0)]
+        return []
     return _to_coords(Point(0, 0).buffer(r, resolution=max(3, n // 4)))
 
 
 def shape_ellipse(rx: float, ry: float, n: int = 64) -> list[tuple[float, float]]:
     if rx <= 0 or ry <= 0:
-        return [(0, 0)]
+        return []
     circle = Point(0, 0).buffer(1.0, resolution=max(3, n // 4))
     ellipse = shapely_scale(circle, xfact=rx, yfact=ry, origin=(0, 0))
     return _to_coords(ellipse)
 
 
 def shape_polygon(sides: int, r: float) -> list[tuple[float, float]]:
+    if r <= 0:
+        return []
     sides = max(3, sides)
     pts = [
         (
@@ -70,7 +72,7 @@ def shape_slot(
 ) -> list[tuple[float, float]]:
     """Obround / slot profile centred at origin."""
     if width <= 0 or length <= 0:
-        return [(0, 0)]
+        return []
     radius = width / 2.0
     half_straight = max(0.0, length / 2.0 - radius)
     line = LineString([(-half_straight, 0.0), (half_straight, 0.0)])

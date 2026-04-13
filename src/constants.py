@@ -44,6 +44,7 @@ PATTERNS = [
     "Celtic Knot",
     "Lissajous",
     "Moroccan Zellige",
+    "Tri-Weave",
     "Topographic",
     "Image Halftone",
 ]

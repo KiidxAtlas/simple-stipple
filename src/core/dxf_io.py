@@ -82,7 +82,15 @@ def polylines_to_outline(polylines: list[list[tuple[float, float]]]):
         except (TypeError, ValueError) as exc:
             _LOG.debug("Skipping invalid closed outline polyline: %s", exc)
     if not polys:
-        # Fallback: use all paths (original behaviour) so we never return empty
+        # Fallback: use all paths so we never return empty.
+        # This means open paths become outlines — warn so callers can surface it.
+        _LOG.warning(
+            "No genuinely closed polylines found (start≈end within %.1f mm, "
+            "area ≥ %.1f mm²). Falling back to all paths as outlines — "
+            "open paths may be auto-closed.",
+            _CLOSE_TOL,
+            _AREA_MIN,
+        )
         for c in polylines:
             if len(c) < 3:
                 continue

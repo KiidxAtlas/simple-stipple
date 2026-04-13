@@ -37,3 +37,5 @@ htmlcov/
 # Logs
 *.log
 
+tests/
+.github/

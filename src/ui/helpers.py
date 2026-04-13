@@ -279,7 +279,9 @@ def _surface_frame(surface: str = "panel") -> QFrame:
     return frame
 
 
-def _sidebar_panel(content: QWidget, *, min_width: int = 290, max_width: int = 430) -> QFrame:
+def _sidebar_panel(
+    content: QWidget, *, min_width: int = 340, max_width: int = 430
+) -> QFrame:
     """Wrap sidebar content in a styled scrollable panel."""
     frame = _surface_frame("sidebar")
     frame.setMinimumWidth(min_width)
@@ -298,9 +300,9 @@ def _sidebar_panel(content: QWidget, *, min_width: int = 290, max_width: int = 4
 
 
 def _content_splitter(left: QWidget, right: QWidget, *, sizes: tuple[int, int]) -> QSplitter:
-    """Create a non-collapsible horizontal splitter with sensible defaults."""
+    """Create a collapsible horizontal splitter with sensible defaults."""
     splitter = QSplitter(Qt.Orientation.Horizontal)
-    splitter.setChildrenCollapsible(False)
+    splitter.setChildrenCollapsible(True)
     splitter.addWidget(left)
     splitter.addWidget(right)
     splitter.setStretchFactor(0, 0)
@@ -313,6 +315,7 @@ def _canvas_toolbar(
     on_mode,
     on_fit,
     *,
+    modes: tuple[str, ...] = ("Select", "Draw", "Edit"),
     secondary_actions=None,
 ):
     """Compact canvas toolbar with mode toggles and optional actions."""
@@ -323,10 +326,10 @@ def _canvas_toolbar(
 
     # Mode buttons — tight group
     mode_buttons: dict[str, QPushButton] = {}
-    for mode in ("Select", "Draw", "Edit"):
+    for mode in modes:
         btn = QPushButton(mode)
-        btn.setFixedHeight(26)
-        btn.setProperty("active", mode == "Select")
+        btn.setMinimumHeight(28)
+        btn.setProperty("active", mode == modes[0])
         btn.clicked.connect(lambda checked=False, m=mode: on_mode(m))
         shell_layout.addWidget(btn)
         mode_buttons[mode] = btn
@@ -337,7 +340,7 @@ def _canvas_toolbar(
     shell_layout.addWidget(sep)
 
     fit_btn = QPushButton("Fit")
-    fit_btn.setFixedHeight(26)
+    fit_btn.setMinimumHeight(28)
     fit_btn.clicked.connect(on_fit)
     shell_layout.addWidget(fit_btn)
 
@@ -348,7 +351,7 @@ def _canvas_toolbar(
         for spec in secondary_actions:
             label, slot, role = spec if len(spec) == 3 else (*spec, None)
             btn = QPushButton(label)
-            btn.setFixedHeight(26)
+            btn.setMinimumHeight(28)
             if role:
                 btn.setProperty("role", role)
             btn.clicked.connect(slot)
@@ -368,7 +371,6 @@ def parse_float_field(
     minimum: float | None = None,
     maximum: float | None = None,
     allow_empty: bool = False,
-    fallback: float = 0.0,
 ) -> float | None:
     """Parse a float value from text with optional range validation.
 

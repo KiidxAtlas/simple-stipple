@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -24,13 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from src.constants import DIM, SEL
+from src.core.document_graph import DocumentGraph
+from src.core.document_migration import graph_from_polylines, polylines_from_graph
 from src.core.dxf_io import write_polylines_dxf
 from src.core.image_trace import image_to_outlines
+from src.ui.action_maps import IMAGE_ACTION_MAP
 from src.ui.canvas import DxfCanvas
 from src.ui.helpers import (
     CanvasObjectBrowser,
     CanvasStatusStrip,
-    CollapsibleSection,
     _canvas_toolbar,
     _content_splitter,
     _section_label,
@@ -41,12 +43,15 @@ from src.ui.helpers import (
     set_line_edit_error,
 )
 
+ACTION_MAP = IMAGE_ACTION_MAP
+
 
 class ImageTab(QWidget):
     """Image → outline tracing tab."""
 
     _trace_done = Signal(object)  # (display_img, polys, img_w_px, img_h_px, width_mm)
     _trace_error = Signal(str)
+    _trace_progress = Signal(int, str)  # (percent, label)
     stateChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
@@ -64,6 +69,7 @@ class ImageTab(QWidget):
 
         self._trace_done.connect(self._handle_trace_done)
         self._trace_error.connect(self._handle_trace_error)
+        self._trace_progress.connect(self._on_trace_progress)
         self._last_out: str | None = None
         self._last_display_img = None
         self._last_width_mm: float = 0.0
@@ -87,12 +93,13 @@ class ImageTab(QWidget):
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
 
-        splitter = _content_splitter(
-            _sidebar_panel(left_w, min_width=260, max_width=360),
+        self._left_panel = _sidebar_panel(left_w, min_width=320, max_width=360)
+        self._splitter = _content_splitter(
+            self._left_panel,
             right_w,
-            sizes=(280, 950),
+            sizes=(320, 950),
         )
-        root.addWidget(splitter)
+        root.addWidget(self._splitter)
 
         self._build_left(left)
         self._build_right(right)
@@ -139,48 +146,102 @@ class ImageTab(QWidget):
         file_row.addWidget(browse_btn)
         layout.addLayout(file_row)
 
-        self._thumb_lbl = QLabel()
-        self._thumb_lbl.setFixedHeight(100)
-        self._thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._thumb_lbl)
+        self._img_info_lbl = QLabel("")
+        self._img_info_lbl.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+        layout.addWidget(self._img_info_lbl)
 
         _section_label(layout, "Trace")
 
-        # Threshold controls
-        self._thresh_w = QWidget()
-        tg = QGridLayout(self._thresh_w)
+        # Blur — shared by both region and edge modes
+        tg = QGridLayout()
         tg.setContentsMargins(0, 0, 0, 0)
         tg.addWidget(QLabel("Blur radius"), 0, 0)
         self._blur = QLineEdit("1.5")
         self._blur.setFixedWidth(80)
-        self._blur.setToolTip("Gaussian blur radius applied before thresholding (reduces noise)")
+        self._blur.setToolTip(
+            "Gaussian blur radius applied before thresholding / edge detection"
+        )
         self._blur.textChanged.connect(self._schedule_trace)
         tg.addWidget(self._blur, 0, 1)
-        tg.addWidget(QLabel("Threshold (0-255)"), 1, 0)
+        layout.addLayout(tg)
+
+        self._edge_mode_cb = QCheckBox("Edge mode  (line art / Canny)")
+        self._edge_mode_cb.setToolTip(
+            "Use Canny edge detection instead of threshold masking.\n"
+            "Better for sketches, line drawings, and images with thin strokes."
+        )
+        self._edge_mode_cb.stateChanged.connect(self._on_edge_mode_changed)
+        layout.addWidget(self._edge_mode_cb)
+
+        # ── Region mode controls (threshold) ─────────────────────────────
+        self._thresh_widget = QWidget()
+        tw_layout = QVBoxLayout(self._thresh_widget)
+        tw_layout.setContentsMargins(0, 0, 0, 0)
+        tw_layout.setSpacing(4)
+
+        self._auto_thresh_cb = QCheckBox("Auto threshold (Otsu)")
+        self._auto_thresh_cb.setChecked(True)
+        self._auto_thresh_cb.setToolTip(
+            "Automatically select the best threshold using Otsu's method.\n"
+            "Uncheck to set a manual threshold value."
+        )
+        self._auto_thresh_cb.stateChanged.connect(self._on_auto_thresh_changed)
+        tw_layout.addWidget(self._auto_thresh_cb)
+
+        thresh_row = QGridLayout()
+        thresh_row.setContentsMargins(0, 0, 0, 0)
+        thresh_row.addWidget(QLabel("Threshold (0-255)"), 0, 0)
         self._thresh_entry = QLineEdit("128")
         self._thresh_entry.setFixedWidth(80)
         self._thresh_entry.setToolTip("Brightness cutoff: pixels darker than this become outlines")
         self._thresh_entry.textChanged.connect(self._on_thresh_text)
-        tg.addWidget(self._thresh_entry, 1, 1)
-        layout.addWidget(self._thresh_w)
+        thresh_row.addWidget(self._thresh_entry, 0, 1)
+        tw_layout.addLayout(thresh_row)
 
         self._thresh_slider = QSlider(Qt.Orientation.Horizontal)
         self._thresh_slider.setRange(0, 255)
         self._thresh_slider.setValue(128)
         self._thresh_slider.setToolTip("Drag to adjust the brightness threshold")
         self._thresh_slider.valueChanged.connect(self._on_thresh_slider)
-        layout.addWidget(self._thresh_slider)
+        tw_layout.addWidget(self._thresh_slider)
 
         self._invert_cb = QCheckBox("Invert  (dark background → light foreground)")
         self._invert_cb.setToolTip("Swap foreground/background before tracing")
         self._invert_cb.stateChanged.connect(self._schedule_trace)
-        layout.addWidget(self._invert_cb)
+        tw_layout.addWidget(self._invert_cb)
 
-        refine_content = QWidget()
-        refine_layout = QVBoxLayout(refine_content)
-        refine_layout.setContentsMargins(0, 0, 0, 0)
-        refine_layout.setSpacing(8)
+        layout.addWidget(self._thresh_widget)
+
+        # ── Edge mode controls (Canny) ────────────────────────────────────
+        self._canny_widget = QWidget()
+        self._canny_widget.setVisible(False)
+        cw_layout = QGridLayout(self._canny_widget)
+        cw_layout.setContentsMargins(0, 0, 0, 0)
+        cw_layout.addWidget(QLabel("Canny low"), 0, 0)
+        self._canny_low = QLineEdit("50")
+        self._canny_low.setFixedWidth(80)
+        self._canny_low.setToolTip(
+            "Lower hysteresis threshold for Canny edge detection.\n"
+            "Edges below this value are discarded."
+        )
+        self._canny_low.textChanged.connect(self._schedule_trace)
+        cw_layout.addWidget(self._canny_low, 0, 1)
+        cw_layout.addWidget(QLabel("Canny high"), 1, 0)
+        self._canny_high = QLineEdit("150")
+        self._canny_high.setFixedWidth(80)
+        self._canny_high.setToolTip(
+            "Upper hysteresis threshold for Canny edge detection.\n"
+            "Edges above this value are always kept."
+        )
+        self._canny_high.textChanged.connect(self._schedule_trace)
+        cw_layout.addWidget(self._canny_high, 1, 1)
+        layout.addWidget(self._canny_widget)
+
+        self._update_thresh_controls()
+
+        _section_label(layout, "Refine")
         g2 = QGridLayout()
+        g2.setContentsMargins(0, 0, 0, 0)
         g2.addWidget(QLabel("Simplify (px)"), 0, 0)
         self._simplify = QLineEdit("2.0")
         self._simplify.setFixedWidth(80)
@@ -206,16 +267,21 @@ class ImageTab(QWidget):
         self._close_r.setToolTip("Morphological closing to fill small gaps in edges")
         self._close_r.textChanged.connect(self._schedule_trace)
         g2.addWidget(self._close_r, 3, 1)
-        refine_layout.addLayout(g2)
-        layout.addWidget(
-            CollapsibleSection("Refine & Cleanup", refine_content, expanded=True)
-        )
+        layout.addLayout(g2)
 
-        scale_content = QWidget()
-        scale_layout = QVBoxLayout(scale_content)
-        scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.setSpacing(8)
+        self._outer_only_cb = QCheckBox("Outer contours only")
+        self._outer_only_cb.setChecked(True)
+        self._outer_only_cb.setToolTip(
+            "Only extract the outermost outlines of shapes.\n"
+            "Prevents inner holes (e.g. inside letters A, B, O) from\n"
+            "appearing as extra separate outlines."
+        )
+        self._outer_only_cb.stateChanged.connect(self._schedule_trace)
+        layout.addWidget(self._outer_only_cb)
+
+        _section_label(layout, "Scale")
         g3 = QGridLayout()
+        g3.setContentsMargins(0, 0, 0, 0)
         g3.addWidget(QLabel("Width (mm)"), 0, 0)
         self._width_mm = QLineEdit("50.0")
         self._width_mm.setFixedWidth(80)
@@ -228,20 +294,26 @@ class ImageTab(QWidget):
         self._height_mm.setToolTip("Target output height in millimetres")
         self._height_mm.textChanged.connect(self._on_height_changed)
         g3.addWidget(self._height_mm, 1, 1)
-        scale_layout.addLayout(g3)
+        g3.addWidget(QLabel("Max resolution"), 2, 0)
+        self._max_res = QLineEdit("1200")
+        self._max_res.setFixedWidth(80)
+        self._max_res.setToolTip(
+            "Maximum pixel dimension when loading the image.\n"
+            "Higher values give finer detail but are slower."
+        )
+        self._max_res.textChanged.connect(self._schedule_trace)
+        g3.addWidget(self._max_res, 2, 1)
+        layout.addLayout(g3)
 
         self._lock_cb = QCheckBox("Lock aspect ratio")
         self._lock_cb.setChecked(True)
         self._lock_cb.setToolTip("Keep width and height proportional when resizing")
         self._lock_cb.stateChanged.connect(self._on_aspect_lock_changed)
-        scale_layout.addWidget(self._lock_cb)
+        layout.addWidget(self._lock_cb)
 
         self._size_info_lbl = QLabel("")
         self._size_info_lbl.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        scale_layout.addWidget(self._size_info_lbl)
-        layout.addWidget(
-            CollapsibleSection("Scale & Output Size", scale_content, expanded=True)
-        )
+        layout.addWidget(self._size_info_lbl)
 
         self._status = QLabel("Load an image to begin.")
         self._status.setStyleSheet(f"color: {DIM};")
@@ -290,6 +362,7 @@ class ImageTab(QWidget):
         toolbar, self._mode_btns, self._sel_label = _canvas_toolbar(
             self._on_toolbar_mode,
             lambda: self._canvas.fit(),
+            modes=("Select",),
             secondary_actions=[
                 ("Select All", lambda: self._canvas.select_all()),
                 ("Deselect", lambda: self._canvas.deselect_all()),
@@ -306,13 +379,6 @@ class ImageTab(QWidget):
         canvas_layout = QVBoxLayout(canvas_shell)
         canvas_layout.setContentsMargins(0, 0, 0, 0)
         canvas_layout.setSpacing(8)
-
-        caption = QLabel(
-            "Keep tracing parameters on the left and edit the extracted outlines here."
-        )
-        caption.setWordWrap(True)
-        caption.setStyleSheet(f"color: {DIM}; font-size: 11px;")
-        canvas_layout.addWidget(caption)
 
         self._canvas = DxfCanvas(
             selectable=True,
@@ -391,17 +457,14 @@ class ImageTab(QWidget):
                 self._img_w_px = src.width
                 self._img_h_px = src.height
                 self._img_aspect = src.width / max(src.height, 1)
-                img = src.convert("RGBA")
+            self._img_info_lbl.setText(
+                f"{Path(path).name}  ·  {self._img_w_px}×{self._img_h_px} px"
+            )
             self._update_height_from_width()
-            img.thumbnail((290, 140), Image.Resampling.LANCZOS)
-            data = img.tobytes("raw", "RGBA")
-            qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            pm = QPixmap.fromImage(qimg.copy())
-            self._thumb_lbl.setPixmap(pm)
         except Exception as exc:
             self._img_path = None
             self._img_edit.setText("")
-            self._thumb_lbl.setText("(preview unavailable)")
+            self._img_info_lbl.setText("")
             QMessageBox.warning(
                 self, "Image Error", f"Could not load image:\n{exc}"
             )
@@ -478,33 +541,60 @@ class ImageTab(QWidget):
             minimum=0.0,
         )
         width_mm = self._parse_float_field(self._width_mm, "Width", minimum=0.001)
-        thresh = self._parse_float_field(
-            self._thresh_entry,
-            "Threshold",
-            minimum=0.0,
-            maximum=255.0,
-        )
-        if any(
-            value is None
-            for value in (blur_radius, simplify, min_area, close_r, width_mm, thresh)
-        ):
+        auto_thresh = self._auto_thresh_cb.isChecked()
+        thresh: float | None = None
+        if not auto_thresh:
+            thresh = self._parse_float_field(
+                self._thresh_entry,
+                "Threshold",
+                minimum=0.0,
+                maximum=255.0,
+            )
+        required = [blur_radius, simplify, min_area, close_r, width_mm]
+        if not auto_thresh:
+            required.append(thresh)
+        if any(value is None for value in required):
             return
         assert blur_radius is not None
         assert simplify is not None
         assert min_area is not None
         assert close_r is not None
         assert width_mm is not None
-        assert thresh is not None
+
+        edge_mode = self._edge_mode_cb.isChecked()
+        canny_low_val: int = 50
+        canny_high_val: int = 150
+        if edge_mode:
+            canny_l = self._parse_float_field(
+                self._canny_low, "Canny low", minimum=1.0, maximum=255.0
+            )
+            canny_h = self._parse_float_field(
+                self._canny_high, "Canny high", minimum=1.0, maximum=255.0
+            )
+            assert canny_l is not None
+            assert canny_h is not None
+            canny_low_val = int(canny_l)
+            canny_high_val = int(canny_h)
+        max_res = self._parse_float_field(
+            self._max_res, "Max resolution", minimum=64.0, maximum=8000.0
+        )
+        assert max_res is not None
 
         kwargs: dict = dict(
             blur_radius=blur_radius,
-            threshold=int(max(0, min(255, thresh))),
+            threshold=int(max(0, min(255, thresh))) if thresh is not None else None,
             invert=self._invert_cb.isChecked(),
             simplify_tol=simplify,
             min_area_px=min_area,
             max_area_px=max_area,
             close_radius=max(0, int(close_r)),
             width_mm=width_mm,
+            max_px=int(max_res),
+            edge_mode=edge_mode,
+            canny_low=canny_low_val,
+            canny_high=canny_high_val,
+            outer_only=self._outer_only_cb.isChecked(),
+            on_progress=lambda pct, lbl: self._trace_progress.emit(pct, lbl),
         )
 
         self._running = True
@@ -610,6 +700,27 @@ class ImageTab(QWidget):
             self._emit_state_changed()
         else:
             self._set_status("Nothing to undo.")
+
+    def _on_auto_thresh_changed(self, _state: int) -> None:
+        self._update_thresh_controls()
+        self._schedule_trace()
+
+    def _update_thresh_controls(self) -> None:
+        manual = not self._auto_thresh_cb.isChecked()
+        self._thresh_entry.setEnabled(manual)
+        self._thresh_slider.setEnabled(manual)
+
+    def _on_edge_mode_changed(self) -> None:
+        edge = self._edge_mode_cb.isChecked()
+        self._thresh_widget.setVisible(not edge)
+        self._canny_widget.setVisible(edge)
+        self._schedule_trace()
+
+    def _on_trace_progress(self, percent: int, label: str) -> None:
+        self._progress.setRange(0, 100)
+        self._progress.setValue(percent)
+        if percent < 100:
+            self._set_status(label)
 
     def _on_thresh_text(self, text: str) -> None:
         """Sync the slider to match the text field value, then retrace."""
@@ -783,17 +894,28 @@ class ImageTab(QWidget):
             self._canvas.clear_background_image()
 
     def get_workspace_state(self) -> dict:
+        doc_graph = graph_from_polylines(
+            self._canvas.get_polylines_state(),
+            layer="trace_preview",
+            as_segments=False,
+        )
         return {
             "image_path": self._img_path or self._img_edit.text(),
             "blur": self._blur.text(),
             "threshold": self._thresh_entry.text(),
+            "auto_threshold": self._auto_thresh_cb.isChecked(),
             "invert": self._invert_cb.isChecked(),
+            "edge_mode": self._edge_mode_cb.isChecked(),
+            "canny_low": self._canny_low.text(),
+            "canny_high": self._canny_high.text(),
+            "outer_only": self._outer_only_cb.isChecked(),
             "simplify": self._simplify.text(),
             "min_area": self._min_area.text(),
             "max_area": self._max_area.text(),
             "close_r": self._close_r.text(),
             "width_mm": self._width_mm.text(),
             "height_mm": self._height_mm.text(),
+            "max_res": self._max_res.text(),
             "aspect_locked": self._lock_cb.isChecked(),
             "bg_visible": self._bg_visible_cb.isChecked(),
             "img_w_px": self._img_w_px,
@@ -803,6 +925,7 @@ class ImageTab(QWidget):
             "last_height_mm": self._last_height_mm,
             "canvas_polys": self._canvas.get_polylines_state(),
             "canvas_view": self._canvas.get_view_state(),
+            "document_graph": doc_graph.snapshot(),
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
@@ -813,13 +936,20 @@ class ImageTab(QWidget):
         self._img_edit.setText(image_path)
         self._blur.setText(str(state.get("blur", "1.5")))
         self._thresh_entry.setText(str(state.get("threshold", "128")))
+        self._auto_thresh_cb.setChecked(bool(state.get("auto_threshold", True)))
+        self._update_thresh_controls()
         self._invert_cb.setChecked(bool(state.get("invert", False)))
+        self._edge_mode_cb.setChecked(bool(state.get("edge_mode", False)))
+        self._canny_low.setText(str(state.get("canny_low", "50")))
+        self._canny_high.setText(str(state.get("canny_high", "150")))
+        self._outer_only_cb.setChecked(bool(state.get("outer_only", True)))
         self._simplify.setText(str(state.get("simplify", "2.0")))
         self._min_area.setText(str(state.get("min_area", "100")))
         self._max_area.setText(str(state.get("max_area", "")))
         self._close_r.setText(str(state.get("close_r", "1")))
         self._width_mm.setText(str(state.get("width_mm", "50.0")))
         self._height_mm.setText(str(state.get("height_mm", "---")))
+        self._max_res.setText(str(state.get("max_res", "1200")))
         self._lock_cb.setChecked(bool(state.get("aspect_locked", True)))
         self._bg_visible_cb.setChecked(bool(state.get("bg_visible", True)))
         self._img_w_px = int(state.get("img_w_px", 0))
@@ -830,8 +960,17 @@ class ImageTab(QWidget):
         if image_path and Path(image_path).exists():
             self._load_thumbnail(image_path)
         else:
-            self._thumb_lbl.clear()
-        polys = [list(poly) for poly in state.get("canvas_polys", [])]
+            self._img_info_lbl.setText("")
+        polys: list[list[tuple[float, float]]]
+        graph_state = state.get("document_graph")
+        if isinstance(graph_state, dict):
+            doc_graph = DocumentGraph()
+            doc_graph.restore(graph_state)
+            polys = polylines_from_graph(doc_graph, layer="trace_preview")
+            if not polys:
+                polys = polylines_from_graph(doc_graph, layer="geometry")
+        else:
+            polys = [list(poly) for poly in state.get("canvas_polys", [])]
         self._canvas.set_polylines_state(polys, fit=bool(polys))
         if self._last_width_mm > 0 and self._last_height_mm > 0:
             self._canvas.set_image_bounds(self._last_width_mm, self._last_height_mm)

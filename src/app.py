@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -34,6 +34,7 @@ from src.ui.tabs.fvi_tab import UtilitiesTab
 from src.ui.tabs.image_tab import ImageTab
 from src.ui.tabs.pattern_tab import PatternTab
 from src.ui.tabs.shape_tab import ShapeTab
+from src.ui.tabs.sketch_tab import SketchTab
 
 
 def _apply_dark_palette(app: QApplication) -> None:
@@ -536,13 +537,20 @@ class App(QMainWindow):
         self._pattern_tab = PatternTab(settings=self._settings)
         self._shape_tab = ShapeTab(settings=self._settings)
         self._image_tab = ImageTab(settings=self._settings)
+        self._sketch_tab = SketchTab(settings=self._settings)
 
         self._tabs.addTab(self._shape_tab, "Draft")
+        self._tabs.addTab(self._sketch_tab, "Sketch")
         self._tabs.addTab(self._pattern_tab, "Pattern Fill")
         self._tabs.addTab(self._image_tab, "Trace")
         self._tabs.addTab(self._utilities_tab, "Convert")
 
-        for tab in (self._pattern_tab, self._shape_tab, self._image_tab):
+        for tab in (
+            self._pattern_tab,
+            self._shape_tab,
+            self._image_tab,
+            self._sketch_tab,
+        ):
             tab.stateChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
@@ -598,7 +606,7 @@ class App(QMainWindow):
             ("Save As", self._save_workspace_as, None),
         ]:
             btn = QPushButton(text)
-            btn.setFixedHeight(30)
+            btn.setMinimumHeight(30)
             if role:
                 btn.setProperty("role", role)
             btn.clicked.connect(slot)
@@ -660,6 +668,7 @@ class App(QMainWindow):
             app_state={"current_tab": self._tabs.currentIndex()},
             tab_states={
                 "shape": self._shape_tab.get_workspace_state(),
+                "sketch": self._sketch_tab.get_workspace_state(),
                 "pattern": self._pattern_tab.get_workspace_state(),
                 "image": self._image_tab.get_workspace_state(),
                 "utilities": self._utilities_tab.get_workspace_state(),
@@ -668,7 +677,11 @@ class App(QMainWindow):
                 "shape": self._shape_tab.get_preset_state(),
                 "pattern": self._pattern_tab.get_preset_state(),
             },
-            meta={"workspace_path": str(self._workspace_path) if self._workspace_path else ""},
+            meta={
+                "workspace_path": str(self._workspace_path)
+                if self._workspace_path
+                else ""
+            },
         )
 
     def _apply_workspace_document(self, document: dict) -> None:
@@ -677,6 +690,7 @@ class App(QMainWindow):
         self._pattern_tab.apply_preset_state(data.get("presets", {}).get("pattern", {}))
         tabs = data.get("tabs", {})
         self._shape_tab.apply_workspace_state(tabs.get("shape", {}))
+        self._sketch_tab.apply_workspace_state(tabs.get("sketch", {}))
         self._pattern_tab.apply_workspace_state(tabs.get("pattern", {}))
         self._image_tab.apply_workspace_state(tabs.get("image", {}))
         self._utilities_tab.apply_workspace_state(tabs.get("utilities", {}))
@@ -684,6 +698,7 @@ class App(QMainWindow):
 
     def _clear_workspace_state(self) -> None:
         self._shape_tab.clear_workspace_state()
+        self._sketch_tab.clear_workspace_state()
         self._pattern_tab.clear_workspace_state()
         self._image_tab.clear_workspace_state()
         self._utilities_tab.clear_workspace_state()
@@ -808,7 +823,9 @@ class App(QMainWindow):
 
     def _save_workspace_as(self) -> bool:
         default_name = (
-            self._workspace_path.name if self._workspace_path else "workspace.aa-laser-project.json"
+            self._workspace_path.name
+            if self._workspace_path
+            else f"workspace{WORKSPACE_FILE_SUFFIX}"
         )
         path, _ = QFileDialog.getSaveFileName(
             self,

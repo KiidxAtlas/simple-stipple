@@ -20,18 +20,20 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from src.constants import DIM, PATTERNS, SEL
+from src.core.document_graph import DocumentGraph
+from src.core.document_migration import graph_from_polylines, polylines_from_graph
 from src.core.dxf_io import (
     load_dxf_polylines,
     polylines_to_outline,
     write_polylines_dxf,
 )
 from src.core.generators import (
+    apply_interlace,
     gen_basketweave,
     gen_brick,
     gen_celtic_knot,
@@ -49,13 +51,16 @@ from src.core.generators import (
     gen_spiral,
     gen_square_grid,
     gen_stipple_dots,
+    gen_stipple_interlaced,
     gen_sunburst,
     gen_topographic,
+    gen_tri_weave,
     gen_triangle_grid,
     gen_voronoi,
     gen_wave_fill,
 )
 from src.settings import save_settings
+from src.ui.action_maps import PATTERN_ACTION_MAP
 from src.ui.canvas import DxfCanvas
 from src.ui.helpers import (
     CanvasObjectBrowser,
@@ -70,6 +75,8 @@ from src.ui.helpers import (
     parse_float_field,
     set_line_edit_error,
 )
+
+ACTION_MAP = PATTERN_ACTION_MAP
 
 
 def _param_entry(
@@ -109,6 +116,9 @@ class PatternTab(QWidget):
         self._base_patterns: list[str] = list(PATTERNS)
         self._library_patterns: dict[str, str] = {}
 
+        self._showing_preview: bool = False
+        self._preview_polys_cache: list[list[tuple[float, float]]] = []
+
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.timeout.connect(self._start_preview_thread)
@@ -132,12 +142,13 @@ class PatternTab(QWidget):
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
 
-        splitter = _content_splitter(
-            _sidebar_panel(left_w, min_width=270, max_width=370),
+        self._left_panel = _sidebar_panel(left_w, min_width=320, max_width=370)
+        self._splitter = _content_splitter(
+            self._left_panel,
             right_w,
-            sizes=(290, 950),
+            sizes=(320, 950),
         )
-        root.addWidget(splitter)
+        root.addWidget(self._splitter)
 
         self._build_left(left)
         self._build_right(right)
@@ -231,21 +242,14 @@ class PatternTab(QWidget):
             CollapsibleSection("Scale & Outline", scale_content, expanded=True)
         )
 
-        # ── Edit ─────────────────────────────────────────────────────────────
-        _section_label(layout, "Edit")
-        edit_hint = QLabel(
-            "Selection, delete, undo, and view controls now live beside the canvas."
-        )
-        edit_hint.setWordWrap(True)
-        edit_hint.setStyleSheet(f"color: {DIM};")
-        layout.addWidget(edit_hint)
-
         fill_content = QWidget()
         fill_layout = QVBoxLayout(fill_content)
         fill_layout.setContentsMargins(0, 0, 0, 0)
         fill_layout.setSpacing(8)
         self._pattern_combo = QComboBox()
-        self._pattern_combo.setToolTip("Choose the fill pattern to apply inside the outline")
+        self._pattern_combo.setToolTip(
+            "Choose the fill pattern to apply inside the outline"
+        )
         self._refresh_pattern_choices()
         self._pattern_combo.currentTextChanged.connect(self._switch_pattern)
         fill_layout.addWidget(self._pattern_combo)
@@ -272,6 +276,15 @@ class PatternTab(QWidget):
         fill_layout.addLayout(preset_row)
         self._refresh_preset_combo()
 
+        # Global pattern modifiers
+        self._interlace_cb = QCheckBox("Interlace pattern")
+        self._interlace_cb.setChecked(False)
+        self._interlace_cb.setToolTip(
+            "Apply offset grid interlacing to any pattern for tessellating effect"
+        )
+        self._interlace_cb.stateChanged.connect(self._schedule_preview)
+        fill_layout.addWidget(self._interlace_cb)
+
         # Pattern param panels (stacked manually — show/hide)
         self._honeycomb_w = self._make_honeycomb_params()
         self._gradient_w = self._make_gradient_params()
@@ -292,6 +305,7 @@ class PatternTab(QWidget):
         self._celtic_w = self._make_celtic_knot_params()
         self._lissajous_w = self._make_lissajous_params()
         self._zellige_w = self._make_zellige_params()
+        self._tri_weave_w = self._make_tri_weave_params()
         self._topographic_w = self._make_topographic_params()
         self._tile_library_w = self._make_tile_library_params()
         self._halftone_w = self._make_halftone_params()
@@ -316,6 +330,7 @@ class PatternTab(QWidget):
             self._celtic_w,
             self._lissajous_w,
             self._zellige_w,
+            self._tri_weave_w,
             self._topographic_w,
             self._tile_library_w,
             self._halftone_w,
@@ -475,7 +490,9 @@ class PatternTab(QWidget):
         self._spiral_dir = QComboBox()
         self._spiral_dir.addItems(["cw", "ccw"])
         self._spiral_dir.setFixedWidth(80)
-        self._spiral_dir.setToolTip("Spiral winding direction (clockwise / counter-clockwise)")
+        self._spiral_dir.setToolTip(
+            "Spiral winding direction (clockwise / counter-clockwise)"
+        )
         g.addWidget(self._spiral_dir, 1, 1)
         self._spiral_spacing.textChanged.connect(self._schedule_preview)
         self._spiral_dir.currentTextChanged.connect(self._schedule_preview)
@@ -532,6 +549,21 @@ class PatternTab(QWidget):
         g.addWidget(hint, 2, 0, 1, 2)
         return w
 
+    def _make_tri_weave_params(self) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setContentsMargins(0, 0, 0, 0)
+        self._tri_weave_size = _param_entry(g, 0, "Cell size (mm)", "3.0")
+        self._tri_weave_size.setToolTip("Size of each triangular cell")
+        self._tri_weave_width = _param_entry(g, 1, "Stroke width (mm)", "0.3")
+        self._tri_weave_width.setToolTip("Width of the diagonal strokes")
+        self._tri_weave_size.textChanged.connect(self._schedule_preview)
+        self._tri_weave_width.textChanged.connect(self._schedule_preview)
+        hint = QLabel("Interlocking triangular weave pattern")
+        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
+        g.addWidget(hint, 2, 0, 1, 2)
+        return w
+
     def _make_topographic_params(self) -> QWidget:
         w = QWidget()
         g = QGridLayout(w)
@@ -564,8 +596,15 @@ class PatternTab(QWidget):
         self._stip_r.setToolTip("Radius of each stipple dot")
         self._stip_spacing = _param_entry(g, 1, "Spacing (mm)", "1.2")
         self._stip_spacing.setToolTip("Centre-to-centre distance between dots")
+        self._stip_layout = QCheckBox("Interlaced (offset grid)")
+        self._stip_layout.setChecked(False)
+        self._stip_layout.setToolTip(
+            "Use interlaced offset grid instead of Poisson-disk distribution"
+        )
+        g.addWidget(self._stip_layout, 2, 0, 1, 2)
         self._stip_r.textChanged.connect(self._schedule_preview)
         self._stip_spacing.textChanged.connect(self._schedule_preview)
+        self._stip_layout.stateChanged.connect(self._schedule_preview)
         return w
 
     def _make_brick_params(self) -> QWidget:
@@ -633,7 +672,9 @@ class PatternTab(QWidget):
         g = QGridLayout(w)
         g.setContentsMargins(0, 0, 0, 0)
         self._sunburst_spacing = _param_entry(g, 0, "Spoke spacing (°)", "5.0")
-        self._sunburst_spacing.setToolTip("Angular spacing between spokes (smaller = more spokes)")
+        self._sunburst_spacing.setToolTip(
+            "Angular spacing between spokes (smaller = more spokes)"
+        )
         self._sunburst_spacing.textChanged.connect(self._schedule_preview)
         hint = QLabel("5° → 36 spokes  ·  10° → 18 spokes")
         hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
@@ -690,7 +731,9 @@ class PatternTab(QWidget):
         pick_row = QHBoxLayout()
         self._htone_img_edit = QLineEdit()
         self._htone_img_edit.setPlaceholderText("Select image (jpg/png)…")
-        self._htone_img_edit.setToolTip("Source image whose brightness drives cell sizes")
+        self._htone_img_edit.setToolTip(
+            "Source image whose brightness drives cell sizes"
+        )
         pick_row.addWidget(self._htone_img_edit, stretch=1)
         browse_btn = QPushButton("Browse")
         browse_btn.setFixedWidth(64)
@@ -736,6 +779,7 @@ class PatternTab(QWidget):
             "Celtic Knot": self._celtic_w,
             "Lissajous": self._lissajous_w,
             "Moroccan Zellige": self._zellige_w,
+            "Tri-Weave": self._tri_weave_w,
             "Topographic": self._topographic_w,
             "Image Halftone": self._halftone_w,
         }
@@ -783,6 +827,15 @@ class PatternTab(QWidget):
     # ── Right panel ───────────────────────────────────────────────────────────
 
     def _build_right(self, layout: QVBoxLayout) -> None:
+        # Preview toggle in the toolbar
+        self._preview_btn = QPushButton("Preview")
+        self._preview_btn.setCheckable(True)
+        self._preview_btn.setMinimumHeight(28)
+        self._preview_btn.setToolTip(
+            "Toggle between outline editing and pattern preview"
+        )
+        self._preview_btn.clicked.connect(self._on_preview_toggled)
+
         toolbar, self._mode_btns, self._sel_label = _canvas_toolbar(
             self._on_toolbar_mode,
             lambda: self._canvas.fit(),
@@ -791,9 +844,12 @@ class PatternTab(QWidget):
                 ("Deselect", lambda: self._canvas.deselect_all()),
                 ("Delete", self._delete_selected, "danger"),
                 ("Undo", self._undo_delete),
-                ("Reset Preview", self._reset_preview),
             ],
         )
+        # Insert preview toggle after the last button, before the selection label
+        toolbar_layout = toolbar.layout()
+        if isinstance(toolbar_layout, QHBoxLayout):
+            toolbar_layout.insertWidget(toolbar_layout.count() - 1, self._preview_btn)
         layout.addWidget(toolbar)
 
         self._canvas_status = CanvasStatusStrip()
@@ -809,28 +865,13 @@ class PatternTab(QWidget):
         self._preview_status.setWordWrap(True)
         canvas_shell_layout.addWidget(self._preview_status)
 
-        # Tabbed canvas (Edit / Preview)
-        self._canvas_tabs = QTabWidget()
-        canvas_shell_layout.addWidget(self._canvas_tabs, stretch=1)
-
-        edit_page = QWidget()
-        edit_lay = QVBoxLayout(edit_page)
-        edit_lay.setContentsMargins(0, 0, 0, 0)
         self._canvas = DxfCanvas(
             selectable=True,
             on_change=self._on_sel_change,
             on_mode_change=self._on_canvas_mode_change,
             on_poly_change=self._on_canvas_geometry_change,
         )
-        edit_lay.addWidget(self._canvas)
-        self._canvas_tabs.addTab(edit_page, "Edit")
-
-        preview_page = QWidget()
-        preview_lay = QVBoxLayout(preview_page)
-        preview_lay.setContentsMargins(0, 0, 0, 0)
-        self._preview_canvas = DxfCanvas(selectable=False)
-        preview_lay.addWidget(self._preview_canvas)
-        self._canvas_tabs.addTab(preview_page, "Preview")
+        canvas_shell_layout.addWidget(self._canvas, stretch=1)
 
         self._object_browser = CanvasObjectBrowser("Outline Objects")
         self._object_browser.selectionRequested.connect(
@@ -843,7 +884,38 @@ class PatternTab(QWidget):
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
+    def _on_preview_toggled(self, checked: bool) -> None:
+        """Toggle between outline editing and pattern preview display."""
+        if checked and self._preview_polys_cache:
+            # Switch to preview view
+            self._showing_preview = True
+            self._canvas.load(self._preview_polys_cache)
+            self._preview_status.setText(
+                f"{len(self._preview_polys_cache)} shapes — preview"
+            )
+            self._preview_status.setStyleSheet("color: #3fb950; font-size: 11px;")
+        elif checked and not self._preview_polys_cache:
+            # No preview available yet
+            self._preview_btn.setChecked(False)
+            self._preview_status.setText(
+                "No preview available — select a pattern first"
+            )
+            self._preview_status.setStyleSheet(f"color: {DIM}; font-size: 11px;")
+            return
+        else:
+            # Switch back to outline editing
+            self._showing_preview = False
+            if self._edit_polys:
+                self._canvas.load(self._edit_polys)
+            self._preview_status.setText("")
+        self._preview_btn.setProperty("active", self._showing_preview)
+        self._preview_btn.style().unpolish(self._preview_btn)
+        self._preview_btn.style().polish(self._preview_btn)
+        self._refresh_canvas_panels()
+
     def _on_sel_change(self, count: int) -> None:
+        if self._showing_preview:
+            return
         self._sel_label.setText(f"{count} selected" if count else "0 selected")
         self._sel_label.setStyleSheet(f"color: {SEL};" if count else f"color: {DIM};")
         # When polys are selected, use them as the clip outline; otherwise use all.
@@ -910,6 +982,8 @@ class PatternTab(QWidget):
             QMessageBox.critical(self, "Load Error", str(exc))
 
     def _delete_selected(self) -> None:
+        if self._showing_preview:
+            return
         n = self._canvas.delete_selected()
         if n:
             self._edit_polys = list(self._canvas.get_active())
@@ -919,6 +993,8 @@ class PatternTab(QWidget):
             self._emit_state_changed()
 
     def _undo_delete(self) -> None:
+        if self._showing_preview:
+            return
         if not self._canvas.undo_delete():
             self._set_status("Nothing to undo.")
         else:
@@ -945,6 +1021,8 @@ class PatternTab(QWidget):
         self._refresh_canvas_panels()
 
     def _on_canvas_geometry_change(self) -> None:
+        if self._showing_preview:
+            return
         if self._canvas.sel_count:
             self._edit_polys = self._canvas.get_selected()
         else:
@@ -954,12 +1032,16 @@ class PatternTab(QWidget):
         self._emit_state_changed()
 
     def _on_browser_selection_requested(self, indices: list[int]) -> None:
-        self._canvas_tabs.setCurrentIndex(0)
+        if self._showing_preview:
+            self._on_preview_toggled(False)
+            self._preview_btn.setChecked(False)
         self._canvas.set_selection(indices)
         self._refresh_canvas_panels()
 
     def _fit_selection(self) -> None:
-        self._canvas_tabs.setCurrentIndex(0)
+        if self._showing_preview:
+            self._on_preview_toggled(False)
+            self._preview_btn.setChecked(False)
         if self._canvas.fit_selection():
             self._refresh_canvas_panels()
 
@@ -970,7 +1052,10 @@ class PatternTab(QWidget):
         if self._preview_running:
             readiness_text = "Previewing"
             readiness_tone = "warn"
-        elif self._preview_canvas.poly_count:
+        elif self._showing_preview:
+            readiness_text = "Preview"
+            readiness_tone = "success"
+        elif self._preview_polys_cache:
             readiness_text = "Preview ready"
             readiness_tone = "success"
         elif self._canvas.poly_count:
@@ -1134,7 +1219,7 @@ class PatternTab(QWidget):
         for name in sorted(self._presets):
             self._preset_combo.addItem(name)
         idx = self._preset_combo.findText(current)
-        self._preset_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._preset_combo.setCurrentIndex(max(idx, 0))
         self._preset_combo.blockSignals(False)
 
     def _current_param_text_payload(self) -> dict:
@@ -1144,6 +1229,7 @@ class PatternTab(QWidget):
             "scale_h": self._scale_h.text(),
             "ar_locked": self._ar_cb.isChecked(),
             "include_border": self._include_border_cb.isChecked(),
+            "interlace": self._interlace_cb.isChecked(),
             "hex_r": self._hex_r.text(),
             "hex_gap": self._hex_gap.text(),
             "grad_r_min": self._grad_r_min.text(),
@@ -1159,6 +1245,7 @@ class PatternTab(QWidget):
             "fish_h": self._fish_h.text(),
             "stip_r": self._stip_r.text(),
             "stip_spacing": self._stip_spacing.text(),
+            "stip_layout": self._stip_layout.isChecked(),
             "brick_w": self._brick_w_e.text(),
             "brick_h": self._brick_h_e.text(),
             "brick_gap": self._brick_gap.text(),
@@ -1175,6 +1262,8 @@ class PatternTab(QWidget):
             "vor_seed": self._vor_seed.text(),
             "tri_size": self._tri_size.text(),
             "tri_gap": self._tri_gap.text(),
+            "tri_weave_size": self._tri_weave_size.text(),
+            "tri_weave_width": self._tri_weave_width.text(),
             "tile_pattern_path": self._library_patterns.get(
                 self._pattern_combo.currentText(), ""
             ),
@@ -1214,6 +1303,7 @@ class PatternTab(QWidget):
         self._scale_h.setText(str(values.get("scale_h", "")))
         self._ar_cb.setChecked(bool(values.get("ar_locked", True)))
         self._include_border_cb.setChecked(bool(values.get("include_border", False)))
+        self._interlace_cb.setChecked(bool(values.get("interlace", False)))
         self._hex_r.setText(str(values.get("hex_r", "1.75")))
         self._hex_gap.setText(str(values.get("hex_gap", "0.5")))
         self._grad_r_min.setText(str(values.get("grad_r_min", "0.8")))
@@ -1229,6 +1319,7 @@ class PatternTab(QWidget):
         self._fish_h.setText(str(values.get("fish_h", "2.0")))
         self._stip_r.setText(str(values.get("stip_r", "0.4")))
         self._stip_spacing.setText(str(values.get("stip_spacing", "1.2")))
+        self._stip_layout.setChecked(bool(values.get("stip_layout", False)))
         self._brick_w_e.setText(str(values.get("brick_w", "4.0")))
         self._brick_h_e.setText(str(values.get("brick_h", "2.0")))
         self._brick_gap.setText(str(values.get("brick_gap", "0.5")))
@@ -1245,6 +1336,8 @@ class PatternTab(QWidget):
         self._vor_seed.setText(str(values.get("vor_seed", "42")))
         self._tri_size.setText(str(values.get("tri_size", "3.0")))
         self._tri_gap.setText(str(values.get("tri_gap", "0.15")))
+        self._tri_weave_size.setText(str(values.get("tri_weave_size", "3.0")))
+        self._tri_weave_width.setText(str(values.get("tri_weave_width", "0.3")))
         self._tile_gap.setText(str(values.get("tile_gap", "0.5")))
         self._tile_angle.setText(str(values.get("tile_angle", "0")))
         self._htone_img_edit.setText(str(values.get("htone_img_path", "")))
@@ -1300,17 +1393,28 @@ class PatternTab(QWidget):
         self._refresh_preset_combo()
 
     def get_workspace_state(self) -> dict:
+        # If showing preview, the canvas has preview polys — save edit_polys from our snapshot
+        polys_to_save = (
+            self._edit_polys
+            if self._showing_preview
+            else self._canvas.get_polylines_state()
+        )
+        doc_graph = graph_from_polylines(
+            polys_to_save,
+            layer="pattern_active",
+            as_segments=False,
+        )
         return {
             "dxf_path": self._dxf_edit.text(),
             "params": self._current_param_text_payload(),
             "orig_polys": self._orig_polys,
-            "edit_polys": self._canvas.get_polylines_state(),
+            "edit_polys": polys_to_save,
             "orig_w": self._orig_w,
             "orig_h": self._orig_h,
             "canvas_view": self._canvas.get_view_state(),
-            "preview_polys": self._preview_canvas.get_polylines_state(),
-            "preview_view": self._preview_canvas.get_view_state(),
-            "preview_tab_index": self._canvas_tabs.currentIndex(),
+            "preview_polys": self._preview_polys_cache,
+            "showing_preview": self._showing_preview,
+            "document_graph": doc_graph.snapshot(),
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
@@ -1319,7 +1423,18 @@ class PatternTab(QWidget):
         self._dxf_edit.setText(str(state.get("dxf_path", "")))
         self._apply_param_text_payload(state.get("params", {}))
         self._orig_polys = [list(poly) for poly in state.get("orig_polys", [])]
-        edit_polys = [list(poly) for poly in state.get("edit_polys", self._orig_polys)]
+        graph_state = state.get("document_graph")
+        if isinstance(graph_state, dict):
+            doc_graph = DocumentGraph()
+            doc_graph.restore(graph_state)
+            migrated = polylines_from_graph(doc_graph, layer="pattern_active")
+            if not migrated:
+                migrated = polylines_from_graph(doc_graph, layer="geometry")
+            edit_polys = [list(poly) for poly in migrated]
+        else:
+            edit_polys = [
+                list(poly) for poly in state.get("edit_polys", self._orig_polys)
+            ]
         self._edit_polys = [list(poly) for poly in edit_polys]
         self._orig_w = float(state.get("orig_w", 0.0))
         self._orig_h = float(state.get("orig_h", 0.0))
@@ -1327,17 +1442,30 @@ class PatternTab(QWidget):
             self._orig_dims_label.setText(f"{self._orig_w:.2f} × {self._orig_h:.2f} mm")
         else:
             self._orig_dims_label.setText("—")
-        self._canvas.set_polylines_state(self._edit_polys, fit=bool(self._edit_polys))
+        self._preview_polys_cache = [
+            list(poly) for poly in state.get("preview_polys", [])
+        ]
+        show_preview = bool(state.get("showing_preview", False)) and bool(
+            self._preview_polys_cache
+        )
+        if show_preview:
+            self._canvas.set_polylines_state(self._preview_polys_cache, fit=True)
+            self._showing_preview = True
+            self._preview_btn.setChecked(True)
+            self._preview_btn.setProperty("active", True)
+            self._preview_btn.style().unpolish(self._preview_btn)
+            self._preview_btn.style().polish(self._preview_btn)
+        else:
+            self._canvas.set_polylines_state(
+                self._edit_polys, fit=bool(self._edit_polys)
+            )
+            self._showing_preview = False
+            self._preview_btn.setChecked(False)
+            self._preview_btn.setProperty("active", False)
+            self._preview_btn.style().unpolish(self._preview_btn)
+            self._preview_btn.style().polish(self._preview_btn)
         if state.get("canvas_view"):
             self._canvas.set_view_state(state["canvas_view"])
-        preview_polys = [list(poly) for poly in state.get("preview_polys", [])]
-        if preview_polys:
-            self._preview_canvas.set_polylines_state(preview_polys, fit=True)
-            if state.get("preview_view"):
-                self._preview_canvas.set_view_state(state["preview_view"])
-        else:
-            self._preview_canvas.set_polylines_state([], fit=True)
-        self._canvas_tabs.setCurrentIndex(int(state.get("preview_tab_index", 0)))
         self._suspend_state_changes = False
         self._refresh_canvas_panels()
 
@@ -1446,6 +1574,8 @@ class PatternTab(QWidget):
             if cancel_event and cancel_event.is_set():
                 return
             polys = self._gen_pattern(outline, pattern, params)
+            if self._interlace_cb.isChecked():
+                polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
             if cancel_event and cancel_event.is_set():
                 return
             close = pattern not in (
@@ -1479,8 +1609,11 @@ class PatternTab(QWidget):
         self._set_status(f"Done — {count} shapes → {name}", "#3fb950")
         self._last_out_path = out_path
         self._reveal_btn.setEnabled(True)
-        self._preview_canvas.load(polys)
-        self._preview_status.setText(f"{count} shapes generated")
+        self._preview_polys_cache = list(polys)
+        # Update canvas if preview is already showing; otherwise just cache
+        if self._showing_preview:
+            self._canvas.load(polys)
+        self._preview_status.setText(f"{count} shapes exported")
         self._preview_status.setStyleSheet("color: #3fb950; font-size: 11px;")
 
     def _handle_gen_error(self, msg: str) -> None:
@@ -1557,6 +1690,8 @@ class PatternTab(QWidget):
             polys = self._gen_pattern(outline, pattern, params)
             if cancel_event and cancel_event.is_set():
                 return
+            if self._interlace_cb.isChecked():
+                polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
             if border_polys:
                 display_polys = polys + border_polys
             else:
@@ -1570,12 +1705,12 @@ class PatternTab(QWidget):
     def _handle_preview_done(self, payload: tuple) -> None:
         display_polys, count = payload
         self._preview_running = False
-        if self._preview_canvas.poly_count == 0 and display_polys:
-            self._preview_canvas.load(display_polys)
-        else:
-            self._preview_canvas.reload(display_polys)
-        self._preview_status.setText(f"{count} shapes — live preview")
-        self._preview_status.setStyleSheet("color: #3fb950; font-size: 11px;")
+        self._preview_polys_cache = list(display_polys)
+        # Update canvas if preview is already showing; otherwise just cache
+        if self._showing_preview:
+            self._canvas.load(display_polys)
+            self._preview_status.setText(f"{count} shapes — preview")
+            self._preview_status.setStyleSheet("color: #3fb950; font-size: 11px;")
         self._refresh_canvas_panels()
         if self._preview_pending and self._edit_polys:
             self._preview_pending = False
@@ -1665,11 +1800,18 @@ class PatternTab(QWidget):
         elif pattern == "Stipple Dots":
             return {
                 "r": self._parse_float_field(
-                    self._stip_r, "Dot radius", minimum=0.001, maximum=100,
+                    self._stip_r,
+                    "Dot radius",
+                    minimum=0.001,
+                    maximum=100,
                 ),
                 "spacing": self._parse_float_field(
-                    self._stip_spacing, "Spacing", minimum=0.001, maximum=1000,
+                    self._stip_spacing,
+                    "Spacing",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
+                "interlaced": self._stip_layout.isChecked(),
             }
         elif pattern == "Brick":
             return {
@@ -1791,6 +1933,21 @@ class PatternTab(QWidget):
                     self._zellige_gap, "Gap", minimum=0.0, maximum=1000,
                 ),
             }
+        elif pattern == "Tri-Weave":
+            return {
+                "cell_size": self._parse_float_field(
+                    self._tri_weave_size,
+                    "Cell size",
+                    minimum=0.5,
+                    maximum=1000,
+                ),
+                "stroke_width": self._parse_float_field(
+                    self._tri_weave_width,
+                    "Stroke width",
+                    minimum=0.01,
+                    maximum=100,
+                ),
+            }
         elif pattern == "Topographic":
             return {
                 "spacing": self._parse_float_field(
@@ -1875,7 +2032,10 @@ class PatternTab(QWidget):
         elif pattern == "Fish Scale":
             return gen_fish_scale(outline, params["sw"], params["sh"])
         elif pattern == "Stipple Dots":
-            return gen_stipple_dots(outline, params["r"], params["spacing"])
+            if params.get("interlaced"):
+                return gen_stipple_interlaced(outline, params["r"], params["spacing"])
+            else:
+                return gen_stipple_dots(outline, params["r"], params["spacing"])
         elif pattern == "Brick":
             return gen_brick(
                 outline, params["brick_w"], params["brick_h"], params["gap"]
@@ -1916,6 +2076,8 @@ class PatternTab(QWidget):
             )
         elif pattern == "Moroccan Zellige":
             return gen_moroccan_zellige(outline, params["size"], params["gap"])
+        elif pattern == "Tri-Weave":
+            return gen_tri_weave(outline, params["cell_size"], params["stroke_width"])
         elif pattern == "Topographic":
             return gen_topographic(outline, params["spacing"])
         elif self._is_tile_pattern(pattern):
@@ -1932,9 +2094,10 @@ class PatternTab(QWidget):
             )
 
     def _reset_preview(self) -> None:
-        if self._edit_polys:
-            self._preview_canvas.reload(self._edit_polys)
-            self._preview_status.setText("Preview reset — adjust params to regenerate")
-            self._preview_status.setStyleSheet(f"color: {DIM}; font-size: 11px;")
-            self._schedule_preview()
-            self._emit_state_changed()
+        self._preview_polys_cache = []
+        if self._showing_preview:
+            self._preview_btn.setChecked(False)
+            self._on_preview_toggled(False)
+        self._preview_status.setText("")
+        self._schedule_preview()
+        self._emit_state_changed()

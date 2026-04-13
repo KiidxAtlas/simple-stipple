@@ -15,25 +15,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import ezdxf  # type: ignore[attr-defined]
-
-
-def _load_polylines(
-    path: str | Path,
-) -> list[list[tuple[float, float]]]:
-    """Read LWPOLYLINE entities from a DXF file."""
-    doc = ezdxf.readfile(str(path))
-    msp = doc.modelspace()
-    result: list[list[tuple[float, float]]] = []
-    for ent in msp:
-        if ent.dxftype() == "LWPOLYLINE":
-            pts = [(float(p[0]), float(p[1])) for p in ent.get_points()]
-            closed = bool(ent.closed)
-            if closed and len(pts) >= 2 and pts[0] != pts[-1]:
-                pts = pts + [pts[0]]
-            if len(pts) >= 2:
-                result.append(pts)
-    return result
+from src.core.dxf_io import load_dxf_polylines
 
 
 def _bbox(
@@ -82,7 +64,7 @@ def dxf_to_svg(
     -------
     dict with keys ``polylines``, ``width_mm``, ``height_mm``.
     """
-    polys = _load_polylines(input_path)
+    polys = load_dxf_polylines(str(input_path))
     if not polys:
         # Write empty SVG
         root = ET.Element(

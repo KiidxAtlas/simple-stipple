@@ -39,7 +39,9 @@ def _arc_pts(
 
     r = math.hypot(x - center_x, y - center_y)
     if r < 1e-9:
-        return [(endx * _FVI_SCALE, endy * _FVI_SCALE)]
+        # Degenerate zero-radius arc: emit a straight line segment to the endpoint
+        # so the polyline stays continuous instead of silently dropping the start.
+        return [(x * _FVI_SCALE, y * _FVI_SCALE), (endx * _FVI_SCALE, endy * _FVI_SCALE)]
 
     ang_start = math.degrees(math.atan2(y - center_y, x - center_x))
     ang_end = math.degrees(math.atan2(endy - center_y, endx - center_x))

@@ -85,10 +85,20 @@ def fix_dxf(input_path: str | Path, output_path: str | Path) -> dict:
     raw: list[list[tuple[float, float]]] = []
     is_closed: list[bool] = []
     for ent in msp:
-        if ent.dxftype() == "LWPOLYLINE":
+        dxftype = ent.dxftype()
+        if dxftype == "LWPOLYLINE":
             pts = [(float(p[0]), float(p[1])) for p in ent.get_points()]
             raw.append(pts)
             is_closed.append(bool(ent.closed))
+        elif dxftype == "POLYLINE":
+            if not ent.is_2d_polyline:
+                continue
+            pts = [
+                (float(v.dxf.location.x), float(v.dxf.location.y))
+                for v in ent.vertices
+            ]
+            raw.append(pts)
+            is_closed.append(bool(ent.is_closed))
 
     stats = {
         "polylines_in": len(raw),
