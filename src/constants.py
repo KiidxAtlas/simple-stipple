@@ -39,6 +39,8 @@ PATTERNS = [
     "Voronoi",
     "Penrose Tiling",
     "Topographic",
+    "Hilbert Curve",
+    "Reaction Diffuse",
     "Image Halftone",
 ]
 

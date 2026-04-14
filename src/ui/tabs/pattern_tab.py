@@ -44,9 +44,11 @@ from src.core.generators import (
     gen_diagonal_lines,
     gen_fish_scale,
     gen_gradient_honeycomb,
+    gen_hilbert_curve,
     gen_honeycomb,
     gen_image_halftone,
     gen_penrose_tiling,
+    gen_reaction_diffuse,
     gen_square_grid,
     gen_stipple_dots,
     gen_stipple_interlaced,
@@ -313,6 +315,8 @@ class PatternTab(QWidget):
         self._voronoi_w = self._make_voronoi_params()
         self._penrose_w = self._make_penrose_params()
         self._topographic_w = self._make_topographic_params()
+        self._hilbert_w = self._make_hilbert_params()
+        self._reaction_diffuse_w = self._make_reaction_diffuse_params()
         self._tile_library_w = self._make_tile_library_params()
         self._halftone_w = self._make_halftone_params()
 
@@ -331,6 +335,8 @@ class PatternTab(QWidget):
             self._voronoi_w,
             self._penrose_w,
             self._topographic_w,
+            self._hilbert_w,
+            self._reaction_diffuse_w,
             self._tile_library_w,
             self._halftone_w,
         ]
@@ -511,6 +517,39 @@ class PatternTab(QWidget):
         hint = QLabel("Inward offset contours from the outline edge")
         hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
         g.addWidget(hint, 1, 0, 1, 2)
+        return w
+
+    def _make_hilbert_params(self) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setContentsMargins(0, 0, 0, 0)
+        self._hilbert_order = _param_entry(g, 0, "Order", "5")
+        self._hilbert_order.setToolTip("Curve recursion depth (1-8)")
+        self._hilbert_margin = _param_entry(g, 1, "Margin (mm)", "1.0")
+        self._hilbert_margin.setToolTip("Inset from outline bounds")
+        self._hilbert_order.textChanged.connect(self._schedule_preview)
+        self._hilbert_margin.textChanged.connect(self._schedule_preview)
+        hint = QLabel("Higher order = denser path")
+        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
+        g.addWidget(hint, 2, 0, 1, 2)
+        return w
+
+    def _make_reaction_diffuse_params(self) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setContentsMargins(0, 0, 0, 0)
+        self._rd_cell = _param_entry(g, 0, "Cell (mm)", "0.8")
+        self._rd_cell.setToolTip("Simulation grid cell size")
+        self._rd_iters = _param_entry(g, 1, "Iterations", "1200")
+        self._rd_iters.setToolTip("Simulation steps")
+        self._rd_threshold = _param_entry(g, 2, "Threshold", "0.22")
+        self._rd_threshold.setToolTip("Contour extraction threshold (0-1)")
+        self._rd_seed = _param_entry(g, 3, "Seed", "42")
+        self._rd_seed.setToolTip("Random seed for deterministic output")
+        self._rd_cell.textChanged.connect(self._schedule_preview)
+        self._rd_iters.textChanged.connect(self._schedule_preview)
+        self._rd_threshold.textChanged.connect(self._schedule_preview)
+        self._rd_seed.textChanged.connect(self._schedule_preview)
         return w
 
     def _make_fishscale_params(self) -> QWidget:
@@ -711,6 +750,8 @@ class PatternTab(QWidget):
             "Voronoi": self._voronoi_w,
             "Penrose Tiling": self._penrose_w,
             "Topographic": self._topographic_w,
+            "Hilbert Curve": self._hilbert_w,
+            "Reaction Diffuse": self._reaction_diffuse_w,
             "Image Halftone": self._halftone_w,
         }
         for w in self._pattern_widgets:
@@ -1306,6 +1347,15 @@ class PatternTab(QWidget):
             "vor_cells": self._vor_cells.text(),
             "vor_gap": self._vor_gap.text(),
             "vor_seed": self._vor_seed.text(),
+            "penrose_scale": self._penrose_scale.text(),
+            "penrose_gap": self._penrose_gap.text(),
+            "topo_spacing": self._topo_spacing.text(),
+            "hilbert_order": self._hilbert_order.text(),
+            "hilbert_margin": self._hilbert_margin.text(),
+            "rd_cell": self._rd_cell.text(),
+            "rd_iters": self._rd_iters.text(),
+            "rd_threshold": self._rd_threshold.text(),
+            "rd_seed": self._rd_seed.text(),
             "tile_pattern_path": self._library_patterns.get(
                 self._pattern_combo.currentText(), ""
             ),
@@ -1375,6 +1425,15 @@ class PatternTab(QWidget):
         self._vor_cells.setText(str(values.get("vor_cells", "60")))
         self._vor_gap.setText(str(values.get("vor_gap", "0.15")))
         self._vor_seed.setText(str(values.get("vor_seed", "42")))
+        self._penrose_scale.setText(str(values.get("penrose_scale", "3.0")))
+        self._penrose_gap.setText(str(values.get("penrose_gap", "0.1")))
+        self._topo_spacing.setText(str(values.get("topo_spacing", "1.5")))
+        self._hilbert_order.setText(str(values.get("hilbert_order", "5")))
+        self._hilbert_margin.setText(str(values.get("hilbert_margin", "1.0")))
+        self._rd_cell.setText(str(values.get("rd_cell", "0.8")))
+        self._rd_iters.setText(str(values.get("rd_iters", "1200")))
+        self._rd_threshold.setText(str(values.get("rd_threshold", "0.22")))
+        self._rd_seed.setText(str(values.get("rd_seed", "42")))
         self._tile_gap.setText(str(values.get("tile_gap", "0.5")))
         self._tile_angle.setText(str(values.get("tile_angle", "0")))
         self._htone_img_edit.setText(str(values.get("htone_img_path", "")))
@@ -1649,6 +1708,8 @@ class PatternTab(QWidget):
                 "Wave Fill",
                 "Sunburst",
                 "Topographic",
+                "Hilbert Curve",
+                "Reaction Diffuse",
             )
             write_polylines_dxf(
                 polys,
@@ -2140,6 +2201,43 @@ class PatternTab(QWidget):
                     maximum=500,
                 ),
             }
+        elif pattern == "Hilbert Curve":
+            params = {
+                "order": self._parse_int_field(
+                    self._hilbert_order,
+                    "Order",
+                    minimum=1,
+                    maximum=8,
+                ),
+                "margin": self._parse_float_field(
+                    self._hilbert_margin,
+                    "Margin",
+                    minimum=0.0,
+                    maximum=1000,
+                ),
+            }
+        elif pattern == "Reaction Diffuse":
+            params = {
+                "cell": self._parse_float_field(
+                    self._rd_cell,
+                    "Cell",
+                    minimum=0.1,
+                    maximum=10000,
+                ),
+                "iters": self._parse_int_field(
+                    self._rd_iters,
+                    "Iterations",
+                    minimum=10,
+                    maximum=8000,
+                ),
+                "threshold": self._parse_float_field(
+                    self._rd_threshold,
+                    "Threshold",
+                    minimum=0.01,
+                    maximum=0.99,
+                ),
+                "seed": self._parse_int_field(self._rd_seed, "Seed"),
+            }
         elif self._is_tile_pattern(pattern):
             tile_path = self._library_patterns.get(pattern, "")
             if not tile_path:
@@ -2266,6 +2364,16 @@ class PatternTab(QWidget):
             polys = gen_penrose_tiling(outline, params["scale"], params["gap"])
         elif pattern == "Topographic":
             polys = gen_topographic(outline, params["spacing"])
+        elif pattern == "Hilbert Curve":
+            polys = gen_hilbert_curve(outline, params["order"], params["margin"])
+        elif pattern == "Reaction Diffuse":
+            polys = gen_reaction_diffuse(
+                outline,
+                params["cell"],
+                params["iters"],
+                params["threshold"],
+                params["seed"],
+            )
         elif self._is_tile_pattern(pattern):
             tile_polys = load_dxf_polylines(params["tile_path"])
             polys = gen_custom_tile(outline, tile_polys, params["gap"], params["angle"])
