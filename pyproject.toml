@@ -22,6 +22,12 @@ dependencies = [
 dev = [
     "pytest>=9.0",
 ]
+build = [
+    "pyinstaller>=6.0",
+]
+
+[project.scripts]
+simple-stipple = "src.launcher:main"
 
 [tool.setuptools]
 include-package-data = true
