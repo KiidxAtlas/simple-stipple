@@ -10,16 +10,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
-    QRubberBand,
     QVBoxLayout,
     QWidget,
 )
@@ -64,7 +64,9 @@ class EfficientDraftCanvas(DxfCanvas):
         self._shape_start_w: tuple[float, float] | None = None
         self._shape_start_c: QPoint | None = None
         self._shape_end_c: QPoint | None = None
-        self._shape_band = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
+
+        # Draft UX preference: highlight selected shapes directly (no bbox frame)
+        self._show_selection_bbox = False
 
         # Keep grid visible by default; snap off (faster free drawing by default)
         self.set_grid_visible(True)
@@ -128,9 +130,6 @@ class EfficientDraftCanvas(DxfCanvas):
         if self._shape_drag_active and (event.buttons() & Qt.MouseButton.LeftButton):
             pos = event.position().toPoint()
             self._shape_end_c = pos
-            if self._shape_start_c is not None:
-                rect = QRect(self._shape_start_c, pos).normalized()
-                self._shape_band.setGeometry(rect)
             wx, wy = self._c2w(event.position().x(), event.position().y())
             self._cursor_wx = wx
             self._cursor_wy = wy
@@ -141,7 +140,6 @@ class EfficientDraftCanvas(DxfCanvas):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if self._shape_drag_active and event.button() == Qt.MouseButton.LeftButton:
-            self._shape_band.hide()
             self._finish_shape_drag(event.position().toPoint())
             return
 
@@ -167,6 +165,27 @@ class EfficientDraftCanvas(DxfCanvas):
 
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
+
+        if (
+            self._shape_drag_active
+            and self._shape_start_w is not None
+            and self._shape_end_c is not None
+        ):
+            sx, sy = self._shape_start_w
+            ex, ey = self._c2w(
+                float(self._shape_end_c.x()), float(self._shape_end_c.y())
+            )
+            preview = self._build_drag_shape(self._shape_drag_mode, sx, sy, ex, ey)
+            if len(preview) >= 2:
+                painter_preview = QPainter(self.viewport())
+                painter_preview.setRenderHint(QPainter.RenderHint.Antialiasing)
+                pen = QPen(QColor("#f85149"), 1.5, Qt.PenStyle.DashLine)
+                painter_preview.setPen(pen)
+                for i in range(1, len(preview)):
+                    x0, y0 = self._w2c(*preview[i - 1])
+                    x1, y1 = self._w2c(*preview[i])
+                    painter_preview.drawLine(int(x0), int(y0), int(x1), int(y1))
+                painter_preview.end()
 
         # Discoverability hint for new users (default path is direct drag)
         if self._mode == "select":
@@ -407,8 +426,6 @@ class EfficientDraftCanvas(DxfCanvas):
         self._shape_start_w = (wx, wy)
         self._shape_start_c = pos
         self._shape_end_c = pos
-        self._shape_band.setGeometry(QRect(pos, pos))
-        self._shape_band.show()
 
     def _finish_shape_drag(self, end_c: QPoint) -> None:
         if (

@@ -1,4 +1,4 @@
-"""Utilities tab — FVI → DXF | DXF Fixer | DXF → SVG."""
+"""Utilities tab — FVI → DXF | DXF Fixer | DXF → SVG | SVG → DXF."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from src.core.dxf_fix import fix_dxf
 from src.core.dxf_io import load_dxf_polylines
 from src.core.dxf_svg import dxf_to_svg
 from src.core.fvi import convert_fvi_to_dxf
+from src.core.svg_dxf import svg_to_dxf
 from src.ui.action_maps import UTILITIES_ACTION_MAP
 from src.ui.canvas import DxfCanvas
 from src.ui.helpers import (
@@ -39,7 +40,7 @@ ACTION_MAP = UTILITIES_ACTION_MAP
 
 
 class UtilitiesTab(QWidget):
-    """Utilities — FVI→DXF conversion, DXF fixer, and DXF→SVG export."""
+    """Utilities — conversion and repair helpers for vector workflows."""
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -60,7 +61,12 @@ class UtilitiesTab(QWidget):
         left.addWidget(tool_lbl)
 
         self._tool_combo = QComboBox()
-        self._tool_combo.addItems(["FVI to DXF", "Repair DXF", "DXF to SVG"])
+        self._tool_combo.addItems([
+            "FVI to DXF",
+            "Repair DXF",
+            "DXF to SVG",
+            "SVG to DXF",
+        ])
         self._tool_combo.setToolTip("Choose a conversion or repair utility")
         left.addWidget(self._tool_combo)
 
@@ -69,9 +75,11 @@ class UtilitiesTab(QWidget):
         self._fvi_subtab = _FviSubTab(settings=self._settings)
         self._fix_subtab = _FixerSubTab(settings=self._settings)
         self._svg_subtab = _SvgSubTab(settings=self._settings)
+        self._svg_dxf_subtab = _SvgToDxfSubTab(settings=self._settings)
         self._tool_stack.addWidget(self._fvi_subtab)
         self._tool_stack.addWidget(self._fix_subtab)
         self._tool_stack.addWidget(self._svg_subtab)
+        self._tool_stack.addWidget(self._svg_dxf_subtab)
         self._tool_combo.currentIndexChanged.connect(self._tool_stack.setCurrentIndex)
         left.addWidget(self._tool_stack, stretch=1)
 
@@ -103,7 +111,12 @@ class UtilitiesTab(QWidget):
         root.addWidget(self._splitter)
 
         # Connect sub-tab signals to shared log and preview
-        for tab in (self._fvi_subtab, self._fix_subtab, self._svg_subtab):
+        for tab in (
+            self._fvi_subtab,
+            self._fix_subtab,
+            self._svg_subtab,
+            self._svg_dxf_subtab,
+        ):
             tab.log_line.connect(self._log.appendPlainText)
             tab.preview_path.connect(self._load_preview)
 
@@ -122,6 +135,8 @@ class UtilitiesTab(QWidget):
             "fix_out": self._fix_subtab._out_edit.text(),
             "svg_src": self._svg_subtab._src_edit.text(),
             "svg_out": self._svg_subtab._out_edit.text(),
+            "svg_dxf_src": self._svg_dxf_subtab._src_edit.text(),
+            "svg_dxf_out": self._svg_dxf_subtab._out_edit.text(),
             "preview_polys": self._preview_canvas.get_polylines_state(),
             "preview_view": self._preview_canvas.get_view_state(),
             "document_graph": doc_graph.snapshot(),
@@ -139,6 +154,8 @@ class UtilitiesTab(QWidget):
         self._fix_subtab._out_edit.setText(str(state.get("fix_out", "")))
         self._svg_subtab._src_edit.setText(str(state.get("svg_src", "")))
         self._svg_subtab._out_edit.setText(str(state.get("svg_out", "")))
+        self._svg_dxf_subtab._src_edit.setText(str(state.get("svg_dxf_src", "")))
+        self._svg_dxf_subtab._out_edit.setText(str(state.get("svg_dxf_out", "")))
         graph_state = state.get("document_graph")
         if isinstance(graph_state, dict):
             doc_graph = DocumentGraph()
@@ -648,6 +665,148 @@ class _SvgSubTab(QWidget):
             self._status_sig.emit("Done", "#3fb950")
             self._last_out = out
             self.preview_path.emit(src)
+        except Exception as exc:
+            self.log_line.emit(f"Error: {exc}")
+            self._btn_state.emit(True)
+            self._status_sig.emit(f"Error: {exc}", "#f85149")
+
+    def _reveal(self) -> None:
+        if self._last_out:
+            p = Path(self._last_out)
+            if not p.exists():
+                QMessageBox.warning(
+                    self,
+                    "File Not Found",
+                    f"The file no longer exists:\n{self._last_out}",
+                )
+                return
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
+
+
+# ─── SVG → DXF sub-tab ─────────────────────────────────────────────────────
+
+
+class _SvgToDxfSubTab(QWidget):
+    log_line = Signal(str)
+    preview_path = Signal(str)
+    _btn_state = Signal(bool)
+    _reveal_state = Signal(bool)
+    _status_sig = Signal(str, str)
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        settings: dict | None = None,
+    ):
+        super().__init__(parent)
+        self._settings: dict = settings or {}
+        self._last_out: str | None = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        self._build(root)
+
+    def _build(self, layout: QVBoxLayout) -> None:
+        _section_label(layout, "Input SVG")
+        src_row = QHBoxLayout()
+        self._src_edit = QLineEdit()
+        self._src_edit.setPlaceholderText("Select a .svg file…")
+        self._src_edit.setToolTip("Path to the SVG file to convert")
+        src_btn = QPushButton("Browse")
+        src_btn.setFixedWidth(70)
+        src_btn.clicked.connect(self._browse_src)
+        src_row.addWidget(self._src_edit, stretch=1)
+        src_row.addWidget(src_btn)
+        layout.addLayout(src_row)
+
+        _section_label(layout, "Output DXF")
+        out_row = QHBoxLayout()
+        self._out_edit = QLineEdit()
+        self._out_edit.setPlaceholderText("Leave blank to auto-name…")
+        self._out_edit.setToolTip(
+            "Destination DXF path (blank = same name as input with .dxf)"
+        )
+        out_btn = QPushButton("Browse")
+        out_btn.setFixedWidth(70)
+        out_btn.clicked.connect(self._browse_out)
+        out_row.addWidget(self._out_edit, stretch=1)
+        out_row.addWidget(out_btn)
+        layout.addLayout(out_row)
+
+        self._btn = QPushButton("Convert to DXF")
+        self._btn.setMinimumHeight(38)
+        self._btn.setProperty("role", "primary")
+        self._btn.clicked.connect(self._run)
+        layout.addWidget(self._btn)
+
+        self._reveal_btn = QPushButton("Show in Finder")
+        self._reveal_btn.setMinimumHeight(26)
+        self._reveal_btn.setEnabled(False)
+        self._reveal_btn.clicked.connect(self._reveal)
+        layout.addWidget(self._reveal_btn)
+
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        layout.addWidget(self._status)
+
+        layout.addStretch()
+
+        self._btn_state.connect(self._btn.setEnabled)
+        self._reveal_state.connect(self._reveal_btn.setEnabled)
+        self._status_sig.connect(self._set_status)
+
+    def _browse_src(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select SVG file",
+            "",
+            "SVG files (*.svg *.SVG);;All files (*)",
+        )
+        if path:
+            self._src_edit.setText(path)
+            if not self._out_edit.text().strip():
+                self._out_edit.setText(str(Path(path).with_suffix(".dxf")))
+
+    def _browse_out(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save DXF",
+            "",
+            "DXF files (*.dxf);;All files (*)",
+        )
+        if path:
+            self._out_edit.setText(path)
+
+    def _set_status(self, text: str, color: str = "#8b949e") -> None:
+        self._status.setText(text)
+        self._status.setStyleSheet(f"color: {color};")
+
+    def _run(self) -> None:
+        src = self._src_edit.text().strip()
+        if not src:
+            QMessageBox.critical(self, "Error", "Please select an input SVG file.")
+            return
+        out = self._out_edit.text().strip()
+        if not out:
+            out = str(Path(src).with_suffix(".dxf"))
+            self._out_edit.setText(out)
+        self._btn.setEnabled(False)
+        self._set_status("Converting…")
+        threading.Thread(target=self._convert, args=(src, out), daemon=True).start()
+
+    def _convert(self, src: str, out: str) -> None:
+        try:
+            stats = svg_to_dxf(src, out)
+            msg = (
+                f"Done — {stats['polylines']} polyline(s)"
+                f"  · {stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm"
+            )
+            self.log_line.emit(msg)
+            self._btn_state.emit(True)
+            self._reveal_state.emit(True)
+            self._status_sig.emit("Done", "#3fb950")
+            self._last_out = out
+            self.preview_path.emit(out)
         except Exception as exc:
             self.log_line.emit(f"Error: {exc}")
             self._btn_state.emit(True)

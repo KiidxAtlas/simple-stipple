@@ -112,6 +112,7 @@ class PolylineView(QGraphicsView):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._selectable = selectable
+        self._show_selection_bbox: bool = True
         self._on_change = on_change
         self._on_mode_change = on_mode_change
         self._on_poly_change = on_poly_change
@@ -171,6 +172,8 @@ class PolylineView(QGraphicsView):
         self._edit_vert: int | None = None
         self._edit_dragging: bool = False
         self._edit_linked_verts: set[tuple[int, int]] = set()
+        self._edit_selected_verts: set[tuple[int, int]] = set()
+        self._edit_drag_targets: set[tuple[int, int]] = set()
         self._hover_vert: tuple[int, int] | None = None
 
         # Move state (select mode drag-to-move)
@@ -343,6 +346,8 @@ class PolylineView(QGraphicsView):
         self._edit_vert = None
         self._edit_dragging = False
         self._edit_linked_verts = set()
+        self._edit_selected_verts = set()
+        self._edit_drag_targets = set()
         self._hover_vert = None
         self._redraw()
         self._notify()
@@ -362,6 +367,8 @@ class PolylineView(QGraphicsView):
         self._edit_vert = None
         self._edit_dragging = False
         self._edit_linked_verts = set()
+        self._edit_selected_verts = set()
+        self._edit_drag_targets = set()
         self._hover_vert = None
         self._redraw()
         self._notify()
@@ -432,6 +439,8 @@ class PolylineView(QGraphicsView):
             self._edit_vert = None
             self._edit_dragging = False
             self._edit_linked_verts = set()
+            self._edit_selected_verts = set()
+            self._edit_drag_targets = set()
             self._hover_vert = None
         self._mode = mode
         if mode in ("draw", "edit"):
@@ -789,6 +798,24 @@ class PolylineView(QGraphicsView):
         xs, ys = zip(*poly)
         return min(xs), min(ys), max(xs), max(ys)
 
+    @staticmethod
+    def _poly_rect_for_culling(
+        poly: list[tuple[float, float]],
+        *,
+        epsilon: float = 1e-6,
+    ) -> QRectF:
+        """Return a non-degenerate world rect for robust viewport culling."""
+        if not poly:
+            return QRectF(QPointF(0.0, 0.0), QPointF(epsilon, epsilon))
+        x0, y0, x1, y1 = PolylineView._poly_bounds(poly)
+        if abs(x1 - x0) < epsilon:
+            x0 -= epsilon
+            x1 += epsilon
+        if abs(y1 - y0) < epsilon:
+            y0 -= epsilon
+            y1 += epsilon
+        return QRectF(QPointF(x0, y0), QPointF(x1, y1))
+
     def _selected_indices(self) -> list[int]:
         return [idx for idx in sorted(self._sel) if idx < len(self._polys)]
 
@@ -873,6 +900,13 @@ class PolylineView(QGraphicsView):
             self.deselect_all()
 
     def _key_delete(self) -> None:
+        if self._mode == "edit":
+            if self._edit_selected_verts:
+                self._delete_edit_vertices(set(self._edit_selected_verts))
+                return
+            if self._hover_vert is not None:
+                self._delete_edit_vertices({self._hover_vert})
+                return
         if self._mode == "select":
             self.delete_selected()
 
@@ -883,8 +917,64 @@ class PolylineView(QGraphicsView):
                 self._dismiss_dim_inputs()
                 self._draw_constraint = None
             self._redraw()
+        elif self._mode == "edit":
+            self._key_delete()
         elif self._mode == "select":
             self.delete_selected()
+
+    def _can_delete_vertex(self, pi: int, vi: int) -> bool:
+        if not (0 <= pi < len(self._polys)):
+            return False
+        poly = self._polys[pi]
+        if not (0 <= vi < len(poly)):
+            return False
+        is_closed = (
+            len(poly) >= 4
+            and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 1e-6
+        )
+        unique_count = len(poly) - 1 if is_closed else len(poly)
+        return unique_count > 3
+
+    def _delete_edit_vertices(self, verts: set[tuple[int, int]]) -> int:
+        if not verts:
+            return 0
+
+        grouped: dict[int, set[int]] = {}
+        for pi, vi in verts:
+            if self._can_delete_vertex(pi, vi):
+                grouped.setdefault(pi, set()).add(vi)
+        if not grouped:
+            return 0
+
+        self._push_undo()
+        deleted = 0
+
+        for pi in sorted(grouped.keys(), reverse=True):
+            if not (0 <= pi < len(self._polys)):
+                continue
+            poly = self._polys[pi]
+            is_closed = (
+                len(poly) >= 4
+                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 1e-6
+            )
+
+            for vi in sorted(grouped[pi], reverse=True):
+                if 0 <= vi < len(poly):
+                    poly.pop(vi)
+                    deleted += 1
+
+            if is_closed and len(poly) >= 4:
+                poly[-1] = poly[0]
+
+        self._edit_selected_verts.clear()
+        self._edit_drag_targets = set()
+        self._edit_linked_verts = set()
+        self._edit_poly = None
+        self._edit_vert = None
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return deleted
 
     def _finish_draw(self, *, close: bool = False) -> None:
         if self._mode != "draw" or len(self._draw_pts) < 2:
@@ -1043,10 +1133,37 @@ class PolylineView(QGraphicsView):
         """Move active edit vertex and all linked coincident vertices together."""
         if self._edit_poly is None or self._edit_vert is None:
             return
-        targets = self._edit_linked_verts or {(self._edit_poly, self._edit_vert)}
+        targets = (
+            self._edit_drag_targets
+            or self._edit_linked_verts
+            or {(self._edit_poly, self._edit_vert)}
+        )
         for pi, vi in targets:
             if 0 <= pi < len(self._polys) and 0 <= vi < len(self._polys[pi]):
                 self._polys[pi][vi] = (wx, wy)
+
+    def _select_edit_vertices_in_rect(
+        self,
+        x1c: float,
+        y1c: float,
+        x2c: float,
+        y2c: float,
+        *,
+        additive: bool = True,
+    ) -> int:
+        """Select edit vertices whose canvas coordinates are inside a rectangle."""
+        if not additive:
+            self._edit_selected_verts.clear()
+        added = 0
+        for pi, poly in enumerate(self._polys):
+            for vi, (vx, vy) in enumerate(poly):
+                cx, cy = self._w2c(vx, vy)
+                if x1c <= cx <= x2c and y1c <= cy <= y2c:
+                    key = (pi, vi)
+                    if key not in self._edit_selected_verts:
+                        added += 1
+                    self._edit_selected_verts.add(key)
+        return added
 
     def _zoom_by(self, factor: float) -> None:
         vp = self.viewport()
@@ -1324,12 +1441,7 @@ class PolylineView(QGraphicsView):
             if len(poly) < 2:
                 continue
             # Frustum culling: skip polylines entirely outside the viewport
-            _pxs = [p[0] for p in poly]
-            _pys = [p[1] for p in poly]
-            _poly_rect = QRectF(
-                QPointF(min(_pxs), min(_pys)),
-                QPointF(max(_pxs), max(_pys)),
-            )
+            _poly_rect = self._poly_rect_for_culling(poly)
             if not _visible_world.intersects(_poly_rect):
                 continue
             sel = idx in self._sel
@@ -1352,7 +1464,7 @@ class PolylineView(QGraphicsView):
             painter.drawPath(path)
 
         # Selection bounding box
-        if self._sel and self._mode == "select":
+        if self._show_selection_bbox and self._sel and self._mode == "select":
             sel_pts = [
                 pt for i in self._sel if i < len(self._polys) for pt in self._polys[i]
             ]
@@ -1611,18 +1723,22 @@ class PolylineView(QGraphicsView):
                     and self._edit_poly == pi
                     and self._edit_vert == vi
                 )
+                is_selected = (pi, vi) in self._edit_selected_verts
                 if is_active:
                     color = _HANDLE_ACTIVE
                     r = _HANDLE_R + 2
                 elif is_hover:
                     color = _HANDLE_HOVER
                     r = _HANDLE_R + 1
+                elif is_selected:
+                    color = QColor("#79c0ff")
+                    r = _HANDLE_R + 1
                 else:
                     color = _HANDLE
                     r = _HANDLE_R
                 pen = QPen(color, 1.5)
                 painter.setPen(pen)
-                if is_active or is_hover:
+                if is_active or is_hover or is_selected:
                     painter.setBrush(QBrush(color))
                 else:
                     painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -2431,22 +2547,51 @@ class PolylineView(QGraphicsView):
             return
 
         if self._mode == "edit":
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             hit = self._find_nearest_vertex(pos.x(), pos.y())
+
+            if shift:
+                if hit is not None:
+                    if hit in self._edit_selected_verts:
+                        self._edit_selected_verts.discard(hit)
+                    else:
+                        self._edit_selected_verts.add(hit)
+                    self._redraw()
+                    return
+                self._shift_drag = True
+                self._band_start = pos
+                self._lmb_prev = pos
+                self._lmb_press = None
+                return
+
             if hit is not None:
                 pi, vi = hit
                 self._push_undo()
                 self._edit_poly = pi
                 self._edit_vert = vi
                 self._edit_dragging = True
-                self._edit_linked_verts = self._linked_vertices(pi, vi)
+                if (
+                    hit in self._edit_selected_verts
+                    and len(self._edit_selected_verts) > 1
+                ):
+                    self._edit_drag_targets = set(self._edit_selected_verts)
+                else:
+                    self._edit_selected_verts = {hit}
+                    self._edit_drag_targets = self._linked_vertices(pi, vi)
+                self._edit_linked_verts = set(self._edit_drag_targets)
                 self._redraw()
                 return
+
+            if self._edit_selected_verts:
+                self._edit_selected_verts.clear()
+                self._redraw()
             self._lmb_press = pos
             self._lmb_prev = pos
             return
 
         if self._mode == "draw":
             wx, wy = self._c2w(pos.x(), pos.y())
+
             if self._draw_snap is not None:
                 wx, wy = self._draw_snap
             # B. If dim inputs have user-typed values, compute point from those
@@ -2539,6 +2684,10 @@ class PolylineView(QGraphicsView):
             and self._edit_poly is not None
             and self._edit_vert is not None
         ):
+            if self._shift_drag and self._band_start:
+                self._lmb_prev = pos
+                self._redraw()
+                return
             snap_wx, snap_wy = wx, wy
             best_dist = float("inf")
 
@@ -2551,7 +2700,7 @@ class PolylineView(QGraphicsView):
             vertex_snap = self._find_nearest_vertex_snap(
                 pos.x(),
                 pos.y(),
-                exclude=self._edit_linked_verts,
+                exclude=self._edit_drag_targets,
             )
             if vertex_snap is not None:
                 vert_cx, vert_cy = self._w2c(*vertex_snap)
@@ -2564,6 +2713,10 @@ class PolylineView(QGraphicsView):
             return
 
         if self._mode == "edit":
+            if self._shift_drag and self._band_start:
+                self._lmb_prev = pos
+                self._redraw()
+                return
             old_hover = self._hover_vert
             self._hover_vert = self._find_nearest_vertex(pos.x(), pos.y())
             if self._hover_vert != old_hover:
@@ -2696,9 +2849,21 @@ class PolylineView(QGraphicsView):
         if self._mode == "edit" and self._edit_dragging:
             self._edit_dragging = False
             self._edit_linked_verts = set()
+            self._edit_drag_targets = set()
             self._redraw()
             self._notify()
             self._fire_poly_change()
+            return
+
+        if self._mode == "edit" and self._shift_drag and self._band_start:
+            bx, by = self._band_start.x(), self._band_start.y()
+            x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
+            y1c, y2c = min(by, pos.y()), max(by, pos.y())
+            self._select_edit_vertices_in_rect(x1c, y1c, x2c, y2c, additive=True)
+            self._shift_drag = False
+            self._band_start = None
+            self._lmb_prev = None
+            self._redraw()
             return
 
         if self._mode == "draw":
