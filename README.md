@@ -20,3 +20,23 @@ simple-stipple
 ```bash
 pip install .[cad]
 ```
+
+## Release both desktop artifacts from macOS
+
+From your Mac, create and push a version tag to trigger the GitHub Actions release workflow for both platforms:
+
+```bash
+./scripts/release.sh v0.1.0
+```
+
+That single tag push builds and publishes:
+
+- Windows executable: `SimpleStipple.exe`
+- macOS disk image: `SimpleStipple-macOS.dmg`
+
+If you prefer manual steps, do the equivalent:
+
+```bash
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
