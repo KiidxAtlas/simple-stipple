@@ -38,4 +38,6 @@ htmlcov/
 *.log
 
 tests/
-.github/
+.github/*
+!.github/workflows/
+!.github/workflows/*.yml
