@@ -53,6 +53,8 @@ class ImageTab(QWidget):
     _trace_error = Signal(str)
     _trace_progress = Signal(int, str)  # (percent, label)
     stateChanged = Signal()
+    sendSelectedToDraftRequested = Signal(object)
+    sendSelectedToPatternRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -385,6 +387,8 @@ class ImageTab(QWidget):
             on_change=self._on_sel_change,
             on_mode_change=self._on_canvas_mode_change,
             on_poly_change=self._on_canvas_geometry_change,
+            on_send_selected_to_draft=self._on_send_selected_to_draft,
+            on_send_selected_to_pattern=self._on_send_selected_to_pattern,
         )
         canvas_layout.addWidget(self._canvas, stretch=1)
 
@@ -780,6 +784,20 @@ class ImageTab(QWidget):
     def _on_browser_selection_requested(self, indices: list[int]) -> None:
         self._canvas.set_selection(indices)
         self._refresh_canvas_panels()
+
+    def _on_send_selected_to_draft(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if polys:
+            self.sendSelectedToDraftRequested.emit(polys)
+
+    def _on_send_selected_to_pattern(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if polys:
+            self.sendSelectedToPatternRequested.emit(polys)
 
     def _fit_selection(self) -> None:
         if self._canvas.fit_selection():

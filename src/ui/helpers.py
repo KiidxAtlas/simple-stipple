@@ -20,8 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_ENTRY_ERROR_STYLE = "border: 1px solid #f85149;"
-
 
 def _section_label(parent_layout, text: str) -> QLabel:
     """Compact muted section header with letter-spacing."""
@@ -395,11 +393,15 @@ def parse_float_field(
 
 def set_line_edit_error(widget, message: str) -> None:
     """Highlight a line edit and attach a validation message."""
-    widget.setStyleSheet(_ENTRY_ERROR_STYLE)
+    widget.setProperty("error", True)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
     widget.setToolTip(message)
 
 
 def clear_line_edit_error(widget) -> None:
     """Clear validation styling from a line edit."""
-    widget.setStyleSheet("")
+    widget.setProperty("error", False)
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
     widget.setToolTip("")

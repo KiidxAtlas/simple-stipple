@@ -309,6 +309,10 @@ class EfficientDraftCanvas(DxfCanvas):
                 "Explode to segments",
                 lambda: _run_transform(self.explode_selected_to_segments),
             )
+            menu.addAction(
+                "Merge segments to object",
+                lambda: _run_transform(self.merge_selected_segments_to_objects),
+            )
         else:
             menu.addAction("Select all", self.select_all)
 

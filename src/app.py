@@ -30,11 +30,11 @@ from src.core.workspace_state import (
 from src.settings import load_settings, save_settings
 from src.ui.helpers import _info_chip, _surface_frame
 from src.ui.settings_dialog import SettingsDialog
-from src.ui.tabs.fvi_tab import UtilitiesTab
-from src.ui.tabs.image_tab import ImageTab
+from src.ui.tabs.convert_tab import UtilitiesTab
+from src.ui.tabs.draft_tab import ShapeTab
 from src.ui.tabs.pattern_tab import PatternTab
-from src.ui.tabs.shape_tab import ShapeTab
-from src.ui.tabs.sketch_tab import SketchTab
+from src.ui.tabs.repo_tab import RepoTab
+from src.ui.tabs.trace_tab import ImageTab
 
 
 def _apply_dark_palette(app: QApplication) -> None:
@@ -264,6 +264,22 @@ def _apply_dark_palette(app: QApplication) -> None:
         }
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
             border-color: #2f81f7;
+        }
+        QLineEdit[error="true"] {
+            border: 1px solid #f85149;
+            background: rgba(248, 81, 73, 0.08);
+        }
+        QLineEdit[error="true"]:focus {
+            border: 1px solid #ff7b72;
+            background: rgba(248, 81, 73, 0.12);
+        }
+        QComboBox[error="true"], QSpinBox[error="true"], QDoubleSpinBox[error="true"] {
+            border: 1px solid #f85149;
+            background: rgba(248, 81, 73, 0.08);
+        }
+        QComboBox[error="true"]:focus, QSpinBox[error="true"]:focus, QDoubleSpinBox[error="true"]:focus {
+            border: 1px solid #ff7b72;
+            background: rgba(248, 81, 73, 0.12);
         }
         QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
             border-color: #8b949e;
@@ -537,22 +553,34 @@ class App(QMainWindow):
         self._pattern_tab = PatternTab(settings=self._settings)
         self._shape_tab = ShapeTab(settings=self._settings)
         self._image_tab = ImageTab(settings=self._settings)
-        self._sketch_tab = SketchTab(settings=self._settings)
+        self._repo_tab = RepoTab(settings=self._settings)
 
         self._tabs.addTab(self._shape_tab, "Draft")
-        self._tabs.addTab(self._sketch_tab, "Sketch")
         self._tabs.addTab(self._pattern_tab, "Pattern Fill")
         self._tabs.addTab(self._image_tab, "Trace")
         self._tabs.addTab(self._utilities_tab, "Convert")
+        self._tabs.addTab(self._repo_tab, "Repo")
 
         for tab in (
             self._pattern_tab,
             self._shape_tab,
             self._image_tab,
-            self._sketch_tab,
+            self._repo_tab,
         ):
             tab.stateChanged.connect(self._schedule_workspace_dirty_check)
         self._shape_tab.sendSelectedToPatternRequested.connect(
+            self._send_shape_selection_to_pattern
+        )
+        self._shape_tab.useSelectedAsFillPatternRequested.connect(
+            self._use_shape_selection_as_fill_pattern
+        )
+        self._pattern_tab.sendSelectedToDraftRequested.connect(
+            self._send_pattern_selection_to_draft
+        )
+        self._image_tab.sendSelectedToDraftRequested.connect(
+            self._send_pattern_selection_to_draft
+        )
+        self._image_tab.sendSelectedToPatternRequested.connect(
             self._send_shape_selection_to_pattern
         )
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
@@ -671,10 +699,10 @@ class App(QMainWindow):
             app_state={"current_tab": self._tabs.currentIndex()},
             tab_states={
                 "shape": self._shape_tab.get_workspace_state(),
-                "sketch": self._sketch_tab.get_workspace_state(),
                 "pattern": self._pattern_tab.get_workspace_state(),
                 "image": self._image_tab.get_workspace_state(),
                 "utilities": self._utilities_tab.get_workspace_state(),
+                "repo": self._repo_tab.get_workspace_state(),
             },
             preset_state={
                 "shape": self._shape_tab.get_preset_state(),
@@ -693,18 +721,19 @@ class App(QMainWindow):
         self._pattern_tab.apply_preset_state(data.get("presets", {}).get("pattern", {}))
         tabs = data.get("tabs", {})
         self._shape_tab.apply_workspace_state(tabs.get("shape", {}))
-        self._sketch_tab.apply_workspace_state(tabs.get("sketch", {}))
         self._pattern_tab.apply_workspace_state(tabs.get("pattern", {}))
         self._image_tab.apply_workspace_state(tabs.get("image", {}))
         self._utilities_tab.apply_workspace_state(tabs.get("utilities", {}))
-        self._tabs.setCurrentIndex(int(data.get("app", {}).get("current_tab", 0)))
+        self._repo_tab.apply_workspace_state(tabs.get("repo", {}))
+        idx = int(data.get("app", {}).get("current_tab", 0))
+        self._tabs.setCurrentIndex(max(0, min(idx, self._tabs.count() - 1)))
 
     def _clear_workspace_state(self) -> None:
         self._shape_tab.clear_workspace_state()
-        self._sketch_tab.clear_workspace_state()
         self._pattern_tab.clear_workspace_state()
         self._image_tab.clear_workspace_state()
         self._utilities_tab.clear_workspace_state()
+        self._repo_tab.clear_workspace_state()
         self._tabs.setCurrentIndex(0)
 
     def _schedule_workspace_dirty_check(self) -> None:
@@ -719,6 +748,29 @@ class App(QMainWindow):
         self._pattern_tab.load_outline_polys(polys, source_label="Draft selection")
         self._tabs.setCurrentWidget(self._pattern_tab)
         self._schedule_workspace_dirty_check()
+
+    def _send_pattern_selection_to_draft(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if not polys:
+            return
+        self._shape_tab.load_outline_polys(polys, source_label="Pattern selection")
+        self._tabs.setCurrentWidget(self._shape_tab)
+        self._schedule_workspace_dirty_check()
+
+    def _use_shape_selection_as_fill_pattern(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if not polys:
+            return
+        if self._pattern_tab.use_polys_as_fill_pattern(
+            polys,
+            source_label="Draft selection",
+        ):
+            self._tabs.setCurrentWidget(self._pattern_tab)
+            self._schedule_workspace_dirty_check()
 
     def _update_workspace_dirty(self) -> None:
         if self._last_saved_document is None:

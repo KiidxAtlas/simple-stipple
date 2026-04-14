@@ -6,7 +6,7 @@ import math
 from typing import TypeAlias
 
 from PIL import Image as PILImage
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -34,7 +34,11 @@ from shapely.ops import split as shapely_split
 
 from src.constants import DIM, DRAG_THRESH, POLY, Q_BG, SEL
 
-CanvasState: TypeAlias = tuple[list[list[tuple[float, float]]], set[int]]
+CanvasState: TypeAlias = tuple[
+    list[list[tuple[float, float]]],
+    set[int],
+    set[int],
+]
 
 # Edit-mode visual constants
 _HANDLE = QColor("#4a9eff")  # vertex handle — matches poly accent
@@ -43,6 +47,8 @@ _HANDLE_ACTIVE = QColor("#f5a623")  # active drag — amber
 _SNAP_CLOSE = QColor("#00c8aa")  # snap ring — teal
 _DRAW_COLOR = QColor("#f5a623")  # draw mode in-progress — amber
 _MEASURE_COLOR = QColor("#22d3ee")  # measure — cyan
+_SELECT_PT = QColor("#79c0ff")  # select-mode vertex indicator
+_SELECT_PT_ACTIVE = QColor("#f5a623")  # active drag vertex indicator
 _HANDLE_R = 4
 _SNAP_DIST = 14
 _CLOSE_SNAP_DIST = 14  # same as snap so visual indicator matches click behavior
@@ -57,6 +63,7 @@ _GRID_MAJOR = QColor("#243244")
 _GRID_AXIS = QColor("#31516e")
 _CONSTRUCTION_COLOR = QColor("#9933cc")
 _ORTHO_COLOR = QColor("#334466")
+_GUIDE_COLOR = QColor("#22d3ee")
 _BADGE_BG = QColor(20, 24, 36, 200)
 _BADGE_TEXT = QColor("#ffffff")
 _BADGE_DIM = QColor("#aabbcc")
@@ -123,6 +130,8 @@ class PolylineView(QGraphicsView):
 
         self._polys: list[list[tuple[float, float]]] = []
         self._sel: set[int] = set()
+        self._construction_polys: set[int] = set()
+        self._draw_construction_mode: bool = False
 
         self._scale = 1.0
         self._ox = 0.0
@@ -174,6 +183,8 @@ class PolylineView(QGraphicsView):
         self._edit_linked_verts: set[tuple[int, int]] = set()
         self._edit_selected_verts: set[tuple[int, int]] = set()
         self._edit_drag_targets: set[tuple[int, int]] = set()
+        self._edit_drag_moved: bool = False
+        self._edit_undo_pushed: bool = False
         self._hover_vert: tuple[int, int] | None = None
 
         # Move state (select mode drag-to-move)
@@ -213,12 +224,23 @@ class PolylineView(QGraphicsView):
 
         # Construction / reference lines: list of ("h", y_world) or ("v", x_world)
         self._construction_lines: list[tuple[str, float]] = []
+        # Temporary guide/measure lines (not exported): ((x1, y1), (x2, y2))
+        self._guide_lines: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        self._guide_mode: bool = False
+        self._guide_anchor: tuple[float, float] | None = None
 
         # Auto-dimension HUD inputs (Fusion 360 style)
         self._dim_distance_edit: QLineEdit | None = None
         self._dim_angle_edit: QLineEdit | None = None
         self._dim_distance_dirty: bool = False
         self._dim_angle_dirty: bool = False
+
+        # Selection dimension badge hit rects (for inline editing)
+        self._sel_badge_w_rect: QRectF | None = None
+        self._sel_badge_h_rect: QRectF | None = None
+        # Inline single-dimension editor
+        self._sel_dim_edit: QLineEdit | None = None
+        self._sel_dim_axis: str | None = None  # "w" or "h"
 
         # Auto-constraint detection (H/V)
         self._draw_constraint: str | None = None
@@ -241,12 +263,14 @@ class PolylineView(QGraphicsView):
         self._needs_fit = True
         self._fit()
         self._notify()
+        self._construction_polys.clear()
 
     def reload(self, polys: list[list[tuple[float, float]]]) -> None:
         self._polys = self._clone_polys(polys)
         self._sel &= set(range(len(self._polys)))
         self._redraw()
         self._notify()
+        self._construction_polys &= set(range(len(self._polys)))
 
     def get_polylines_state(self) -> list[list[tuple[float, float]]]:
         return self._clone_polys(self._polys)
@@ -256,6 +280,7 @@ class PolylineView(QGraphicsView):
     ) -> None:
         self._polys = self._clone_polys(polys)
         self._sel.clear()
+        self._construction_polys.clear()
         if fit:
             self._needs_fit = True
             self._fit()
@@ -314,6 +339,8 @@ class PolylineView(QGraphicsView):
             precision.append("Snap")
         if self._measure_mode:
             precision.append("Measure")
+        if self._draw_construction_mode:
+            precision.append("Construction")
         return {
             "mode": self._mode,
             "selected_count": len(self._sel),
@@ -325,7 +352,17 @@ class PolylineView(QGraphicsView):
         n = len(self._sel)
         if n:
             self._push_undo()
-        self._polys = [p for i, p in enumerate(self._polys) if i not in self._sel]
+        kept: list[list[tuple[float, float]]] = []
+        new_construction: set[int] = set()
+        for i, p in enumerate(self._polys):
+            if i in self._sel:
+                continue
+            new_idx = len(kept)
+            kept.append(p)
+            if i in self._construction_polys:
+                new_construction.add(new_idx)
+        self._polys = kept
+        self._construction_polys = new_construction
         self._sel.clear()
         self._redraw()
         self._notify()
@@ -336,12 +373,17 @@ class PolylineView(QGraphicsView):
     def undo(self) -> bool:
         if not self._undo_stack:
             return False
-        self._redo_stack.append(([list(p) for p in self._polys], set(self._sel)))
+        self._redo_stack.append((
+            [list(p) for p in self._polys],
+            set(self._sel),
+            set(self._construction_polys),
+        ))
         if len(self._redo_stack) > 30:
             self._redo_stack.pop(0)
-        polys, sel = self._undo_stack.pop()
+        polys, sel, construction = self._undo_stack.pop()
         self._polys = polys
         self._sel = {i for i in sel if i < len(self._polys)}
+        self._construction_polys = {i for i in construction if i < len(self._polys)}
         self._edit_poly = None
         self._edit_vert = None
         self._edit_dragging = False
@@ -357,12 +399,17 @@ class PolylineView(QGraphicsView):
     def redo(self) -> bool:
         if not self._redo_stack:
             return False
-        self._undo_stack.append(([list(p) for p in self._polys], set(self._sel)))
+        self._undo_stack.append((
+            [list(p) for p in self._polys],
+            set(self._sel),
+            set(self._construction_polys),
+        ))
         if len(self._undo_stack) > 30:
             self._undo_stack.pop(0)
-        polys, sel = self._redo_stack.pop()
+        polys, sel, construction = self._redo_stack.pop()
         self._polys = polys
         self._sel = {i for i in sel if i < len(self._polys)}
+        self._construction_polys = {i for i in construction if i < len(self._polys)}
         self._edit_poly = None
         self._edit_vert = None
         self._edit_dragging = False
@@ -392,6 +439,132 @@ class PolylineView(QGraphicsView):
         self._sel.clear()
         self._redraw()
         self._notify()
+
+    def explode_selected_to_segments(self) -> int:
+        """Split each selected multi-vertex polyline into individual 2-pt line segments.
+
+        Returns the number of new segments created.
+        """
+        indices = self._selected_indices()
+        if not indices:
+            return 0
+        # Only explode polylines with more than 2 points (1 segment is already atomic).
+        to_explode = [i for i in indices if len(self._polys[i]) > 2]
+        if not to_explode:
+            return 0
+        self._push_undo()
+        new_polys: list[list[tuple[float, float]]] = []
+        new_construction: set[int] = set()
+        new_sel: set[int] = set()
+        for i, poly in enumerate(self._polys):
+            is_construction = i in self._construction_polys
+            if i in to_explode:
+                pts = poly
+                # If closed (first == last) drop the duplicate closing point first
+                if (
+                    len(pts) >= 3
+                    and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
+                    < 1e-6
+                ):
+                    pts = pts[:-1]
+                for j in range(len(pts)):
+                    seg = [pts[j], pts[(j + 1) % len(pts)]]
+                    si = len(new_polys)
+                    new_polys.append(seg)
+                    if is_construction:
+                        new_construction.add(si)
+                    new_sel.add(si)
+            else:
+                ni = len(new_polys)
+                new_polys.append(poly)
+                if is_construction:
+                    new_construction.add(ni)
+        self._polys = new_polys
+        self._construction_polys = new_construction
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_sel)
+
+    def merge_selected_segments_to_objects(self) -> int:
+        """Merge selected 2-point segments back into one or more connected polylines."""
+        indices = self._selected_indices()
+        if len(indices) < 2:
+            return 0
+        if any(len(self._polys[i]) != 2 for i in indices):
+            return 0
+
+        def _eq(a: tuple[float, float], b: tuple[float, float]) -> bool:
+            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
+        segs = [list(self._polys[i]) for i in indices]
+        sel_set = set(indices)
+        any_construction = any(i in self._construction_polys for i in indices)
+
+        self._push_undo()
+
+        merged_polys: list[list[tuple[float, float]]] = []
+        used = [False] * len(segs)
+
+        for si, seg in enumerate(segs):
+            if used[si]:
+                continue
+            used[si] = True
+            chain = [seg[0], seg[1]]
+
+            changed = True
+            while changed:
+                changed = False
+                for j, s in enumerate(segs):
+                    if used[j]:
+                        continue
+                    a, b = s[0], s[1]
+                    head, tail = chain[0], chain[-1]
+                    if _eq(tail, a):
+                        chain.append(b)
+                    elif _eq(tail, b):
+                        chain.append(a)
+                    elif _eq(head, b):
+                        chain.insert(0, a)
+                    elif _eq(head, a):
+                        chain.insert(0, b)
+                    else:
+                        continue
+                    used[j] = True
+                    changed = True
+                    break
+
+            if len(chain) >= 3 and _eq(chain[0], chain[-1]):
+                # normalize explicit closure point
+                chain[-1] = chain[0]
+            merged_polys.append(chain)
+
+        kept_polys: list[list[tuple[float, float]]] = []
+        kept_construction: set[int] = set()
+        for i, poly in enumerate(self._polys):
+            if i in sel_set:
+                continue
+            ni = len(kept_polys)
+            kept_polys.append(poly)
+            if i in self._construction_polys:
+                kept_construction.add(ni)
+
+        new_sel: set[int] = set()
+        for poly in merged_polys:
+            ni = len(kept_polys)
+            kept_polys.append(poly)
+            new_sel.add(ni)
+            if any_construction:
+                kept_construction.add(ni)
+
+        self._polys = kept_polys
+        self._construction_polys = kept_construction
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_sel)
 
     def toggle_measure(self) -> None:
         self._measure_mode = not self._measure_mode
@@ -772,14 +945,40 @@ class PolylineView(QGraphicsView):
     def _update_cursor(self) -> None:
         if self._measure_mode or self._mode in ("draw", "edit"):
             self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._mode == "select" and self._hover_vert is not None and self._sel:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
             self.unsetCursor()
 
     def _push_undo(self) -> None:
-        self._undo_stack.append(([list(p) for p in self._polys], set(self._sel)))
+        self._undo_stack.append((
+            [list(p) for p in self._polys],
+            set(self._sel),
+            set(self._construction_polys),
+        ))
         if len(self._undo_stack) > 30:
             self._undo_stack.pop(0)
         self._redo_stack.clear()
+
+    def _toggle_selected_construction(self) -> None:
+        if not self._sel:
+            return
+        self._push_undo()
+        for idx in list(self._sel):
+            if idx in self._construction_polys:
+                self._construction_polys.discard(idx)
+            else:
+                self._construction_polys.add(idx)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def get_export_polylines_state(self) -> list[list[tuple[float, float]]]:
+        return [
+            list(poly)
+            for idx, poly in enumerate(self._polys)
+            if idx not in self._construction_polys
+        ]
 
     def _bbox(self) -> tuple[float, float, float, float]:
         pts = [pt for p in self._polys for pt in p]
@@ -829,6 +1028,46 @@ class PolylineView(QGraphicsView):
         xs, ys = zip(*pts)
         return min(xs), min(ys), max(xs), max(ys)
 
+    def _connected_poly_indices(self, start_idx: int) -> set[int]:
+        """Return polylines connected to start_idx via shared vertices."""
+        if not (0 <= start_idx < len(self._polys)):
+            return set()
+
+        def _key(pt: tuple[float, float]) -> tuple[int, int]:
+            return (round(pt[0] * 1_000_000), round(pt[1] * 1_000_000))
+
+        graph: dict[int, set[int]] = {i: set() for i in range(len(self._polys))}
+        point_to_polys: dict[tuple[int, int], set[int]] = {}
+        for pi, poly in enumerate(self._polys):
+            seen: set[tuple[int, int]] = set()
+            for pt in poly:
+                k = _key(pt)
+                if k in seen:
+                    continue
+                seen.add(k)
+                point_to_polys.setdefault(k, set()).add(pi)
+
+        for linked in point_to_polys.values():
+            if len(linked) < 2:
+                continue
+            idxs = list(linked)
+            for i in range(len(idxs)):
+                a = idxs[i]
+                for j in range(i + 1, len(idxs)):
+                    b = idxs[j]
+                    graph[a].add(b)
+                    graph[b].add(a)
+
+        visited = {start_idx}
+        stack = [start_idx]
+        while stack:
+            cur = stack.pop()
+            for nxt in graph.get(cur, set()):
+                if nxt not in visited:
+                    visited.add(nxt)
+                    stack.append(nxt)
+        return visited
+
     def _fit_to_bounds(self, bounds: tuple[float, float, float, float]) -> None:
         vp = self.viewport()
         w = max(vp.width(), 100)
@@ -866,6 +1105,12 @@ class PolylineView(QGraphicsView):
             if poly_snap is not None:
                 sx, sy = self._w2c(poly_snap[0], poly_snap[1])
                 candidates.append((math.hypot(cx - sx, cy - sy), poly_snap))
+            for a, b in self._guide_lines:
+                for gx, gy in (a, b):
+                    sx, sy = self._w2c(gx, gy)
+                    dist = math.hypot(cx - sx, cy - sy)
+                    if dist <= _SNAP_DIST:
+                        candidates.append((dist, (gx, gy, "guide")))
         if allow_grid and self._grid_snap:
             grid_snap = self._snap_to_grid(wx, wy)
             sx, sy = self._w2c(*grid_snap)
@@ -876,28 +1121,41 @@ class PolylineView(QGraphicsView):
         return candidates[0][1]
 
     def _escape_cb(self) -> None:
-        if self._mode == "draw":
-            if len(self._draw_pts) >= 2:
-                # Commit the placed points as an open polyline, stay in draw mode
-                self._finish_draw(close=False)
-            elif self._draw_pts:
-                # Only 1 point placed — discard it
-                self._draw_pts.clear()
-                self._draw_constraint = None
-                self._dismiss_dim_inputs()
-                self._redraw()
-            else:
-                self.set_mode("select")
-        elif self._mode == "edit":
-            if self._edit_dragging:
-                self._edit_dragging = False
-                self._redraw()
-            else:
-                self.set_mode("select")
-        elif self._measure_mode:
-            self.toggle_measure()
-        else:
-            self.deselect_all()
+        # Hard reset interaction states.
+        self._draw_pts.clear()
+        self._draw_constraint = None
+        self._draw_snap = None
+        self._draw_snap_type = None
+        self._angle_snap_active = False
+        self._dismiss_dim_inputs()
+
+        self._edit_dragging = False
+        self._edit_linked_verts = set()
+        self._edit_selected_verts = set()
+        self._edit_drag_targets = set()
+        self._edit_drag_moved = False
+        self._edit_undo_pushed = False
+        self._hover_vert = None
+
+        self._measure_mode = False
+        self._measure_anchor = None
+        self._measure_hover = None
+        self._measure_locked = False
+        self._measure_end = None
+        self._measure_snapped_a = False
+        self._measure_snapped_b = False
+        self._measure_hover_pre = None
+        self._dismiss_measure_edit()
+
+        self._guide_mode = False
+        self._guide_anchor = None
+
+        self._mode = "select"
+        self._sel.clear()
+        self._update_cursor()
+        self.modeChanged.emit("select")
+        self._notify()
+        self._redraw()
 
     def _key_delete(self) -> None:
         if self._mode == "edit":
@@ -984,47 +1242,14 @@ class PolylineView(QGraphicsView):
             self._draw_pts.append(self._draw_pts[0])
         drawn = list(self._draw_pts)
 
-        # Try to split existing geometry with the drawn line
-        # (Fusion 360 behavior: drawing a line across a shape splits it)
-        if not close and len(drawn) >= 2:
-            did_split = self._split_geometry_with_line(drawn)
-            if did_split:
-                # Cutting line consumed — don't keep it as a separate poly
-                self._notify()
-                self._fire_poly_change()
-                self._draw_pts.clear()
-                self._draw_constraint = None
-                self._dismiss_dim_inputs()
-                self._show_flash("Geometry split", 800)
-                self._redraw()
-                return
-
-        # No split occurred — add drawn polyline normally
+        # Add drawn polyline
         self._polys.append(drawn)
+        new_idx = len(self._polys) - 1
+        if self._draw_construction_mode:
+            self._construction_polys.add(new_idx)
 
-        merged_idx: int | None = None
-        if not close:
-            merged_idx = self._try_merge_endpoints()
-
-        merged_closed = False
-        if merged_idx is not None:
-            merged_poly = self._polys[merged_idx]
-            merged_closed = (
-                len(merged_poly) >= 4
-                and math.hypot(
-                    merged_poly[0][0] - merged_poly[-1][0],
-                    merged_poly[0][1] - merged_poly[-1][1],
-                )
-                < 1e-6
-            )
-
-        if close:
-            new_idx = len(self._polys) - 1
-            self._sel.clear()
-            self._sel.add(new_idx)
-        elif merged_idx is not None:
-            self._sel.clear()
-            self._sel.add(merged_idx)
+        self._sel.clear()
+        self._sel.add(new_idx)
         self._notify()
         self._fire_poly_change()
         self._draw_pts.clear()
@@ -1032,7 +1257,7 @@ class PolylineView(QGraphicsView):
         self._dismiss_dim_inputs()
         self._show_flash("Polyline created", 800)
         self._redraw()
-        if close or merged_closed:
+        if close:
             self.set_mode("edit")
 
     def _try_merge_endpoints(self) -> int | None:
@@ -1071,10 +1296,20 @@ class PolylineView(QGraphicsView):
                     merged = list(reversed(poly))[:-1] + survivor
                 if merged is None:
                     continue
+                popped_was_construction = i in self._construction_polys
+                survivor_was_construction = survivor_idx in self._construction_polys
                 self._polys[survivor_idx] = merged
                 self._polys.pop(i)
+                remapped: set[int] = set()
+                for ci in self._construction_polys:
+                    if ci == i:
+                        continue
+                    remapped.add(ci - 1 if ci > i else ci)
+                self._construction_polys = remapped
                 if i < survivor_idx:
                     survivor_idx -= 1
+                if popped_was_construction or survivor_was_construction:
+                    self._construction_polys.add(survivor_idx)
                 merged_any = True
                 changed = True
                 break
@@ -1326,7 +1561,13 @@ class PolylineView(QGraphicsView):
         wx, wy = self._c2w(cx, cy)
         for pi, poly in enumerate(self._polys):
             n = len(poly)
-            for vi in range(n):
+            is_closed = (
+                n >= 3
+                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
+                < 0.01
+            )
+            seg_count = n if is_closed else n - 1
+            for vi in range(seg_count):
                 ax, ay = poly[vi]
                 bx, by = poly[(vi + 1) % n]
                 dx, dy = bx - ax, by - ay
@@ -1354,7 +1595,13 @@ class PolylineView(QGraphicsView):
         wx, wy = self._c2w(cx, cy)
         for pi, poly in enumerate(self._polys):
             n = len(poly)
-            for vi in range(n):
+            is_closed = (
+                n >= 3
+                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
+                < 0.01
+            )
+            seg_count = n if is_closed else n - 1
+            for vi in range(seg_count):
                 ax, ay = poly[vi]
                 bx, by = poly[(vi + 1) % n]
                 dx, dy = bx - ax, by - ay
@@ -1445,9 +1692,16 @@ class PolylineView(QGraphicsView):
             if not _visible_world.intersects(_poly_rect):
                 continue
             sel = idx in self._sel
-            color = QColor(SEL) if sel else QColor(POLY)
-            lw = 2.0 if sel else 1.5
+            is_construction = idx in self._construction_polys
+            color = (
+                QColor(SEL)
+                if sel
+                else (QColor(_GUIDE_COLOR) if is_construction else QColor(POLY))
+            )
+            lw = 2.0 if sel else (1.2 if is_construction else 1.5)
             pen = QPen(color, lw)
+            if is_construction:
+                pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             path = QPainterPath()
@@ -1482,9 +1736,50 @@ class PolylineView(QGraphicsView):
                     )
                 )
 
+        # Select-mode dimensions (Fusion-like quick readout)
+        if self._mode == "select" and self._sel:
+            sel_bounds = self._selection_bounds()
+            if sel_bounds is not None:
+                x0, y0, x1, y1 = sel_bounds
+                width = x1 - x0
+                height = y1 - y0
+                cx0, cy0 = self._w2c(x0, y0)
+                cx1, cy1 = self._w2c(x1, y1)
+                mx = (cx0 + cx1) / 2.0
+                my = (cy0 + cy1) / 2.0
+                self._sel_badge_w_rect = self._draw_badge(
+                    painter, mx, min(cy0, cy1) - 14, f"W {width:.2f}", 9
+                )
+                self._sel_badge_h_rect = self._draw_badge(
+                    painter, max(cx0, cx1) + 26, my, f"H {height:.2f}", 9
+                )
+                if len(self._sel) == 1:
+                    idx = next(iter(self._sel))
+                    if 0 <= idx < len(self._polys):
+                        poly = self._polys[idx]
+                        if len(poly) == 2:
+                            (ax, ay), (bx, by) = poly
+                            llen = math.hypot(bx - ax, by - ay)
+                            ang = math.degrees(math.atan2(by - ay, bx - ax))
+                            self._draw_badge(
+                                painter,
+                                mx,
+                                max(cy0, cy1) + 16,
+                                f"L {llen:.2f}  ∠ {ang:.1f}°",
+                                9,
+                            )
+            else:
+                self._sel_badge_w_rect = None
+                self._sel_badge_h_rect = None
+        else:
+            self._sel_badge_w_rect = None
+            self._sel_badge_h_rect = None
+
         # Edit mode: vertex handles
         if self._mode == "edit":
             self._paint_edit_handles(painter)
+        elif self._mode == "select" and self._sel:
+            self._paint_select_handles(painter)
 
         # Construction lines (Feature 15)
         if self._construction_lines:
@@ -1497,6 +1792,35 @@ class PolylineView(QGraphicsView):
                 else:
                     cx_con, _ = self._w2c(cl_val, 0.0)
                     painter.drawLine(QPointF(cx_con, 0.0), QPointF(cx_con, float(h)))
+
+        # Guide/measure lines (non-exported)
+        if self._guide_lines:
+            gpen = QPen(_GUIDE_COLOR, 1.2, Qt.PenStyle.DashLine)
+            painter.setPen(gpen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for (ax, ay), (bx, by) in self._guide_lines:
+                acx, acy = self._w2c(ax, ay)
+                bcx, bcy = self._w2c(bx, by)
+                painter.drawLine(QPointF(acx, acy), QPointF(bcx, bcy))
+                painter.drawEllipse(QPointF(acx, acy), 3.0, 3.0)
+                painter.drawEllipse(QPointF(bcx, bcy), 3.0, 3.0)
+                glen = math.hypot(bx - ax, by - ay)
+                midx, midy = (acx + bcx) / 2.0, (acy + bcy) / 2.0
+                self._draw_badge(painter, midx, midy - 10, f"{glen:.2f} mm", 9)
+
+        if (
+            self._guide_mode
+            and self._guide_anchor
+            and self._cursor_wx is not None
+            and self._cursor_wy is not None
+        ):
+            ax, ay = self._guide_anchor
+            acx, acy = self._w2c(ax, ay)
+            ccx, ccy = self._w2c(self._cursor_wx, self._cursor_wy)
+            ghost_pen = QPen(QColor(34, 211, 238, 120), 1.0, Qt.PenStyle.DashLine)
+            painter.setPen(ghost_pen)
+            painter.drawLine(QPointF(acx, acy), QPointF(ccx, ccy))
+            painter.drawEllipse(QPointF(acx, acy), 4.0, 4.0)
 
         # Ortho constraint line (Feature 6)
         if self._mode == "draw" and self._angle_snap_active and self._draw_pts:
@@ -1600,7 +1924,7 @@ class PolylineView(QGraphicsView):
         elif self._mode == "edit":
             hint = "[drag vert  dbl-click edge=insert  right-click vert=delete  E=exit]"
         else:
-            hint = "[F=fit  \u2318Z=undo  \u2318A=all  \u2318C/V/D/X=clip  S=snap  [/]=grid  H/V=cline  M D E=modes]"
+            hint = "[F=fit  \u2318Z=undo  \u2318A=all  \u2318C/V/D/X=clip  S=snap  [/]=grid  H/V=cline  L=guide  X=construction  \u2318⇧L=clear guides  M D E=modes]"
         precision = []
         if self._grid_visible:
             precision.append(f"grid {self._grid_spacing:g}mm")
@@ -1744,6 +2068,35 @@ class PolylineView(QGraphicsView):
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(QPointF(cx, cy), r, r)
 
+    def _paint_select_handles(self, painter: QPainter) -> None:
+        """Show selected poly vertices in select mode for direct manipulation."""
+        if not self._sel:
+            return
+        for pi in sorted(self._sel):
+            if pi < 0 or pi >= len(self._polys):
+                continue
+            poly = self._polys[pi]
+            for vi, pt in enumerate(poly):
+                cx, cy = self._w2c(*pt)
+                is_hover = self._hover_vert == (pi, vi)
+                is_active = (
+                    self._edit_dragging
+                    and self._edit_poly == pi
+                    and self._edit_vert == vi
+                )
+                if is_active:
+                    color = _SELECT_PT_ACTIVE
+                    r = _HANDLE_R + 2
+                elif is_hover:
+                    color = _SNAP_CLOSE
+                    r = _HANDLE_R + 1
+                else:
+                    color = _SELECT_PT
+                    r = _HANDLE_R
+                painter.setPen(QPen(color, 1.5))
+                painter.setBrush(QBrush(color))
+                painter.drawEllipse(QPointF(cx, cy), r, r)
+
     def _is_near_start(self) -> bool:
         """Check if cursor is near the first draw point (close-polygon zone)."""
         if (
@@ -1757,12 +2110,13 @@ class PolylineView(QGraphicsView):
         return math.hypot(cur_cx - start_cx, cur_cy - start_cy) < _CLOSE_SNAP_DIST
 
     def _paint_in_progress_poly(self, painter: QPainter) -> None:
+        draw_color = _GUIDE_COLOR if self._draw_construction_mode else _DRAW_COLOR
         pts_screen = [self._w2c(*pt) for pt in self._draw_pts]
         near_close = self._is_near_start()
 
         # ── Placed segments (solid, thick) ──
         if len(pts_screen) >= 2:
-            pen = QPen(_DRAW_COLOR, _DRAW_LINE_W)
+            pen = QPen(draw_color, _DRAW_LINE_W)
             painter.setPen(pen)
             path = QPainterPath()
             path.moveTo(*pts_screen[0])
@@ -1811,7 +2165,7 @@ class PolylineView(QGraphicsView):
             painter.drawEllipse(QPointF(cx, cy), _DRAW_VERT_R + 2, _DRAW_VERT_R + 2)
             # Filled center
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(_DRAW_COLOR))
+            painter.setBrush(QBrush(draw_color))
             painter.drawEllipse(QPointF(cx, cy), _DRAW_VERT_R, _DRAW_VERT_R)
 
         # ── Rubber-band line to cursor ──
@@ -1832,7 +2186,7 @@ class PolylineView(QGraphicsView):
                 if self._draw_constraint is not None:
                     rub_color = QColor("#4a9eff")
                 else:
-                    rub_color = _DRAW_COLOR
+                    rub_color = draw_color
                 pen = QPen(rub_color, _RUBBER_W)
                 painter.setPen(pen)
                 painter.drawLine(QPointF(*last), QPointF(*cur_c))
@@ -1944,6 +2298,7 @@ class PolylineView(QGraphicsView):
             "edge": "On Edge",
             "grid": "Grid",
             "perpendicular": "Perpendicular",
+            "guide": "Guide",
         }
         _label = _snap_labels.get(snap_t, "")
         if _label:
@@ -1960,8 +2315,11 @@ class PolylineView(QGraphicsView):
 
     def _draw_badge(
         self, painter: QPainter, cx: float, cy: float, text: str, font_size: int
-    ) -> None:
-        """Draw a text badge with semi-transparent background centered at (cx, cy)."""
+    ) -> QRectF:
+        """Draw a text badge with semi-transparent background centered at (cx, cy).
+
+        Returns the bounding QRectF of the drawn badge (for hit-testing).
+        """
         font = QFont("Helvetica", font_size)
         painter.setFont(font)
         fm = QFontMetrics(font)
@@ -1970,15 +2328,17 @@ class PolylineView(QGraphicsView):
         pad = 4
         rx = cx - tw / 2 - pad
         ry = cy - th / 2 - pad / 2
+        rect = QRectF(rx, ry, tw + 2 * pad, th + pad)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(_BADGE_BG))
-        painter.drawRoundedRect(QRectF(rx, ry, tw + 2 * pad, th + pad), 3, 3)
+        painter.drawRoundedRect(rect, 3, 3)
         painter.setPen(_BADGE_TEXT if font_size >= 10 else _BADGE_DIM)
         painter.drawText(
-            QRectF(rx, ry, tw + 2 * pad, th + pad),
+            rect,
             Qt.AlignmentFlag.AlignCenter,
             text,
         )
+        return rect
 
     def _show_flash(self, text: str, duration_ms: int = 1200) -> None:
         """Show a brief flash indicator on the canvas."""
@@ -2018,6 +2378,7 @@ class PolylineView(QGraphicsView):
         dist_edit.setPlaceholderText("d:")
         dist_edit.show()
         dist_edit.returnPressed.connect(self._apply_dim_input)
+        dist_edit.installEventFilter(self)
         self._dim_distance_edit = dist_edit
         self._dim_distance_dirty = False
 
@@ -2029,8 +2390,29 @@ class PolylineView(QGraphicsView):
         angle_edit.setPlaceholderText("\u2220:")
         angle_edit.show()
         angle_edit.returnPressed.connect(self._apply_dim_input)
+        angle_edit.installEventFilter(self)
         self._dim_angle_edit = angle_edit
         self._dim_angle_dirty = False
+
+    def eventFilter(self, obj, event) -> bool:
+        """Intercept Tab/Backtab on the draw-mode dim-input QLineEdits."""
+        if event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                if (
+                    self._dim_distance_edit is not None
+                    and self._dim_angle_edit is not None
+                ):
+                    if obj is self._dim_distance_edit:
+                        self._dim_angle_edit.setFocus()
+                        self._dim_angle_edit.selectAll()
+                        self._dim_angle_dirty = True
+                    elif obj is self._dim_angle_edit:
+                        self._dim_distance_edit.setFocus()
+                        self._dim_distance_edit.selectAll()
+                        self._dim_distance_dirty = True
+                return True  # Consume the Tab — prevent Qt focus chain
+        return super().eventFilter(obj, event)
 
     def _dismiss_dim_inputs(self) -> None:
         """Remove the auto-dimension HUD widgets."""
@@ -2044,6 +2426,62 @@ class PolylineView(QGraphicsView):
             self._dim_angle_edit = None
         self._dim_distance_dirty = False
         self._dim_angle_dirty = False
+
+    # ── Inline selection-badge dimension editor ───────────────────────────────
+
+    def _show_sel_dim_editor(self, axis: str, rect: QRectF) -> None:
+        """Show a floating QLineEdit over the W or H badge for direct editing."""
+        self._dismiss_sel_dim_editor()
+        bounds = self._selection_bounds()
+        if bounds is None:
+            return
+        x0, y0, x1, y1 = bounds
+        cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
+
+        edit = QLineEdit(self.viewport())
+        edit.setFixedWidth(max(int(rect.width()) + 10, 70))
+        edit.setFixedHeight(22)
+        edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        edit.setStyleSheet(self._DIM_STYLE)
+        edit.setText(f"{cur_val:.3f}")
+        edit.selectAll()
+        edit.move(int(rect.x()), int(rect.y()))
+        edit.show()
+        edit.setFocus()
+        edit.returnPressed.connect(lambda: self._apply_sel_dim_editor())
+        edit.editingFinished.connect(lambda: self._dismiss_sel_dim_editor())
+        self._sel_dim_edit = edit
+        self._sel_dim_axis = axis
+
+    def _apply_sel_dim_editor(self) -> None:
+        if self._sel_dim_edit is None or self._sel_dim_axis is None:
+            return
+        text = self._sel_dim_edit.text().strip()
+        axis = self._sel_dim_axis
+        # Disconnect editingFinished before dismissing to avoid double-trigger
+        try:
+            self._sel_dim_edit.editingFinished.disconnect()
+        except RuntimeError:
+            pass
+        self._dismiss_sel_dim_editor()
+        try:
+            val = float(text)
+        except ValueError:
+            return
+        if val <= 0:
+            return
+        if axis == "w":
+            self._set_selected_width(val)
+        else:
+            self._set_selected_height(val)
+        self._show_flash("Dimension updated", 900)
+
+    def _dismiss_sel_dim_editor(self) -> None:
+        if self._sel_dim_edit is not None:
+            self._sel_dim_edit.hide()
+            self._sel_dim_edit.deleteLater()
+            self._sel_dim_edit = None
+        self._sel_dim_axis = None
 
     def _update_dim_positions(self, cx: float, cy: float) -> None:
         """Move the dim input widgets near cursor, avoiding snap label overlap.
@@ -2315,6 +2753,14 @@ class PolylineView(QGraphicsView):
                 self._construction_lines.clear()
                 self._show_flash("Construction lines cleared")
                 return
+            elif key == Qt.Key.Key_L and shift_mod:
+                # Ctrl+Shift+L: clear guide lines
+                self._guide_lines.clear()
+                self._guide_mode = False
+                self._guide_anchor = None
+                self._show_flash("Guide lines cleared")
+                self._redraw()
+                return
             elif key == Qt.Key.Key_D and shift_mod:
                 self._prompt_edit_dimensions()
                 return
@@ -2350,6 +2796,31 @@ class PolylineView(QGraphicsView):
             self._redraw()
         elif key == Qt.Key.Key_M:
             self.toggle_measure()
+        elif key == Qt.Key.Key_L and not ctrl:
+            self._guide_mode = not self._guide_mode
+            self._guide_anchor = None
+            self._show_flash(
+                "Guide mode: ON" if self._guide_mode else "Guide mode: OFF"
+            )
+            self._redraw()
+            return
+        elif key == Qt.Key.Key_X and not ctrl:
+            if self._sel and self._mode in ("select", "edit"):
+                self._toggle_selected_construction()
+                self._show_flash("Toggled construction for selection", 900)
+                return
+            self._draw_construction_mode = not self._draw_construction_mode
+            if self._mode != "draw":
+                self.set_mode("draw")
+            else:
+                self._redraw()
+            self._show_flash(
+                "Construction draw: ON"
+                if self._draw_construction_mode
+                else "Construction draw: OFF",
+                900,
+            )
+            return
         elif key == Qt.Key.Key_Escape:
             # If a dim field has focus or is dirty, blur and reset it first
             has_dim_focus = (
@@ -2512,6 +2983,35 @@ class PolylineView(QGraphicsView):
             self.toggle_measure()
             return
 
+        # Clicking directly on a W/H selection badge opens inline dimension editor
+        if self._mode == "select" and self._sel:
+            pt = QPointF(pos.x(), pos.y())
+            if self._sel_badge_w_rect is not None and self._sel_badge_w_rect.contains(
+                pt
+            ):
+                self._show_sel_dim_editor("w", self._sel_badge_w_rect)
+                return
+            if self._sel_badge_h_rect is not None and self._sel_badge_h_rect.contains(
+                pt
+            ):
+                self._show_sel_dim_editor("h", self._sel_badge_h_rect)
+                return
+
+        if self._guide_mode and self._mode == "select":
+            wx, wy = self._c2w(pos.x(), pos.y())
+            snap_result = self._resolve_snap(pos.x(), pos.y(), wx, wy)
+            if snap_result is not None:
+                wx, wy = snap_result[0], snap_result[1]
+            if self._guide_anchor is None:
+                self._guide_anchor = (wx, wy)
+                self._redraw()
+                return
+            self._guide_lines.append((self._guide_anchor, (wx, wy)))
+            self._guide_anchor = None
+            self._show_flash("Guide line created", 700)
+            self._redraw()
+            return
+
         if self._measure_mode:
             if self._measure_locked:
                 # Click again to reset measurement
@@ -2566,10 +3066,11 @@ class PolylineView(QGraphicsView):
 
             if hit is not None:
                 pi, vi = hit
-                self._push_undo()
                 self._edit_poly = pi
                 self._edit_vert = vi
                 self._edit_dragging = True
+                self._edit_drag_moved = False
+                self._edit_undo_pushed = False
                 if (
                     hit in self._edit_selected_verts
                     and len(self._edit_selected_verts) > 1
@@ -2637,7 +3138,36 @@ class PolylineView(QGraphicsView):
             self._lmb_press = pos
             self._lmb_prev = pos
             target = self._find_poly_at(pos.x(), pos.y())
+            was_selected_before = target in self._sel if target is not None else False
             self._lmb_target = target
+            # Select-mode direct vertex editing: single-click selects the segment,
+            # shows its points, and allows immediate vertex drag.
+            if self._mode == "select" and target is not None:
+                ctrl = bool(
+                    event.modifiers()
+                    & (
+                        Qt.KeyboardModifier.ControlModifier
+                        | Qt.KeyboardModifier.MetaModifier
+                    )
+                )
+                if ctrl:
+                    self._sel.add(target)
+                else:
+                    self._sel = {target}
+                self._notify()
+                hit = self._find_nearest_vertex(pos.x(), pos.y())
+                if hit is not None and hit[0] == target and was_selected_before:
+                    pi, vi = hit
+                    self._edit_poly = pi
+                    self._edit_vert = vi
+                    self._edit_dragging = True
+                    self._edit_drag_moved = False
+                    self._edit_undo_pushed = False
+                    self._edit_selected_verts = {hit}
+                    self._edit_drag_targets = self._linked_vertices(pi, vi)
+                    self._edit_linked_verts = set(self._edit_drag_targets)
+                    self._redraw()
+                    return
             # Prepare for move if clicking on an already-selected poly
             if target is not None and target in self._sel:
                 wx, wy = self._c2w(pos.x(), pos.y())
@@ -2679,7 +3209,7 @@ class PolylineView(QGraphicsView):
             return
 
         if (
-            self._mode == "edit"
+            self._mode in ("edit", "select")
             and self._edit_dragging
             and self._edit_poly is not None
             and self._edit_vert is not None
@@ -2706,7 +3236,23 @@ class PolylineView(QGraphicsView):
                 vert_cx, vert_cy = self._w2c(*vertex_snap)
                 vert_dist = math.hypot(pos.x() - vert_cx, pos.y() - vert_cy)
                 if vert_dist < best_dist:
+                    best_dist = vert_dist
                     snap_wx, snap_wy = vertex_snap
+
+            # Edge snap: snap dragged vertex to nearest edge of other polylines
+            edge_snap_result = self._resolve_snap(pos.x(), pos.y(), wx, wy)
+            if edge_snap_result is not None and edge_snap_result[2] == "edge":
+                edge_cx, edge_cy = self._w2c(edge_snap_result[0], edge_snap_result[1])
+                edge_dist = math.hypot(pos.x() - edge_cx, pos.y() - edge_cy)
+                if edge_dist < best_dist:
+                    snap_wx, snap_wy = edge_snap_result[0], edge_snap_result[1]
+
+            cur_pt = self._polys[self._edit_poly][self._edit_vert]
+            if abs(cur_pt[0] - snap_wx) > 1e-9 or abs(cur_pt[1] - snap_wy) > 1e-9:
+                if not self._edit_undo_pushed:
+                    self._push_undo()
+                    self._edit_undo_pushed = True
+                self._edit_drag_moved = True
 
             self._apply_edit_vertex_position(snap_wx, snap_wy)
             self._redraw()
@@ -2720,8 +3266,24 @@ class PolylineView(QGraphicsView):
             old_hover = self._hover_vert
             self._hover_vert = self._find_nearest_vertex(pos.x(), pos.y())
             if self._hover_vert != old_hover:
+                self._update_cursor()
                 self._redraw()
             return
+
+        if self._mode == "select" and self._sel:
+            old_hover = self._hover_vert
+            hit = self._find_nearest_vertex(pos.x(), pos.y())
+            if hit is not None and hit[0] in self._sel:
+                self._hover_vert = hit
+            else:
+                self._hover_vert = None
+            if self._hover_vert != old_hover:
+                self._update_cursor()
+                self._redraw()
+                return
+        elif self._mode == "select" and self._hover_vert is not None:
+            self._hover_vert = None
+            self._update_cursor()
 
         if self._mode == "draw":
             # 1. Resolve snap target
@@ -2846,13 +3408,16 @@ class PolylineView(QGraphicsView):
         if self._measure_mode:
             return
 
-        if self._mode == "edit" and self._edit_dragging:
+        if self._mode in ("edit", "select") and self._edit_dragging:
             self._edit_dragging = False
             self._edit_linked_verts = set()
             self._edit_drag_targets = set()
             self._redraw()
             self._notify()
-            self._fire_poly_change()
+            if self._edit_drag_moved:
+                self._fire_poly_change()
+            self._edit_drag_moved = False
+            self._edit_undo_pushed = False
             return
 
         if self._mode == "edit" and self._shift_drag and self._band_start:
@@ -2898,6 +3463,7 @@ class PolylineView(QGraphicsView):
 
         if (
             self._selectable
+            and self._mode != "select"
             and self._lmb_press is not None
             and self._lmb_target is not None
         ):
@@ -2905,12 +3471,29 @@ class PolylineView(QGraphicsView):
             dy = pos.y() - self._lmb_press.y()
             if abs(dx) <= DRAG_THRESH and abs(dy) <= DRAG_THRESH:
                 idx = self._lmb_target
-                if idx in self._sel:
-                    self._sel.discard(idx)
+                mods = event.modifiers()
+                if mods & (
+                    Qt.KeyboardModifier.ControlModifier
+                    | Qt.KeyboardModifier.MetaModifier
+                ):
+                    if idx in self._sel:
+                        self._sel.discard(idx)
+                    else:
+                        self._sel.add(idx)
                 else:
-                    self._sel.add(idx)
+                    self._sel = {idx}
                 self._redraw()
                 self._notify()
+        elif (
+            self._mode == "select"
+            and self._selectable
+            and self._lmb_press is not None
+            and self._lmb_target is None
+        ):
+            dx = pos.x() - self._lmb_press.x()
+            dy = pos.y() - self._lmb_press.y()
+            if abs(dx) <= DRAG_THRESH and abs(dy) <= DRAG_THRESH and self._sel:
+                self.deselect_all()
         self._lmb_press = None
         self._lmb_prev = None
         self._lmb_target = None
@@ -2923,6 +3506,18 @@ class PolylineView(QGraphicsView):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         pos = event.position()
+        if self._mode == "select" and self._selectable:
+            hit = self._find_poly_at(pos.x(), pos.y())
+            if hit is not None:
+                shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                if shift:
+                    self._sel = self._connected_poly_indices(hit)
+                    self._show_flash(f"Object selected ({len(self._sel)})", 800)
+                else:
+                    self._sel = {hit}
+                self._redraw()
+                self._notify()
+            return
         if self._mode == "draw":
             # Double-click finishes and closes the polygon (Fusion 360 behavior)
             if len(self._draw_pts) >= 3:
@@ -3037,7 +3632,17 @@ class PolylineView(QGraphicsView):
             return
         self._copy_selected()
         self._push_undo()
-        self._polys = [p for i, p in enumerate(self._polys) if i not in self._sel]
+        kept: list[list[tuple[float, float]]] = []
+        new_construction: set[int] = set()
+        for i, p in enumerate(self._polys):
+            if i in self._sel:
+                continue
+            new_idx = len(kept)
+            kept.append(p)
+            if i in self._construction_polys:
+                new_construction.add(new_idx)
+        self._polys = kept
+        self._construction_polys = new_construction
         self._sel.clear()
         self._redraw()
         self._notify()
@@ -3273,12 +3878,46 @@ class PolylineView(QGraphicsView):
 
         if self._sel:
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
+            if context_idx is not None:
+                menu.addAction(
+                    "Select connected object",
+                    lambda: self._ctx_select_connected(context_idx),
+                )
             menu.addAction("Invert selection", self.invert_selection)
             menu.addAction("Deselect all", self.deselect_all)
             menu.addAction("Duplicate  [⌘D]", self.duplicate_selected)
             menu.addAction("Fit selection", self.fit_selection)
+            menu.addAction(
+                "Explode to segments",
+                lambda: _run_transform(self.explode_selected_to_segments),
+            )
+            menu.addAction(
+                "Merge segments to object",
+                lambda: _run_transform(self.merge_selected_segments_to_objects),
+            )
         else:
             menu.addAction("Select all", self.select_all)
+            if context_idx is not None:
+                menu.addAction(
+                    "Select connected object",
+                    lambda: self._ctx_select_connected(context_idx),
+                )
+
+        if callable(getattr(self, "_send_selected_to_draft_cb", None)):
+            menu.addAction(
+                "Send selected to Draft",
+                lambda: _run_transform(self._send_selected_to_draft),
+            )
+        if callable(getattr(self, "_send_selected_to_pattern_cb", None)):
+            menu.addAction(
+                "Use as outline",
+                lambda: _run_transform(self._send_selected_to_pattern),
+            )
+        if callable(getattr(self, "_use_selected_as_fill_pattern_cb", None)):
+            menu.addAction(
+                "Use as pattern fill",
+                lambda: _run_transform(self._use_selected_as_fill_pattern),
+            )
 
         transform_menu = menu.addMenu("Transform")
         transform_menu.addAction(
@@ -3401,7 +4040,7 @@ class PolylineView(QGraphicsView):
         poly = self._polys[pi]
         is_closed = (
             len(poly) >= 4
-            and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 1e-6
+            and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01
         )
 
         self._push_undo()
@@ -3417,6 +4056,12 @@ class PolylineView(QGraphicsView):
     def _delete_poly(self, pi: int) -> None:
         self._push_undo()
         self._polys.pop(pi)
+        remapped: set[int] = set()
+        for idx in self._construction_polys:
+            if idx == pi:
+                continue
+            remapped.add(idx - 1 if idx > pi else idx)
+        self._construction_polys = remapped
         self._sel.discard(pi)
         self._sel = {i if i < pi else i - 1 for i in self._sel if i != pi}
         self._redraw()
@@ -3436,11 +4081,60 @@ class PolylineView(QGraphicsView):
     def _ctx_delete_poly(self, idx: int) -> None:
         self._push_undo()
         self._polys.pop(idx)
+        remapped: set[int] = set()
+        for pi in self._construction_polys:
+            if pi == idx:
+                continue
+            remapped.add(pi - 1 if pi > idx else pi)
+        self._construction_polys = remapped
         self._sel.discard(idx)
         self._sel = {i if i < idx else i - 1 for i in self._sel if i != idx}
         self._redraw()
         self._notify()
         self._fire_poly_change()
+
+    def _ctx_select_connected(self, idx: int | None) -> None:
+        if idx is None:
+            return
+        self._sel = self._connected_poly_indices(idx)
+        self._redraw()
+        self._notify()
+
+    def _send_selected_to_pattern(self) -> None:
+        cb = getattr(self, "_send_selected_to_pattern_cb", None)
+        if not callable(cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        cb(payload)
+        self._show_flash("Sent to Pattern Fill", 900)
+
+    def _send_selected_to_draft(self) -> None:
+        cb = getattr(self, "_send_selected_to_draft_cb", None)
+        if not callable(cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        cb(payload)
+        self._show_flash("Sent to Draft", 900)
+
+    def _use_selected_as_fill_pattern(self) -> None:
+        cb = getattr(self, "_use_selected_as_fill_pattern_cb", None)
+        if not callable(cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        cb(payload)
+        self._show_flash("Sent as fill pattern", 900)
 
 
 # Backward-compat subclass for DXF editing
@@ -3455,6 +4149,9 @@ class DxfCanvas(PolylineView):
         on_mode_change=None,
         on_poly_change=None,
         on_action=None,
+        on_send_selected_to_pattern=None,
+        on_send_selected_to_draft=None,
+        on_use_selected_as_fill_pattern=None,
     ):
         super().__init__(
             parent=parent,
@@ -3464,3 +4161,6 @@ class DxfCanvas(PolylineView):
             on_poly_change=on_poly_change,
         )
         self._on_action = on_action
+        self._send_selected_to_pattern_cb = on_send_selected_to_pattern
+        self._send_selected_to_draft_cb = on_send_selected_to_draft
+        self._use_selected_as_fill_pattern_cb = on_use_selected_as_fill_pattern

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QTimer, QUrl, Signal
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMenu,
     QMessageBox,
     QProgressBar,
@@ -36,26 +39,19 @@ from src.core.generators import (
     apply_interlace,
     gen_basketweave,
     gen_brick,
-    gen_celtic_knot,
     gen_concentric_rings,
     gen_custom_tile,
     gen_diagonal_lines,
-    gen_diamond_checkering,
     gen_fish_scale,
     gen_gradient_honeycomb,
     gen_honeycomb,
     gen_image_halftone,
-    gen_lissajous,
-    gen_moroccan_zellige,
     gen_penrose_tiling,
-    gen_spiral,
     gen_square_grid,
     gen_stipple_dots,
     gen_stipple_interlaced,
     gen_sunburst,
     gen_topographic,
-    gen_tri_weave,
-    gen_triangle_grid,
     gen_voronoi,
     gen_wave_fill,
 )
@@ -95,6 +91,7 @@ class PatternTab(QWidget):
     _preview_done = Signal(object)  # (display_polys, count)
     _preview_error = Signal(str)
     stateChanged = Signal()
+    sendSelectedToDraftRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -118,6 +115,10 @@ class PatternTab(QWidget):
 
         self._showing_preview: bool = False
         self._preview_polys_cache: list[list[tuple[float, float]]] = []
+        # Per-zone pattern assignments: each zone is a snapshot of
+        # {"polys": [...], "pattern": str, "params": dict,
+        #  "interlace": bool, "scale": (w, h), "label": str}
+        self._zones: list[dict] = []
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -285,10 +286,21 @@ class PatternTab(QWidget):
         self._interlace_cb.stateChanged.connect(self._schedule_preview)
         fill_layout.addWidget(self._interlace_cb)
 
+        rot_row = QGridLayout()
+        rot_row.setContentsMargins(0, 0, 0, 0)
+        rot_row.addWidget(QLabel("Pattern rotation (°)"), 0, 0)
+        self._pattern_rotation = QLineEdit("0")
+        self._pattern_rotation.setFixedWidth(80)
+        self._pattern_rotation.setToolTip(
+            "Rotate generated pattern geometry around outline center"
+        )
+        self._pattern_rotation.textChanged.connect(self._schedule_preview)
+        rot_row.addWidget(self._pattern_rotation, 0, 1)
+        fill_layout.addLayout(rot_row)
+
         # Pattern param panels (stacked manually — show/hide)
         self._honeycomb_w = self._make_honeycomb_params()
         self._gradient_w = self._make_gradient_params()
-        self._checkering_w = self._make_checkering_params()
         self._basketweave_w = self._make_basketweave_params()
         self._fishscale_w = self._make_fishscale_params()
         self._stipple_w = self._make_stipple_params()
@@ -299,13 +311,7 @@ class PatternTab(QWidget):
         self._wave_w = self._make_wave_fill_params()
         self._sunburst_w = self._make_sunburst_params()
         self._voronoi_w = self._make_voronoi_params()
-        self._triangle_w = self._make_triangle_grid_params()
         self._penrose_w = self._make_penrose_params()
-        self._spiral_w = self._make_spiral_params()
-        self._celtic_w = self._make_celtic_knot_params()
-        self._lissajous_w = self._make_lissajous_params()
-        self._zellige_w = self._make_zellige_params()
-        self._tri_weave_w = self._make_tri_weave_params()
         self._topographic_w = self._make_topographic_params()
         self._tile_library_w = self._make_tile_library_params()
         self._halftone_w = self._make_halftone_params()
@@ -313,7 +319,6 @@ class PatternTab(QWidget):
         self._pattern_widgets = [
             self._honeycomb_w,
             self._gradient_w,
-            self._checkering_w,
             self._basketweave_w,
             self._fishscale_w,
             self._stipple_w,
@@ -324,13 +329,7 @@ class PatternTab(QWidget):
             self._wave_w,
             self._sunburst_w,
             self._voronoi_w,
-            self._triangle_w,
             self._penrose_w,
-            self._spiral_w,
-            self._celtic_w,
-            self._lissajous_w,
-            self._zellige_w,
-            self._tri_weave_w,
             self._topographic_w,
             self._tile_library_w,
             self._halftone_w,
@@ -341,12 +340,58 @@ class PatternTab(QWidget):
 
         self._include_border_cb = QCheckBox("Include border on separate layer")
         self._include_border_cb.setToolTip(
-            "Writes the outline on a 'BORDER' DXF layer so your laser\n"
-            "program can treat it separately from the pattern fill."
+            "Writes pattern fill to 'background' and each outline geometry\n"
+            "to 'outline', 'outline_1', 'outline_2', ... layers."
         )
         fill_layout.addWidget(self._include_border_cb)
         layout.addWidget(
             CollapsibleSection("Fill Parameters", fill_content, expanded=True)
+        )
+
+        # ── Pattern Zones ─────────────────────────────────────────────────────
+        zones_content = QWidget()
+        zones_layout = QVBoxLayout(zones_content)
+        zones_layout.setContentsMargins(0, 0, 0, 0)
+        zones_layout.setSpacing(6)
+
+        assign_row = QHBoxLayout()
+        self._assign_zone_btn = QPushButton("Assign Pattern to Selection")
+        self._assign_zone_btn.setMinimumHeight(30)
+        self._assign_zone_btn.setToolTip(
+            "Save the current pattern and parameters as a named zone\n"
+            "for the selected outlines. Different zones can use different patterns."
+        )
+        self._assign_zone_btn.clicked.connect(self._assign_zone)
+        assign_row.addWidget(self._assign_zone_btn, stretch=1)
+        zones_layout.addLayout(assign_row)
+
+        self._zone_list = QListWidget()
+        self._zone_list.setMaximumHeight(110)
+        self._zone_list.setToolTip(
+            "Assigned pattern zones — each outline group with its own pattern"
+        )
+        zones_layout.addWidget(self._zone_list)
+
+        zone_action_row = QHBoxLayout()
+        remove_zone_btn = QPushButton("Remove Zone")
+        remove_zone_btn.setToolTip("Remove the selected zone from the list")
+        remove_zone_btn.clicked.connect(self._remove_selected_zone)
+        zone_action_row.addWidget(remove_zone_btn)
+        clear_zones_btn = QPushButton("Clear All")
+        clear_zones_btn.setToolTip("Remove all pattern zone assignments")
+        clear_zones_btn.clicked.connect(self._clear_zones)
+        zone_action_row.addWidget(clear_zones_btn)
+        zones_layout.addLayout(zone_action_row)
+
+        zones_hint = QLabel(
+            "Select outlines → configure pattern → 'Assign'. Repeat for each region."
+        )
+        zones_hint.setWordWrap(True)
+        zones_hint.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+        zones_layout.addWidget(zones_hint)
+
+        layout.addWidget(
+            CollapsibleSection("Pattern Zones", zones_content, expanded=False)
         )
 
         # ── Export ───────────────────────────────────────────────────────────
@@ -411,18 +456,6 @@ class PatternTab(QWidget):
         g.addWidget(hint, 4, 0, 1, 2)
         return w
 
-    def _make_checkering_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._check_cell = _param_entry(g, 0, "Cell size (mm)", "2.0")
-        self._check_cell.setToolTip("Side length of each diamond cell")
-        self._check_gap = _param_entry(g, 1, "Gap (mm)", "0.15")
-        self._check_gap.setToolTip("Gap between adjacent diamond cells")
-        self._check_cell.textChanged.connect(self._schedule_preview)
-        self._check_gap.textChanged.connect(self._schedule_preview)
-        return w
-
     def _make_basketweave_params(self) -> QWidget:
         w = QWidget()
         g = QGridLayout(w)
@@ -453,18 +486,6 @@ class PatternTab(QWidget):
         self._vor_seed.textChanged.connect(self._schedule_preview)
         return w
 
-    def _make_triangle_grid_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._tri_size = _param_entry(g, 0, "Side length (mm)", "3.0")
-        self._tri_size.setToolTip("Side length of each triangle")
-        self._tri_gap = _param_entry(g, 1, "Gap (mm)", "0.15")
-        self._tri_gap.setToolTip("Gap between adjacent triangles")
-        self._tri_size.textChanged.connect(self._schedule_preview)
-        self._tri_gap.textChanged.connect(self._schedule_preview)
-        return w
-
     def _make_penrose_params(self) -> QWidget:
         w = QWidget()
         g = QGridLayout(w)
@@ -476,90 +497,6 @@ class PatternTab(QWidget):
         self._penrose_scale.textChanged.connect(self._schedule_preview)
         self._penrose_gap.textChanged.connect(self._schedule_preview)
         hint = QLabel("Aperiodic kite-and-dart tiling (P2)")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 2, 0, 1, 2)
-        return w
-
-    def _make_spiral_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._spiral_spacing = _param_entry(g, 0, "Arm spacing (mm)", "1.5")
-        self._spiral_spacing.setToolTip("Gap between successive spiral arms")
-        g.addWidget(QLabel("Direction"), 1, 0)
-        self._spiral_dir = QComboBox()
-        self._spiral_dir.addItems(["cw", "ccw"])
-        self._spiral_dir.setFixedWidth(80)
-        self._spiral_dir.setToolTip(
-            "Spiral winding direction (clockwise / counter-clockwise)"
-        )
-        g.addWidget(self._spiral_dir, 1, 1)
-        self._spiral_spacing.textChanged.connect(self._schedule_preview)
-        self._spiral_dir.currentTextChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_celtic_knot_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._celtic_cell = _param_entry(g, 0, "Cell size (mm)", "5.0")
-        self._celtic_cell.setToolTip("Grid cell size for the knot pattern")
-        self._celtic_lw = _param_entry(g, 1, "Line width (mm)", "1.0")
-        self._celtic_lw.setToolTip("Width of each knot band")
-        self._celtic_gap = _param_entry(g, 2, "Gap (mm)", "0.3")
-        self._celtic_gap.setToolTip("Gap at crossings for the over-under effect")
-        self._celtic_cell.textChanged.connect(self._schedule_preview)
-        self._celtic_lw.textChanged.connect(self._schedule_preview)
-        self._celtic_gap.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_lissajous_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._liss_fx = _param_entry(g, 0, "Freq X", "3")
-        self._liss_fx.setToolTip("Horizontal frequency (integer)")
-        self._liss_fy = _param_entry(g, 1, "Freq Y", "2")
-        self._liss_fy.setToolTip("Vertical frequency (integer)")
-        self._liss_spacing = _param_entry(g, 2, "Spacing (mm)", "2.0")
-        self._liss_spacing.setToolTip("Vertical offset between repeated curves")
-        self._liss_amp = _param_entry(g, 3, "Amplitude (mm)", "5.0")
-        self._liss_amp.setToolTip("Peak amplitude of the Lissajous figure")
-        self._liss_fx.textChanged.connect(self._schedule_preview)
-        self._liss_fy.textChanged.connect(self._schedule_preview)
-        self._liss_spacing.textChanged.connect(self._schedule_preview)
-        self._liss_amp.textChanged.connect(self._schedule_preview)
-        hint = QLabel("Try 3:2, 5:4, 7:6 for interesting curves")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 4, 0, 1, 2)
-        return w
-
-    def _make_zellige_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._zellige_size = _param_entry(g, 0, "Tile size (mm)", "5.0")
-        self._zellige_size.setToolTip("Size of each zellige tile cell")
-        self._zellige_gap = _param_entry(g, 1, "Gap (mm)", "0.15")
-        self._zellige_gap.setToolTip("Spacing between star and cross tiles")
-        self._zellige_size.textChanged.connect(self._schedule_preview)
-        self._zellige_gap.textChanged.connect(self._schedule_preview)
-        hint = QLabel("8-pointed star and cross pattern")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 2, 0, 1, 2)
-        return w
-
-    def _make_tri_weave_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._tri_weave_size = _param_entry(g, 0, "Cell size (mm)", "3.0")
-        self._tri_weave_size.setToolTip("Size of each triangular cell")
-        self._tri_weave_width = _param_entry(g, 1, "Stroke width (mm)", "0.3")
-        self._tri_weave_width.setToolTip("Width of the diagonal strokes")
-        self._tri_weave_size.textChanged.connect(self._schedule_preview)
-        self._tri_weave_width.textChanged.connect(self._schedule_preview)
-        hint = QLabel("Interlocking triangular weave pattern")
         hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
         g.addWidget(hint, 2, 0, 1, 2)
         return w
@@ -762,7 +699,6 @@ class PatternTab(QWidget):
         mapping = {
             "Honeycomb": self._honeycomb_w,
             "Gradient Honeycomb": self._gradient_w,
-            "Diamond Checkering": self._checkering_w,
             "Basketweave": self._basketweave_w,
             "Fish Scale": self._fishscale_w,
             "Stipple Dots": self._stipple_w,
@@ -773,13 +709,7 @@ class PatternTab(QWidget):
             "Wave Fill": self._wave_w,
             "Sunburst": self._sunburst_w,
             "Voronoi": self._voronoi_w,
-            "Triangle Grid": self._triangle_w,
             "Penrose Tiling": self._penrose_w,
-            "Spiral": self._spiral_w,
-            "Celtic Knot": self._celtic_w,
-            "Lissajous": self._lissajous_w,
-            "Moroccan Zellige": self._zellige_w,
-            "Tri-Weave": self._tri_weave_w,
             "Topographic": self._topographic_w,
             "Image Halftone": self._halftone_w,
         }
@@ -870,6 +800,7 @@ class PatternTab(QWidget):
             on_change=self._on_sel_change,
             on_mode_change=self._on_canvas_mode_change,
             on_poly_change=self._on_canvas_geometry_change,
+            on_send_selected_to_draft=self._on_send_selected_to_draft_from_canvas,
         )
         canvas_shell_layout.addWidget(self._canvas, stretch=1)
 
@@ -918,11 +849,15 @@ class PatternTab(QWidget):
             return
         self._sel_label.setText(f"{count} selected" if count else "0 selected")
         self._sel_label.setStyleSheet(f"color: {SEL};" if count else f"color: {DIM};")
-        # When polys are selected, use them as the clip outline; otherwise use all.
-        if count:
+        # When zones are active: always target all outlines so the composite
+        # preview can show context for unassigned shapes alongside zone fills.
+        # Without zones: target only selection when something is selected.
+        if self._zones:
+            self._edit_polys = self._canvas.get_polylines_state()
+        elif count:
             self._edit_polys = self._canvas.get_selected()
         else:
-            self._edit_polys = self._canvas.get_active()
+            self._edit_polys = self._canvas.get_polylines_state()
         self._refresh_canvas_panels()
         self._schedule_preview()
 
@@ -960,6 +895,8 @@ class PatternTab(QWidget):
         self._orig_polys = [list(poly) for poly in incoming]
         self._edit_polys = [list(poly) for poly in incoming]
         self._preview_polys_cache = []
+        self._zones.clear()
+        self._refresh_zone_list()
 
         self._canvas.set_polylines_state(self._edit_polys, fit=True)
         self._canvas.set_mode("select")
@@ -1001,6 +938,8 @@ class PatternTab(QWidget):
             polys = load_dxf_polylines(path)
             self._orig_polys = polys
             self._edit_polys = list(polys)
+            self._zones.clear()
+            self._refresh_zone_list()
             self._canvas.load(polys)
 
             all_pts = [pt for p in polys for pt in p]
@@ -1040,6 +979,8 @@ class PatternTab(QWidget):
         n = self._canvas.delete_selected()
         if n:
             self._edit_polys = list(self._canvas.get_active())
+            self._zones.clear()
+            self._refresh_zone_list()
             self._set_status(f"Deleted {n} polyline(s). Use ↩ Undo to restore.")
             self._refresh_canvas_panels()
             self._schedule_preview()
@@ -1052,6 +993,8 @@ class PatternTab(QWidget):
             self._set_status("Nothing to undo.")
         else:
             self._edit_polys = list(self._canvas.get_active())
+            self._zones.clear()
+            self._refresh_zone_list()
             self._set_status("Undo: polylines restored.")
             self._refresh_canvas_panels()
             self._schedule_preview()
@@ -1076,10 +1019,12 @@ class PatternTab(QWidget):
     def _on_canvas_geometry_change(self) -> None:
         if self._showing_preview:
             return
-        if self._canvas.sel_count:
+        if self._zones:
+            self._edit_polys = self._canvas.get_polylines_state()
+        elif self._canvas.sel_count:
             self._edit_polys = self._canvas.get_selected()
         else:
-            self._edit_polys = self._canvas.get_active()
+            self._edit_polys = self._canvas.get_polylines_state()
         self._refresh_canvas_panels()
         self._schedule_preview()
         self._emit_state_changed()
@@ -1090,6 +1035,14 @@ class PatternTab(QWidget):
             self._preview_btn.setChecked(False)
         self._canvas.set_selection(indices)
         self._refresh_canvas_panels()
+
+    def _on_send_selected_to_draft_from_canvas(
+        self,
+        polys: list[list[tuple[float, float]]],
+    ) -> None:
+        if not polys:
+            return
+        self.sendSelectedToDraftRequested.emit(polys)
 
     def _fit_selection(self) -> None:
         if self._showing_preview:
@@ -1254,6 +1207,47 @@ class PatternTab(QWidget):
             self._htone_img_edit.setText(path)
             self._schedule_preview()
 
+    def use_polys_as_fill_pattern(
+        self,
+        polys: list[list[tuple[float, float]]],
+        *,
+        source_label: str = "Draft selection",
+    ) -> bool:
+        """Persist selected geometry as a temporary tile and activate it as pattern."""
+        if not polys:
+            return False
+        try:
+            out_dir = Path(self._settings.get("pattern_output_dir", "") or "")
+            if not out_dir:
+                out_dir = Path.cwd() / "job"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+            tile_path = out_dir / f"tile_from_selection_{stamp}.dxf"
+            write_polylines_dxf(polys, str(tile_path), close=False)
+
+            self._refresh_pattern_choices(extra_tile_path=str(tile_path))
+            match_label = next(
+                (
+                    label
+                    for label, path in self._library_patterns.items()
+                    if path == str(tile_path)
+                ),
+                "",
+            )
+            if match_label:
+                self._pattern_combo.setCurrentText(match_label)
+            self._switch_pattern(self._pattern_combo.currentText())
+            self._set_status(
+                f"Using selected geometry as fill pattern ({source_label})",
+                "#3fb950",
+            )
+            self._schedule_preview()
+            self._emit_state_changed()
+            return True
+        except (OSError, ValueError) as exc:
+            self._set_status(f"Failed to create fill pattern: {exc}", "#f85149")
+            return False
+
     def _set_status(self, text: str, color: str = DIM) -> None:
         self._status.setText(text)
         self._status.setStyleSheet(f"color: {color};")
@@ -1278,6 +1272,7 @@ class PatternTab(QWidget):
     def _current_param_text_payload(self) -> dict:
         return {
             "pattern": self._pattern_combo.currentText(),
+            "rotation": self._pattern_rotation.text(),
             "scale_w": self._scale_w.text(),
             "scale_h": self._scale_h.text(),
             "ar_locked": self._ar_cb.isChecked(),
@@ -1289,8 +1284,6 @@ class PatternTab(QWidget):
             "grad_r_max": self._grad_r_max.text(),
             "grad_gap": self._grad_gap.text(),
             "grad_angle": self._grad_angle.text(),
-            "check_cell": self._check_cell.text(),
-            "check_gap": self._check_gap.text(),
             "basket_strip_w": self._basket_strip_w.text(),
             "basket_strip_l": self._basket_strip_l.text(),
             "basket_gap": self._basket_gap.text(),
@@ -1313,10 +1306,6 @@ class PatternTab(QWidget):
             "vor_cells": self._vor_cells.text(),
             "vor_gap": self._vor_gap.text(),
             "vor_seed": self._vor_seed.text(),
-            "tri_size": self._tri_size.text(),
-            "tri_gap": self._tri_gap.text(),
-            "tri_weave_size": self._tri_weave_size.text(),
-            "tri_weave_width": self._tri_weave_width.text(),
             "tile_pattern_path": self._library_patterns.get(
                 self._pattern_combo.currentText(), ""
             ),
@@ -1352,6 +1341,7 @@ class PatternTab(QWidget):
                 "— None —",
             )
         self._pattern_combo.setCurrentText(pattern)
+        self._pattern_rotation.setText(str(values.get("rotation", "0")))
         self._scale_w.setText(str(values.get("scale_w", "")))
         self._scale_h.setText(str(values.get("scale_h", "")))
         self._ar_cb.setChecked(bool(values.get("ar_locked", True)))
@@ -1363,8 +1353,6 @@ class PatternTab(QWidget):
         self._grad_r_max.setText(str(values.get("grad_r_max", "2.5")))
         self._grad_gap.setText(str(values.get("grad_gap", "0.5")))
         self._grad_angle.setText(str(values.get("grad_angle", "0")))
-        self._check_cell.setText(str(values.get("check_cell", "2.0")))
-        self._check_gap.setText(str(values.get("check_gap", "0.15")))
         self._basket_strip_w.setText(str(values.get("basket_strip_w", "2.0")))
         self._basket_strip_l.setText(str(values.get("basket_strip_l", "8.0")))
         self._basket_gap.setText(str(values.get("basket_gap", "0.2")))
@@ -1387,10 +1375,6 @@ class PatternTab(QWidget):
         self._vor_cells.setText(str(values.get("vor_cells", "60")))
         self._vor_gap.setText(str(values.get("vor_gap", "0.15")))
         self._vor_seed.setText(str(values.get("vor_seed", "42")))
-        self._tri_size.setText(str(values.get("tri_size", "3.0")))
-        self._tri_gap.setText(str(values.get("tri_gap", "0.15")))
-        self._tri_weave_size.setText(str(values.get("tri_weave_size", "3.0")))
-        self._tri_weave_width.setText(str(values.get("tri_weave_width", "0.3")))
         self._tile_gap.setText(str(values.get("tile_gap", "0.5")))
         self._tile_angle.setText(str(values.get("tile_angle", "0")))
         self._htone_img_edit.setText(str(values.get("htone_img_path", "")))
@@ -1468,6 +1452,7 @@ class PatternTab(QWidget):
             "preview_polys": self._preview_polys_cache,
             "showing_preview": self._showing_preview,
             "document_graph": doc_graph.snapshot(),
+            "zones": list(self._zones),
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
@@ -1521,6 +1506,8 @@ class PatternTab(QWidget):
             self._canvas.set_view_state(state["canvas_view"])
         self._suspend_state_changes = False
         self._refresh_canvas_panels()
+        self._zones = list(state.get("zones", []))
+        self._refresh_zone_list()
 
     def clear_workspace_state(self) -> None:
         self.apply_workspace_state({})
@@ -1570,7 +1557,7 @@ class PatternTab(QWidget):
         return value
 
     def _generate(self) -> None:
-        if not self._edit_polys:
+        if not self._edit_polys and not self._zones:
             QMessageBox.critical(self, "Error", "No polylines available for outline.")
             return
 
@@ -1586,13 +1573,6 @@ class PatternTab(QWidget):
         # Read widget values on the GUI thread (thread-safe)
         pattern = self._pattern_combo.currentText()
         include_border = self._include_border_cb.isChecked()
-        try:
-            scale = self._collect_scale()
-            params = self._collect_pattern_params(pattern)
-        except ValueError:
-            return
-        polys_snap = list(self._edit_polys)
-        border_polys = self._apply_scale(polys_snap, *scale) if include_border else None
 
         self._gen_btn.setEnabled(False)
         self._progress.setRange(0, 0)  # indeterminate
@@ -1601,11 +1581,40 @@ class PatternTab(QWidget):
         self._cancel_event.set()
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
-        threading.Thread(
-            target=self._run_generate,
-            args=(polys_snap, out_path, pattern, params, scale, border_polys, cancel_event),
-            daemon=True,
-        ).start()
+        if self._zones:
+            zones_snap = list(self._zones)
+            threading.Thread(
+                target=self._run_generate_zones,
+                args=(zones_snap, out_path, include_border, cancel_event),
+                daemon=True,
+            ).start()
+        else:
+            try:
+                scale = self._collect_scale()
+                params = self._collect_pattern_params(pattern)
+            except ValueError:
+                self._gen_btn.setEnabled(True)
+                self._progress.setRange(0, 100)
+                return
+            polys_snap = list(self._edit_polys)
+            border_polys = (
+                self._apply_scale(polys_snap, *scale) if include_border else None
+            )
+            interlace = self._interlace_cb.isChecked()
+            threading.Thread(
+                target=self._run_generate,
+                args=(
+                    polys_snap,
+                    out_path,
+                    pattern,
+                    params,
+                    scale,
+                    border_polys,
+                    interlace,
+                    cancel_event,
+                ),
+                daemon=True,
+            ).start()
 
     def _run_generate(
         self,
@@ -1615,6 +1624,7 @@ class PatternTab(QWidget):
         params: dict,
         scale: tuple[float, float],
         border_polys: list[list[tuple[float, float]]] | None,
+        interlace: bool = False,
         cancel_event: threading.Event | None = None,
     ) -> None:
         try:
@@ -1627,7 +1637,7 @@ class PatternTab(QWidget):
             if cancel_event and cancel_event.is_set():
                 return
             polys = self._gen_pattern(outline, pattern, params)
-            if self._interlace_cb.isChecked():
+            if interlace:
                 polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
             if cancel_event and cancel_event.is_set():
                 return
@@ -1638,17 +1648,67 @@ class PatternTab(QWidget):
                 "Concentric Rings",
                 "Wave Fill",
                 "Sunburst",
-                "Spiral",
-                "Celtic Knot",
-                "Lissajous",
                 "Topographic",
             )
-            write_polylines_dxf(polys, out_path, close=close, border_polys=border_polys)
+            write_polylines_dxf(
+                polys,
+                out_path,
+                close=close,
+                border_polys=border_polys,
+                pattern_layer="background" if border_polys else None,
+                border_layer_prefix="outline",
+            )
 
             count = len(polys)
             name = Path(out_path).name
             self._gen_done.emit((count, name, out_path, polys))
 
+        except Exception as exc:
+            if cancel_event and cancel_event.is_set():
+                return
+            self._gen_error.emit(str(exc))
+
+    def _run_generate_zones(
+        self,
+        zones: list[dict],
+        out_path: str,
+        include_border: bool,
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        """Worker: generate all zone patterns and write to a single DXF."""
+        try:
+            all_polys: list[list[tuple[float, float]]] = []
+            border_polys: list[list[tuple[float, float]]] = []
+            for zone in zones:
+                if cancel_event and cancel_event.is_set():
+                    return
+                scaled = self._apply_scale(zone["polys"], *zone["scale"])
+                if cancel_event and cancel_event.is_set():
+                    return
+                outline = polylines_to_outline(scaled)
+                if cancel_event and cancel_event.is_set():
+                    return
+                polys = self._gen_pattern(outline, zone["pattern"], zone["params"])
+                if zone["interlace"]:
+                    polys = apply_interlace(
+                        polys, spacing=zone["params"].get("spacing", 1.0)
+                    )
+                all_polys.extend(polys)
+                if include_border:
+                    border_polys.extend(scaled)
+            if cancel_event and cancel_event.is_set():
+                return
+            write_polylines_dxf(
+                all_polys,
+                out_path,
+                close=True,
+                border_polys=border_polys if border_polys else None,
+                pattern_layer="background" if border_polys else None,
+                border_layer_prefix="outline",
+            )
+            count = len(all_polys)
+            name = Path(out_path).name
+            self._gen_done.emit((count, name, out_path, all_polys))
         except Exception as exc:
             if cancel_event and cancel_event.is_set():
                 return
@@ -1675,7 +1735,7 @@ class PatternTab(QWidget):
         self._progress.setValue(0)
         self._gen_btn.setEnabled(True)
         self._set_status(f"Error: {msg}", "#f85149")
-        if self._preview_pending and self._edit_polys:
+        if self._preview_pending and (self._edit_polys or self._zones):
             self._preview_pending = False
             self._preview_timer.start(0)
 
@@ -1684,9 +1744,11 @@ class PatternTab(QWidget):
     def _schedule_preview(self, *_) -> None:
         if self._suspend_state_changes:
             return
-        if self._pattern_combo.currentText() == "— None —":
+        # Allow preview if zones exist (even if current pattern is "— None —" or
+        # no manual selection is targeted), otherwise require normal preconditions.
+        if not self._zones and self._pattern_combo.currentText() == "— None —":
             return
-        if not self._edit_polys:
+        if not self._zones and not self._edit_polys:
             return
         if self._preview_running:
             self._preview_pending = True
@@ -1694,33 +1756,56 @@ class PatternTab(QWidget):
         self._emit_state_changed()
 
     def _start_preview_thread(self) -> None:
-        if not self._edit_polys:
-            return
         if self._preview_running:
             self._preview_pending = True
+            return
+        if not self._zones and not self._edit_polys:
             return
         self._preview_running = True
         self._preview_pending = False
         self._cancel_event.set()
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
-        polys_snap = list(self._edit_polys)
         pattern = self._pattern_combo.currentText()
         include_border = self._include_border_cb.isChecked()
         try:
             scale = self._collect_scale()
-            params = self._collect_pattern_params(pattern)
+            params = (
+                self._collect_pattern_params(pattern) if pattern != "— None —" else {}
+            )
         except ValueError:
             self._preview_running = False
             return
-        border_polys = self._apply_scale(polys_snap, *scale) if include_border else None
+        interlace = self._interlace_cb.isChecked()
         self._preview_status.setText("Previewing…")
         self._preview_status.setStyleSheet(f"color: {DIM}; font-size: 11px;")
-        threading.Thread(
-            target=self._compute_preview,
-            args=(polys_snap, pattern, params, scale, border_polys, cancel_event),
-            daemon=True,
-        ).start()
+        if self._zones:
+            # Zone mode: snapshot zone data + all polys for context
+            zones_snap = list(self._zones)
+            all_polys_snap = list(self._edit_polys)
+            threading.Thread(
+                target=self._compute_preview_zones,
+                args=(zones_snap, all_polys_snap, cancel_event),
+                daemon=True,
+            ).start()
+        else:
+            polys_snap = list(self._edit_polys)
+            border_polys = (
+                self._apply_scale(polys_snap, *scale) if include_border else None
+            )
+            threading.Thread(
+                target=self._compute_preview,
+                args=(
+                    polys_snap,
+                    pattern,
+                    params,
+                    scale,
+                    border_polys,
+                    interlace,
+                    cancel_event,
+                ),
+                daemon=True,
+            ).start()
 
     def _compute_preview(
         self,
@@ -1729,6 +1814,7 @@ class PatternTab(QWidget):
         params: dict,
         scale: tuple[float, float],
         border_polys: list[list[tuple[float, float]]] | None,
+        interlace: bool = False,
         cancel_event: threading.Event | None = None,
     ) -> None:
         try:
@@ -1743,13 +1829,61 @@ class PatternTab(QWidget):
             polys = self._gen_pattern(outline, pattern, params)
             if cancel_event and cancel_event.is_set():
                 return
-            if self._interlace_cb.isChecked():
+            if interlace:
                 polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
             if border_polys:
                 display_polys = polys + border_polys
             else:
                 display_polys = polys
             self._preview_done.emit((display_polys, len(polys)))
+        except Exception as exc:
+            if cancel_event and cancel_event.is_set():
+                return
+            self._preview_error.emit(str(exc))
+
+    def _compute_preview_zones(
+        self,
+        zones: list[dict],
+        all_polys: list[list[tuple[float, float]]],
+        cancel_event: threading.Event | None = None,
+    ) -> None:
+        """Worker: generate each zone's pattern and combine for composite preview."""
+        try:
+            # Collect every poly that belongs to at least one zone (for context detection)
+            zone_poly_ids: set[int] = set()
+            zone_results: list[list[tuple[float, float]]] = []
+
+            for zone in zones:
+                if cancel_event and cancel_event.is_set():
+                    return
+                zone_polys = zone["polys"]
+                scaled = self._apply_scale(zone_polys, *zone["scale"])
+                if cancel_event and cancel_event.is_set():
+                    return
+                outline = polylines_to_outline(scaled)
+                if cancel_event and cancel_event.is_set():
+                    return
+                polys = self._gen_pattern(outline, zone["pattern"], zone["params"])
+                if cancel_event and cancel_event.is_set():
+                    return
+                if zone["interlace"]:
+                    polys = apply_interlace(
+                        polys, spacing=zone["params"].get("spacing", 1.0)
+                    )
+                zone_results.extend(polys)
+                # Track which canvas polys are covered by a zone (by identity comparison)
+                for zp in zone_polys:
+                    for idx, cp in enumerate(all_polys):
+                        if cp == zp:
+                            zone_poly_ids.add(idx)
+
+            # Unassigned polys shown as plain context borders
+            context_polys = [
+                p for i, p in enumerate(all_polys) if i not in zone_poly_ids
+            ]
+            # Always show unassigned polys as context borders in preview
+            display_polys = zone_results + context_polys
+            self._preview_done.emit((display_polys, len(zone_results)))
         except Exception as exc:
             if cancel_event and cancel_event.is_set():
                 return
@@ -1765,7 +1899,7 @@ class PatternTab(QWidget):
             self._preview_status.setText(f"{count} shapes — preview")
             self._preview_status.setStyleSheet("color: #3fb950; font-size: 11px;")
         self._refresh_canvas_panels()
-        if self._preview_pending and self._edit_polys:
+        if self._preview_pending and (self._edit_polys or self._zones):
             self._preview_pending = False
             self._preview_timer.start(0)
 
@@ -1774,7 +1908,7 @@ class PatternTab(QWidget):
         self._preview_status.setText(f"Preview error: {msg}")
         self._preview_status.setStyleSheet("color: #f85149; font-size: 11px;")
         self._refresh_canvas_panels()
-        if self._preview_pending and self._edit_polys:
+        if self._preview_pending and (self._edit_polys or self._zones):
             self._preview_pending = False
             self._preview_timer.start(0)
 
@@ -1798,60 +1932,82 @@ class PatternTab(QWidget):
         return sw, sh
 
     def _collect_pattern_params(self, pattern: str) -> dict:
+        params: dict
         if pattern == "Honeycomb":
-            return {
+            params = {
                 "r": self._parse_float_field(
-                    self._hex_r, "Hex size", minimum=0.001, maximum=1000,
+                    self._hex_r,
+                    "Hex size",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "gap": self._parse_float_field(
-                    self._hex_gap, "Gap", minimum=0.0, maximum=1000,
+                    self._hex_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
             }
         elif pattern == "Gradient Honeycomb":
-            return {
+            params = {
                 "r_min": self._parse_float_field(
-                    self._grad_r_min, "Min size", minimum=0.0, maximum=1000,
+                    self._grad_r_min,
+                    "Min size",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
                 "r_max": self._parse_float_field(
-                    self._grad_r_max, "Max size", minimum=0.001, maximum=1000,
+                    self._grad_r_max,
+                    "Max size",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "gap": self._parse_float_field(
-                    self._grad_gap, "Gap", minimum=0.0, maximum=1000,
+                    self._grad_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
                 "angle": self._parse_float_field(self._grad_angle, "Direction"),
             }
-        elif pattern == "Diamond Checkering":
-            return {
-                "cell_size": self._parse_float_field(
-                    self._check_cell, "Cell size", minimum=0.001, maximum=1000,
-                ),
-                "gap": self._parse_float_field(
-                    self._check_gap, "Gap", minimum=0.0, maximum=1000,
-                ),
-            }
         elif pattern == "Basketweave":
-            return {
+            params = {
                 "strip_w": self._parse_float_field(
-                    self._basket_strip_w, "Strip width", minimum=0.001, maximum=1000,
+                    self._basket_strip_w,
+                    "Strip width",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "strip_l": self._parse_float_field(
-                    self._basket_strip_l, "Strip length", minimum=0.001, maximum=1000,
+                    self._basket_strip_l,
+                    "Strip length",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "gap": self._parse_float_field(
-                    self._basket_gap, "Gap", minimum=0.0, maximum=1000,
+                    self._basket_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
             }
         elif pattern == "Fish Scale":
-            return {
+            params = {
                 "sw": self._parse_float_field(
-                    self._fish_w, "Scale width", minimum=0.001, maximum=1000,
+                    self._fish_w,
+                    "Scale width",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "sh": self._parse_float_field(
-                    self._fish_h, "Scale height", minimum=0.001, maximum=1000,
+                    self._fish_h,
+                    "Scale height",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
             }
         elif pattern == "Stipple Dots":
-            return {
+            params = {
                 "r": self._parse_float_field(
                     self._stip_r,
                     "Dot radius",
@@ -1867,172 +2023,169 @@ class PatternTab(QWidget):
                 "interlaced": self._stip_layout.isChecked(),
             }
         elif pattern == "Brick":
-            return {
+            params = {
                 "brick_w": self._parse_float_field(
-                    self._brick_w_e, "Brick width", minimum=0.001, maximum=1000,
+                    self._brick_w_e,
+                    "Brick width",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "brick_h": self._parse_float_field(
-                    self._brick_h_e, "Brick height", minimum=0.001, maximum=1000,
+                    self._brick_h_e,
+                    "Brick height",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "gap": self._parse_float_field(
-                    self._brick_gap, "Gap", minimum=0.0, maximum=1000,
+                    self._brick_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
             }
         elif pattern == "Diagonal Lines":
-            return {
+            params = {
                 "spacing": self._parse_float_field(
-                    self._diag_spacing, "Line spacing", minimum=0.001, maximum=1000,
+                    self._diag_spacing,
+                    "Line spacing",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "angle": self._parse_float_field(self._diag_angle, "Angle"),
             }
         elif pattern == "Square Grid":
-            return {
+            params = {
                 "spacing": self._parse_float_field(
-                    self._sq_spacing, "Grid spacing", minimum=0.001, maximum=1000,
+                    self._sq_spacing,
+                    "Grid spacing",
+                    minimum=0.001,
+                    maximum=1000,
                 )
             }
         elif pattern == "Concentric Rings":
-            return {
+            params = {
                 "spacing": self._parse_float_field(
-                    self._conc_spacing, "Ring spacing", minimum=0.1, maximum=500,
+                    self._conc_spacing,
+                    "Ring spacing",
+                    minimum=0.1,
+                    maximum=500,
                 )
             }
         elif pattern == "Wave Fill":
-            return {
+            params = {
                 "spacing": self._parse_float_field(
-                    self._wave_spacing, "Row spacing", minimum=0.001, maximum=1000,
+                    self._wave_spacing,
+                    "Row spacing",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "amplitude": self._parse_float_field(
-                    self._wave_amplitude, "Amplitude", maximum=500,
+                    self._wave_amplitude,
+                    "Amplitude",
+                    maximum=500,
                 ),
                 "wavelength": self._parse_float_field(
-                    self._wave_wavelength, "Wavelength", minimum=0.1, maximum=1000,
+                    self._wave_wavelength,
+                    "Wavelength",
+                    minimum=0.1,
+                    maximum=1000,
                 ),
             }
         elif pattern == "Sunburst":
-            return {
+            params = {
                 "spacing_deg": self._parse_float_field(
-                    self._sunburst_spacing, "Spoke spacing", minimum=0.5, maximum=180,
+                    self._sunburst_spacing,
+                    "Spoke spacing",
+                    minimum=0.5,
+                    maximum=180,
                 ),
             }
         elif pattern == "Voronoi":
-            return {
+            params = {
                 "n_cells": self._parse_int_field(
-                    self._vor_cells, "Cell count", minimum=2, maximum=10000,
+                    self._vor_cells,
+                    "Cell count",
+                    minimum=2,
+                    maximum=10000,
                 ),
                 "gap": self._parse_float_field(
-                    self._vor_gap, "Gap", minimum=0.0, maximum=1000,
+                    self._vor_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
                 "seed": self._parse_int_field(self._vor_seed, "Seed"),
             }
-        elif pattern == "Triangle Grid":
-            return {
-                "size": self._parse_float_field(
-                    self._tri_size, "Side length", minimum=0.001, maximum=1000,
-                ),
-                "gap": self._parse_float_field(
-                    self._tri_gap, "Gap", minimum=0.0, maximum=1000,
-                ),
-            }
         elif pattern == "Penrose Tiling":
-            return {
+            params = {
                 "scale": self._parse_float_field(
-                    self._penrose_scale, "Tile size", minimum=0.1, maximum=1000,
-                ),
-                "gap": self._parse_float_field(
-                    self._penrose_gap, "Gap", minimum=0.0, maximum=1000,
-                ),
-            }
-        elif pattern == "Spiral":
-            return {
-                "spacing": self._parse_float_field(
-                    self._spiral_spacing, "Arm spacing", minimum=0.1, maximum=1000,
-                ),
-                "direction": self._spiral_dir.currentText(),
-            }
-        elif pattern == "Celtic Knot":
-            return {
-                "cell_size": self._parse_float_field(
-                    self._celtic_cell, "Cell size", minimum=0.5, maximum=1000,
-                ),
-                "line_width": self._parse_float_field(
-                    self._celtic_lw, "Line width", minimum=0.1, maximum=500,
-                ),
-                "gap": self._parse_float_field(
-                    self._celtic_gap, "Gap", minimum=0.0, maximum=500,
-                ),
-            }
-        elif pattern == "Lissajous":
-            return {
-                "freq_x": self._parse_int_field(
-                    self._liss_fx, "Freq X", minimum=1, maximum=100,
-                ),
-                "freq_y": self._parse_int_field(
-                    self._liss_fy, "Freq Y", minimum=1, maximum=100,
-                ),
-                "spacing": self._parse_float_field(
-                    self._liss_spacing, "Spacing", minimum=0.1, maximum=1000,
-                ),
-                "amplitude": self._parse_float_field(
-                    self._liss_amp, "Amplitude", minimum=0.1, maximum=1000,
-                ),
-            }
-        elif pattern == "Moroccan Zellige":
-            return {
-                "size": self._parse_float_field(
-                    self._zellige_size, "Tile size", minimum=0.5, maximum=1000,
-                ),
-                "gap": self._parse_float_field(
-                    self._zellige_gap, "Gap", minimum=0.0, maximum=1000,
-                ),
-            }
-        elif pattern == "Tri-Weave":
-            return {
-                "cell_size": self._parse_float_field(
-                    self._tri_weave_size,
-                    "Cell size",
-                    minimum=0.5,
+                    self._penrose_scale,
+                    "Tile size",
+                    minimum=0.1,
                     maximum=1000,
                 ),
-                "stroke_width": self._parse_float_field(
-                    self._tri_weave_width,
-                    "Stroke width",
-                    minimum=0.01,
-                    maximum=100,
+                "gap": self._parse_float_field(
+                    self._penrose_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
             }
         elif pattern == "Topographic":
-            return {
+            params = {
                 "spacing": self._parse_float_field(
-                    self._topo_spacing, "Contour spacing", minimum=0.1, maximum=500,
+                    self._topo_spacing,
+                    "Contour spacing",
+                    minimum=0.1,
+                    maximum=500,
                 ),
             }
         elif self._is_tile_pattern(pattern):
             tile_path = self._library_patterns.get(pattern, "")
             if not tile_path:
                 raise ValueError("Selected tile pattern is unavailable.")
-            return {
+            params = {
                 "tile_path": tile_path,
                 "gap": self._parse_float_field(
-                    self._tile_gap, "Gap", minimum=0.0, maximum=1000,
+                    self._tile_gap,
+                    "Gap",
+                    minimum=0.0,
+                    maximum=1000,
                 ),
                 "angle": self._parse_float_field(self._tile_angle, "Tile rotation"),
             }
-        else:  # Image Halftone
+        elif pattern == "Image Halftone":
             img_path = self._parse_path_field(self._htone_img_edit, "Halftone image")
-            return {
+            params = {
                 "img_path": img_path,
                 "r_min": self._parse_float_field(
-                    self._htone_r_min, "Cell min", minimum=0.0, maximum=100,
+                    self._htone_r_min,
+                    "Cell min",
+                    minimum=0.0,
+                    maximum=100,
                 ),
                 "r_max": self._parse_float_field(
-                    self._htone_r_max, "Cell max", minimum=0.001, maximum=100,
+                    self._htone_r_max,
+                    "Cell max",
+                    minimum=0.001,
+                    maximum=100,
                 ),
                 "spacing": self._parse_float_field(
-                    self._htone_spacing, "Grid spacing", minimum=0.001, maximum=1000,
+                    self._htone_spacing,
+                    "Grid spacing",
+                    minimum=0.001,
+                    maximum=1000,
                 ),
                 "invert": self._htone_invert.isChecked(),
             }
+        else:
+            raise ValueError(f"Pattern '{pattern}' is no longer available.")
+
+        params["rotation"] = self._parse_float_field(
+            self._pattern_rotation,
+            "Pattern rotation",
+        )
+        return params
 
     # ── Pure helpers (safe from any thread) ──────────────────────────────────
 
@@ -2066,78 +2219,58 @@ class PatternTab(QWidget):
         pattern: str,
         params: dict,
     ) -> list[list[tuple[float, float]]]:
+        rot_deg = float(params.get("rotation", 0.0) or 0.0)
+
         if pattern == "Honeycomb":
-            return gen_honeycomb(outline, params["r"], params["gap"])
+            polys = gen_honeycomb(outline, params["r"], params["gap"])
         elif pattern == "Gradient Honeycomb":
-            return gen_gradient_honeycomb(
+            polys = gen_gradient_honeycomb(
                 outline,
                 params["r_min"],
                 params["r_max"],
                 params["gap"],
                 params["angle"],
             )
-        elif pattern == "Diamond Checkering":
-            return gen_diamond_checkering(outline, params["cell_size"], params["gap"])
         elif pattern == "Basketweave":
-            return gen_basketweave(
+            polys = gen_basketweave(
                 outline, params["strip_w"], params["strip_l"], params["gap"]
             )
         elif pattern == "Fish Scale":
-            return gen_fish_scale(outline, params["sw"], params["sh"])
+            polys = gen_fish_scale(outline, params["sw"], params["sh"])
         elif pattern == "Stipple Dots":
             if params.get("interlaced"):
-                return gen_stipple_interlaced(outline, params["r"], params["spacing"])
+                polys = gen_stipple_interlaced(outline, params["r"], params["spacing"])
             else:
-                return gen_stipple_dots(outline, params["r"], params["spacing"])
+                polys = gen_stipple_dots(outline, params["r"], params["spacing"])
         elif pattern == "Brick":
-            return gen_brick(
+            polys = gen_brick(
                 outline, params["brick_w"], params["brick_h"], params["gap"]
             )
         elif pattern == "Diagonal Lines":
-            return gen_diagonal_lines(outline, params["spacing"], params["angle"])
+            polys = gen_diagonal_lines(outline, params["spacing"], params["angle"])
         elif pattern == "Square Grid":
-            return gen_square_grid(outline, params["spacing"])
+            polys = gen_square_grid(outline, params["spacing"])
         elif pattern == "Concentric Rings":
-            return gen_concentric_rings(outline, params["spacing"])
+            polys = gen_concentric_rings(outline, params["spacing"])
         elif pattern == "Wave Fill":
-            return gen_wave_fill(
+            polys = gen_wave_fill(
                 outline, params["spacing"], params["amplitude"], params["wavelength"]
             )
         elif pattern == "Sunburst":
-            return gen_sunburst(outline, params["spacing_deg"])
+            polys = gen_sunburst(outline, params["spacing_deg"])
         elif pattern == "Voronoi":
-            return gen_voronoi(
+            polys = gen_voronoi(
                 outline, params["n_cells"], params["gap"], params["seed"]
             )
-        elif pattern == "Triangle Grid":
-            return gen_triangle_grid(outline, params["size"], params["gap"])
         elif pattern == "Penrose Tiling":
-            return gen_penrose_tiling(outline, params["scale"], params["gap"])
-        elif pattern == "Spiral":
-            return gen_spiral(outline, params["spacing"], params["direction"])
-        elif pattern == "Celtic Knot":
-            return gen_celtic_knot(
-                outline, params["cell_size"], params["line_width"], params["gap"]
-            )
-        elif pattern == "Lissajous":
-            return gen_lissajous(
-                outline,
-                params["freq_x"],
-                params["freq_y"],
-                params["spacing"],
-                params["amplitude"],
-            )
-        elif pattern == "Moroccan Zellige":
-            return gen_moroccan_zellige(outline, params["size"], params["gap"])
-        elif pattern == "Tri-Weave":
-            return gen_tri_weave(outline, params["cell_size"], params["stroke_width"])
+            polys = gen_penrose_tiling(outline, params["scale"], params["gap"])
         elif pattern == "Topographic":
-            return gen_topographic(outline, params["spacing"])
+            polys = gen_topographic(outline, params["spacing"])
         elif self._is_tile_pattern(pattern):
             tile_polys = load_dxf_polylines(params["tile_path"])
-            return gen_custom_tile(outline, tile_polys, params["gap"], params["angle"])
+            polys = gen_custom_tile(outline, tile_polys, params["gap"], params["angle"])
         else:  # Image Halftone
-            return gen_image_halftone(
+            polys = gen_image_halftone(
                 outline,
                 params["img_path"],
                 params["r_min"],
@@ -2145,6 +2278,91 @@ class PatternTab(QWidget):
                 params["spacing"],
                 params["invert"],
             )
+
+        if abs(rot_deg) > 1e-9:
+            all_pts = [pt for poly in polys for pt in poly]
+            if all_pts:
+                xs, ys = zip(*all_pts)
+                cx = (min(xs) + max(xs)) / 2.0
+                cy = (min(ys) + max(ys)) / 2.0
+                rad = rot_deg * 3.141592653589793 / 180.0
+                ca, sa = math.cos(rad), math.sin(rad)
+                polys = [
+                    [
+                        (
+                            cx + (x - cx) * ca - (y - cy) * sa,
+                            cy + (x - cx) * sa + (y - cy) * ca,
+                        )
+                        for x, y in poly
+                    ]
+                    for poly in polys
+                ]
+        return polys
+
+    # ── Pattern Zone management ───────────────────────────────────────────────
+
+    def _assign_zone(self) -> None:
+        """Save current pattern+params as a zone for the selected outlines."""
+        sel_polys = self._canvas.get_selected()
+        if not sel_polys:
+            QMessageBox.information(
+                self,
+                "No Selection",
+                "Select one or more outlines on the canvas first, then click 'Assign'.",
+            )
+            return
+        pattern = self._pattern_combo.currentText()
+        if pattern == "— None —":
+            QMessageBox.information(
+                self, "No Pattern", "Choose a pattern before assigning."
+            )
+            return
+        try:
+            scale = self._collect_scale()
+            params = self._collect_pattern_params(pattern)
+        except ValueError:
+            return
+        interlace = self._interlace_cb.isChecked()
+        label = f"Zone {len(self._zones) + 1}: {pattern} ({len(sel_polys)} outline{'s' if len(sel_polys) != 1 else ''})"
+        self._zones.append({
+            "polys": [list(p) for p in sel_polys],
+            "pattern": pattern,
+            "params": params,
+            "interlace": interlace,
+            "scale": scale,
+            "label": label,
+        })
+        self._refresh_zone_list()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _remove_selected_zone(self) -> None:
+        """Remove the currently highlighted zone from the list."""
+        row = self._zone_list.currentRow()
+        if 0 <= row < len(self._zones):
+            del self._zones[row]
+            self._refresh_zone_list()
+            self._schedule_preview()
+            self._emit_state_changed()
+
+    def _clear_zones(self) -> None:
+        if not self._zones:
+            return
+        self._zones.clear()
+        self._refresh_zone_list()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _refresh_zone_list(self) -> None:
+        if not hasattr(self, "_zone_list"):
+            return
+        self._zone_list.blockSignals(True)
+        self._zone_list.clear()
+        for zone in self._zones:
+            self._zone_list.addItem(zone["label"])
+        self._zone_list.blockSignals(False)
+
+    # ── Preview / reset ───────────────────────────────────────────────────────
 
     def _reset_preview(self) -> None:
         self._preview_polys_cache = []

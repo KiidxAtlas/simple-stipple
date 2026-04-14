@@ -114,10 +114,19 @@ def write_polylines_dxf(
     out_path: str,
     close: bool = False,
     border_polys: list[list[tuple[float, float]]] | None = None,
+    pattern_layer: str | None = None,
+    border_layer_prefix: str = "BORDER",
 ) -> None:
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4
     msp = doc.modelspace()
+
+    dxfattrs: dict[str, str] = {}
+    if pattern_layer:
+        if pattern_layer not in doc.layers:
+            doc.layers.add(pattern_layer, color=7)
+        dxfattrs = {"layer": pattern_layer}
+
     for c in polylines:
         if len(c) >= 2:
             if (
@@ -130,10 +139,18 @@ def write_polylines_dxf(
             else:
                 poly_close = False
                 coords = c
-            msp.add_lwpolyline(coords, close=poly_close)
+            msp.add_lwpolyline(coords, close=poly_close, dxfattribs=dxfattrs or None)
+
     if border_polys:
-        doc.layers.add("BORDER", color=3)
-        for c in border_polys:
-            if len(c) >= 2:
-                msp.add_lwpolyline(c, close=True, dxfattribs={"layer": "BORDER"})
+        count = len(border_polys)
+        for idx, c in enumerate(border_polys):
+            if len(c) < 2:
+                continue
+            layer_name = border_layer_prefix
+            if count > 1:
+                layer_name = f"{border_layer_prefix}_{idx + 1}"
+            if layer_name not in doc.layers:
+                doc.layers.add(layer_name, color=3)
+            msp.add_lwpolyline(c, close=True, dxfattribs={"layer": layer_name})
+
     doc.saveas(out_path)

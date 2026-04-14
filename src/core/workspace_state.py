@@ -6,7 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-WORKSPACE_SCHEMA_VERSION = 2
+WORKSPACE_SCHEMA_VERSION = 3
 WORKSPACE_FILE_SUFFIX = ".simple-stipple-project.json"
 
 
@@ -16,6 +16,17 @@ def _migrate_v1_to_v2(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(tabs, dict):
         tabs = {}
     tabs.setdefault("sketch", {})
+    migrated["tabs"] = tabs
+    migrated["schema_version"] = 2
+    return migrated
+
+
+def _migrate_v2_to_v3(document: dict[str, Any]) -> dict[str, Any]:
+    migrated = deepcopy(document)
+    tabs = migrated.get("tabs")
+    if not isinstance(tabs, dict):
+        tabs = {}
+    tabs.pop("sketch", None)
     migrated["tabs"] = tabs
     migrated["schema_version"] = WORKSPACE_SCHEMA_VERSION
     return migrated
@@ -32,7 +43,6 @@ def empty_workspace_document() -> dict[str, Any]:
             "utilities": {},
             "pattern": {},
             "shape": {},
-            "sketch": {},
             "image": {},
         },
         "presets": {
@@ -49,6 +59,9 @@ def validate_workspace_document(document: dict[str, Any]) -> dict[str, Any]:
     version = int(document.get("schema_version", 0))
     if version == 1:
         document = _migrate_v1_to_v2(document)
+        version = 2
+    if version == 2:
+        document = _migrate_v2_to_v3(document)
         version = WORKSPACE_SCHEMA_VERSION
 
     if version != WORKSPACE_SCHEMA_VERSION:
