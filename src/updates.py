@@ -13,7 +13,7 @@ from typing import NamedTuple
 _LOG = logging.getLogger(__name__)
 
 # Read version from pyproject.toml
-_CURRENT_VERSION = "0.1.1"
+_CURRENT_VERSION = "0.1.2"
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 
