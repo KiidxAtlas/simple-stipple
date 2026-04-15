@@ -13,7 +13,7 @@ from typing import NamedTuple
 _LOG = logging.getLogger(__name__)
 
 # Read version from pyproject.toml
-_CURRENT_VERSION = "0.1.0"
+_CURRENT_VERSION = "0.1.1"
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 
@@ -45,14 +45,16 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
         url = f"https://api.github.com/repos/{_REPO_OWNER}/{_REPO_NAME}/releases/latest"
         req = urllib.request.Request(url)
         req.add_header("Accept", "application/vnd.github.v3+json")
+        req.add_header("User-Agent", "SimpleStipple/update-checker")
 
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode())
 
         latest_version = data.get("tag_name", "").lstrip("v")
-        release_notes = data.get("body", "").strip()
+        release_notes = (data.get("body") or "").strip()
 
         if not latest_version:
+            _LOG.warning("No tag_name in release response")
             return None
 
         is_newer = _compare_versions(latest_version, _CURRENT_VERSION) > 0
@@ -61,7 +63,7 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
         download_url = _get_download_url_for_platform(data.get("assets", []))
 
         if not download_url:
-            _LOG.warning("No release asset found for platform")
+            _LOG.warning("No release asset found for platform %s", platform.system())
             return None
 
         return UpdateInfo(
@@ -70,13 +72,11 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
             release_notes=release_notes,
             is_newer=is_newer,
         )
-    except (
-        urllib.error.URLError,
-        urllib.error.HTTPError,
-        json.JSONDecodeError,
-        KeyError,
-    ) as exc:
-        _LOG.warning("Failed to check for updates: %s", exc)
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        _LOG.warning("Network error checking for updates: %s", exc)
+        return None
+    except (json.JSONDecodeError, KeyError) as exc:
+        _LOG.warning("Invalid response format from GitHub API: %s", exc)
         return None
     except Exception as exc:
         _LOG.error("Unexpected error checking for updates: %s", exc)
