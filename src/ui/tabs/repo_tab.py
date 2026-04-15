@@ -176,3 +176,33 @@ class RepoTab(QWidget):
 
     def apply_preset_state(self, presets: dict[str, dict]) -> None:
         _ = presets
+
+    def auto_fetch(self) -> bool:
+        """Silently fetch from remote repository (for auto-fetch on startup).
+
+        Returns True if successful, False otherwise.
+        Does not show message boxes — only logs to the git output panel.
+        """
+        repo = self._repo_dir()
+        if repo is None:
+            return False
+        try:
+            proc = subprocess.run(
+                ["git", "pull"],
+                cwd=str(repo),
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=15,  # 15-second timeout for network operations
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+        out = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
+        out = out.strip()
+        if out:
+            self._log.appendPlainText(f"$ git pull (auto)\n{out}\n")
+        else:
+            self._log.appendPlainText("$ git pull (auto)\n(done)\n")
+        self._emit_state_changed()
+        return proc.returncode == 0

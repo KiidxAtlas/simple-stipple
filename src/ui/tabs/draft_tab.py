@@ -906,7 +906,7 @@ class ShapeTab(QWidget):
         out_path, _ = QFileDialog.getSaveFileName(
             self,
             "Export DXF",
-            str(Path(self._settings.get("shape_output_dir", "")) / "draft.dxf"),
+            str(Path(self._settings.get("draft_output_dir", "")) / "draft.dxf"),
             "DXF files (*.dxf);;All files (*)",
         )
         if not out_path:
@@ -984,7 +984,7 @@ class ShapeTab(QWidget):
         event.ignore()
 
     def _browse_dxf(self) -> None:
-        idir = self._settings.get("shape_input_dxf_dir", "")
+        idir = self._settings.get("draft_input_dxf_dir", "")
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Open DXF for Draft Editing",
@@ -1008,7 +1008,7 @@ class ShapeTab(QWidget):
             self._graph_adapter = CanvasGraphAdapter(
                 self._doc_graph, display_layer="geometry"
             )
-            self._settings["shape_input_dxf_dir"] = str(Path(path).parent)
+            self._settings["draft_input_dxf_dir"] = str(Path(path).parent)
             self._canvas._show_flash(f"Loaded DXF: {Path(path).name}", 1200)
             self._refresh_status()
             self._emit_state_changed()

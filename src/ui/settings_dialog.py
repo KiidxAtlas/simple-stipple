@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -21,25 +22,33 @@ from src.ui.helpers import _section_label, _sep, _surface_frame
 
 
 class SettingsDialog(QDialog):
+    """Settings dialog with folder paths and behavioral toggles."""
+
     _FOLDER_FIELDS = [
         ("workspace_dir", "Workspace folder"),
-        ("outline_dxf_dir", "Outline DXF folder"),
-        ("pattern_library_dir", "Pattern library folder"),
-        ("pattern_output_dir", "Pattern output folder"),
-        ("shape_output_dir", "Shape output folder"),
-        ("fvi_source_dir", "FVI source folder"),
-        ("fvi_output_dir", "FVI output folder"),
+        ("pattern_library_dir", "Patterns folder"),
+        ("outline_dxf_dir", "Pattern outline folder"),
+        ("pattern_output_dir", "Pattern fill output folder"),
+        ("draft_output_dir", "Draft output folder"),
+        ("fvi_source_dir", "Trace source folder"),
+        ("fvi_output_dir", "Trace output folder"),
+    ]
+
+    _TOGGLE_FIELDS = [
+        ("auto_fetch_on_startup", "Fetch repository on startup", False),
+        ("check_updates_on_startup", "Check for app updates on startup", False),
     ]
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(680, 620)
-        self.setMinimumSize(620, 520)
+        self.resize(700, 800)
+        self.setMinimumSize(640, 600)
         self.setModal(True)
 
         self._settings: dict = settings or {}
         self._entries: dict[str, QLineEdit] = {}
+        self._toggles: dict[str, QCheckBox] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -49,7 +58,9 @@ class SettingsDialog(QDialog):
         title.setStyleSheet("color: #f0f6fc; font-size: 16px; font-weight: 700;")
         layout.addWidget(title)
 
-        subtitle = QLabel("Configure default folders for workspace, source, and export paths.")
+        subtitle = QLabel(
+            "Configure workspace paths, folder locations, and application behavior."
+        )
         subtitle.setStyleSheet("color: #8b949e; font-size: 12px;")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -65,28 +76,40 @@ class SettingsDialog(QDialog):
         content_layout.setSpacing(10)
         scroll.setWidget(content)
 
+        # ── Workspace & Source ────────────────────────────────────
         workspace_card = _surface_frame("panel")
         workspace_layout = QVBoxLayout(workspace_card)
         workspace_layout.setContentsMargins(12, 12, 12, 12)
         workspace_layout.setSpacing(6)
-        _section_label(workspace_layout, "Workspace & Libraries")
-        for key, label in self._FOLDER_FIELDS[:3]:
+        _section_label(workspace_layout, "Workspace & Source")
+        for key, label in self._FOLDER_FIELDS[:2]:
             self._add_row(workspace_layout, key, label, browse=True)
         content_layout.addWidget(workspace_card)
 
+        # ── Outputs & Conversion ──────────────────────────────────
         output_card = _surface_frame("panel")
         output_layout = QVBoxLayout(output_card)
         output_layout.setContentsMargins(12, 12, 12, 12)
         output_layout.setSpacing(6)
         _section_label(output_layout, "Outputs & Conversion")
-        for key, label in self._FOLDER_FIELDS[3:]:
+        for key, label in self._FOLDER_FIELDS[2:]:
             self._add_row(output_layout, key, label, browse=True)
         content_layout.addWidget(output_card)
+
+        # ── Behavior ──────────────────────────────────────────────
+        behavior_card = _surface_frame("panel")
+        behavior_layout = QVBoxLayout(behavior_card)
+        behavior_layout.setContentsMargins(12, 12, 12, 12)
+        behavior_layout.setSpacing(8)
+        _section_label(behavior_layout, "Application Behavior")
+        for key, label, default in self._TOGGLE_FIELDS:
+            self._add_toggle(behavior_layout, key, label, default)
+        content_layout.addWidget(behavior_card)
 
         content_layout.addStretch()
         _sep(layout)
 
-        # Save / Cancel
+        # ── Save / Cancel ─────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         save_btn = QPushButton("Save")
@@ -103,9 +126,10 @@ class SettingsDialog(QDialog):
     def _add_row(
         self, layout: QVBoxLayout, key: str, label: str, browse: bool = False
     ) -> None:
+        """Add a folder path input row with optional browse button."""
         row = QHBoxLayout()
         lbl = QLabel(label)
-        lbl.setFixedWidth(170)
+        lbl.setFixedWidth(200)
         row.addWidget(lbl)
         e = QLineEdit()
         e.setText(self._settings.get(key, ""))
@@ -118,7 +142,20 @@ class SettingsDialog(QDialog):
             row.addWidget(btn)
         layout.addLayout(row)
 
+    def _add_toggle(
+        self, layout: QVBoxLayout, key: str, label: str, default: bool = False
+    ) -> None:
+        """Add a checkbox toggle for a boolean setting."""
+        row = QHBoxLayout()
+        cb = QCheckBox(label)
+        cb.setChecked(self._settings.get(key, default))
+        row.addWidget(cb)
+        row.addStretch()
+        self._toggles[key] = cb
+        layout.addLayout(row)
+
     def _browse_dir(self, key: str) -> None:
+        """Open file browser to select a directory."""
         current = self._entries[key].text().strip()
         d = QFileDialog.getExistingDirectory(
             self,
@@ -129,11 +166,18 @@ class SettingsDialog(QDialog):
             self._entries[key].setText(d)
 
     def _save(self) -> None:
+        """Save all settings to disk."""
+        # Save folder paths
         for key, entry in self._entries.items():
             v = entry.text().strip()
             if v:
                 self._settings[key] = v
             elif key in self._settings:
                 del self._settings[key]
+
+        # Save toggles
+        for key, toggle in self._toggles.items():
+            self._settings[key] = toggle.isChecked()
+
         save_settings(self._settings)
         self.accept()

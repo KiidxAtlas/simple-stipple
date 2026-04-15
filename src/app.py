@@ -35,6 +35,7 @@ from src.ui.tabs.draft_tab import ShapeTab
 from src.ui.tabs.pattern_tab import PatternTab
 from src.ui.tabs.repo_tab import RepoTab
 from src.ui.tabs.trace_tab import ImageTab
+from src.ui.update_dialog import UpdateDialog
 
 
 def _apply_dark_palette(app: QApplication) -> None:
@@ -644,6 +645,12 @@ class App(QMainWindow):
             layout.addWidget(btn)
 
         # Settings — visually separated
+        update_btn = QPushButton("↓")
+        update_btn.setFixedSize(30, 30)
+        update_btn.setToolTip("Check for updates")
+        update_btn.clicked.connect(self._open_update_check)
+        layout.addWidget(update_btn)
+
         settings_btn = QPushButton("⚙")
         settings_btn.setFixedSize(30, 30)
         settings_btn.setToolTip("Settings (Ctrl+,)")
@@ -909,6 +916,38 @@ class App(QMainWindow):
             return
         event.ignore()
 
+    def showEvent(self, event) -> None:
+        """Handle window show event — perform startup tasks like auto-fetch and update check."""
+        super().showEvent(event)
+        if hasattr(self, "_startup_done"):
+            return
+        self._startup_done = True
+
+        # Auto-fetch repository on startup if setting is enabled
+        if self._settings.get("auto_fetch_on_startup", False):
+            QTimer.singleShot(500, self._attempt_auto_fetch)
+
+        # Check for updates on startup if setting is enabled
+        if self._settings.get("check_updates_on_startup", False):
+            QTimer.singleShot(1000, self._attempt_startup_update_check)
+
+    def _attempt_auto_fetch(self) -> None:
+        """Attempt to auto-fetch from configured repository (startup only)."""
+        try:
+            self._repo_tab.auto_fetch()
+        except Exception as exc:
+            logging.warning("Auto-fetch failed: %s", exc)
+
+    def _attempt_startup_update_check(self) -> None:
+        """Check for updates on startup (silent if up-to-date)."""
+        from src.updates import check_for_updates
+
+        info = check_for_updates(timeout=8)
+        if info and info.is_newer:
+            # Only show dialog if there's an update available
+            dlg = UpdateDialog(self, info)
+            dlg.exec()
+
     def _autosave(self) -> None:
         """Auto-save workspace if it has a path and is dirty."""
         if self._workspace_path and self._workspace_dirty:
@@ -937,3 +976,8 @@ class App(QMainWindow):
                 self._image_tab,
             ):
                 tab._settings = self._settings
+
+    def _open_update_check(self) -> None:
+        """Open the update check dialog."""
+        dlg = UpdateDialog(self)
+        dlg.exec()
