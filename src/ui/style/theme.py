@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 
 from PySide6.QtGui import QColor, QPalette
@@ -35,8 +37,20 @@ def _build_dark_palette() -> QPalette:
 
 
 def load_app_qss() -> str:
-    qss_path = Path(__file__).with_name("theme.qss")
-    return qss_path.read_text(encoding="utf-8")
+    bundled_root = getattr(sys, "_MEIPASS", None)
+    candidates = [Path(__file__).with_name("theme.qss")]
+    if bundled_root:
+        candidates.append(Path(bundled_root) / "src" / "ui" / "style" / "theme.qss")
+
+    for qss_path in candidates:
+        if qss_path.exists():
+            return qss_path.read_text(encoding="utf-8")
+
+    logging.warning(
+        "Theme stylesheet not found in expected locations: %s",
+        ", ".join(str(path) for path in candidates),
+    )
+    return ""
 
 
 def apply_dark_theme(app: QApplication) -> None:

@@ -10,14 +10,25 @@ from PySide6.QtWidgets import QApplication
 
 from src.app import App, _apply_dark_palette
 
-_ICON_PATH = Path(__file__).parent.parent / "assets" / "icon.png"
+
+def _resolve_icon_path() -> Path | None:
+    bundled_root = getattr(sys, "_MEIPASS", None)
+    candidates = [Path(__file__).parent.parent / "assets" / "icon.png"]
+    if bundled_root:
+        candidates.append(Path(bundled_root) / "assets" / "icon.png")
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def main() -> int:
     app = QApplication(sys.argv)
     _apply_dark_palette(app)
-    if _ICON_PATH.exists():
-        app.setWindowIcon(QIcon(str(_ICON_PATH)))
+    icon_path = _resolve_icon_path()
+    if icon_path is not None:
+        app.setWindowIcon(QIcon(str(icon_path)))
     window = App()
     window.show()
     return app.exec()

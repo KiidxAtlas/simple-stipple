@@ -10,6 +10,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _add_data_arg(source: Path, dest: str) -> str:
+    separator = ";" if platform.system() == "Windows" else ":"
+    return f"{source}{separator}{dest}"
+
+
 def main() -> int:
     app_name = "SimpleStipple"
     entry = ROOT / "main.py"
@@ -24,6 +29,10 @@ def main() -> int:
         app_name,
         "--noconfirm",
         "--windowed",
+        "--add-data",
+        _add_data_arg(ROOT / "src" / "ui" / "style" / "theme.qss", "src/ui/style"),
+        "--add-data",
+        _add_data_arg(ROOT / "assets" / "icon.png", "assets"),
         str(entry),
     ]
 

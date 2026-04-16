@@ -28,7 +28,10 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --windowed --onefile --name SimpleStipple main.py
+          pyinstaller --noconfirm --windowed --onefile --name SimpleStipple \
+            --add-data "src/ui/style/theme.qss;src/ui/style" \
+            --add-data "assets/icon.png;assets" \
+            main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -60,7 +63,10 @@ jobs:
 
       - name: Build macOS app bundle
         run: |
-          pyinstaller --noconfirm --windowed --name SimpleStipple main.py
+          pyinstaller --noconfirm --windowed --name SimpleStipple \
+            --add-data "src/ui/style/theme.qss:src/ui/style" \
+            --add-data "assets/icon.png:assets" \
+            main.py
 
       - name: Package DMG
         run: |
