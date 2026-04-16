@@ -28,10 +28,7 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --noconfirm --windowed --onefile --name SimpleStipple \
-            --add-data "src/ui/style/theme.qss;src/ui/style" \
-            --add-data "assets/icon.png;assets" \
-            main.py
+          pyinstaller --noconfirm --windowed --onefile --name SimpleStipple --add-data "src/ui/style/theme.qss;src/ui/style" --add-data "assets/icon.png;assets" main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
