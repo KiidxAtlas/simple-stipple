@@ -23,10 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.document.actions import set_active_layer
-from src.core.document.graph import DocumentGraph
-from src.core.document.migration import graph_from_polylines
-from src.core.dxf.io import load_dxf_polylines, write_polylines_dxf
+from src.backend.document.actions import set_active_layer
+from src.backend.document.graph import DocumentGraph
+from src.backend.document.migration import graph_from_polylines
+from src.backend.dxf.io import load_dxf_polylines, write_polylines_dxf
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.graph_adapter import CanvasGraphAdapter
 from src.ui.components.containers import (
@@ -36,17 +36,13 @@ from src.ui.components.containers import (
     DxfLayersTree,
 )
 from src.ui.components.factories import _content_splitter, _surface_frame
-from src.ui.panels.properties import PropertiesPanel
+from src.ui.sidebars.properties import PropertiesPanel
 
 
 def _toolbar_sep() -> QLabel:
     sep = QLabel("│")
     sep.setStyleSheet("color: #21262d; font-size: 12px;")
     return sep
-
-
-class EfficientDraftCanvas(DxfCanvas):
-    """Backward-compatible alias; Draft now uses DxfCanvas directly."""
 
 
 class ShapeTab(QWidget):

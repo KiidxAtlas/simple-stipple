@@ -87,6 +87,91 @@ def _clip_to_outline(
     _extract_polys(outline_poly.intersection(shape), result)
 
 
+def apply_invert_fill(outline_poly: Polygon, margin: float = 5.0) -> Polygon:
+    """Return the area outside outline_poly within a padded bounding box.
+
+    Inverts the fill region so the pattern covers the background instead of
+    the interior of the outline.
+    """
+    from shapely.geometry import box as shapely_box
+
+    bounds = outline_poly.bounds
+    bbox = shapely_box(
+        bounds[0] - margin,
+        bounds[1] - margin,
+        bounds[2] + margin,
+        bounds[3] + margin,
+    )
+    return bbox.difference(outline_poly)
+
+
+def apply_border_fade(
+    polys: list[list[tuple[float, float]]],
+    outline_poly: Polygon,
+    fade_width: float,
+) -> list[list[tuple[float, float]]]:
+    """Thin out pattern elements near the outline boundary.
+
+    Elements whose centroids are within fade_width of the boundary are removed
+    with probability proportional to their closeness to the edge (deterministic
+    based on position hash, so the result is stable across re-generates).
+    """
+    if fade_width <= 0 or not polys:
+        return polys
+    from shapely.geometry import Point
+
+    boundary = outline_poly.boundary
+    result = []
+    for poly in polys:
+        if not poly:
+            continue
+        cx = sum(x for x, y in poly) / len(poly)
+        cy = sum(y for x, y in poly) / len(poly)
+        dist = Point(cx, cy).distance(boundary)
+        if dist >= fade_width:
+            result.append(poly)
+            continue
+        ratio = dist / fade_width
+        h = (hash((round(cx, 2), round(cy, 2))) & 0xFFFF) / 0xFFFF
+        if h < ratio:
+            result.append(poly)
+    return result
+
+
+def apply_mirror(
+    polys: list[list[tuple[float, float]]],
+    outline_poly: Polygon,
+    mirror_v: bool = False,
+    mirror_h: bool = False,
+) -> list[list[tuple[float, float]]]:
+    """Mirror pattern elements from one half to the other for symmetric output.
+
+    mirror_v: reflect across the vertical center axis (left <-> right).
+    mirror_h: reflect across the horizontal center axis (top <-> bottom).
+    Elements in the reference half are kept; mirrored copies fill the other half.
+    """
+    if not mirror_v and not mirror_h:
+        return polys
+    bounds = outline_poly.bounds
+    cx = (bounds[0] + bounds[2]) / 2
+    cy = (bounds[1] + bounds[3]) / 2
+    result = []
+    for poly in polys:
+        if not poly:
+            continue
+        avg_x = sum(x for x, y in poly) / len(poly)
+        avg_y = sum(y for x, y in poly) / len(poly)
+        if mirror_v:
+            if avg_x <= cx:
+                result.append(poly)
+                result.append([(2 * cx - x, y) for x, y in poly])
+        elif mirror_h:
+            if avg_y <= cy:
+                result.append(poly)
+                result.append([(x, 2 * cy - y) for x, y in poly])
+    return result
+
+
 def apply_interlace(
     polylines: list[list[tuple[float, float]]], spacing: float = 1.0
 ) -> list[list[tuple[float, float]]]:

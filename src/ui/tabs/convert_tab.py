@@ -13,9 +13,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.document.graph import DocumentGraph
-from src.core.document.migration import graph_from_polylines, polylines_from_graph
-from src.core.dxf.io import load_dxf_polylines
+from src.backend.document.graph import DocumentGraph
+from src.backend.document.migration import graph_from_polylines, polylines_from_graph
+from src.backend.dxf.io import load_dxf_polylines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import UTILITIES_ACTION_MAP
 from src.ui.components.containers import CanvasPrecisionBar, CanvasStatusStrip
@@ -219,7 +219,3 @@ class UtilitiesTab(QWidget):
                 self._refresh_preview_ui()
         except (OSError, ValueError) as exc:
             LOGGER.debug("Preview load failed for '%s': %s", dxf_path, exc)
-
-
-# Keep old name as alias for backward compatibility
-FviTab = UtilitiesTab

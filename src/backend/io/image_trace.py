@@ -305,7 +305,10 @@ def image_to_outlines(
     polys = filter_contours(polys, min_area_px, max_area_px)
     n_kept = len(polys)
     if n_kept < n_before:
-        _progress(92, f"Kept {n_kept} of {n_before} contours (area filter removed {n_before - n_kept}).")
+        _progress(
+            92,
+            f"Kept {n_kept} of {n_before} contours (area filter removed {n_before - n_kept}).",
+        )
 
     _progress(95, "Scaling to mm\u2026")
     px_per_mm = img_w_px / max(width_mm, 0.001)

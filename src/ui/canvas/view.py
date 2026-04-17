@@ -22,7 +22,6 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
-    QImage,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -52,44 +51,26 @@ from shapely.geometry import (
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
-from src.constants import DIM, DRAG_THRESH, POLY, Q_BG, SEL
-from src.core.geometry.arc import arc_from_center_start_end, arc_from_three_points
-from src.core.geometry.primitives import (
+from src.backend.behaviors import snapping as snap_behaviors
+from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
+from src.backend.geometry.primitives import (
     build_circle_poly,
     build_ellipse_poly,
     build_polygon_poly,
     build_rect_poly,
 )
-from src.ui.canvas._constants import (
-    BADGE_BG as _BADGE_BG,
-    BADGE_DIM as _BADGE_DIM,
-    BADGE_TEXT as _BADGE_TEXT,
-    CLOSE_SNAP_DIST as _CLOSE_SNAP_DIST,
-    CONSTRUCTION_COLOR as _CONSTRUCTION_COLOR,
-    DRAW_COLOR as _DRAW_COLOR,
-    DRAW_LINE_W as _DRAW_LINE_W,
-    DRAW_VERT_R as _DRAW_VERT_R,
-    EDGE_HIT as _EDGE_HIT,
-    GRID_AXIS as _GRID_AXIS,
-    GRID_MAJOR as _GRID_MAJOR,
-    GRID_MINOR as _GRID_MINOR,
-    GUIDE_COLOR as _GUIDE_COLOR,
-    HANDLE as _HANDLE,
-    HANDLE_ACTIVE as _HANDLE_ACTIVE,
-    HANDLE_HOVER as _HANDLE_HOVER,
-    HANDLE_R as _HANDLE_R,
-    MEASURE_COLOR as _MEASURE_COLOR,
-    MIN_SCALE as _MIN_SCALE,
-    ORTHO_COLOR as _ORTHO_COLOR,
-    RUBBER_W as _RUBBER_W,
-    SELECT_PT as _SELECT_PT,
-    SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE,
-    SNAP_CLOSE as _SNAP_CLOSE,
-    SNAP_DIST as _SNAP_DIST,
-    VERT_HIT as _VERT_HIT,
-)
+from src.constants import DIM, DRAG_THRESH, POLY, Q_BG, SEL
+from src.ui.canvas._constants import CLOSE_SNAP_DIST as _CLOSE_SNAP_DIST
+from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
+from src.ui.canvas._constants import GRID_AXIS as _GRID_AXIS
+from src.ui.canvas._constants import GUIDE_COLOR as _GUIDE_COLOR
+from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
+from src.ui.canvas._constants import ORTHO_COLOR as _ORTHO_COLOR
+from src.ui.canvas._constants import SNAP_CLOSE as _SNAP_CLOSE
+from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
+from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 from src.ui.canvas.render import CanvasRenderer
-from src.ui.canvas.sidebar import DrawSidebar
+from src.ui.sidebars.canvas_sidebar import DrawSidebar
 
 CanvasState: TypeAlias = tuple[
     list[list[tuple[float, float]]],
@@ -153,6 +134,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._construction_polys: set[int] = set()
         self._hidden_polys: set[int] = set()
         self._locked_polys: set[int] = set()
+        self._accent_polys: dict[int, str] = {}  # index → color hex for role overlays
         self._draw_construction_mode: bool = False
         self._draw_split_enabled: bool = True
 
@@ -226,6 +208,8 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._move_dragging: bool = False
         self._move_origin: tuple[float, float] | None = None
         self._move_undo_pushed: bool = False
+        self._move_snap_exclude_vertices: set[tuple[int, int]] = set()
+        self._move_snap_exclude_segments: set[tuple[int, int]] = set()
 
         # Clipboard
         self._clipboard: list[list[tuple[float, float]]] = []
@@ -258,7 +242,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         # Precision aids
         self._grid_visible: bool = False
         self._grid_snap: bool = False
-        self._grid_spacing: float = 1.0
+        self._grid_spacing: float = 5.0
 
         # Construction / reference lines: list of ("h", y_world) or ("v", x_world)
 
@@ -318,12 +302,187 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._notify()
         self._construction_polys.clear()
 
+    def set_accent_polys(self, accent: dict[int, str]) -> None:
+        """Override render color for specific poly indices (e.g. cutout shapes).
+
+        Pass an empty dict to clear all accents.
+        """
+        self._accent_polys = dict(accent)
+        self._redraw()
+
     def reload(self, polys: list[list[tuple[float, float]]]) -> None:
         self._polys = self._clone_polys(polys)
         self._sel &= set(range(len(self._polys)))
         self._hidden_polys &= set(range(len(self._polys)))
         self._locked_polys &= set(range(len(self._polys)))
         self._redraw()
+
+    def _snap_to_grid(self, wx: float, wy: float) -> tuple[float, float]:
+        return snap_behaviors.snap_to_grid(wx, wy, self._grid_spacing)
+
+    def _snap_to_polyline(
+        self,
+        cx: float,
+        cy: float,
+        *,
+        reference_point: tuple[float, float] | None = None,
+    ) -> tuple[float, float, str] | None:
+        return snap_behaviors.snap_to_polyline(
+            cx,
+            cy,
+            self._polys,
+            self._hidden_polys,
+            self._scale,
+            self._w2c,
+            self._c2w,
+            self._poly_bounds,
+            self._is_poly_closed,
+            self._segment_intersection_point,
+            reference_point=reference_point,
+            draw_points=self._draw_pts,
+            mode=self._mode,
+        )
+
+    def _resolve_snap(
+        self,
+        cx: float,
+        cy: float,
+        wx: float,
+        wy: float,
+        *,
+        allow_polyline: bool = True,
+        allow_grid: bool = True,
+        reference_point: tuple[float, float] | None = None,
+    ) -> tuple[float, float, str] | None:
+        return snap_behaviors.resolve_snap(
+            cx,
+            cy,
+            wx,
+            wy,
+            allow_polyline=allow_polyline,
+            allow_grid=allow_grid,
+            grid_snap_enabled=self._grid_snap,
+            grid_spacing=self._grid_spacing,
+            polylines=self._polys,
+            hidden_polys=self._hidden_polys,
+            scale=self._scale,
+            w2c=self._w2c,
+            c2w=self._c2w,
+            poly_bounds=self._poly_bounds,
+            is_poly_closed=self._is_poly_closed,
+            segment_intersection_point=self._segment_intersection_point,
+            mode=self._mode,
+            reference_point=reference_point,
+            draw_points=self._draw_pts,
+        )
+
+    def _resolve_drag_snap(
+        self,
+        cx: float,
+        cy: float,
+        wx: float,
+        wy: float,
+        *,
+        allow_polyline: bool = True,
+        allow_grid: bool = True,
+        allow_vertex: bool = True,
+        exclude_vertices: set[tuple[int, int]] | None = None,
+        exclude_segments: set[tuple[int, int]] | None = None,
+        reference_point: tuple[float, float] | None = None,
+    ) -> tuple[float, float, str] | None:
+        return snap_behaviors.resolve_drag_snap(
+            cx,
+            cy,
+            wx,
+            wy,
+            allow_polyline=allow_polyline,
+            allow_grid=allow_grid,
+            allow_vertex=allow_vertex,
+            grid_snap_enabled=self._grid_snap,
+            grid_spacing=self._grid_spacing,
+            polylines=self._polys,
+            hidden_polys=self._hidden_polys,
+            scale=self._scale,
+            w2c=self._w2c,
+            c2w=self._c2w,
+            poly_bounds=self._poly_bounds,
+            is_poly_closed=self._is_poly_closed,
+            segment_intersection_point=self._segment_intersection_point,
+            mode=self._mode,
+            exclude_vertices=exclude_vertices,
+            exclude_segments=exclude_segments,
+            reference_point=reference_point,
+            draw_points=self._draw_pts,
+        )
+
+    def _immediate_segments_for_vertices(
+        self,
+        vertices: set[tuple[int, int]],
+    ) -> set[tuple[int, int]]:
+        """Return segment keys ``(poly_idx, seg_idx)`` touching the given vertices."""
+        excluded: set[tuple[int, int]] = set()
+        for pi, vi in vertices:
+            if not (0 <= pi < len(self._polys)):
+                continue
+            poly = self._polys[pi]
+            n = len(poly)
+            if n < 2:
+                continue
+            closed = self._is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            if seg_count <= 0:
+                continue
+            if closed:
+                excluded.add((pi, vi % seg_count))
+                excluded.add((pi, (vi - 1) % seg_count))
+            else:
+                if 0 <= vi < seg_count:
+                    excluded.add((pi, vi))
+                if 0 <= (vi - 1) < seg_count:
+                    excluded.add((pi, vi - 1))
+        return excluded
+
+    def _vertices_for_polylines(self, poly_indices: set[int]) -> set[tuple[int, int]]:
+        vertices: set[tuple[int, int]] = set()
+        for pi in poly_indices:
+            if 0 <= pi < len(self._polys):
+                vertices.update((pi, vi) for vi in range(len(self._polys[pi])))
+        return vertices
+
+    def _segments_for_polylines(self, poly_indices: set[int]) -> set[tuple[int, int]]:
+        segments: set[tuple[int, int]] = set()
+        for pi in poly_indices:
+            if not (0 <= pi < len(self._polys)):
+                continue
+            poly = self._polys[pi]
+            n = len(poly)
+            if n < 2:
+                continue
+            closed = self._is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            segments.update((pi, si) for si in range(max(0, seg_count)))
+        return segments
+
+    def _find_nearest_vertex_snap(
+        self,
+        cx: float,
+        cy: float,
+        *,
+        exclude: set[tuple[int, int]] | None = None,
+    ) -> tuple[float, float] | None:
+        return snap_behaviors.find_nearest_vertex_snap(
+            cx,
+            cy,
+            self._polys,
+            self._hidden_polys,
+            self._w2c,
+            exclude=exclude,
+        )
+
+    def _angle_snap(
+        self, ax: float, ay: float, wx: float, wy: float
+    ) -> tuple[float, float]:
+        return snap_behaviors.angle_snap(ax, ay, wx, wy)
         self._notify()
         self._construction_polys &= set(range(len(self._polys)))
 
@@ -1950,43 +2109,6 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._fit_to_bounds(self._bbox())
         self._fit_scale = self._scale
 
-    def _snap_to_grid(self, wx: float, wy: float) -> tuple[float, float]:
-        spacing = max(self._grid_spacing, 0.001)
-        return (round(wx / spacing) * spacing, round(wy / spacing) * spacing)
-
-    def _resolve_snap(
-        self,
-        cx: float,
-        cy: float,
-        wx: float,
-        wy: float,
-        *,
-        allow_polyline: bool = True,
-        allow_grid: bool = True,
-        reference_point: tuple[float, float] | None = None,
-    ) -> tuple[float, float, str] | None:
-        candidates: list[tuple[float, tuple[float, float, str]]] = []
-        if allow_polyline:
-            poly_snap = self._snap_to_polyline(
-                cx,
-                cy,
-                reference_point=reference_point,
-            )
-            if poly_snap is not None:
-                sx, sy = self._w2c(poly_snap[0], poly_snap[1])
-                candidates.append((math.hypot(cx - sx, cy - sy), poly_snap))
-        if allow_grid and self._grid_snap:
-            grid_snap = self._snap_to_grid(wx, wy)
-            sx, sy = self._w2c(*grid_snap)
-            candidates.append((
-                math.hypot(cx - sx, cy - sy),
-                (grid_snap[0], grid_snap[1], "grid"),
-            ))
-        if not candidates:
-            return None
-        candidates.sort(key=lambda item: item[0])
-        return candidates[0][1]
-
     def _escape_cb(self) -> None:
         # Hard reset interaction states.
         self._draw_pts.clear()
@@ -2271,28 +2393,6 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
         return linked
 
-    def _find_nearest_vertex_snap(
-        self,
-        cx: float,
-        cy: float,
-        *,
-        exclude: set[tuple[int, int]] | None = None,
-    ) -> tuple[float, float] | None:
-        """Return nearest vertex world position within snap distance, excluding given verts."""
-        best_dist = _SNAP_DIST
-        best_pt: tuple[float, float] | None = None
-        excluded = exclude or set()
-        for pi, poly in enumerate(self._polys):
-            for vi, pt in enumerate(poly):
-                if (pi, vi) in excluded:
-                    continue
-                sx, sy = self._w2c(*pt)
-                dist = math.hypot(cx - sx, cy - sy)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_pt = pt
-        return best_pt
-
     def _apply_edit_vertex_position(self, wx: float, wy: float) -> None:
         """Move active edit vertex and all linked coincident vertices together."""
         if self._edit_poly is None or self._edit_vert is None:
@@ -2343,195 +2443,6 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
     # ── Hit testing ───────────────────────────────────────────────────────────
 
-    def _snap_to_polyline(
-        self,
-        cx: float,
-        cy: float,
-        *,
-        reference_point: tuple[float, float] | None = None,
-    ) -> tuple[float, float, str] | None:
-        """Return the nearest world-space point on any polyline within _SNAP_DIST pixels.
-
-        Checks vertices first, then midpoints, then perpendicular (in draw mode),
-        then edges. Returns (wx, wy, snap_type) or None.
-        """
-        cwx, cwy = self._c2w(cx, cy)
-        world_r = (_SNAP_DIST / max(self._scale, _MIN_SCALE)) * 1.6
-
-        candidate_polys: list[list[tuple[float, float]]] = []
-        for pi, poly in enumerate(self._polys):
-            if pi in self._hidden_polys:
-                continue
-            if len(poly) < 2:
-                continue
-            x0, y0, x1, y1 = self._poly_bounds(poly)
-            if cwx < x0 - world_r or cwx > x1 + world_r:
-                continue
-            if cwy < y0 - world_r or cwy > y1 + world_r:
-                continue
-            candidate_polys.append(poly)
-
-        # Priority order matters here. If edge snap is allowed to compete purely on
-        # distance, it almost always wins over midpoint/perpendicular because the
-        # cursor is usually closer to the segment than the exact semantic point.
-        # Prefer explicit semantic snaps first, then fall back to generic edge.
-
-        # Check vertices first
-        best_dist = _SNAP_DIST
-        best_pt: tuple[float, float] | None = None
-        for poly in candidate_polys:
-            for pt in poly:
-                sx, sy = self._w2c(*pt)
-                d = math.hypot(cx - sx, cy - sy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pt = pt
-        if best_pt is not None:
-            return (best_pt[0], best_pt[1], "vertex")
-
-        # Check midpoints (only real segments, not wrap-around for open polys)
-        best_dist = _SNAP_DIST
-        best_pt = None
-        for poly in candidate_polys:
-            n = len(poly)
-            is_closed = (
-                n >= 3
-                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                < 0.01
-            )
-            seg_count = n if is_closed else n - 1
-            for vi in range(seg_count):
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                sx, sy = self._w2c(mx, my)
-                d = math.hypot(cx - sx, cy - sy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pt = (mx, my)
-        if best_pt is not None:
-            return (best_pt[0], best_pt[1], "midpoint")
-
-        # Check segment intersections
-        best_dist = _SNAP_DIST
-        best_pt = None
-        segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
-        for poly in candidate_polys:
-            n = len(poly)
-            is_closed = (
-                n >= 3
-                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                < 0.01
-            )
-            seg_count = n if is_closed else n - 1
-            for vi in range(seg_count):
-                segments.append((poly[vi], poly[(vi + 1) % n]))
-
-        for i in range(len(segments)):
-            a1, a2 = segments[i]
-            for j in range(i + 1, len(segments)):
-                b1, b2 = segments[j]
-                ipt = self._segment_intersection_point(a1, a2, b1, b2)
-                if ipt is None:
-                    continue
-                sx, sy = self._w2c(*ipt)
-                d = math.hypot(cx - sx, cy - sy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pt = ipt
-        if best_pt is not None:
-            return (best_pt[0], best_pt[1], "intersection")
-
-        # Check centers of closed shapes
-        best_dist = _SNAP_DIST
-        best_pt = None
-        for poly in candidate_polys:
-            if not self._is_poly_closed(poly):
-                continue
-            x0, y0, x1, y1 = self._poly_bounds(poly)
-            center = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
-            sx, sy = self._w2c(*center)
-            d = math.hypot(cx - sx, cy - sy)
-            if d < best_dist:
-                best_dist = d
-                best_pt = center
-        if best_pt is not None:
-            return (best_pt[0], best_pt[1], "center")
-
-        # Check perpendicular snap when we have an anchor/reference point.
-        perp_ref = reference_point
-        if perp_ref is None and self._mode == "draw" and self._draw_pts:
-            perp_ref = self._draw_pts[-1]
-        if perp_ref is not None:
-            best_dist = _SNAP_DIST
-            best_pt = None
-            last_wx, last_wy = perp_ref
-            for poly in candidate_polys:
-                n = len(poly)
-                is_closed = (
-                    n >= 3
-                    and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                    < 0.01
-                )
-                seg_count = n if is_closed else n - 1
-                for vi in range(seg_count):
-                    eax, eay = poly[vi]
-                    ebx, eby = poly[(vi + 1) % n]
-                    edx, edy = ebx - eax, eby - eay
-                    seg_len_sq = edx * edx + edy * edy
-                    if seg_len_sq < 1e-12:
-                        continue
-                    # Find perpendicular foot from last_draw_pt onto this edge
-                    t_perp = (
-                        (last_wx - eax) * edx + (last_wy - eay) * edy
-                    ) / seg_len_sq
-                    if 0.0 <= t_perp <= 1.0:
-                        foot_x = eax + t_perp * edx
-                        foot_y = eay + t_perp * edy
-                        sx, sy = self._w2c(foot_x, foot_y)
-                        d = math.hypot(cx - sx, cy - sy)
-                        if d < best_dist:
-                            best_dist = d
-                            best_pt = (foot_x, foot_y)
-            if best_pt is not None:
-                return (best_pt[0], best_pt[1], "perpendicular")
-
-        # Check edges
-        best_dist = _SNAP_DIST
-        best_pt = None
-        for poly in candidate_polys:
-            n = len(poly)
-            is_closed = (
-                n >= 3
-                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                < 0.01
-            )
-            seg_count = n if is_closed else n - 1
-            for vi in range(seg_count):
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                dx, dy = bx - ax, by - ay
-                seg_len_sq = dx * dx + dy * dy
-                if seg_len_sq < 1e-12:
-                    continue
-                wwx, wwy = self._c2w(cx, cy)
-                t = max(
-                    0.0,
-                    min(
-                        1.0,
-                        ((wwx - ax) * dx + (wwy - ay) * dy) / seg_len_sq,
-                    ),
-                )
-                px, py_ = ax + t * dx, ay + t * dy
-                scx, scy = self._w2c(px, py_)
-                d = math.hypot(cx - scx, cy - scy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pt = (px, py_)
-        if best_pt is not None:
-            return (best_pt[0], best_pt[1], "edge")
-        return None
-
     @staticmethod
     def _segment_intersection_point(
         a1: tuple[float, float],
@@ -2571,19 +2482,6 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 return None
 
         return (px, py)
-
-    @staticmethod
-    def _angle_snap(ax: float, ay: float, wx: float, wy: float) -> tuple[float, float]:
-        """Snap (wx, wy) to the nearest 45-degree ray from (ax, ay)."""
-        dxx = wx - ax
-        dyy = wy - ay
-        dist = math.hypot(dxx, dyy)
-        if dist < 1e-9:
-            return (wx, wy)
-        angle = math.atan2(dyy, dxx)
-        # Round to nearest 45° (pi/4)
-        snapped = round(angle / (math.pi / 4)) * (math.pi / 4)
-        return (ax + dist * math.cos(snapped), ay + dist * math.sin(snapped))
 
     def _find_nearest_endpoint(
         self, cx: float, cy: float
@@ -2768,11 +2666,14 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             sel = idx in self._sel
             is_construction = idx in self._construction_polys
             is_locked = idx in self._locked_polys
-            color = (
-                QColor(SEL)
-                if sel
-                else (QColor(_GUIDE_COLOR) if is_construction else QColor(POLY))
-            )
+            if sel:
+                color = QColor(SEL)
+            elif idx in self._accent_polys:
+                color = QColor(self._accent_polys[idx])
+            elif is_construction:
+                color = QColor(_GUIDE_COLOR)
+            else:
+                color = QColor(POLY)
             if is_locked:
                 color = QColor("#8b949e")
             lw = 2.0 if sel else (1.2 if is_construction else 1.5)
@@ -3669,6 +3570,18 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 else:
                     self._show_flash("No open polyline selected", 900)
                 return
+        elif key == Qt.Key.Key_R and not ctrl and not shift_mod:
+            if self._mode in ("select", "edit"):
+                self._prompt_round_shortcut()
+                return
+        elif key == Qt.Key.Key_C and not ctrl and not shift_mod:
+            if self._mode in ("select", "edit"):
+                self._prompt_chamfer_shortcut()
+                return
+        elif key == Qt.Key.Key_O and not ctrl and not shift_mod:
+            if self._mode in ("select", "edit"):
+                self._prompt_offset_selected()
+                return
         elif key == Qt.Key.Key_O and shift_mod and not ctrl:
             if self._mode in ("select", "edit"):
                 n_opened = self._open_selected_polylines()
@@ -4169,6 +4082,8 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 self._move_origin = (wx, wy)
                 self._move_dragging = False
                 self._move_undo_pushed = False
+                self._move_snap_exclude_vertices = set()
+                self._move_snap_exclude_segments = set()
 
     def mouseMoveEvent(self, event: QMouseEvent):
         pos = event.position()
@@ -4251,54 +4166,37 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 self._lmb_prev = pos
                 self._redraw()
                 return
-            snap_wx, snap_wy = wx, wy
-            snap_type = ""
-            best_dist = float("inf")
-
-            if self._grid_snap:
-                grid_wx, grid_wy = self._snap_to_grid(wx, wy)
-                grid_cx, grid_cy = self._w2c(grid_wx, grid_wy)
-                best_dist = math.hypot(pos.x() - grid_cx, pos.y() - grid_cy)
-                snap_wx, snap_wy = grid_wx, grid_wy
-                snap_type = "grid"
-
-            vertex_snap = self._find_nearest_vertex_snap(
-                pos.x(),
-                pos.y(),
-                exclude=self._edit_drag_targets,
-            )
-            if vertex_snap is not None:
-                vert_cx, vert_cy = self._w2c(*vertex_snap)
-                vert_dist = math.hypot(pos.x() - vert_cx, pos.y() - vert_cy)
-                if vert_dist < best_dist:
-                    best_dist = vert_dist
-                    snap_wx, snap_wy = vertex_snap
-                    snap_type = "vertex"
-
             allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
-            geom_snap_result = self._resolve_snap(
+            drag_snap_result = self._resolve_drag_snap(
                 pos.x(),
                 pos.y(),
                 wx,
                 wy,
                 allow_polyline=allow_snap,
                 allow_grid=allow_snap,
+                exclude_vertices=self._edit_drag_targets,
+                exclude_segments=self._immediate_segments_for_vertices(
+                    self._edit_drag_targets
+                ),
                 reference_point=self._polys[self._edit_poly][self._edit_vert],
             )
-            if geom_snap_result is not None and geom_snap_result[2] in {
-                "edge",
-                "midpoint",
-                "intersection",
-                "center",
-                "perpendicular",
-                "grid",
-            }:
-                geom_cx, geom_cy = self._w2c(geom_snap_result[0], geom_snap_result[1])
-                geom_dist = math.hypot(pos.x() - geom_cx, pos.y() - geom_cy)
-                if geom_dist < best_dist:
-                    best_dist = geom_dist
-                    snap_wx, snap_wy = geom_snap_result[0], geom_snap_result[1]
-                    snap_type = geom_snap_result[2]
+            snap_wx, snap_wy = wx, wy
+            snap_type = ""
+            if drag_snap_result is not None:
+                snap_wx, snap_wy, snap_type = drag_snap_result
+
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                poly = self._polys[self._edit_poly]
+                anchor_pt = None
+                if self._edit_vert > 0:
+                    anchor_pt = poly[self._edit_vert - 1]
+                elif len(poly) > 1:
+                    anchor_pt = poly[1]
+                if anchor_pt is not None:
+                    snap_wx, snap_wy = self._angle_snap(
+                        anchor_pt[0], anchor_pt[1], snap_wx, snap_wy
+                    )
+                    snap_type = snap_type or "angle"
 
             cur_pt = self._polys[self._edit_poly][self._edit_vert]
             if abs(cur_pt[0] - snap_wx) > 1e-9 or abs(cur_pt[1] - snap_wy) > 1e-9:
@@ -4449,32 +4347,34 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 ):
                     self._move_dragging = True
                     self._nudge_undo_pushed = False
+                    self._move_snap_exclude_vertices = self._vertices_for_polylines(
+                        set(self._sel)
+                    )
+                    self._move_snap_exclude_segments = self._segments_for_polylines(
+                        set(self._sel)
+                    )
                 if self._move_dragging:
                     if not self._move_undo_pushed:
                         self._push_undo()
                         self._move_undo_pushed = True
                     new_wx, new_wy = self._c2w(pos.x(), pos.y())
                     move_snap_type = ""
-                    if self._grid_snap:
-                        new_wx, new_wy = self._snap_to_grid(new_wx, new_wy)
-                        move_snap_type = "grid"
-                    # Keep object move snapping conservative; midpoint/edge-style
-                    # semantic snaps make whole-object translation feel jittery.
                     allow_snap = not bool(
                         event.modifiers() & Qt.KeyboardModifier.AltModifier
                     )
                     if allow_snap:
-                        poly_snap = self._resolve_snap(
+                        move_snap = self._resolve_drag_snap(
                             pos.x(),
                             pos.y(),
                             new_wx,
                             new_wy,
                             allow_polyline=True,
-                            allow_grid=False,
+                            allow_grid=True,
+                            exclude_vertices=self._move_snap_exclude_vertices,
+                            exclude_segments=self._move_snap_exclude_segments,
                         )
-                        if poly_snap is not None and poly_snap[2] == "vertex":
-                            new_wx, new_wy = poly_snap[0], poly_snap[1]
-                            move_snap_type = poly_snap[2]
+                        if move_snap is not None:
+                            new_wx, new_wy, move_snap_type = move_snap
                     dx_w = new_wx - self._move_origin[0]
                     dy_w = new_wy - self._move_origin[1]
                     for idx in self._sel:
@@ -4578,6 +4478,8 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             self._move_dragging = False
             self._move_origin = None
             self._move_undo_pushed = False
+            self._move_snap_exclude_vertices = set()
+            self._move_snap_exclude_segments = set()
             self._lmb_press = None
             self._lmb_prev = None
             self._lmb_target = None
@@ -4626,6 +4528,8 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._band_start = None
         self._move_origin = None
         self._move_undo_pushed = False
+        self._move_snap_exclude_vertices = set()
+        self._move_snap_exclude_segments = set()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -5450,14 +5354,13 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
         a1 = math.atan2(t1[1] - center[1], t1[0] - center[0])
         a2 = math.atan2(t2[1] - center[1], t2[0] - center[0])
-        cross = u1[0] * u2[1] - u1[1] * u2[0]
-        if cross >= 0:
-            while a2 <= a1:
-                a2 += 2 * math.pi
-        else:
-            while a2 >= a1:
-                a2 -= 2 * math.pi
+        # Use the minor arc between tangent points; choosing the major arc
+        # produces loop-like rounding artifacts.
         span = a2 - a1
+        while span <= -math.pi:
+            span += 2 * math.pi
+        while span > math.pi:
+            span -= 2 * math.pi
         steps = max(4, min(24, int(abs(span) / (math.pi / 18.0))))
         arc_pts = [
             (
@@ -5532,6 +5435,132 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             self._show_flash(f"Offset {created} polyline(s)", 900)
         else:
             self._show_flash("Offset failed", 900)
+
+    def _prompt_offset_selected(self) -> None:
+        if not self._sel:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        value, ok = QInputDialog.getDouble(
+            self,
+            "Offset Geometry",
+            "Offset distance (mm):",
+            1.0,
+            -1_000_000.0,
+            1_000_000.0,
+            3,
+        )
+        if ok:
+            self._offset_selected_with_feedback(value)
+
+    def _active_vertex_for_shortcuts(self) -> tuple[int, int] | None:
+        """Return the best vertex target for round/chamfer keyboard shortcuts."""
+        if self._edit_poly is not None and self._edit_vert is not None:
+            return (self._edit_poly, self._edit_vert)
+        if self._hover_vert is not None:
+            return self._hover_vert
+        if self._cursor_wx is not None and self._cursor_wy is not None:
+            cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
+            return self._find_nearest_vertex(cx, cy)
+        return None
+
+    def _normalized_corner_vertex(self, pi: int, vi: int) -> tuple[int, int] | None:
+        """Return a valid interior-corner vertex for round/chamfer, if possible."""
+        if not (0 <= pi < len(self._polys)):
+            return None
+        if pi in self._locked_polys:
+            return None
+        poly = self._polys[pi]
+        closed = self._is_poly_closed(poly)
+        pts = poly[:-1] if closed else list(poly)
+        n = len(pts)
+        if n < 3:
+            return None
+        if closed and vi == n:
+            vi = 0
+        if not (0 <= vi < n):
+            return None
+        if not closed and (vi == 0 or vi == n - 1):
+            return None
+        return (pi, vi)
+
+    def _corner_vertex_for_shortcuts(self) -> tuple[int, int] | None:
+        """Resolve keyboard round/chamfer target to the nearest valid corner."""
+        active = self._active_vertex_for_shortcuts()
+        if active is not None:
+            normalized = self._normalized_corner_vertex(*active)
+            if normalized is not None:
+                return normalized
+
+        if self._cursor_wx is None or self._cursor_wy is None:
+            return None
+        ccx, ccy = self._w2c(self._cursor_wx, self._cursor_wy)
+
+        # Prefer currently selected polylines when available.
+        if self._sel:
+            poly_indices = [
+                pi for pi in sorted(self._sel) if 0 <= pi < len(self._polys)
+            ]
+        else:
+            poly_indices = list(range(len(self._polys)))
+
+        best: tuple[int, int] | None = None
+        best_dist = float("inf")
+        for pi in poly_indices:
+            poly = self._polys[pi]
+            for vi, pt in enumerate(poly):
+                normalized = self._normalized_corner_vertex(pi, vi)
+                if normalized is None:
+                    continue
+                cx, cy = self._w2c(*pt)
+                d = math.hypot(ccx - cx, ccy - cy)
+                if d < best_dist:
+                    best_dist = d
+                    best = normalized
+        return best
+
+    def _prompt_round_shortcut(self) -> None:
+        target = self._corner_vertex_for_shortcuts()
+        if target is None:
+            self._show_flash("Pick a valid corner vertex first", 1000)
+            return
+        pi, vi = target
+        radius, ok = QInputDialog.getDouble(
+            self,
+            "Round Corner",
+            "Radius (mm):",
+            1.0,
+            0.01,
+            1_000_000.0,
+            3,
+        )
+        if not ok:
+            return
+        if self._round_vertex(pi, vi, radius):
+            self._show_flash("Rounded corner", 900)
+        else:
+            self._show_flash("Round failed", 900)
+
+    def _prompt_chamfer_shortcut(self) -> None:
+        target = self._corner_vertex_for_shortcuts()
+        if target is None:
+            self._show_flash("Pick a valid corner vertex first", 1000)
+            return
+        pi, vi = target
+        distance, ok = QInputDialog.getDouble(
+            self,
+            "Chamfer Corner",
+            "Distance (mm):",
+            1.0,
+            0.01,
+            1_000_000.0,
+            3,
+        )
+        if not ok:
+            return
+        if self._chamfer_vertex(pi, vi, distance):
+            self._show_flash("Chamfered corner", 900)
+        else:
+            self._show_flash("Chamfer failed", 900)
 
     def _send_selected_to_pattern(self) -> None:
         cb = getattr(self, "_send_selected_to_pattern_cb", None)

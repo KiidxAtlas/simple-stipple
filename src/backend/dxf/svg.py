@@ -6,7 +6,7 @@ of the polylines.
 
 Usage::
 
-    from src.core.dxf.svg import dxf_to_svg
+    from src.backend.dxf.svg import dxf_to_svg
     dxf_to_svg("input.dxf", "output.svg")
 """
 
@@ -15,7 +15,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from src.core.dxf.io import load_dxf_polylines
+from src.backend.dxf.io import load_dxf_polylines
 
 
 def _bbox(

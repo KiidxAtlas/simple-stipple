@@ -18,10 +18,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.dxf.fix import fix_dxf
-from src.core.dxf.fvi import convert_fvi_to_dxf
-from src.core.dxf.svg import dxf_to_svg
-from src.core.io import svg_to_dxf
+from src.backend.dxf.fix import fix_dxf
+from src.backend.dxf.fvi import convert_fvi_to_dxf
+from src.backend.dxf.svg import dxf_to_svg
+from src.backend.io import svg_to_dxf
 from src.ui.components.factories import _section_label
 
 

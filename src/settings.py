@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from src.core.io import read_json_file, write_json_file_atomic
+from src.backend.io import read_json_file, write_json_file_atomic
 
 _SETTINGS_FILE = Path.home() / ".simple_stipple_settings.json"
 _LOG = logging.getLogger(__name__)
@@ -34,11 +34,6 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
 
 def _migrate_settings(data: dict) -> dict:
     """Upgrade legacy settings keys to current names."""
-    # Migrate shape_output_dir → draft_output_dir
-    if "shape_output_dir" in data and "draft_output_dir" not in data:
-        data["draft_output_dir"] = data.pop("shape_output_dir")
-    # Remove legacy unused setting shape_input_dxf_dir
-    data.pop("shape_input_dxf_dir", None)
     keybindings = data.get("keybindings")
     if not isinstance(keybindings, dict):
         data["keybindings"] = dict(DEFAULT_KEYBINDINGS)

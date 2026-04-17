@@ -18,7 +18,7 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from src.core.dxf.io import write_polylines_dxf
+from src.backend.dxf.io import write_polylines_dxf
 
 _NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _CMD_RE = re.compile(rf"[MmLlHhVvZz]|{_NUM_RE}")

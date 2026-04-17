@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.core.document.graph import DocumentGraph
+from src.backend.document.graph import DocumentGraph
 
 
 def graph_from_polylines(

@@ -32,15 +32,21 @@ from PySide6.QtWidgets import (
 )
 
 from src.constants import DIM, PATTERNS, SEL
-from src.core.dxf.io import (
+from src.backend.generators import (
+    apply_border_fade,
+    apply_interlace,
+    apply_invert_fill,
+    apply_mirror,
+    get_generator,
+)
+from src.backend.dxf.io import (
     analyze_outline_polylines,
     load_dxf_polylines,
     polylines_to_outline,
     write_polylines_dxf,
 )
-from src.core.document.graph import DocumentGraph
-from src.core.document.migration import graph_from_polylines, polylines_from_graph
-from src.core.generator_api import apply_interlace, get_generator
+from src.backend.document.graph import DocumentGraph
+from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.settings import save_settings
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import PATTERN_ACTION_MAP
@@ -109,6 +115,8 @@ class PatternTab(QWidget):
         # {"outline_ids": [...], "pattern": str, "params": dict,
         #  "interlace": bool, "scale": (w, h), "label": str}
         self._zones: list[dict] = []
+        # Outline IDs marked as exclusion cutouts (pattern fills around them)
+        self._exclusion_ids: list[str] = []
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -296,6 +304,7 @@ class PatternTab(QWidget):
         self._honeycomb_w = build_param_widget(self, "Honeycomb", _sp)
         self._gradient_w = build_param_widget(self, "Gradient Honeycomb", _sp)
         self._basketweave_w = build_param_widget(self, "Basketweave", _sp)
+        self._braid_w = build_param_widget(self, "Braid", _sp)
         self._fishscale_w = build_param_widget(self, "Fish Scale", _sp)
         self._stipple_w = build_param_widget(self, "Stipple Dots", _sp)
         self._brick_w = build_param_widget(self, "Brick", _sp)
@@ -311,6 +320,8 @@ class PatternTab(QWidget):
         self._reaction_diffuse_w = build_param_widget(self, "Reaction Diffuse", _sp)
         self._celtic_w = build_param_widget(self, "Celtic Knot", _sp)
         self._lissajous_w = build_param_widget(self, "Lissajous", _sp)
+        self._golden_spiral_w = build_param_widget(self, "Golden Spiral", _sp)
+        self._rose_curve_w = build_param_widget(self, "Rose Curve", _sp)
         self._tile_library_w = build_tile_library_widget(self, _sp)
         self._halftone_w = build_halftone_widget(self, _sp)
 
@@ -318,6 +329,7 @@ class PatternTab(QWidget):
             self._honeycomb_w,
             self._gradient_w,
             self._basketweave_w,
+            self._braid_w,
             self._fishscale_w,
             self._stipple_w,
             self._brick_w,
@@ -333,6 +345,8 @@ class PatternTab(QWidget):
             self._reaction_diffuse_w,
             self._celtic_w,
             self._lissajous_w,
+            self._golden_spiral_w,
+            self._rose_curve_w,
             self._tile_library_w,
             self._halftone_w,
         ]
@@ -374,6 +388,17 @@ class PatternTab(QWidget):
         )
         zones_layout.addWidget(self._zone_list)
 
+        outline_action_row = QHBoxLayout()
+        self._close_outlines_btn = QPushButton("Close Selected")
+        self._close_outlines_btn.setToolTip("Close the selected open outlines")
+        self._close_outlines_btn.clicked.connect(self._close_selected_outlines)
+        outline_action_row.addWidget(self._close_outlines_btn)
+        self._open_outlines_btn = QPushButton("Open Selected")
+        self._open_outlines_btn.setToolTip("Open the selected closed outlines")
+        self._open_outlines_btn.clicked.connect(self._open_selected_outlines)
+        outline_action_row.addWidget(self._open_outlines_btn)
+        zones_layout.addLayout(outline_action_row)
+
         zone_action_row = QHBoxLayout()
         self._remove_zone_btn = QPushButton("Remove Zone")
         self._remove_zone_btn.setToolTip("Remove the selected zone from the list")
@@ -395,6 +420,55 @@ class PatternTab(QWidget):
         layout.addWidget(
             CollapsibleSection("Pattern Zones", zones_content, expanded=False)
         )
+
+        # ── Output Options (always visible) ───────────────────────────────────
+        _section_label(layout, "Output Options")
+
+        opt_row1 = QHBoxLayout()
+        self._invert_fill_cb = QCheckBox("Invert fill")
+        self._invert_fill_cb.setToolTip(
+            "Stipple the area OUTSIDE the outline instead of inside.\n"
+            "Useful for backgrounds and frames around a clean design."
+        )
+        self._invert_fill_cb.stateChanged.connect(self._schedule_preview)
+        opt_row1.addWidget(self._invert_fill_cb)
+        opt_row1.addStretch()
+        opt_row1.addWidget(QLabel("Fade (mm):"))
+        self._border_fade = QLineEdit("0")
+        self._border_fade.setFixedWidth(52)
+        self._border_fade.setToolTip(
+            "Thin the pattern near the outline edge.\n"
+            "0 = off. Higher values = wider fade zone."
+        )
+        self._border_fade.textChanged.connect(self._schedule_preview)
+        opt_row1.addWidget(self._border_fade)
+        layout.addLayout(opt_row1)
+
+        opt_row2 = QHBoxLayout()
+        opt_row2.addWidget(QLabel("Symmetry:"))
+        self._mirror_v_cb = QCheckBox("\u2190 \u2192")
+        self._mirror_v_cb.setToolTip("Mirror pattern left \u2194 right")
+        self._mirror_v_cb.stateChanged.connect(self._schedule_preview)
+        opt_row2.addWidget(self._mirror_v_cb)
+        self._mirror_h_cb = QCheckBox("\u2191 \u2193")
+        self._mirror_h_cb.setToolTip("Mirror pattern top \u2194 bottom")
+        self._mirror_h_cb.stateChanged.connect(self._schedule_preview)
+        opt_row2.addWidget(self._mirror_h_cb)
+        opt_row2.addStretch()
+        cutout_clear_btn = QPushButton("Clear cutouts")
+        cutout_clear_btn.setFixedHeight(22)
+        cutout_clear_btn.setStyleSheet("font-size: 10px;")
+        cutout_clear_btn.setToolTip("Remove all cutout assignments")
+        cutout_clear_btn.clicked.connect(self._clear_exclusions)
+        opt_row2.addWidget(cutout_clear_btn)
+        layout.addLayout(opt_row2)
+
+        self._cutout_status_label = QLabel(
+            "No cutouts \u2014 right-click a shape on canvas to mark it"
+        )
+        self._cutout_status_label.setWordWrap(True)
+        self._cutout_status_label.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+        layout.addWidget(self._cutout_status_label)
 
         # ── Export ───────────────────────────────────────────────────────────
         _section_label(layout, "Export")
@@ -427,13 +501,12 @@ class PatternTab(QWidget):
 
     # ── Pattern param builders removed — now data-driven via params.py ──────────
 
-
-
     def _switch_pattern(self, value: str) -> None:
         mapping = {
             "Honeycomb": self._honeycomb_w,
             "Gradient Honeycomb": self._gradient_w,
             "Basketweave": self._basketweave_w,
+            "Braid": self._braid_w,
             "Fish Scale": self._fishscale_w,
             "Stipple Dots": self._stipple_w,
             "Brick": self._brick_w,
@@ -449,6 +522,8 @@ class PatternTab(QWidget):
             "Reaction Diffuse": self._reaction_diffuse_w,
             "Celtic Knot": self._celtic_w,
             "Lissajous": self._lissajous_w,
+            "Golden Spiral": self._golden_spiral_w,
+            "Rose Curve": self._rose_curve_w,
             "Image Halftone": self._halftone_w,
         }
         for w in self._pattern_widgets:
@@ -503,6 +578,10 @@ class PatternTab(QWidget):
         )
         self._preview_btn.clicked.connect(self._on_preview_toggled)
 
+        self._reset_preview_btn = QPushButton("Reset")
+        self._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
+        self._reset_preview_btn.clicked.connect(self._reset_preview)
+
         toolbar, self._mode_btns, self._sel_label = _canvas_toolbar(
             self._on_toolbar_mode,
             lambda: self._canvas.fit(),
@@ -510,6 +589,9 @@ class PatternTab(QWidget):
         toolbar_layout = toolbar.layout()
         if isinstance(toolbar_layout, QHBoxLayout):
             toolbar_layout.insertWidget(toolbar_layout.count() - 1, self._preview_btn)
+            toolbar_layout.insertWidget(
+                toolbar_layout.count() - 1, self._reset_preview_btn
+            )
         layout.addWidget(toolbar)
 
         self._precision_bar = CanvasPrecisionBar(
@@ -536,6 +618,7 @@ class PatternTab(QWidget):
             on_mode_change=self._on_canvas_mode_change,
             on_poly_change=self._on_canvas_geometry_change,
             on_send_selected_to_draft=self._on_send_selected_to_draft_from_canvas,
+            on_cutout_toggle=self._on_canvas_cutout_toggle,
             draft_profile=True,
         )
         self._canvas.set_grid_visible(True)
@@ -647,11 +730,14 @@ class PatternTab(QWidget):
         self._orig_polys = [list(poly) for poly in incoming]
         self._edit_polys = [list(poly) for poly in incoming]
         self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
+        self._exclusion_ids.clear()
         self._preview_polys_cache = []
         self._zones.clear()
         self._refresh_zone_list()
 
         self._canvas.set_polylines_state(self._edit_polys, fit=True)
+        self._sync_canvas_cutout_highlight()
+        self._refresh_cutout_status()
         self._canvas.set_mode("select")
         self._canvas.deselect_all()
 
@@ -1114,6 +1200,8 @@ class PatternTab(QWidget):
             "basket_strip_w": self._basket_strip_w.text(),
             "basket_strip_l": self._basket_strip_l.text(),
             "basket_gap": self._basket_gap.text(),
+            "braid_strip_w": self._braid_strip_w.text(),
+            "braid_spacing": self._braid_spacing.text(),
             "fish_w": self._fish_w.text(),
             "fish_h": self._fish_h.text(),
             "stip_r": self._stip_r.text(),
@@ -1138,10 +1226,24 @@ class PatternTab(QWidget):
             "topo_spacing": self._topo_spacing.text(),
             "hilbert_order": self._hilbert_order.text(),
             "hilbert_margin": self._hilbert_margin.text(),
+            "rd_pattern": self._rd_pattern.currentText(),
             "rd_cell": self._rd_cell.text(),
             "rd_iters": self._rd_iters.text(),
             "rd_threshold": self._rd_threshold.text(),
             "rd_seed": self._rd_seed.text(),
+            "celtic_cell": self._celtic_cell.text(),
+            "celtic_line_w": self._celtic_line_w.text(),
+            "celtic_gap": self._celtic_gap.text(),
+            "liss_freq_x": self._liss_freq_x.text(),
+            "liss_freq_y": self._liss_freq_y.text(),
+            "liss_spacing": self._liss_spacing.text(),
+            "liss_amplitude": self._liss_amplitude.text(),
+            "golden_turns": self._golden_turns.text(),
+            "golden_spacing": self._golden_spacing.text(),
+            "golden_dir": self._golden_dir.currentText(),
+            "rose_petals": self._rose_petals.text(),
+            "rose_copies": self._rose_copies.text(),
+            "rose_margin": self._rose_margin.text(),
             "tile_pattern_path": self._library_patterns.get(
                 self._pattern_combo.currentText(), ""
             ),
@@ -1152,6 +1254,10 @@ class PatternTab(QWidget):
             "htone_r_max": self._htone_r_max.text(),
             "htone_spacing": self._htone_spacing.text(),
             "htone_invert": self._htone_invert.isChecked(),
+            "invert_fill": self._invert_fill_cb.isChecked(),
+            "border_fade": self._border_fade.text(),
+            "mirror_v": self._mirror_v_cb.isChecked(),
+            "mirror_h": self._mirror_h_cb.isChecked(),
         }
 
     def _apply_param_text_payload(self, payload: dict) -> None:
@@ -1192,6 +1298,8 @@ class PatternTab(QWidget):
         self._basket_strip_w.setText(str(values.get("basket_strip_w", "2.0")))
         self._basket_strip_l.setText(str(values.get("basket_strip_l", "8.0")))
         self._basket_gap.setText(str(values.get("basket_gap", "0.2")))
+        self._braid_strip_w.setText(str(values.get("braid_strip_w", "2.0")))
+        self._braid_spacing.setText(str(values.get("braid_spacing", "3.0")))
         self._fish_w.setText(str(values.get("fish_w", "3.0")))
         self._fish_h.setText(str(values.get("fish_h", "2.0")))
         self._stip_r.setText(str(values.get("stip_r", "0.4")))
@@ -1216,10 +1324,24 @@ class PatternTab(QWidget):
         self._topo_spacing.setText(str(values.get("topo_spacing", "1.5")))
         self._hilbert_order.setText(str(values.get("hilbert_order", "5")))
         self._hilbert_margin.setText(str(values.get("hilbert_margin", "1.0")))
+        self._rd_pattern.setCurrentText(str(values.get("rd_pattern", "labyrinth")))
         self._rd_cell.setText(str(values.get("rd_cell", "0.8")))
         self._rd_iters.setText(str(values.get("rd_iters", "1200")))
         self._rd_threshold.setText(str(values.get("rd_threshold", "0.22")))
         self._rd_seed.setText(str(values.get("rd_seed", "42")))
+        self._celtic_cell.setText(str(values.get("celtic_cell", "5.0")))
+        self._celtic_line_w.setText(str(values.get("celtic_line_w", "1.0")))
+        self._celtic_gap.setText(str(values.get("celtic_gap", "0.2")))
+        self._liss_freq_x.setText(str(values.get("liss_freq_x", "3")))
+        self._liss_freq_y.setText(str(values.get("liss_freq_y", "2")))
+        self._liss_spacing.setText(str(values.get("liss_spacing", "2.0")))
+        self._liss_amplitude.setText(str(values.get("liss_amplitude", "5.0")))
+        self._golden_turns.setText(str(values.get("golden_turns", "4.5")))
+        self._golden_spacing.setText(str(values.get("golden_spacing", "1.5")))
+        self._golden_dir.setCurrentText(str(values.get("golden_dir", "ccw")))
+        self._rose_petals.setText(str(values.get("rose_petals", "7")))
+        self._rose_copies.setText(str(values.get("rose_copies", "2")))
+        self._rose_margin.setText(str(values.get("rose_margin", "1.0")))
         self._tile_gap.setText(str(values.get("tile_gap", "0.5")))
         self._tile_angle.setText(str(values.get("tile_angle", "0")))
         self._htone_img_edit.setText(str(values.get("htone_img_path", "")))
@@ -1227,6 +1349,10 @@ class PatternTab(QWidget):
         self._htone_r_max.setText(str(values.get("htone_r_max", "1.8")))
         self._htone_spacing.setText(str(values.get("htone_spacing", "2.2")))
         self._htone_invert.setChecked(bool(values.get("htone_invert", False)))
+        self._invert_fill_cb.setChecked(bool(values.get("invert_fill", False)))
+        self._border_fade.setText(str(values.get("border_fade", "0")))
+        self._mirror_v_cb.setChecked(bool(values.get("mirror_v", False)))
+        self._mirror_h_cb.setChecked(bool(values.get("mirror_h", False)))
         self._update_tile_library_panel()
 
     def _save_preset(self) -> None:
@@ -1299,6 +1425,7 @@ class PatternTab(QWidget):
             "showing_preview": self._showing_preview,
             "document_graph": doc_graph.snapshot(),
             "zones": list(self._zones),
+            "exclusion_ids": list(self._exclusion_ids),
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
@@ -1360,6 +1487,9 @@ class PatternTab(QWidget):
         self._refresh_canvas_panels()
         self._zones = list(state.get("zones", []))
         self._refresh_zone_list()
+        self._exclusion_ids = [str(v) for v in state.get("exclusion_ids", [])]
+        self._sync_canvas_cutout_highlight()
+        self._refresh_cutout_status()
 
     def clear_workspace_state(self) -> None:
         self.apply_workspace_state({})
@@ -1426,6 +1556,14 @@ class PatternTab(QWidget):
         # Read widget values on the GUI thread (thread-safe)
         pattern = self._pattern_combo.currentText()
         include_border = self._include_border_cb.isChecked()
+        invert_fill = self._invert_fill_cb.isChecked()
+        mirror_v = self._mirror_v_cb.isChecked()
+        mirror_h = self._mirror_h_cb.isChecked()
+        try:
+            border_fade = max(0.0, float(self._border_fade.text() or "0"))
+        except ValueError:
+            border_fade = 0.0
+        excl_polys = self._resolve_exclusion_polys() or None
 
         self._gen_btn.setEnabled(False)
         self._progress.setRange(0, 0)  # indeterminate
@@ -1450,6 +1588,11 @@ class PatternTab(QWidget):
                     zones_snap,
                     out_path,
                     include_border,
+                    invert_fill,
+                    mirror_v,
+                    mirror_h,
+                    border_fade,
+                    excl_polys,
                     generation_token,
                     cancel_event,
                 ),
@@ -1479,6 +1622,11 @@ class PatternTab(QWidget):
                     scale,
                     border_polys,
                     interlace,
+                    invert_fill,
+                    mirror_v,
+                    mirror_h,
+                    border_fade,
+                    excl_polys,
                     generation_token,
                     cancel_event,
                 ),
@@ -1494,6 +1642,11 @@ class PatternTab(QWidget):
         scale: tuple[float, float],
         border_polys: list[list[tuple[float, float]]] | None,
         interlace: bool = False,
+        invert_fill: bool = False,
+        mirror_v: bool = False,
+        mirror_h: bool = False,
+        border_fade: float = 0.0,
+        exclusion_polys: list[list[tuple[float, float]]] | None = None,
         generation_token: int = 0,
         cancel_event: threading.Event | None = None,
     ) -> None:
@@ -1503,12 +1656,27 @@ class PatternTab(QWidget):
             scaled = self._apply_scale(active, *scale)
             if cancel_event and cancel_event.is_set():
                 return
-            outline = polylines_to_outline(scaled)
+            orig_outline = polylines_to_outline(scaled)
+            fill_outline = orig_outline
+            if exclusion_polys:
+                excl_scaled = self._apply_scale(exclusion_polys, *scale)
+                excl_outline = polylines_to_outline(excl_scaled)
+                fill_outline = fill_outline.difference(excl_outline)
+            if invert_fill:
+                fill_outline = apply_invert_fill(orig_outline)
+                if exclusion_polys:
+                    excl_scaled = self._apply_scale(exclusion_polys, *scale)
+                    excl_outline = polylines_to_outline(excl_scaled)
+                    fill_outline = fill_outline.difference(excl_outline)
             if cancel_event and cancel_event.is_set():
                 return
-            polys = self._gen_pattern(outline, pattern, params)
+            polys = self._gen_pattern(fill_outline, pattern, params)
             if interlace:
                 polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
+            if mirror_v or mirror_h:
+                polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
+            if border_fade > 0:
+                polys = apply_border_fade(polys, orig_outline, border_fade)
             if cancel_event and cancel_event.is_set():
                 return
             close = pattern not in (
@@ -1521,6 +1689,8 @@ class PatternTab(QWidget):
                 "Topographic",
                 "Hilbert Curve",
                 "Reaction Diffuse",
+                "Golden Spiral",
+                "Rose Curve",
             )
             write_polylines_dxf(
                 polys,
@@ -1546,7 +1716,12 @@ class PatternTab(QWidget):
         zones: list[dict],
         out_path: str,
         include_border: bool,
-        generation_token: int,
+        invert_fill: bool = False,
+        mirror_v: bool = False,
+        mirror_h: bool = False,
+        border_fade: float = 0.0,
+        exclusion_polys: list[list[tuple[float, float]]] | None = None,
+        generation_token: int = 0,
         cancel_event: threading.Event | None = None,
     ) -> None:
         """Worker: generate all zone patterns and write to a single DXF."""
@@ -1559,14 +1734,31 @@ class PatternTab(QWidget):
                 scaled = self._apply_scale(zone["polys"], *zone["scale"])
                 if cancel_event and cancel_event.is_set():
                     return
-                outline = polylines_to_outline(scaled)
+                orig_outline = polylines_to_outline(scaled)
+                fill_outline = orig_outline
+                if exclusion_polys:
+                    excl_scaled = self._apply_scale(exclusion_polys, *zone["scale"])
+                    excl_outline = polylines_to_outline(excl_scaled)
+                    fill_outline = fill_outline.difference(excl_outline)
+                if invert_fill:
+                    fill_outline = apply_invert_fill(orig_outline)
+                    if exclusion_polys:
+                        excl_scaled = self._apply_scale(
+                            exclusion_polys, *zone["scale"]
+                        )
+                        excl_outline = polylines_to_outline(excl_scaled)
+                        fill_outline = fill_outline.difference(excl_outline)
                 if cancel_event and cancel_event.is_set():
                     return
-                polys = self._gen_pattern(outline, zone["pattern"], zone["params"])
+                polys = self._gen_pattern(fill_outline, zone["pattern"], zone["params"])
                 if zone["interlace"]:
                     polys = apply_interlace(
                         polys, spacing=zone["params"].get("spacing", 1.0)
                     )
+                if mirror_v or mirror_h:
+                    polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
+                if border_fade > 0:
+                    polys = apply_border_fade(polys, orig_outline, border_fade)
                 all_polys.extend(polys)
                 if include_border:
                     border_polys.extend(scaled)
@@ -1660,6 +1852,14 @@ class PatternTab(QWidget):
             self._preview_task.finish_run()
             return
         interlace = self._interlace_cb.isChecked()
+        invert_fill = self._invert_fill_cb.isChecked()
+        mirror_v = self._mirror_v_cb.isChecked()
+        mirror_h = self._mirror_h_cb.isChecked()
+        try:
+            border_fade = max(0.0, float(self._border_fade.text() or "0"))
+        except ValueError:
+            border_fade = 0.0
+        excl_polys = self._resolve_exclusion_polys() or None
         self._set_preview_status("Previewing…")
         if self._zones:
             # Zone mode: snapshot zone data + all polys for context
@@ -1673,7 +1873,17 @@ class PatternTab(QWidget):
             all_polys_snap = list(self._edit_polys)
             threading.Thread(
                 target=self._compute_preview_zones,
-                args=(zones_snap, all_polys_snap, preview_token, cancel_event),
+                args=(
+                    zones_snap,
+                    all_polys_snap,
+                    invert_fill,
+                    mirror_v,
+                    mirror_h,
+                    border_fade,
+                    excl_polys,
+                    preview_token,
+                    cancel_event,
+                ),
                 daemon=True,
             ).start()
         else:
@@ -1690,6 +1900,11 @@ class PatternTab(QWidget):
                     scale,
                     border_polys,
                     interlace,
+                    invert_fill,
+                    mirror_v,
+                    mirror_h,
+                    border_fade,
+                    excl_polys,
                     preview_token,
                     cancel_event,
                 ),
@@ -1704,6 +1919,11 @@ class PatternTab(QWidget):
         scale: tuple[float, float],
         border_polys: list[list[tuple[float, float]]] | None,
         interlace: bool = False,
+        invert_fill: bool = False,
+        mirror_v: bool = False,
+        mirror_h: bool = False,
+        border_fade: float = 0.0,
+        exclusion_polys: list[list[tuple[float, float]]] | None = None,
         preview_token: int = 0,
         cancel_event: threading.Event | None = None,
     ) -> None:
@@ -1713,14 +1933,29 @@ class PatternTab(QWidget):
             scaled = self._apply_scale(outline_polys, *scale)
             if cancel_event and cancel_event.is_set():
                 return
-            outline = polylines_to_outline(scaled)
+            orig_outline = polylines_to_outline(scaled)
+            fill_outline = orig_outline
+            if exclusion_polys:
+                excl_scaled = self._apply_scale(exclusion_polys, *scale)
+                excl_outline = polylines_to_outline(excl_scaled)
+                fill_outline = fill_outline.difference(excl_outline)
+            if invert_fill:
+                fill_outline = apply_invert_fill(orig_outline)
+                if exclusion_polys:
+                    excl_scaled = self._apply_scale(exclusion_polys, *scale)
+                    excl_outline = polylines_to_outline(excl_scaled)
+                    fill_outline = fill_outline.difference(excl_outline)
             if cancel_event and cancel_event.is_set():
                 return
-            polys = self._gen_pattern(outline, pattern, params)
+            polys = self._gen_pattern(fill_outline, pattern, params)
             if cancel_event and cancel_event.is_set():
                 return
             if interlace:
                 polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
+            if mirror_v or mirror_h:
+                polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
+            if border_fade > 0:
+                polys = apply_border_fade(polys, orig_outline, border_fade)
             if border_polys:
                 display_polys = polys + border_polys
             else:
@@ -1736,7 +1971,12 @@ class PatternTab(QWidget):
         self,
         zones: list[dict],
         all_polys: list[list[tuple[float, float]]],
-        preview_token: int,
+        invert_fill: bool = False,
+        mirror_v: bool = False,
+        mirror_h: bool = False,
+        border_fade: float = 0.0,
+        exclusion_polys: list[list[tuple[float, float]]] | None = None,
+        preview_token: int = 0,
         cancel_event: threading.Event | None = None,
     ) -> None:
         """Worker: generate each zone's pattern and combine for composite preview."""
@@ -1752,16 +1992,33 @@ class PatternTab(QWidget):
                 scaled = self._apply_scale(zone_polys, *zone["scale"])
                 if cancel_event and cancel_event.is_set():
                     return
-                outline = polylines_to_outline(scaled)
+                orig_outline = polylines_to_outline(scaled)
+                fill_outline = orig_outline
+                if exclusion_polys:
+                    excl_scaled = self._apply_scale(exclusion_polys, *zone["scale"])
+                    excl_outline = polylines_to_outline(excl_scaled)
+                    fill_outline = fill_outline.difference(excl_outline)
+                if invert_fill:
+                    fill_outline = apply_invert_fill(orig_outline)
+                    if exclusion_polys:
+                        excl_scaled = self._apply_scale(
+                            exclusion_polys, *zone["scale"]
+                        )
+                        excl_outline = polylines_to_outline(excl_scaled)
+                        fill_outline = fill_outline.difference(excl_outline)
                 if cancel_event and cancel_event.is_set():
                     return
-                polys = self._gen_pattern(outline, zone["pattern"], zone["params"])
+                polys = self._gen_pattern(fill_outline, zone["pattern"], zone["params"])
                 if cancel_event and cancel_event.is_set():
                     return
                 if zone["interlace"]:
                     polys = apply_interlace(
                         polys, spacing=zone["params"].get("spacing", 1.0)
                     )
+                if mirror_v or mirror_h:
+                    polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
+                if border_fade > 0:
+                    polys = apply_border_fade(polys, orig_outline, border_fade)
                 zone_results.extend(polys)
                 # Track which canvas polys are covered by a zone (by identity comparison)
                 for zp in zone_polys:
@@ -1851,15 +2108,15 @@ class PatternTab(QWidget):
         was_showing = self._showing_preview
         self._preview_polys_cache = []
         if was_showing:
-            self._showing_preview = False
+            # Keep preview mode active while parameters/settings refresh.
+            # The canvas continues to display the last preview until the new
+            # preview result arrives.
             self._preview_btn.blockSignals(True)
-            self._preview_btn.setChecked(False)
+            self._preview_btn.setChecked(True)
             self._preview_btn.blockSignals(False)
-            self._preview_btn.setProperty("active", False)
+            self._preview_btn.setProperty("active", True)
             self._preview_btn.style().unpolish(self._preview_btn)
             self._preview_btn.style().polish(self._preview_btn)
-            if self._edit_polys:
-                self._canvas.load(self._edit_polys)
         if had_cache or was_showing:
             self._set_preview_status("Refreshing preview…")
         self._update_preview_controls()
@@ -2013,6 +2270,10 @@ class PatternTab(QWidget):
             polys = get_generator("gen_basketweave")(
                 outline, params["strip_w"], params["strip_l"], params["gap"]
             )
+        elif pattern == "Braid":
+            polys = get_generator("gen_braid")(
+                outline, params["strip_width"], params["spacing"]
+            )
         elif pattern == "Fish Scale":
             polys = get_generator("gen_fish_scale")(outline, params["sw"], params["sh"])
         elif pattern == "Stipple Dots":
@@ -2089,6 +2350,20 @@ class PatternTab(QWidget):
                 params["freq_y"],
                 params["spacing"],
                 params["amplitude"],
+            )
+        elif pattern == "Golden Spiral":
+            polys = get_generator("gen_golden_spiral")(
+                outline,
+                params["turns"],
+                params["spacing_mm"],
+                params["direction"],
+            )
+        elif pattern == "Rose Curve":
+            polys = get_generator("gen_rose_curve")(
+                outline,
+                params["petals"],
+                params["copies"],
+                params["margin_mm"],
             )
         elif self._is_tile_pattern(pattern):
             tile_polys = load_dxf_polylines(params["tile_path"])
@@ -2223,6 +2498,65 @@ class PatternTab(QWidget):
             if item is not None:
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
         self._update_zone_actions()
+
+    # ── Exclusion Cutout management ───────────────────────────────────────────
+
+    def _on_canvas_cutout_toggle(self, idx: int) -> None:
+        """Toggle cutout status for a canvas poly index (called from right-click menu)."""
+        if not (0 <= idx < len(self._outline_ids)):
+            return
+        oid = self._outline_ids[idx]
+        if oid in self._exclusion_ids:
+            self._exclusion_ids.remove(oid)
+        else:
+            self._exclusion_ids.append(oid)
+        self._sync_canvas_cutout_highlight()
+        self._refresh_cutout_status()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _clear_exclusions(self) -> None:
+        if not self._exclusion_ids:
+            return
+        self._exclusion_ids.clear()
+        self._sync_canvas_cutout_highlight()
+        self._refresh_cutout_status()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _sync_canvas_cutout_highlight(self) -> None:
+        """Update canvas accent colors to reflect current cutout assignments."""
+        if not hasattr(self, "_canvas"):
+            return
+        id_to_idx = {oid: i for i, oid in enumerate(self._outline_ids)}
+        cutout_idxs = {
+            id_to_idx[eid] for eid in self._exclusion_ids if eid in id_to_idx
+        }
+        self._canvas.set_cutout_indices(cutout_idxs)
+
+    def _refresh_cutout_status(self) -> None:
+        """Update the always-visible cutout status label."""
+        if not hasattr(self, "_cutout_status_label"):
+            return
+        n = len(self._exclusion_ids)
+        if n == 0:
+            self._cutout_status_label.setText(
+                "No cutouts \u2014 right-click a shape on canvas to mark it"
+            )
+            self._cutout_status_label.setStyleSheet(
+                f"color: {DIM}; font-size: 10px;"
+            )
+        else:
+            self._cutout_status_label.setText(
+                f"{n} cutout{'s' if n != 1 else ''} active \u2014 shown orange on canvas"
+            )
+            self._cutout_status_label.setStyleSheet(
+                "color: #f0883e; font-size: 10px;"
+            )
+
+    def _resolve_exclusion_polys(self) -> list[list[tuple[float, float]]]:
+        """Return polylines for all current exclusion IDs."""
+        return self._resolve_outline_ids(self._exclusion_ids)
 
     # ── Preview / reset ───────────────────────────────────────────────────────
 

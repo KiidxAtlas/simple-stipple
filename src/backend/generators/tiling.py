@@ -7,7 +7,7 @@ import math
 from shapely import prepared  # type: ignore[import-untyped]
 from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
 
-from src.core.generators._shared import (
+from src.backend.generators._shared import (
     _clip_to_outline,
     _collect_lines,
     _extract_polys,
@@ -252,10 +252,12 @@ def gen_diagonal_lines(
     result: list[list[tuple[float, float]]] = []
     while p <= p_max:
         ox, oy = p * nx, p * ny
-        ln = LineString([
-            (ox - dx * diag, oy - dy * diag),
-            (ox + dx * diag, oy + dy * diag),
-        ])
+        ln = LineString(
+            [
+                (ox - dx * diag, oy - dy * diag),
+                (ox + dx * diag, oy + dy * diag),
+            ]
+        )
         _collect_lines(outline_poly.intersection(ln), result)
         p += spacing
     return result
@@ -263,9 +265,8 @@ def gen_diagonal_lines(
 
 def gen_square_grid(outline_poly, spacing: float) -> list[list[tuple[float, float]]]:
     """Orthogonal grid of horizontal and vertical lines clipped to outline."""
-    return (
-        gen_diagonal_lines(outline_poly, spacing, 0.0)
-        + gen_diagonal_lines(outline_poly, spacing, 90.0)
+    return gen_diagonal_lines(outline_poly, spacing, 0.0) + gen_diagonal_lines(
+        outline_poly, spacing, 90.0
     )
 
 

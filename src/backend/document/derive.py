@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from collections.abc import Callable
 
-from src.core.document.graph import DocumentGraph
+from src.backend.document.graph import DocumentGraph
 
 Polyline = list[tuple[float, float]]
 PolylineList = list[list[tuple[float, float]]]

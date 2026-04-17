@@ -8,7 +8,12 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QInputDialog, QLineEdit, QMenu
 
-from src.core.shapes import shape_circle, shape_polygon, shape_rect, shape_slot
+from src.backend.geometry.shapes import (
+    shape_circle,
+    shape_polygon,
+    shape_rect,
+    shape_slot,
+)
 from src.ui.canvas.view import PolylineView
 
 
@@ -19,6 +24,8 @@ class DxfCanvas(PolylineView):
     quickShapeEnabledChanged = Signal(bool)
 
     _VALID_QUICK_SHAPES = frozenset({"rectangle", "circle", "slot", "hexagon"})
+
+    _CUTOUT_COLOR = "#f0883e"
 
     def __init__(
         self,
@@ -31,6 +38,7 @@ class DxfCanvas(PolylineView):
         on_send_selected_to_pattern=None,
         on_send_selected_to_draft=None,
         on_use_selected_as_fill_pattern=None,
+        on_cutout_toggle=None,
         draft_profile: bool = False,
     ):
         super().__init__(
@@ -44,6 +52,8 @@ class DxfCanvas(PolylineView):
         self._send_selected_to_pattern_cb = on_send_selected_to_pattern
         self._send_selected_to_draft_cb = on_send_selected_to_draft
         self._use_selected_as_fill_pattern_cb = on_use_selected_as_fill_pattern
+        self._on_cutout_toggle = on_cutout_toggle
+        self._cutout_indices: set[int] = set()
         self._draft_profile = bool(draft_profile or selectable)
 
         self._quick_shape_mode: str = "rectangle"
@@ -88,6 +98,11 @@ class DxfCanvas(PolylineView):
         if flash:
             self._show_flash(f"Drag shape: {m}", 900)
         self._redraw()
+
+    def set_cutout_indices(self, indices: set[int]) -> None:
+        """Mark poly indices as cutout shapes, rendering them in amber."""
+        self._cutout_indices = set(indices)
+        self.set_accent_polys({idx: self._CUTOUT_COLOR for idx in indices})
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self._selectable and self._radial_active:
@@ -247,6 +262,10 @@ class DxfCanvas(PolylineView):
             else:
                 menu.addAction("Select", lambda: self._ctx_select(idx))
             menu.addAction("Delete", lambda: self._ctx_delete_poly(idx))
+            if callable(self._on_cutout_toggle):
+                is_cutout = idx in self._cutout_indices
+                cutout_label = "Remove Cutout" if is_cutout else "Mark as Cutout"
+                menu.addAction(cutout_label, lambda _idx=idx: self._on_cutout_toggle(_idx))
             menu.addSeparator()
 
         context_idx = poly_hit

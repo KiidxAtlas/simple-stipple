@@ -1,7 +1,7 @@
 """Public geometry API."""
 
-from src.core.geometry.arc import arc_from_center_start_end, arc_from_three_points
-from src.core.geometry.primitives import (
+from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
+from src.backend.geometry.primitives import (
     clip_line_to_outline,
     clip_polygon_to_outline,
     build_circle_poly,

@@ -183,7 +183,9 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if hasattr(canvas, "set_grid_visible") and hasattr(canvas, "get_precision_state"):
+        if hasattr(canvas, "set_grid_visible") and hasattr(
+            canvas, "get_precision_state"
+        ):
             state = canvas.get_precision_state()
             canvas.set_grid_visible(not bool(state.get("grid_visible", False)))
             self._after_change()
@@ -201,9 +203,13 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if hasattr(canvas, "set_construction_mode") and hasattr(canvas, "get_precision_state"):
+        if hasattr(canvas, "set_construction_mode") and hasattr(
+            canvas, "get_precision_state"
+        ):
             state = canvas.get_precision_state()
-            canvas.set_construction_mode(not bool(state.get("construction_mode", False)))
+            canvas.set_construction_mode(
+                not bool(state.get("construction_mode", False))
+            )
             self._after_change()
 
     def _toggle_measure(self) -> None:
@@ -218,7 +224,9 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if not hasattr(canvas, "get_precision_state") or not hasattr(canvas, "set_grid_spacing"):
+        if not hasattr(canvas, "get_precision_state") or not hasattr(
+            canvas, "set_grid_spacing"
+        ):
             return
         current = float(canvas.get_precision_state().get("grid_spacing", 1.0))
         canvas.set_grid_spacing(max(0.1, min(100.0, current * factor)))
@@ -431,9 +439,9 @@ class CanvasObjectBrowser(QFrame):
         self._locked_indices = set(locked_indices or [])
 
         if not polys:
-            empty = QTreeWidgetItem([
-                "No objects yet — load or create geometry to browse it here."
-            ])
+            empty = QTreeWidgetItem(
+                ["No objects yet — load or create geometry to browse it here."]
+            )
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             self._tree.addTopLevelItem(empty)
             self._summary.setText("0 objects")
@@ -542,7 +550,9 @@ class CanvasObjectBrowser(QFrame):
         menu.addSeparator()
         menu.addAction("Hide selected", lambda: _set_visible(target_indices, False))
         menu.addAction("Show selected", lambda: _set_visible(target_indices, True))
-        menu.addAction("Show all", lambda: _set_visible(list(self._hidden_indices), True))
+        menu.addAction(
+            "Show all", lambda: _set_visible(list(self._hidden_indices), True)
+        )
         menu.popup(self._tree.viewport().mapToGlobal(pos))
 
     @staticmethod

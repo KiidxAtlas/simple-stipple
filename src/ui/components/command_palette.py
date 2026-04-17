@@ -69,11 +69,13 @@ class CommandPaletteDialog(QDialog):
         self._filtered_indices = []
         self._list.clear()
         for idx, cmd in enumerate(self._commands):
-            hay = " ".join([
-                str(cmd.get("title", "")),
-                str(cmd.get("shortcut", "")),
-                str(cmd.get("keywords", "")),
-            ]).lower()
+            hay = " ".join(
+                [
+                    str(cmd.get("title", "")),
+                    str(cmd.get("shortcut", "")),
+                    str(cmd.get("keywords", "")),
+                ]
+            ).lower()
             if text and text not in hay:
                 continue
             self._filtered_indices.append(idx)

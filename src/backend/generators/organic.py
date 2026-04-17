@@ -18,7 +18,7 @@ from shapely.geometry import (  # type: ignore[import-untyped]
 )
 from shapely.ops import voronoi_diagram  # type: ignore[import-untyped]
 
-from src.core.generators._shared import (
+from src.backend.generators._shared import (
     _clip_to_outline,
     _collect_lines,
     _coords_to_polyline,
@@ -234,6 +234,8 @@ def gen_topographic(outline_poly, spacing: float) -> list[list[tuple[float, floa
                                 Polygon(coords), outline_poly, prep, result
                             )
         except (TypeError, ValueError, RuntimeError) as exc:
-            LOGGER.debug("Skipping topographic contour at distance %.3f: %s", distance, exc)
+            LOGGER.debug(
+                "Skipping topographic contour at distance %.3f: %s", distance, exc
+            )
 
     return result

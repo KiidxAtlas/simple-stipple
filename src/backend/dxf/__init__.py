@@ -1,13 +1,13 @@
 """DXF/FVI conversion and repair exports."""
 
-from src.core.dxf.fix import fix_dxf
-from src.core.dxf.fvi import convert_fvi_to_dxf
-from src.core.dxf.io import (
+from src.backend.dxf.fix import fix_dxf
+from src.backend.dxf.fvi import convert_fvi_to_dxf
+from src.backend.dxf.io import (
     load_dxf_polylines,
     polylines_to_outline,
     write_polylines_dxf,
 )
-from src.core.dxf.svg import dxf_to_svg
+from src.backend.dxf.svg import dxf_to_svg
 
 __all__ = [
     "convert_fvi_to_dxf",

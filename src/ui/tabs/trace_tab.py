@@ -23,10 +23,10 @@ from PySide6.QtWidgets import (
 )
 
 from src.constants import DIM, SEL
-from src.core.document.graph import DocumentGraph
-from src.core.document.migration import graph_from_polylines, polylines_from_graph
-from src.core.dxf.io import write_polylines_dxf
-from src.core.io import image_to_outlines
+from src.backend.document.graph import DocumentGraph
+from src.backend.document.migration import graph_from_polylines, polylines_from_graph
+from src.backend.dxf.io import write_polylines_dxf
+from src.backend.io import image_to_outlines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import IMAGE_ACTION_MAP
 from src.ui.components.containers import (

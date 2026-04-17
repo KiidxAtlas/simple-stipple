@@ -8,7 +8,8 @@ from pathlib import Path
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
-from src.app import App, _apply_dark_palette
+from src.app import App
+from src.ui.style.theme import apply_dark_theme
 
 
 def _resolve_icon_path() -> Path | None:
@@ -25,7 +26,7 @@ def _resolve_icon_path() -> Path | None:
 
 def main() -> int:
     app = QApplication(sys.argv)
-    _apply_dark_palette(app)
+    apply_dark_theme(app)
     icon_path = _resolve_icon_path()
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))

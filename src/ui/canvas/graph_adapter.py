@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from src.core.document.actions import replace_layer_polylines
-from src.core.document.graph import DocumentGraph, EntityRef
+from src.backend.document.actions import replace_layer_polylines
+from src.backend.document.graph import DocumentGraph, EntityRef
 
 if TYPE_CHECKING:
     from src.ui.canvas.view import PolylineView

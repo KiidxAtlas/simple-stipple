@@ -1,6 +1,6 @@
 /* ── Global font ─────────────────────────────────────── */
 * {
-    font-family: "Helvetica Neue", sans-serif;
+    font-family: "Helvetica Neue", "Arial", "Helvetica";
     font-size: 13px;
 }
 

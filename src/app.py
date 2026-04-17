@@ -9,7 +9,6 @@ from typing import Any
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -21,29 +20,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.core.document.state import (
+from src.backend.document.state import (
     WORKSPACE_FILE_SUFFIX,
     build_workspace_document,
     normalize_workspace_path,
     validate_workspace_document,
 )
-from src.core.io import read_json_file, write_json_file_atomic
+from src.backend.io import read_json_file, write_json_file_atomic
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
+from src.ui.components.command_palette import CommandPaletteDialog
 from src.ui.components.factories import _info_chip, _surface_frame
-from src.ui.dialogs.command_palette import CommandPaletteDialog
-from src.ui.dialogs.settings_dialog import SettingsDialog
-from src.ui.dialogs.update_dialog import UpdateDialog
-from src.ui.style.theme import apply_dark_theme
+from src.ui.components.update_dialog import UpdateDialog
 from src.ui.tabs.convert_tab import UtilitiesTab
 from src.ui.tabs.draft_tab import ShapeTab
 from src.ui.tabs.pattern import PatternTab
 from src.ui.tabs.repo_tab import RepoTab
+from src.ui.tabs.settings_dialog import SettingsDialog
 from src.ui.tabs.trace_tab import ImageTab
-
-
-def _apply_dark_palette(app: QApplication) -> None:
-    """Backward-compatible theming entrypoint used by app bootstrap."""
-    apply_dark_theme(app)
 
 
 class App(QMainWindow):
@@ -226,6 +219,9 @@ class App(QMainWindow):
         self._workspace_state_chip.setProperty("tone", chip_tone)
         self._workspace_state_chip.style().unpolish(self._workspace_state_chip)
         self._workspace_state_chip.style().polish(self._workspace_state_chip)
+        # Disable save actions if there's no workspace content
+        has_content = self._has_workspace_content()
+        self._save_workspace_action.setEnabled(has_content and self._workspace_dirty)
 
     def _build_workspace_actions(self) -> None:
         self._new_workspace_action = QAction("New Workspace", self)
@@ -401,7 +397,8 @@ class App(QMainWindow):
 
     def _confirm_discard_if_dirty(self) -> bool:
         self._update_workspace_dirty()
-        if not self._workspace_dirty:
+        # Don't prompt for save if there's no content to save
+        if not self._workspace_dirty or not self._has_workspace_content():
             return True
         choice = QMessageBox.question(
             self,

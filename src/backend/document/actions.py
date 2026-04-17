@@ -6,8 +6,13 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from src.core.document.graph import DocumentGraph, EntityRef
-from src.core.shapes import shape_circle, shape_polygon, shape_rect, shape_slot
+from src.backend.document.graph import DocumentGraph, EntityRef
+from src.backend.geometry.shapes import (
+    shape_circle,
+    shape_polygon,
+    shape_rect,
+    shape_slot,
+)
 
 
 class ActionType:

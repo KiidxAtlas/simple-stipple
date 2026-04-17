@@ -11,9 +11,9 @@ from shapely.geometry import (  # type: ignore[import-untyped]
     MultiPoint,
     Polygon,
 )
+from shapely.ops import linemerge  # type: ignore[import-untyped]
 
-from src.core.generators._shared import _collect_lines, _extract_polys
-
+from src.backend.generators._shared import _collect_lines, _extract_polys
 
 # ── Penrose Tiling (P2 kite/dart subdivision) ────────────────────────────────
 
@@ -197,9 +197,9 @@ def gen_hilbert_curve(
 # Named Gray-Scott presets: (feed, kill)
 _RD_PRESETS: dict[str, tuple[float, float]] = {
     "labyrinth": (0.0367, 0.0649),
-    "spots":     (0.035,  0.065),
-    "stripes":   (0.026,  0.051),
-    "maze":      (0.029,  0.057),
+    "spots": (0.035, 0.065),
+    "stripes": (0.026, 0.051),
+    "maze": (0.029, 0.057),
 }
 
 
@@ -245,8 +245,15 @@ def gen_reaction_diffuse(
     for _ in range(iters):
         lapA = (
             -A
-            + 0.2 * (np.roll(A, 1, 0) + np.roll(A, -1, 0) + np.roll(A, 1, 1) + np.roll(A, -1, 1))
-            + 0.05 * (
+            + 0.2
+            * (
+                np.roll(A, 1, 0)
+                + np.roll(A, -1, 0)
+                + np.roll(A, 1, 1)
+                + np.roll(A, -1, 1)
+            )
+            + 0.05
+            * (
                 np.roll(np.roll(A, 1, 0), 1, 1)
                 + np.roll(np.roll(A, 1, 0), -1, 1)
                 + np.roll(np.roll(A, -1, 0), 1, 1)
@@ -255,8 +262,15 @@ def gen_reaction_diffuse(
         )
         lapB = (
             -B
-            + 0.2 * (np.roll(B, 1, 0) + np.roll(B, -1, 0) + np.roll(B, 1, 1) + np.roll(B, -1, 1))
-            + 0.05 * (
+            + 0.2
+            * (
+                np.roll(B, 1, 0)
+                + np.roll(B, -1, 0)
+                + np.roll(B, 1, 1)
+                + np.roll(B, -1, 1)
+            )
+            + 0.05
+            * (
                 np.roll(np.roll(B, 1, 0), 1, 1)
                 + np.roll(np.roll(B, 1, 0), -1, 1)
                 + np.roll(np.roll(B, -1, 0), 1, 1)
@@ -275,7 +289,7 @@ def gen_reaction_diffuse(
     xs = np.linspace(minx, maxx, nx)
     ys = np.linspace(miny, maxy, ny)
 
-    result: list[list[tuple[float, float]]] = []
+    raw_segments: list[list[tuple[float, float]]] = []
 
     def _interp(p1, p2, v1, v2):
         if abs(v2 - v1) < 1e-12:
@@ -305,9 +319,39 @@ def gen_reaction_diffuse(
                 pts.append(_interp((x0, y0), (x0, y1), v00, v01))
 
             if len(pts) == 2:
-                _collect_lines(outline_poly.intersection(LineString([pts[0], pts[1]])), result)
+                _collect_lines(
+                    outline_poly.intersection(LineString([pts[0], pts[1]])),
+                    raw_segments,
+                )
             elif len(pts) == 4:
-                _collect_lines(outline_poly.intersection(LineString([pts[0], pts[1]])), result)
-                _collect_lines(outline_poly.intersection(LineString([pts[2], pts[3]])), result)
+                _collect_lines(
+                    outline_poly.intersection(LineString([pts[0], pts[1]])),
+                    raw_segments,
+                )
+                _collect_lines(
+                    outline_poly.intersection(LineString([pts[2], pts[3]])),
+                    raw_segments,
+                )
 
-    return result
+    if not raw_segments:
+        return []
+
+    seg_lines = [LineString(seg) for seg in raw_segments if len(seg) >= 2]
+    if not seg_lines:
+        return []
+
+    merged = linemerge(seg_lines)
+    merged_coords: list[list[tuple[float, float]]] = []
+    _collect_lines(merged, merged_coords)
+
+    min_len = max(cell_mm * 0.6, 0.12)
+    filtered: list[list[tuple[float, float]]] = []
+    for coords in merged_coords:
+        if len(coords) < 2:
+            continue
+        try:
+            if LineString(coords).length >= min_len:
+                filtered.append(coords)
+        except (TypeError, ValueError):
+            continue
+    return filtered

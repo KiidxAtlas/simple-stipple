@@ -7,7 +7,12 @@ from typing import TypeAlias
 from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 
-from src.core.shapes import shape_circle, shape_ellipse, shape_polygon, shape_rect
+from src.backend.geometry.shapes import (
+    shape_circle,
+    shape_ellipse,
+    shape_polygon,
+    shape_rect,
+)
 
 Point: TypeAlias = tuple[float, float]
 Polyline = list[Point]

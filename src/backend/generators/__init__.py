@@ -4,33 +4,41 @@ from collections.abc import Callable
 from functools import cache, lru_cache
 from importlib import import_module
 
-from src.core.generators._shared import apply_interlace
-from src.core.generators.advanced import (
+from src.backend.generators._shared import (
+    apply_border_fade,
+    apply_interlace,
+    apply_invert_fill,
+    apply_mirror,
+)
+from src.backend.generators.advanced import (
     gen_hilbert_curve,
     gen_penrose_tiling,
     gen_reaction_diffuse,
 )
-from src.core.generators.composite import (
+from src.backend.generators.composite import (
+    gen_braid,
     gen_custom_tile,
     gen_image_halftone,
     gen_moroccan_zellige,
     gen_tri_weave,
 )
-from src.core.generators.curves import (
+from src.backend.generators.curves import (
     gen_celtic_knot,
     gen_concentric_rings,
+    gen_golden_spiral,
     gen_lissajous,
+    gen_rose_curve,
     gen_spiral,
     gen_sunburst,
     gen_wave_fill,
 )
-from src.core.generators.organic import (
+from src.backend.generators.organic import (
     gen_stipple_dots,
     gen_stipple_interlaced,
     gen_topographic,
     gen_voronoi,
 )
-from src.core.generators.tiling import (
+from src.backend.generators.tiling import (
     gen_basketweave,
     gen_brick,
     gen_diagonal_lines,
@@ -43,8 +51,12 @@ from src.core.generators.tiling import (
 )
 
 __all__ = [
+    "apply_border_fade",
     "apply_interlace",
+    "apply_invert_fill",
+    "apply_mirror",
     "gen_basketweave",
+    "gen_braid",
     "gen_brick",
     "gen_celtic_knot",
     "gen_concentric_rings",
@@ -52,6 +64,7 @@ __all__ = [
     "gen_diagonal_lines",
     "gen_diamond_checkering",
     "gen_fish_scale",
+    "gen_golden_spiral",
     "gen_gradient_honeycomb",
     "gen_hilbert_curve",
     "gen_honeycomb",
@@ -60,6 +73,7 @@ __all__ = [
     "gen_moroccan_zellige",
     "gen_penrose_tiling",
     "gen_reaction_diffuse",
+    "gen_rose_curve",
     "gen_spiral",
     "gen_square_grid",
     "gen_stipple_dots",
@@ -77,7 +91,7 @@ GeneratorFn = Callable[..., list[list[tuple[float, float]]]]
 
 @lru_cache(maxsize=1)
 def _generators_module():
-    return import_module("src.core.generators")
+    return import_module("src.backend.generators")
 
 
 @cache

@@ -8,15 +8,109 @@ from typing import Any, cast
 from shapely import prepared  # type: ignore[import-untyped]
 from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
 
-from src.core.generators._shared import (
-    _PIL_Image,
+from src.backend.generators._shared import (
     _PIL_OK,
+    LOGGER,
     _clip_to_outline,
     _collect_lines,
     _extract_polys,
     _hex_verts,
-    LOGGER,
+    _PIL_Image,
 )
+
+
+def gen_braid(
+    outline_poly, strip_width: float, spacing: float
+) -> list[list[tuple[float, float]]]:
+    """Interlocking diagonal weave pattern at ±45° angles.
+
+    Creates alternating diagonal strips offset by spacing, with each strip
+    having a width of strip_width. Pattern creates visual interlocking effect.
+
+    Args:
+        outline_poly: Shapely Polygon boundary
+        strip_width: Width of each diagonal strip (mm)
+        spacing: Gap between parallel diagonal strips (mm)
+
+    Returns:
+        List of polylines clipped to the outline
+    """
+    if strip_width <= 0 or spacing <= 0:
+        return []
+
+    minx, miny, maxx, maxy = outline_poly.bounds
+    w = maxx - minx
+    h = maxy - miny
+    if w <= 0 or h <= 0:
+        return []
+
+    # Spacing between diagonal strip centers (width + gap)
+    step = strip_width + spacing
+    pad = step * 3.0
+
+    prep = prepared.prep(outline_poly)
+    result: list[list[tuple[float, float]]] = []
+
+    # Create diagonal strips at +45° and -45° alternating
+    # For +45° lines: y = x + c, so perpendicular is y = -x + c2
+    # Strip is bounded by two parallel lines at ±45°
+
+    # Diagonal distance across bounds
+    diag = math.hypot(w, h) + pad
+
+    # +45° direction strips (slope = 1)
+    # Perpendicular normal for spacing: (1/√2, -1/√2)
+    normal_pos = 1.0 / math.sqrt(2.0)
+
+    # Sample lines perpendicular to +45° direction
+    # Start and end projections
+    corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+    projs_pos = [x * normal_pos - y * normal_pos for x, y in corners]
+    proj_min_pos = min(projs_pos) - pad
+    proj_max_pos = max(projs_pos) + pad
+
+    # Create +45° strips
+    offset = proj_min_pos
+    strip_idx = 0
+    while offset <= proj_max_pos:
+        # Two parallel perpendicular lines bounding the strip
+        # Line perpendicular to +45° at offset p: x - y = p
+        # Points on the line: (p + y, y) for any y
+
+        # Create line segment spanning the outline
+        p1 = (offset, 0)
+        p2 = (offset + diag, diag)
+
+        # Draw thick diagonal by parallel lines
+        for sub_offset in [offset, offset + strip_width]:
+            p1_sub = (sub_offset, -diag)
+            p2_sub = (sub_offset + diag, diag)
+            ln = LineString([p1_sub, p2_sub])
+            _collect_lines(outline_poly.intersection(ln), result)
+
+        offset += step
+        strip_idx += 1
+
+    # -45° direction strips (slope = -1)
+    # Normal for spacing: (1/√2, 1/√2)
+    projs_neg = [x * normal_pos + y * normal_pos for x, y in corners]
+    proj_min_neg = min(projs_neg) - pad
+    proj_max_neg = max(projs_neg) + pad
+
+    offset = proj_min_neg
+    strip_idx = 0
+    while offset <= proj_max_neg:
+        # -45° line: x + y = p
+        for sub_offset in [offset, offset + strip_width]:
+            p1_sub = (-diag, sub_offset + diag)
+            p2_sub = (diag, sub_offset - diag)
+            ln = LineString([p1_sub, p2_sub])
+            _collect_lines(outline_poly.intersection(ln), result)
+
+        offset += step
+        strip_idx += 1
+
+    return result
 
 
 def gen_image_halftone(

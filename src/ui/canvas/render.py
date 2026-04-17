@@ -24,14 +24,14 @@ from PySide6.QtGui import (
     QPixmap,
 )
 
-from src.constants import DIM
-from src.core.geometry.arc import arc_from_center_start_end, arc_from_three_points
-from src.core.geometry.primitives import (
+from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
+from src.backend.geometry.primitives import (
     build_circle_poly,
     build_ellipse_poly,
     build_polygon_poly,
     build_rect_poly,
 )
+from src.constants import DIM
 from src.ui.canvas._constants import (
     BADGE_BG as _BADGE_BG,
 )
@@ -541,27 +541,49 @@ class CanvasRenderer:
             painter.drawLine(QPointF(_dsx - 4, _dsy + 4), QPointF(_dsx + 4, _dsy - 4))
 
         # Snap label pill — above the snap point
-        _snap_labels = {
-            "vertex": "Endpoint",
-            "midpoint": "Midpoint",
-            "intersection": "Intersection",
-            "center": "Center",
-            "edge": "On Edge",
-            "grid": "Grid",
-            "perpendicular": "Perpendicular",
-        }
-        _label = _snap_labels.get(snap_t, "")
+        mode = getattr(self, "_mode", "")
+        if snap_t == "vertex":
+            _label = "Endpoint" if mode == "draw" else "Vertex"
+        elif snap_t == "midpoint":
+            _label = "Midpoint"
+        elif snap_t == "edge":
+            _label = "On Edge"
+        else:
+            _label = ""
         if _label:
-            painter.setFont(QFont("Helvetica", 9, QFont.Weight.DemiBold))
-            _fm = QFontMetrics(painter.font())
-            _ltw = _fm.horizontalAdvance(_label)
-            _lx = _dsx - _ltw / 2 - 4
-            _ly = _dsy - 24
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(0, 30, 40, 210)))
-            painter.drawRoundedRect(QRectF(_lx, _ly, _ltw + 8, 16), 3, 3)
-            painter.setPen(_SNAP_CLOSE)
-            painter.drawText(QPointF(_lx + 4, _ly + 12), _label)
+            cache = getattr(self, "_snap_label_badge_cache", None)
+            if not isinstance(cache, dict):
+                cache = {}
+                self._snap_label_badge_cache = cache
+
+            badge = cache.get(_label)
+            if badge is None:
+                font = QFont("Helvetica", 9, QFont.Weight.DemiBold)
+                fm = QFontMetrics(font)
+                tw = fm.horizontalAdvance(_label)
+                badge_w = int(math.ceil(tw + 8))
+                badge_h = 16
+                badge = QPixmap(badge_w, badge_h)
+                badge.fill(Qt.GlobalColor.transparent)
+
+                badge_painter = QPainter(badge)
+                badge_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                badge_painter.setPen(Qt.PenStyle.NoPen)
+                badge_painter.setBrush(QBrush(QColor(0, 30, 40, 210)))
+                badge_painter.drawRoundedRect(QRectF(0, 0, badge_w, badge_h), 3, 3)
+                badge_painter.setPen(_SNAP_CLOSE)
+                badge_painter.setFont(font)
+                badge_painter.drawText(
+                    QRectF(0, 0, badge_w, badge_h),
+                    Qt.AlignmentFlag.AlignCenter,
+                    _label,
+                )
+                badge_painter.end()
+                cache[_label] = badge
+
+            badge_x = int(round(_dsx - badge.width() / 2.0))
+            badge_y = int(round(_dsy - 24))
+            painter.drawPixmap(badge_x, badge_y, badge)
 
     def _draw_badge(
         self, painter: QPainter, cx: float, cy: float, text: str, font_size: int
