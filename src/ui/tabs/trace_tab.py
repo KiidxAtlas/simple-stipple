@@ -29,11 +29,13 @@ from src.core.dxf.io import write_polylines_dxf
 from src.core.io import image_to_outlines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import IMAGE_ACTION_MAP
-from src.ui.components.helpers import (
+from src.ui.components.containers import (
     CanvasObjectBrowser,
     CanvasPrecisionBar,
     CanvasStatusStrip,
     DxfLayersTree,
+)
+from src.ui.components.factories import (
     _canvas_toolbar,
     _content_splitter,
     _section_label,
@@ -43,12 +45,13 @@ from src.ui.components.helpers import (
     parse_float_field,
     set_line_edit_error,
 )
-from src.ui.components.trace_form_components import (
+from src.ui.components.trace_form import (
     PathField,
     TextField,
+    TraceFieldBindings,
     build_lazy_section,
+    build_trace_kwargs,
 )
-from src.ui.tabs.trace_form_logic import TraceFieldBindings, build_trace_kwargs
 
 ACTION_MAP = IMAGE_ACTION_MAP
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)

@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QInputDialog, QLineEdit, QMenu
 
 from src.core.shapes import shape_circle, shape_polygon, shape_rect, shape_slot
-from src.ui.canvas.polyline_view import PolylineView
+from src.ui.canvas.view import PolylineView
 
 
 class DxfCanvas(PolylineView):

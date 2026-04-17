@@ -32,7 +32,11 @@ from PIL import Image
 Poly = list[tuple[float, float]]
 
 
-def _close_poly(poly: Poly, tol: float = 1e-6) -> Poly:
+# Shared closure tolerance (mm / pixel space) — must match canvas _is_poly_closed.
+_CLOSE_TOL = 0.01
+
+
+def _close_poly(poly: Poly, tol: float = _CLOSE_TOL) -> Poly:
     """Return *poly* with the starting point appended if needed."""
     if len(poly) < 3:
         return list(poly)
@@ -171,7 +175,9 @@ def simplify_contours(contours: list[Poly], tolerance: float = 1.0) -> list[Poly
         perimeter = cv2.arcLength(arr, closed=True)
         epsilon = max(0.01, float(tolerance))
         if perimeter > 1e-6:
-            epsilon = min(epsilon, perimeter * 0.25)
+            # Cap at 5% of perimeter — 25% was far too aggressive and erased
+            # fine detail (text, thin strokes) even at low tolerance settings.
+            epsilon = min(epsilon, perimeter * 0.05)
         simplified = cv2.approxPolyDP(arr, epsilon, closed=True)
         coords = [(float(p[0][0]), float(p[0][1])) for p in simplified]
         if len(coords) >= 3:
@@ -294,8 +300,12 @@ def image_to_outlines(
     _progress(70, "Simplifying\u2026")
     polys = simplify_contours(polys, simplify_tol)
 
-    _progress(85, "Filtering\u2026")
+    n_before = len(polys)
+    _progress(85, f"Filtering {n_before} contour(s)\u2026")
     polys = filter_contours(polys, min_area_px, max_area_px)
+    n_kept = len(polys)
+    if n_kept < n_before:
+        _progress(92, f"Kept {n_kept} of {n_before} contours (area filter removed {n_before - n_kept}).")
 
     _progress(95, "Scaling to mm\u2026")
     px_per_mm = img_w_px / max(width_mm, 0.001)

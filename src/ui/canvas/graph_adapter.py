@@ -9,7 +9,7 @@ from src.core.document.actions import replace_layer_polylines
 from src.core.document.graph import DocumentGraph, EntityRef
 
 if TYPE_CHECKING:
-    from src.ui.canvas.polyline_view import PolylineView
+    from src.ui.canvas.view import PolylineView
 
 
 @dataclass

@@ -29,14 +29,14 @@ from src.core.document.state import (
 )
 from src.core.io import read_json_file, write_json_file_atomic
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
-from src.ui.components.helpers import _info_chip, _surface_frame
+from src.ui.components.factories import _info_chip, _surface_frame
 from src.ui.dialogs.command_palette import CommandPaletteDialog
 from src.ui.dialogs.settings_dialog import SettingsDialog
 from src.ui.dialogs.update_dialog import UpdateDialog
 from src.ui.style.theme import apply_dark_theme
 from src.ui.tabs.convert_tab import UtilitiesTab
 from src.ui.tabs.draft_tab import ShapeTab
-from src.ui.tabs.pattern_tab import PatternTab
+from src.ui.tabs.pattern import PatternTab
 from src.ui.tabs.repo_tab import RepoTab
 from src.ui.tabs.trace_tab import ImageTab
 

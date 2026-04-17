@@ -6,12 +6,14 @@ from src.ui.components.action_maps import (
     SHAPE_ACTION_MAP,
     UTILITIES_ACTION_MAP,
 )
-from src.ui.components.helpers import (
+from src.ui.components.containers import (
     CanvasObjectBrowser,
     CanvasPrecisionBar,
     CanvasStatusStrip,
     CollapsibleSection,
     DxfLayersTree,
+)
+from src.ui.components.factories import (
     _canvas_toolbar,
     _content_splitter,
     _info_chip,
@@ -23,7 +25,7 @@ from src.ui.components.helpers import (
     parse_float_field,
     set_line_edit_error,
 )
-from src.ui.components.trace_form_components import (
+from src.ui.components.trace_form import (
     PathField,
     TextField,
     build_lazy_section,

@@ -1,10 +1,15 @@
-"""Geometry primitive builders (pure core logic)."""
+"""Geometry primitive builders and clipping operations (pure core logic)."""
 
 from __future__ import annotations
 
+from typing import TypeAlias
+
+from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
+from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
+
 from src.core.shapes import shape_circle, shape_ellipse, shape_polygon, shape_rect
 
-Point = tuple[float, float]
+Point: TypeAlias = tuple[float, float]
 Polyline = list[Point]
 
 
@@ -46,9 +51,21 @@ def build_polygon_poly(cx: float, cy: float, r: float, sides: int = 6) -> Polyli
     return _translate(shape_polygon(sides, r), cx, cy)
 
 
+def clip_polygon_to_outline(shape: Polygon, outline: Polygon) -> BaseGeometry:
+    """Return ``shape`` clipped to ``outline``."""
+    return outline.intersection(shape)
+
+
+def clip_line_to_outline(points: list[Point], outline: Polygon) -> BaseGeometry:
+    """Return line geometry clipped to ``outline``."""
+    return outline.intersection(LineString(points))
+
+
 __all__ = [
     "build_circle_poly",
     "build_ellipse_poly",
     "build_polygon_poly",
     "build_rect_poly",
+    "clip_line_to_outline",
+    "clip_polygon_to_outline",
 ]

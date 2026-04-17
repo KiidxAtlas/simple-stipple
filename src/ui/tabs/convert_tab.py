@@ -18,12 +18,8 @@ from src.core.document.migration import graph_from_polylines, polylines_from_gra
 from src.core.dxf.io import load_dxf_polylines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import UTILITIES_ACTION_MAP
-from src.ui.components.helpers import (
-    CanvasPrecisionBar,
-    CanvasStatusStrip,
-    _content_splitter,
-    _surface_frame,
-)
+from src.ui.components.containers import CanvasPrecisionBar, CanvasStatusStrip
+from src.ui.components.factories import _content_splitter, _surface_frame
 from src.ui.tabs.convert_subtabs import (
     FixerSubTab,
     FviSubTab,

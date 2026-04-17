@@ -29,14 +29,13 @@ from src.core.document.migration import graph_from_polylines
 from src.core.dxf.io import load_dxf_polylines, write_polylines_dxf
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.graph_adapter import CanvasGraphAdapter
-from src.ui.components.helpers import (
+from src.ui.components.containers import (
     CanvasObjectBrowser,
     CanvasPrecisionBar,
     CanvasStatusStrip,
     DxfLayersTree,
-    _content_splitter,
-    _surface_frame,
 )
+from src.ui.components.factories import _content_splitter, _surface_frame
 from src.ui.panels.properties import PropertiesPanel
 
 

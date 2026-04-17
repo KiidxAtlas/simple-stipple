@@ -41,6 +41,8 @@ PATTERNS = [
     "Topographic",
     "Hilbert Curve",
     "Reaction Diffuse",
+    "Celtic Knot",
+    "Lissajous",
     "Image Halftone",
 ]
 

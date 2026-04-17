@@ -1,4 +1,4 @@
-"""Small layout helper functions for building PySide6 panels."""
+"""Composite panel and browser widgets for PySide6 UIs."""
 
 from __future__ import annotations
 
@@ -14,8 +14,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
-    QScrollArea,
-    QSplitter,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -23,46 +21,50 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
-def _section_label(parent_layout, text: str) -> QLabel:
-    """Compact muted section header with letter-spacing."""
-    lb = QLabel(text.upper())
-    lb.setStyleSheet(
-        "color: #484f58;"
-        "font-size: 10px;"
-        "font-weight: 600;"
-        "letter-spacing: 0.8px;"
-        "padding-bottom: 1px;"
-    )
-    lb.setContentsMargins(0, 8, 0, 2)
-    parent_layout.addWidget(lb)
-    return lb
+from src.ui.components.factories import _info_chip
 
 
-def _sep(parent_layout) -> QFrame:
-    """Hairline horizontal separator."""
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: #21262d;")
-    line.setFixedHeight(1)
-    parent_layout.addWidget(line)
-    return line
+class CollapsibleSection(QFrame):
+    """Expandable/collapsible content section for dense sidebars."""
 
+    def __init__(self, title: str, content: QWidget, *, expanded: bool = True):
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setProperty("surface", "panel")
+        self.setProperty("role", "collapsible")
 
-def _row() -> QHBoxLayout:
-    """Create a horizontal row layout."""
-    h = QHBoxLayout()
-    h.setContentsMargins(0, 0, 0, 0)
-    return h
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
 
+        self._toggle = QToolButton()
+        self._toggle.setText(title)
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(expanded)
+        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self._toggle.clicked.connect(self._on_toggled)
+        layout.addWidget(self._toggle)
 
-def _info_chip(text: str, tone: str = "neutral") -> QLabel:
-    """Small capsule label used for capabilities, state, and shortcuts."""
-    chip = QLabel(text)
-    chip.setProperty("role", "chip")
-    chip.setProperty("tone", tone)
-    chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    return chip
+        self._content = content
+        self._content.setVisible(expanded)
+        layout.addWidget(self._content)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
+        )
+        self._content.setVisible(checked)
+        self.adjustSize()
+
+    def isExpanded(self) -> bool:
+        return self._toggle.isChecked()
+
+    def setExpanded(self, expanded: bool) -> None:
+        self._toggle.setChecked(expanded)
+        self._on_toggled(expanded)
 
 
 class CanvasPrecisionBar(QFrame):
@@ -181,9 +183,7 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if hasattr(canvas, "set_grid_visible") and hasattr(
-            canvas, "get_precision_state"
-        ):
+        if hasattr(canvas, "set_grid_visible") and hasattr(canvas, "get_precision_state"):
             state = canvas.get_precision_state()
             canvas.set_grid_visible(not bool(state.get("grid_visible", False)))
             self._after_change()
@@ -201,13 +201,9 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if hasattr(canvas, "set_construction_mode") and hasattr(
-            canvas, "get_precision_state"
-        ):
+        if hasattr(canvas, "set_construction_mode") and hasattr(canvas, "get_precision_state"):
             state = canvas.get_precision_state()
-            canvas.set_construction_mode(
-                not bool(state.get("construction_mode", False))
-            )
+            canvas.set_construction_mode(not bool(state.get("construction_mode", False)))
             self._after_change()
 
     def _toggle_measure(self) -> None:
@@ -222,9 +218,7 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if not hasattr(canvas, "get_precision_state") or not hasattr(
-            canvas, "set_grid_spacing"
-        ):
+        if not hasattr(canvas, "get_precision_state") or not hasattr(canvas, "set_grid_spacing"):
             return
         current = float(canvas.get_precision_state().get("grid_spacing", 1.0))
         canvas.set_grid_spacing(max(0.1, min(100.0, current * factor)))
@@ -277,51 +271,8 @@ class ContextCoachStrip(QFrame):
         self._secondary.setText(secondary)
 
 
-class CollapsibleSection(QFrame):
-    """Expandable/collapsible content section for dense sidebars."""
-
-    def __init__(self, title: str, content: QWidget, *, expanded: bool = True):
-        super().__init__()
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("surface", "panel")
-        self.setProperty("role", "collapsible")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
-
-        self._toggle = QToolButton()
-        self._toggle.setText(title)
-        self._toggle.setCheckable(True)
-        self._toggle.setChecked(expanded)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-        )
-        self._toggle.clicked.connect(self._on_toggled)
-        layout.addWidget(self._toggle)
-
-        self._content = content
-        self._content.setVisible(expanded)
-        layout.addWidget(self._content)
-
-    def _on_toggled(self, checked: bool) -> None:
-        self._toggle.setArrowType(
-            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
-        )
-        self._content.setVisible(checked)
-        self.adjustSize()
-
-    def isExpanded(self) -> bool:
-        return self._toggle.isChecked()
-
-    def setExpanded(self, expanded: bool) -> None:
-        self._toggle.setChecked(expanded)
-        self._on_toggled(expanded)
-
-
 class CanvasStatusStrip(QFrame):
-    """Compact status bar for canvas — mode, selection, zoom, coordinates, and readiness."""
+    """Compact status bar — mode, selection, zoom, coordinates, and readiness."""
 
     def __init__(self, *, show_readiness: bool = True) -> None:
         super().__init__()
@@ -359,7 +310,6 @@ class CanvasStatusStrip(QFrame):
 
         layout.addStretch()
 
-        # Cursor position
         self._cursor_label = QLabel("")
         self._cursor_label.setStyleSheet(
             "color: #6e7681; font-size: 10px; font-family: 'Menlo', 'Courier New';"
@@ -368,7 +318,6 @@ class CanvasStatusStrip(QFrame):
 
         layout.addWidget(self._dot())
 
-        # Zoom level
         self._zoom_label = QLabel("100%")
         self._zoom_label.setStyleSheet("color: #8b949e; font-size: 10px;")
         self._zoom_label.setToolTip("Zoom level (scroll to zoom)")
@@ -539,8 +488,7 @@ class CanvasObjectBrowser(QFrame):
     def _emit_selection_request(self) -> None:
         if self._syncing:
             return
-        indices = self._selected_object_indices()
-        self.selectionRequested.emit(indices)
+        self.selectionRequested.emit(self._selected_object_indices())
 
     def _emit_visibility_change(self, item: QTreeWidgetItem, _column: int) -> None:
         if self._syncing:
@@ -594,9 +542,7 @@ class CanvasObjectBrowser(QFrame):
         menu.addSeparator()
         menu.addAction("Hide selected", lambda: _set_visible(target_indices, False))
         menu.addAction("Show selected", lambda: _set_visible(target_indices, True))
-        menu.addAction(
-            "Show all", lambda: _set_visible(list(self._hidden_indices), True)
-        )
+        menu.addAction("Show all", lambda: _set_visible(list(self._hidden_indices), True))
         menu.popup(self._tree.viewport().mapToGlobal(pos))
 
     @staticmethod
@@ -650,10 +596,7 @@ class DxfLayersTree(QFrame):
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         layout.addWidget(self._tree, stretch=1)
 
-    def set_layers(
-        self,
-        layers: list[tuple[str, int, bool, bool]],
-    ) -> None:
+    def set_layers(self, layers: list[tuple[str, int, bool, bool]]) -> None:
         """Set layer rows as (name, entity_count, dirty, is_active)."""
         self._tree.clear()
         if not layers:
@@ -665,166 +608,15 @@ class DxfLayersTree(QFrame):
         for name, _entity_count, _dirty, _is_active in layers:
             item = QTreeWidgetItem([name])
             self._tree.addTopLevelItem(item)
-
         self._summary.setText(f"{len(layers)} layers")
         self._tree.expandAll()
 
 
-def _surface_frame(surface: str = "panel") -> QFrame:
-    """Create a styled surface frame for sidebar or content panels."""
-    frame = QFrame()
-    frame.setFrameShape(QFrame.Shape.NoFrame)
-    frame.setProperty("surface", surface)
-    return frame
-
-
-def _sidebar_panel(
-    content: QWidget, *, min_width: int = 340, max_width: int = 430
-) -> QFrame:
-    """Wrap sidebar content in a styled scrollable panel."""
-    frame = _surface_frame("sidebar")
-    frame.setMinimumWidth(min_width)
-    frame.setMaximumWidth(max_width)
-    layout = QVBoxLayout(frame)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(0)
-
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    scroll.setWidget(content)
-    layout.addWidget(scroll)
-    return frame
-
-
-def _content_splitter(
-    left: QWidget, right: QWidget, *, sizes: tuple[int, int]
-) -> QSplitter:
-    """Create a collapsible horizontal splitter with sensible defaults."""
-    splitter = QSplitter(Qt.Orientation.Horizontal)
-    splitter.setChildrenCollapsible(True)
-    splitter.addWidget(left)
-    splitter.addWidget(right)
-    splitter.setStretchFactor(0, 0)
-    splitter.setStretchFactor(1, 1)
-    splitter.setSizes(list(sizes))
-    return splitter
-
-
-def _canvas_toolbar(
-    on_mode,
-    on_fit,
-    *,
-    modes: tuple[str, ...] = ("Select", "Draw", "Edit"),
-    secondary_actions=None,
-):
-    """Compact canvas toolbar with mode toggles and optional actions."""
-    shell = QWidget()
-    shell_layout = QHBoxLayout(shell)
-    shell_layout.setContentsMargins(0, 0, 0, 0)
-    shell_layout.setSpacing(4)
-
-    # Mode buttons — tight group
-    mode_buttons: dict[str, QPushButton] = {}
-    mode_hints = {
-        "Select": "Shortcut: S",
-        "Draw": "Shortcut: D",
-        "Edit": "Shortcut: E",
-    }
-    for mode in modes:
-        btn = QPushButton(mode)
-        btn.setMinimumHeight(28)
-        btn.setProperty("active", mode == modes[0])
-        if mode in mode_hints:
-            btn.setToolTip(mode_hints[mode])
-        btn.clicked.connect(lambda checked=False, m=mode: on_mode(m))
-        shell_layout.addWidget(btn)
-        mode_buttons[mode] = btn
-
-    # Separator
-    sep = QLabel("│")
-    sep.setStyleSheet("color: #21262d; font-size: 12px;")
-    shell_layout.addWidget(sep)
-
-    fit_btn = QPushButton("Fit")
-    fit_btn.setMinimumHeight(28)
-    fit_btn.setToolTip("Fit view to content (Shortcut: F)")
-    fit_btn.clicked.connect(on_fit)
-    shell_layout.addWidget(fit_btn)
-
-    if secondary_actions:
-        sep2 = QLabel("│")
-        sep2.setStyleSheet("color: #21262d; font-size: 12px;")
-        shell_layout.addWidget(sep2)
-        for spec in secondary_actions:
-            label, slot, role = spec if len(spec) == 3 else (*spec, None)
-            btn = QPushButton(label)
-            btn.setMinimumHeight(28)
-            secondary_hints = {
-                "Select All": "Shortcut: Ctrl+A",
-                "Deselect": "Shortcut: Ctrl+Shift+A",
-                "Delete": "Shortcut: Delete",
-                "Undo": "Shortcut: Ctrl+Z",
-                "Close": "Shortcut: Shift+C",
-                "Open": "Shortcut: Shift+O",
-            }
-            if label in secondary_hints:
-                btn.setToolTip(secondary_hints[label])
-            if role:
-                btn.setProperty("role", role)
-            btn.clicked.connect(slot)
-            shell_layout.addWidget(btn)
-
-    selection_label = QLabel("")
-    selection_label.setStyleSheet("color: #8b949e; font-size: 11px;")
-    selection_label.setAlignment(
-        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-    )
-    shell_layout.addWidget(selection_label, stretch=1)
-
-    return shell, mode_buttons, selection_label
-
-
-def parse_float_field(
-    text: str,
-    *,
-    minimum: float | None = None,
-    maximum: float | None = None,
-    allow_empty: bool = False,
-) -> float | None:
-    """Parse a float value from text with optional range validation.
-
-    Returns *None* when *allow_empty* is True and *text* is blank.
-    Raises ``ValueError`` with a human-readable message on any failure.
-    """
-    text = text.strip()
-    if not text:
-        if allow_empty:
-            return None
-        raise ValueError("Value is required.")
-    try:
-        value = float(text)
-    except ValueError as exc:
-        raise ValueError("Value must be a number.") from exc
-    if minimum is not None and value < minimum:
-        raise ValueError(f"Value must be at least {minimum:g}.")
-    if maximum is not None and value > maximum:
-        raise ValueError(f"Value must be at most {maximum:g}.")
-    return value
-
-
-def set_line_edit_error(widget: QWidget, message: str) -> None:
-    """Highlight a line edit and attach a validation message."""
-    widget.setProperty("error", True)
-    widget.style().unpolish(widget)
-    widget.style().polish(widget)
-    widget.setToolTip(message)
-
-
-def clear_line_edit_error(widget: QWidget) -> None:
-    """Clear validation styling from a line edit."""
-    widget.setProperty("error", False)
-    widget.style().unpolish(widget)
-    widget.style().polish(widget)
-    widget.setToolTip("")
+__all__ = [
+    "CanvasObjectBrowser",
+    "CanvasPrecisionBar",
+    "CanvasStatusStrip",
+    "CollapsibleSection",
+    "ContextCoachStrip",
+    "DxfLayersTree",
+]

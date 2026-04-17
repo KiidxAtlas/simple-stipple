@@ -2,9 +2,23 @@
 
 from __future__ import annotations
 
+import logging
 import math
 
+_LOG = logging.getLogger(__name__)
+
 Point = tuple[float, float]
+
+
+def _straight_line_pts(p0: Point, p2: Point, steps: int) -> list[Point]:
+    """Return *steps+1* linearly interpolated points from p0 to p2."""
+    return [
+        (
+            p0[0] + (p2[0] - p0[0]) * i / steps,
+            p0[1] + (p2[1] - p0[1]) * i / steps,
+        )
+        for i in range(steps + 1)
+    ]
 
 
 def arc_from_three_points(
@@ -19,7 +33,11 @@ def arc_from_three_points(
     x3, y3 = p2
     d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
     if abs(d) < 1e-9:
-        return [p0, p1, p2]
+        # Points are collinear — no circle exists.  Return a straight-line
+        # approximation with the same point count so callers always receive
+        # segments+1 points and never mistake 3 raw points for a dense arc.
+        _LOG.debug("arc_from_three_points: collinear input, returning straight line")
+        return _straight_line_pts(p0, p2, max(2, segments))
     ux = (
         (x1 * x1 + y1 * y1) * (y2 - y3)
         + (x2 * x2 + y2 * y2) * (y3 - y1)
@@ -32,7 +50,8 @@ def arc_from_three_points(
     ) / d
     radius = math.hypot(x1 - ux, y1 - uy)
     if radius < 1e-9:
-        return [p0, p1, p2]
+        _LOG.debug("arc_from_three_points: degenerate radius, returning straight line")
+        return _straight_line_pts(p0, p2, max(2, segments))
 
     a0 = math.atan2(y1 - uy, x1 - ux)
     a2 = math.atan2(y3 - uy, x3 - ux)

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import save_settings
-from src.ui.components.helpers import _surface_frame
+from src.ui.components.factories import _surface_frame
 
 
 class RepoTab(QWidget):

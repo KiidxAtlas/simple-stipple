@@ -44,36 +44,33 @@ from src.core.generator_api import apply_interlace, get_generator
 from src.settings import save_settings
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import PATTERN_ACTION_MAP
-from src.ui.components.helpers import (
-    _canvas_toolbar,
-    _content_splitter,
-    _section_label,
-    _sidebar_panel,
-    _surface_frame,
+from src.ui.components.containers import (
     CanvasObjectBrowser,
     CanvasPrecisionBar,
     CanvasStatusStrip,
     CollapsibleSection,
     DxfLayersTree,
+)
+from src.ui.components.factories import (
+    _canvas_toolbar,
+    _content_splitter,
+    _section_label,
+    _sidebar_panel,
+    _surface_frame,
     clear_line_edit_error,
     parse_float_field,
     set_line_edit_error,
 )
-from src.ui.tabs.pattern_params import collect_pattern_params
+from src.ui.tabs.pattern.params import (
+    build_halftone_widget,
+    build_param_widget,
+    build_tile_library_widget,
+    collect_pattern_params,
+)
 from src.ui.tabs.task_state import CancellableTaskState
 
 ACTION_MAP = PATTERN_ACTION_MAP
 LOGGER = logging.getLogger(__name__)
-
-
-def _param_entry(
-    grid: QGridLayout, row: int, label: str, default: str, width: int = 80
-) -> QLineEdit:
-    grid.addWidget(QLabel(label), row, 0)
-    e = QLineEdit(default)
-    e.setFixedWidth(width)
-    grid.addWidget(e, row, 1)
-    return e
 
 
 class PatternTab(QWidget):
@@ -295,24 +292,27 @@ class PatternTab(QWidget):
         fill_layout.addLayout(rot_row)
 
         # Pattern param panels (stacked manually — show/hide)
-        self._honeycomb_w = self._make_honeycomb_params()
-        self._gradient_w = self._make_gradient_params()
-        self._basketweave_w = self._make_basketweave_params()
-        self._fishscale_w = self._make_fishscale_params()
-        self._stipple_w = self._make_stipple_params()
-        self._brick_w = self._make_brick_params()
-        self._diagonal_w = self._make_diagonal_lines_params()
-        self._square_grid_w = self._make_square_grid_params()
-        self._concentric_w = self._make_concentric_rings_params()
-        self._wave_w = self._make_wave_fill_params()
-        self._sunburst_w = self._make_sunburst_params()
-        self._voronoi_w = self._make_voronoi_params()
-        self._penrose_w = self._make_penrose_params()
-        self._topographic_w = self._make_topographic_params()
-        self._hilbert_w = self._make_hilbert_params()
-        self._reaction_diffuse_w = self._make_reaction_diffuse_params()
-        self._tile_library_w = self._make_tile_library_params()
-        self._halftone_w = self._make_halftone_params()
+        _sp = self._schedule_preview
+        self._honeycomb_w = build_param_widget(self, "Honeycomb", _sp)
+        self._gradient_w = build_param_widget(self, "Gradient Honeycomb", _sp)
+        self._basketweave_w = build_param_widget(self, "Basketweave", _sp)
+        self._fishscale_w = build_param_widget(self, "Fish Scale", _sp)
+        self._stipple_w = build_param_widget(self, "Stipple Dots", _sp)
+        self._brick_w = build_param_widget(self, "Brick", _sp)
+        self._diagonal_w = build_param_widget(self, "Diagonal Lines", _sp)
+        self._square_grid_w = build_param_widget(self, "Square Grid", _sp)
+        self._concentric_w = build_param_widget(self, "Concentric Rings", _sp)
+        self._wave_w = build_param_widget(self, "Wave Fill", _sp)
+        self._sunburst_w = build_param_widget(self, "Sunburst", _sp)
+        self._voronoi_w = build_param_widget(self, "Voronoi", _sp)
+        self._penrose_w = build_param_widget(self, "Penrose Tiling", _sp)
+        self._topographic_w = build_param_widget(self, "Topographic", _sp)
+        self._hilbert_w = build_param_widget(self, "Hilbert Curve", _sp)
+        self._reaction_diffuse_w = build_param_widget(self, "Reaction Diffuse", _sp)
+        self._celtic_w = build_param_widget(self, "Celtic Knot", _sp)
+        self._lissajous_w = build_param_widget(self, "Lissajous", _sp)
+        self._tile_library_w = build_tile_library_widget(self, _sp)
+        self._halftone_w = build_halftone_widget(self, _sp)
 
         self._pattern_widgets = [
             self._honeycomb_w,
@@ -331,6 +331,8 @@ class PatternTab(QWidget):
             self._topographic_w,
             self._hilbert_w,
             self._reaction_diffuse_w,
+            self._celtic_w,
+            self._lissajous_w,
             self._tile_library_w,
             self._halftone_w,
         ]
@@ -423,310 +425,9 @@ class PatternTab(QWidget):
 
         layout.addStretch()
 
-    # ── Pattern param builders ────────────────────────────────────────────────
+    # ── Pattern param builders removed — now data-driven via params.py ──────────
 
-    def _make_honeycomb_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._hex_r = _param_entry(g, 0, "Hex size (mm)", "1.75")
-        self._hex_r.setToolTip("Radius of each hexagonal cell")
-        self._hex_gap = _param_entry(g, 1, "Gap (mm)", "0.5")
-        self._hex_gap.setToolTip("Spacing between adjacent hexagons")
-        self._hex_r.textChanged.connect(self._schedule_preview)
-        self._hex_gap.textChanged.connect(self._schedule_preview)
-        return w
 
-    def _make_gradient_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._grad_r_min = _param_entry(g, 0, "Min size (mm)", "0.8")
-        self._grad_r_min.setToolTip("Smallest hex cell size at one end of the gradient")
-        self._grad_r_max = _param_entry(g, 1, "Max size (mm)", "2.5")
-        self._grad_r_max.setToolTip("Largest hex cell size at the other end")
-        self._grad_gap = _param_entry(g, 2, "Gap (mm)", "0.5")
-        self._grad_gap.setToolTip("Spacing between hexagons")
-        self._grad_angle = _param_entry(g, 3, "Direction (°)", "0")
-        self._grad_angle.setToolTip("Gradient direction in degrees (0 = left to right)")
-        for e in (self._grad_r_min, self._grad_r_max, self._grad_gap, self._grad_angle):
-            e.textChanged.connect(self._schedule_preview)
-        hint = QLabel("0° = left→right  ·90° = vertical")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 4, 0, 1, 2)
-        return w
-
-    def _make_basketweave_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._basket_strip_w = _param_entry(g, 0, "Strip width (mm)", "2.0")
-        self._basket_strip_w.setToolTip("Width of each woven strip")
-        self._basket_strip_l = _param_entry(g, 1, "Strip length (mm)", "8.0")
-        self._basket_strip_l.setToolTip("Length of each woven strip")
-        self._basket_gap = _param_entry(g, 2, "Gap (mm)", "0.2")
-        self._basket_gap.setToolTip("Gap between woven strips")
-        self._basket_strip_w.textChanged.connect(self._schedule_preview)
-        self._basket_strip_l.textChanged.connect(self._schedule_preview)
-        self._basket_gap.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_voronoi_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._vor_cells = _param_entry(g, 0, "Cell count", "60")
-        self._vor_cells.setToolTip("Number of random Voronoi cells to generate")
-        self._vor_gap = _param_entry(g, 1, "Gap (mm)", "0.15")
-        self._vor_gap.setToolTip("Inset distance between Voronoi cells")
-        self._vor_seed = _param_entry(g, 2, "Seed", "42")
-        self._vor_seed.setToolTip("Random seed for reproducible cell placement")
-        self._vor_cells.textChanged.connect(self._schedule_preview)
-        self._vor_gap.textChanged.connect(self._schedule_preview)
-        self._vor_seed.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_penrose_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._penrose_scale = _param_entry(g, 0, "Tile size (mm)", "3.0")
-        self._penrose_scale.setToolTip("Approximate size of each Penrose tile")
-        self._penrose_gap = _param_entry(g, 1, "Gap (mm)", "0.1")
-        self._penrose_gap.setToolTip("Spacing between adjacent tiles")
-        self._penrose_scale.textChanged.connect(self._schedule_preview)
-        self._penrose_gap.textChanged.connect(self._schedule_preview)
-        hint = QLabel("Aperiodic kite-and-dart tiling (P2)")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 2, 0, 1, 2)
-        return w
-
-    def _make_topographic_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._topo_spacing = _param_entry(g, 0, "Contour spacing (mm)", "1.5")
-        self._topo_spacing.setToolTip("Distance between successive contour lines")
-        self._topo_spacing.textChanged.connect(self._schedule_preview)
-        hint = QLabel("Inward offset contours from the outline edge")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 1, 0, 1, 2)
-        return w
-
-    def _make_hilbert_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._hilbert_order = _param_entry(g, 0, "Order", "5")
-        self._hilbert_order.setToolTip("Curve recursion depth (1-8)")
-        self._hilbert_margin = _param_entry(g, 1, "Margin (mm)", "1.0")
-        self._hilbert_margin.setToolTip("Inset from outline bounds")
-        self._hilbert_order.textChanged.connect(self._schedule_preview)
-        self._hilbert_margin.textChanged.connect(self._schedule_preview)
-        hint = QLabel("Higher order = denser path")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 2, 0, 1, 2)
-        return w
-
-    def _make_reaction_diffuse_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._rd_cell = _param_entry(g, 0, "Cell (mm)", "0.8")
-        self._rd_cell.setToolTip("Simulation grid cell size")
-        self._rd_iters = _param_entry(g, 1, "Iterations", "1200")
-        self._rd_iters.setToolTip("Simulation steps")
-        self._rd_threshold = _param_entry(g, 2, "Threshold", "0.22")
-        self._rd_threshold.setToolTip("Contour extraction threshold (0-1)")
-        self._rd_seed = _param_entry(g, 3, "Seed", "42")
-        self._rd_seed.setToolTip("Random seed for deterministic output")
-        self._rd_cell.textChanged.connect(self._schedule_preview)
-        self._rd_iters.textChanged.connect(self._schedule_preview)
-        self._rd_threshold.textChanged.connect(self._schedule_preview)
-        self._rd_seed.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_fishscale_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._fish_w = _param_entry(g, 0, "Scale width (mm)", "3.0")
-        self._fish_w.setToolTip("Horizontal span of each fish-scale arc")
-        self._fish_h = _param_entry(g, 1, "Scale height (mm)", "2.0")
-        self._fish_h.setToolTip("Vertical height of each fish-scale arc")
-        self._fish_w.textChanged.connect(self._schedule_preview)
-        self._fish_h.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_stipple_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._stip_r = _param_entry(g, 0, "Dot radius (mm)", "0.4")
-        self._stip_r.setToolTip("Radius of each stipple dot")
-        self._stip_spacing = _param_entry(g, 1, "Spacing (mm)", "1.2")
-        self._stip_spacing.setToolTip("Centre-to-centre distance between dots")
-        self._stip_layout = QCheckBox("Interlaced (offset grid)")
-        self._stip_layout.setChecked(False)
-        self._stip_layout.setToolTip(
-            "Use interlaced offset grid instead of Poisson-disk distribution"
-        )
-        g.addWidget(self._stip_layout, 2, 0, 1, 2)
-        self._stip_r.textChanged.connect(self._schedule_preview)
-        self._stip_spacing.textChanged.connect(self._schedule_preview)
-        self._stip_layout.stateChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_brick_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._brick_w_e = _param_entry(g, 0, "Brick width (mm)", "4.0")
-        self._brick_w_e.setToolTip("Width of each brick")
-        self._brick_h_e = _param_entry(g, 1, "Brick height (mm)", "2.0")
-        self._brick_h_e.setToolTip("Height of each brick")
-        self._brick_gap = _param_entry(g, 2, "Gap (mm)", "0.5")
-        self._brick_gap.setToolTip("Mortar gap between bricks")
-        self._brick_w_e.textChanged.connect(self._schedule_preview)
-        self._brick_h_e.textChanged.connect(self._schedule_preview)
-        self._brick_gap.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_diagonal_lines_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._diag_spacing = _param_entry(g, 0, "Line spacing (mm)", "1.0")
-        self._diag_spacing.setToolTip("Distance between parallel diagonal lines")
-        self._diag_angle = _param_entry(g, 1, "Angle (°)", "45")
-        self._diag_angle.setToolTip("Angle of the diagonal lines in degrees")
-        self._diag_spacing.textChanged.connect(self._schedule_preview)
-        self._diag_angle.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_square_grid_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._sq_spacing = _param_entry(g, 0, "Grid spacing (mm)", "1.0")
-        self._sq_spacing.setToolTip("Distance between grid lines")
-        self._sq_spacing.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_concentric_rings_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._conc_spacing = _param_entry(g, 0, "Ring spacing (mm)", "1.5")
-        self._conc_spacing.setToolTip("Distance between concentric rings")
-        self._conc_spacing.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_wave_fill_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._wave_spacing = _param_entry(g, 0, "Row spacing (mm)", "1.5")
-        self._wave_spacing.setToolTip("Vertical distance between wave rows")
-        self._wave_amplitude = _param_entry(g, 1, "Amplitude (mm)", "0.5")
-        self._wave_amplitude.setToolTip("Peak-to-centre height of each wave")
-        self._wave_wavelength = _param_entry(g, 2, "Wavelength (mm)", "3.0")
-        self._wave_wavelength.setToolTip("Horizontal length of one full wave cycle")
-        self._wave_spacing.textChanged.connect(self._schedule_preview)
-        self._wave_amplitude.textChanged.connect(self._schedule_preview)
-        self._wave_wavelength.textChanged.connect(self._schedule_preview)
-        return w
-
-    def _make_sunburst_params(self) -> QWidget:
-        w = QWidget()
-        g = QGridLayout(w)
-        g.setContentsMargins(0, 0, 0, 0)
-        self._sunburst_spacing = _param_entry(g, 0, "Spoke spacing (°)", "5.0")
-        self._sunburst_spacing.setToolTip(
-            "Angular spacing between spokes (smaller = more spokes)"
-        )
-        self._sunburst_spacing.textChanged.connect(self._schedule_preview)
-        hint = QLabel("5° → 36 spokes  ·  10° → 18 spokes")
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        g.addWidget(hint, 1, 0, 1, 2)
-        return w
-
-    def _make_tile_library_params(self) -> QWidget:
-        w = QWidget()
-        vl = QVBoxLayout(w)
-        vl.setContentsMargins(0, 0, 0, 0)
-        folder_lbl = QLabel("Pattern library")
-        folder_lbl.setStyleSheet(f"color: {DIM}; font-size: 11px;")
-        vl.addWidget(folder_lbl)
-        self._tile_library_folder_lbl = QLabel("No pattern folder selected")
-        self._tile_library_folder_lbl.setWordWrap(True)
-        self._tile_library_folder_lbl.setStyleSheet(f"color: {DIM};")
-        vl.addWidget(self._tile_library_folder_lbl)
-        btn_row = QHBoxLayout()
-        choose_btn = QPushButton("Choose Folder")
-        choose_btn.setToolTip("Select a folder containing DXF tile patterns")
-        choose_btn.clicked.connect(self._choose_pattern_library_dir)
-        btn_row.addWidget(choose_btn)
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setToolTip("Rescan the pattern folder for new or changed tiles")
-        refresh_btn.clicked.connect(self._refresh_pattern_library)
-        btn_row.addWidget(refresh_btn)
-        vl.addLayout(btn_row)
-        tile_lbl = QLabel("Selected tile")
-        tile_lbl.setStyleSheet(f"color: {DIM}; font-size: 11px;")
-        vl.addWidget(tile_lbl)
-        self._tile_name_lbl = QLabel("Choose a tile pattern from the list")
-        self._tile_name_lbl.setWordWrap(True)
-        vl.addWidget(self._tile_name_lbl)
-        g = QGridLayout()
-        self._tile_gap = _param_entry(g, 0, "Gap (mm)", "0.5")
-        self._tile_gap.setToolTip("Spacing between repeated tile instances")
-        self._tile_angle = _param_entry(g, 1, "Tile rotation (°)", "0")
-        self._tile_angle.setToolTip("Rotate the tile pattern by this angle")
-        self._tile_gap.textChanged.connect(self._schedule_preview)
-        self._tile_angle.textChanged.connect(self._schedule_preview)
-        vl.addLayout(g)
-        hint = QLabel(
-            "DXF files in the folder appear in the pattern list as Tile: Name"
-        )
-        hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
-        vl.addWidget(hint)
-        self._update_tile_library_panel()
-        return w
-
-    def _make_halftone_params(self) -> QWidget:
-        w = QWidget()
-        vl = QVBoxLayout(w)
-        vl.setContentsMargins(0, 0, 0, 0)
-        pick_row = QHBoxLayout()
-        self._htone_img_edit = QLineEdit()
-        self._htone_img_edit.setPlaceholderText("Select image (jpg/png)…")
-        self._htone_img_edit.setToolTip(
-            "Source image whose brightness drives cell sizes"
-        )
-        pick_row.addWidget(self._htone_img_edit, stretch=1)
-        browse_btn = QPushButton("Browse")
-        browse_btn.setFixedWidth(64)
-        browse_btn.setToolTip("Browse for a halftone source image")
-        browse_btn.clicked.connect(self._browse_halftone_image)
-        pick_row.addWidget(browse_btn)
-        vl.addLayout(pick_row)
-        g = QGridLayout()
-        self._htone_r_min = _param_entry(g, 0, "Cell min (mm)", "0.3")
-        self._htone_r_min.setToolTip("Smallest cell size (brightest areas)")
-        self._htone_r_max = _param_entry(g, 1, "Cell max (mm)", "1.8")
-        self._htone_r_max.setToolTip("Largest cell size (darkest areas)")
-        self._htone_spacing = _param_entry(g, 2, "Grid spacing (mm)", "2.2")
-        self._htone_spacing.setToolTip("Centre-to-centre distance of the halftone grid")
-        self._htone_r_min.textChanged.connect(self._schedule_preview)
-        self._htone_r_max.textChanged.connect(self._schedule_preview)
-        self._htone_spacing.textChanged.connect(self._schedule_preview)
-        vl.addLayout(g)
-        self._htone_invert = QCheckBox("Invert  (dark → small cells)")
-        self._htone_invert.setToolTip("Swap which tones get large vs. small cells")
-        self._htone_invert.stateChanged.connect(self._schedule_preview)
-        vl.addWidget(self._htone_invert)
-        return w
 
     def _switch_pattern(self, value: str) -> None:
         mapping = {
@@ -746,6 +447,8 @@ class PatternTab(QWidget):
             "Topographic": self._topographic_w,
             "Hilbert Curve": self._hilbert_w,
             "Reaction Diffuse": self._reaction_diffuse_w,
+            "Celtic Knot": self._celtic_w,
+            "Lissajous": self._lissajous_w,
             "Image Halftone": self._halftone_w,
         }
         for w in self._pattern_widgets:
@@ -2370,6 +2073,22 @@ class PatternTab(QWidget):
                 params["iters"],
                 params["threshold"],
                 params["seed"],
+                params.get("pattern", "labyrinth"),
+            )
+        elif pattern == "Celtic Knot":
+            polys = get_generator("gen_celtic_knot")(
+                outline,
+                params["cell_size"],
+                params["line_width"],
+                params["gap"],
+            )
+        elif pattern == "Lissajous":
+            polys = get_generator("gen_lissajous")(
+                outline,
+                params["freq_x"],
+                params["freq_y"],
+                params["spacing"],
+                params["amplitude"],
             )
         elif self._is_tile_pattern(pattern):
             tile_polys = load_dxf_polylines(params["tile_path"])

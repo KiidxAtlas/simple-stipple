@@ -22,7 +22,7 @@ from src.core.dxf.fix import fix_dxf
 from src.core.dxf.fvi import convert_fvi_to_dxf
 from src.core.dxf.svg import dxf_to_svg
 from src.core.io import svg_to_dxf
-from src.ui.components.helpers import _section_label
+from src.ui.components.factories import _section_label
 
 
 class FviSubTab(QWidget):

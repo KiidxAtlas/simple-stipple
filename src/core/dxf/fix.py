@@ -50,10 +50,18 @@ def _remove_duplicates(
 def _simplify_collinear(
     pts: list[tuple[float, float]], tol: float
 ) -> list[tuple[float, float]]:
-    """Remove near-collinear interior vertices using Ramer–Douglas–Peucker."""
+    """Remove near-collinear interior vertices using Ramer–Douglas–Peucker.
+
+    The tolerance is capped at 1 % of the shape's own extent so that small
+    shapes (fine text, micro-details) are not visibly distorted.
+    """
     if len(pts) < 3:
         return pts
-    simplified = LineString(pts).simplify(tol, preserve_topology=False)
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    extent = max(max(xs) - min(xs), max(ys) - min(ys), 1e-9)
+    effective_tol = min(tol, extent * 0.01)
+    simplified = LineString(pts).simplify(effective_tol, preserve_topology=False)
     return [(float(x), float(y)) for x, y, *_ in simplified.coords]
 
 

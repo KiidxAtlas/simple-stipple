@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import DEFAULT_KEYBINDINGS, save_settings
-from src.ui.components.helpers import _section_label, _sep, _surface_frame
+from src.ui.components.factories import _section_label, _sep, _surface_frame
 
 
 class SettingsDialog(QDialog):
