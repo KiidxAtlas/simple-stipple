@@ -11,6 +11,7 @@ Fixes applied
 
 from __future__ import annotations
 
+import logging
 import math
 from pathlib import Path
 from typing import Any, cast
@@ -18,16 +19,14 @@ from typing import Any, cast
 import ezdxf  # type: ignore[attr-defined]
 from shapely.geometry import LineString  # type: ignore[import-untyped]
 
+from src.backend.dxf.io import (
+    load_dxf_polylines_with_report,
+    summarize_dxf_import_report,
+)
+
 _CLOSE_TOL = 0.01  # mm — endpoints closer than this are merged to close polyline
 _COLINEAR_TOL = 0.001  # mm — max cross-product deviation to treat segment as collinear
-
-
-def _ezdxf_readfile(path: str):
-    return cast(Any, ezdxf).readfile(path)
-
-
-def _ezdxf_new(version: str = "R2010"):
-    return cast(Any, ezdxf).new(version)
+_LOG = logging.getLogger(__name__)
 
 
 def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -96,39 +95,29 @@ def fix_dxf(input_path: str | Path, output_path: str | Path) -> dict:
             "discarded":     int,   # degenerate polylines removed
         }
     """
-    doc = _ezdxf_readfile(str(input_path))
-    msp = doc.modelspace()
-
-    raw: list[list[tuple[float, float]]] = []
-    is_closed: list[bool] = []
-    for ent in msp:
-        dxftype = ent.dxftype()
-        if dxftype == "LWPOLYLINE":
-            lw = cast(Any, ent)
-            pts = [(float(p[0]), float(p[1])) for p in lw.get_points()]
-            raw.append(pts)
-            is_closed.append(bool(lw.closed))
-        elif dxftype == "POLYLINE":
-            poly = cast(Any, ent)
-            if not poly.is_2d_polyline:
-                continue
-            pts = [
-                (float(v.dxf.location.x), float(v.dxf.location.y))
-                for v in poly.vertices
-            ]
-            raw.append(pts)
-            is_closed.append(bool(poly.is_closed))
+    raw, import_report = load_dxf_polylines_with_report(str(input_path))
 
     stats = {
-        "polylines_in": len(raw),
+        "polylines_in": import_report.supported_polylines,
         "polylines_out": 0,
         "closed": 0,
         "simplified": 0,
         "discarded": 0,
+        "flattened_entities": sum(import_report.flattened_entities.values()),
+        "flattened_entity_summary": None,
+        "ignored_entities": import_report.ignored_entities,
+        "ignored_entity_summary": summarize_dxf_import_report(import_report),
     }
 
+    if import_report.flattened_entities:
+        stats["flattened_entity_summary"] = ", ".join(
+            f"{name} × {count}"
+            for name, count in import_report.flattened_entities.items()
+        )
+
     fixed: list[list[tuple[float, float]]] = []
-    for pts, was_closed in zip(raw, is_closed):
+    for pts in raw:
+        was_closed = len(pts) >= 3 and pts[0] == pts[-1]
         # Honour existing closed flag
         if was_closed and len(pts) >= 2 and pts[0] != pts[-1]:
             pts = pts + [pts[0]]
@@ -149,7 +138,8 @@ def fix_dxf(input_path: str | Path, output_path: str | Path) -> dict:
         fixed.append(result)
 
     # Write output DXF
-    out_doc = _ezdxf_new("R2010")
+
+    out_doc = cast(Any, ezdxf).new("R2010")
     out_msp = out_doc.modelspace()
     for pts in fixed:
         closed = len(pts) >= 3 and pts[0] == pts[-1]

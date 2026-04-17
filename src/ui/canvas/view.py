@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import TypeAlias
+from copy import deepcopy
+from typing import Any, TypeAlias
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
@@ -52,13 +53,17 @@ from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
 from src.backend.behaviors import snapping as snap_behaviors
-from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
+from src.backend.geometry.arc import (
+    arc_from_center_start_end,
+    arc_from_three_points,
+)
 from src.backend.geometry.primitives import (
     build_circle_poly,
     build_ellipse_poly,
     build_polygon_poly,
     build_rect_poly,
 )
+from src.backend.geometry.spline import build_spline_poly
 from src.constants import DIM, DRAG_THRESH, POLY, Q_BG, SEL
 from src.ui.canvas._constants import CLOSE_SNAP_DIST as _CLOSE_SNAP_DIST
 from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
@@ -76,6 +81,8 @@ CanvasState: TypeAlias = tuple[
     list[list[tuple[float, float]]],
     set[int],
     set[int],
+    list[str],
+    list[dict[str, Any] | None],
 ]
 
 
@@ -130,11 +137,15 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             self.modeChanged.connect(on_mode_change)
 
         self._polys: list[list[tuple[float, float]]] = []
+        self._entity_kinds: list[str] = []
+        self._entity_meta: list[dict[str, Any] | None] = []
         self._sel: set[int] = set()
         self._construction_polys: set[int] = set()
         self._hidden_polys: set[int] = set()
         self._locked_polys: set[int] = set()
         self._accent_polys: dict[int, str] = {}  # index → color hex for role overlays
+        self._groups: dict[int, int] = {}  # poly_idx → group_id
+        self._next_group_id: int = 0
         self._draw_construction_mode: bool = False
         self._draw_split_enabled: bool = True
 
@@ -212,7 +223,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._move_snap_exclude_segments: set[tuple[int, int]] = set()
 
         # Clipboard
-        self._clipboard: list[list[tuple[float, float]]] = []
+        self._clipboard: list[dict[str, Any]] = []
 
         # Nudge undo debounce
         self._nudge_undo_pushed: bool = False
@@ -294,9 +305,12 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
     def load(self, polys: list[list[tuple[float, float]]]) -> None:
         self._polys = self._clone_polys(polys)
+        self._entity_kinds = ["polyline" for _ in self._polys]
+        self._entity_meta = [None for _ in self._polys]
         self._sel.clear()
         self._hidden_polys.clear()
         self._locked_polys.clear()
+        self._groups.clear()
         self._needs_fit = True
         self._fit()
         self._notify()
@@ -312,9 +326,15 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
     def reload(self, polys: list[list[tuple[float, float]]]) -> None:
         self._polys = self._clone_polys(polys)
-        self._sel &= set(range(len(self._polys)))
-        self._hidden_polys &= set(range(len(self._polys)))
-        self._locked_polys &= set(range(len(self._polys)))
+        if len(self._entity_kinds) != len(self._polys):
+            self._entity_kinds = ["polyline" for _ in self._polys]
+        if len(self._entity_meta) != len(self._polys):
+            self._entity_meta = [None for _ in self._polys]
+        valid = set(range(len(self._polys)))
+        self._sel &= valid
+        self._hidden_polys &= valid
+        self._locked_polys &= valid
+        self._groups = {k: v for k, v in self._groups.items() if k in valid}
         self._redraw()
 
     def _snap_to_grid(self, wx: float, wy: float) -> tuple[float, float]:
@@ -493,10 +513,13 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self, polys: list[list[tuple[float, float]]], fit: bool = False
     ) -> None:
         self._polys = self._clone_polys(polys)
+        self._entity_kinds = ["polyline" for _ in self._polys]
+        self._entity_meta = [None for _ in self._polys]
         self._sel.clear()
         self._construction_polys.clear()
         self._hidden_polys.clear()
         self._locked_polys.clear()
+        self._groups.clear()
         if fit:
             self._needs_fit = True
             self._fit()
@@ -504,7 +527,9 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             self._redraw()
         self._notify()
 
-    def get_view_state(self) -> dict[str, float | str | bool | list[int]]:
+    def get_view_state(
+        self,
+    ) -> dict[str, float | str | bool | list[int] | dict[str, int]]:
         return {
             "scale": self._scale,
             "ox": self._ox,
@@ -516,6 +541,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             "grid_spacing": self._grid_spacing,
             "hidden_indices": sorted(self._hidden_polys),
             "locked_indices": sorted(self._locked_polys),
+            "groups": {str(k): v for k, v in self._groups.items()},
         }
 
     def set_view_state(self, state: dict[str, float | str | bool | list[int]]) -> None:
@@ -557,6 +583,16 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._locked_polys = {
             i for i in locked_state if isinstance(i, int) and 0 <= i < len(self._polys)
         }
+        raw_groups = state.get("groups", {})
+        if isinstance(raw_groups, dict):
+            self._groups = {
+                int(k): int(v)
+                for k, v in raw_groups.items()
+                if str(k).lstrip("-").isdigit()
+                and str(v).lstrip("-").isdigit()
+                and 0 <= int(k) < len(self._polys)
+            }
+            self._next_group_id = max(self._groups.values(), default=0) + 1
         self._sel -= self._hidden_polys
         self._redraw()
 
@@ -565,6 +601,225 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
     def get_selected(self) -> list[list[tuple[float, float]]]:
         return [p for i, p in enumerate(self._polys) if i in self._sel]
+
+    def _append_entity(
+        self,
+        poly: list[tuple[float, float]],
+        *,
+        kind: str = "polyline",
+        meta: dict[str, Any] | None = None,
+    ) -> int:
+        self._polys.append(list(poly))
+        self._entity_kinds.append(kind)
+        self._entity_meta.append(deepcopy(meta) if meta is not None else None)
+        return len(self._polys) - 1
+
+    def _insert_entity(
+        self,
+        idx: int,
+        poly: list[tuple[float, float]],
+        *,
+        kind: str = "polyline",
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        self._polys.insert(idx, list(poly))
+        self._entity_kinds.insert(idx, kind)
+        self._entity_meta.insert(idx, deepcopy(meta) if meta is not None else None)
+
+    def _remove_entity(self, idx: int) -> None:
+        self._polys.pop(idx)
+        if idx < len(self._entity_kinds):
+            self._entity_kinds.pop(idx)
+        if idx < len(self._entity_meta):
+            self._entity_meta.pop(idx)
+
+    def _copy_entities(self) -> tuple[list[str], list[dict[str, Any] | None]]:
+        return (
+            list(self._entity_kinds),
+            [
+                deepcopy(meta) if meta is not None else None
+                for meta in self._entity_meta
+            ],
+        )
+
+    def _set_entities_from_copy(
+        self,
+        kinds: list[str],
+        meta: list[dict[str, Any] | None],
+    ) -> None:
+        self._entity_kinds = list(kinds)
+        self._entity_meta = [deepcopy(m) if m is not None else None for m in meta]
+
+    def _demote_selected_entities_to_polylines(
+        self, indices: list[int] | None = None
+    ) -> None:
+        if indices is None:
+            indices = self._selected_indices()
+        for idx in indices:
+            if 0 <= idx < len(self._entity_kinds):
+                self._entity_kinds[idx] = "polyline"
+                self._entity_meta[idx] = None
+
+    @staticmethod
+    def _rotate_point(
+        point: tuple[float, float],
+        center: tuple[float, float],
+        angle_deg: float,
+    ) -> tuple[float, float]:
+        if abs(angle_deg) < 1e-9:
+            return point
+        ang = math.radians(angle_deg)
+        ca = math.cos(ang)
+        sa = math.sin(ang)
+        px, py = point
+        cx, cy = center
+        dx = px - cx
+        dy = py - cy
+        return (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
+
+    @staticmethod
+    def _scale_point(
+        point: tuple[float, float],
+        center: tuple[float, float],
+        factor: float,
+    ) -> tuple[float, float]:
+        if abs(factor - 1.0) < 1e-9:
+            return point
+        px, py = point
+        cx, cy = center
+        return (cx + (px - cx) * factor, cy + (py - cy) * factor)
+
+    @staticmethod
+    def _mirror_point(
+        point: tuple[float, float],
+        center: tuple[float, float],
+        axis: str,
+    ) -> tuple[float, float]:
+        px, py = point
+        cx, cy = center
+        if axis == "horizontal":
+            return (2 * cx - px, py)
+        if axis == "vertical":
+            return (px, 2 * cy - py)
+        return point
+
+    def _transform_entity_meta(
+        self,
+        idx: int,
+        *,
+        center: tuple[float, float],
+        kind: str,
+        meta: dict[str, Any] | None,
+        transform: str,
+        factor: float | None = None,
+        angle_deg: float = 0.0,
+        axis: str | None = None,
+        dx: float = 0.0,
+        dy: float = 0.0,
+    ) -> None:
+        if not meta or kind == "polyline":
+            return
+        updated = deepcopy(meta)
+
+        def _translate_point(pt: tuple[float, float]) -> tuple[float, float]:
+            return (pt[0] + dx, pt[1] + dy)
+
+        def _xform_point(pt: tuple[float, float]) -> tuple[float, float]:
+            if transform == "translate":
+                return _translate_point(pt)
+            if transform == "rotate":
+                return self._rotate_point(pt, center, angle_deg)
+            if transform == "scale":
+                if factor is None:
+                    return pt
+                return self._scale_point(pt, center, factor)
+            if transform == "mirror" and axis is not None:
+                return self._mirror_point(pt, center, axis)
+            return pt
+
+        if kind == "line":
+            start = updated.get("start")
+            end = updated.get("end")
+            if isinstance(start, tuple) and isinstance(end, tuple):
+                updated["start"] = _xform_point(tuple(start))
+                updated["end"] = _xform_point(tuple(end))
+        elif kind == "circle":
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = _xform_point(tuple(ctr))
+            if transform == "scale" and factor is not None:
+                updated["radius"] = float(updated.get("radius", 0.0)) * abs(factor)
+        elif kind == "ellipse":
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = _xform_point(tuple(ctr))
+            if transform == "scale" and factor is not None:
+                updated["rx"] = float(updated.get("rx", 0.0)) * abs(factor)
+                updated["ry"] = float(updated.get("ry", 0.0)) * abs(factor)
+            rot = float(updated.get("rotation", 0.0))
+            if transform == "rotate":
+                updated["rotation"] = (rot + angle_deg) % 360.0
+            elif transform == "mirror" and axis is not None:
+                if axis == "horizontal":
+                    updated["rotation"] = (180.0 - rot) % 360.0
+                elif axis == "vertical":
+                    updated["rotation"] = (-rot) % 360.0
+        elif kind == "arc":
+            ctr = updated.get("center")
+            radius = float(updated.get("radius", 0.0))
+            start_angle = float(updated.get("start_angle", 0.0))
+            end_angle = float(updated.get("end_angle", 0.0))
+            if isinstance(ctr, tuple) and radius > 0:
+                cpt = tuple(ctr)
+                start_pt = (
+                    cpt[0] + radius * math.cos(math.radians(start_angle)),
+                    cpt[1] + radius * math.sin(math.radians(start_angle)),
+                )
+                end_pt = (
+                    cpt[0] + radius * math.cos(math.radians(end_angle)),
+                    cpt[1] + radius * math.sin(math.radians(end_angle)),
+                )
+                cpt = _xform_point(cpt)
+                start_pt = _xform_point(start_pt)
+                end_pt = _xform_point(end_pt)
+                updated["center"] = cpt
+                updated["radius"] = math.hypot(
+                    start_pt[0] - cpt[0], start_pt[1] - cpt[1]
+                )
+                updated["start_angle"] = (
+                    math.degrees(math.atan2(start_pt[1] - cpt[1], start_pt[0] - cpt[0]))
+                    % 360.0
+                )
+                updated["end_angle"] = (
+                    math.degrees(math.atan2(end_pt[1] - cpt[1], end_pt[0] - cpt[0]))
+                    % 360.0
+                )
+
+        if idx < len(self._entity_meta):
+            self._entity_meta[idx] = updated
+
+    @staticmethod
+    def _translated_entity_meta(
+        kind: str,
+        meta: dict[str, Any] | None,
+        dx: float,
+        dy: float,
+    ) -> dict[str, Any] | None:
+        if meta is None or kind == "polyline":
+            return None
+        updated = deepcopy(meta)
+        if kind == "line":
+            start = updated.get("start")
+            end = updated.get("end")
+            if isinstance(start, tuple):
+                updated["start"] = (start[0] + dx, start[1] + dy)
+            if isinstance(end, tuple):
+                updated["end"] = (end[0] + dx, end[1] + dy)
+        elif kind in {"circle", "ellipse", "arc"}:
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = (ctr[0] + dx, ctr[1] + dy)
+        return updated
 
     def get_selection_indices(self) -> list[int]:
         return self._selected_indices()
@@ -651,6 +906,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         new_construction: set[int] = set()
         new_hidden: set[int] = set()
         new_locked: set[int] = set()
+        new_groups: dict[int, int] = {}
         for i, p in enumerate(self._polys):
             if i in delete_set:
                 continue
@@ -662,10 +918,13 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 new_hidden.add(new_idx)
             if i in self._locked_polys:
                 new_locked.add(new_idx)
+            if i in self._groups:
+                new_groups[new_idx] = self._groups[i]
         self._polys = kept
         self._construction_polys = new_construction
         self._hidden_polys = new_hidden
         self._locked_polys = new_locked
+        self._groups = new_groups
         self._sel.clear()
         self._redraw()
         self._notify()
@@ -680,13 +939,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             [list(p) for p in self._polys],
             set(self._sel),
             set(self._construction_polys),
+            list(self._entity_kinds),
+            [
+                deepcopy(meta) if meta is not None else None
+                for meta in self._entity_meta
+            ],
         ))
         if len(self._redo_stack) > 30:
             self._redo_stack.pop(0)
-        polys, sel, construction = self._undo_stack.pop()
+        polys, sel, construction, kinds, meta = self._undo_stack.pop()
         self._polys = polys
         self._sel = {i for i in sel if i < len(self._polys)}
         self._construction_polys = {i for i in construction if i < len(self._polys)}
+        self._set_entities_from_copy(kinds, meta)
         self._edit_poly = None
         self._edit_vert = None
         self._edit_dragging = False
@@ -706,13 +971,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             [list(p) for p in self._polys],
             set(self._sel),
             set(self._construction_polys),
+            list(self._entity_kinds),
+            [
+                deepcopy(meta) if meta is not None else None
+                for meta in self._entity_meta
+            ],
         ))
         if len(self._undo_stack) > 30:
             self._undo_stack.pop(0)
-        polys, sel, construction = self._redo_stack.pop()
+        polys, sel, construction, kinds, meta = self._redo_stack.pop()
         self._polys = polys
         self._sel = {i for i in sel if i < len(self._polys)}
         self._construction_polys = {i for i in construction if i < len(self._polys)}
+        self._set_entities_from_copy(kinds, meta)
         self._edit_poly = None
         self._edit_vert = None
         self._edit_dragging = False
@@ -1095,6 +1366,16 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 )
                 for x, y in self._polys[idx]
             ]
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="rotate",
+                angle_deg=angle_deg,
+            )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1113,6 +1394,16 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 (cx + (x - cx) * factor, cy + (y - cy) * factor)
                 for x, y in self._polys[idx]
             ]
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="scale",
+                factor=factor,
+            )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1133,6 +1424,16 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 self._polys[idx] = [(x, 2 * cy - y) for x, y in self._polys[idx]]
             else:
                 return False
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="mirror",
+                axis=axis,
+            )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1417,6 +1718,17 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             else:
                 return False
             self._polys[idx] = [(x + dx, y + dy) for x, y in self._polys[idx]]
+            self._transform_entity_meta(
+                idx,
+                center=(center_x, center_y),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="translate",
+                dx=dx,
+                dy=dy,
+            )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1432,6 +1744,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             return False
         fx = width / cur_w
         cx = (bounds[0] + bounds[2]) / 2.0
+        self._demote_selected_entities_to_polylines(indices)
         self._push_undo()
         for idx in indices:
             self._polys[idx] = [(cx + (x - cx) * fx, y) for x, y in self._polys[idx]]
@@ -1450,6 +1763,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             return False
         fy = height / cur_h
         cy = (bounds[1] + bounds[3]) / 2.0
+        self._demote_selected_entities_to_polylines(indices)
         self._push_undo()
         for idx in indices:
             self._polys[idx] = [(x, cy + (y - cy) * fy) for x, y in self._polys[idx]]
@@ -1474,6 +1788,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         ux, uy = dx / cur_len, dy / cur_len
         self._push_undo()
         self._polys[indices[0]][1] = (ax + ux * length, ay + uy * length)
+        self._transform_entity_meta(
+            indices[0],
+            center=(ax, ay),
+            kind=self._entity_kinds[indices[0]]
+            if indices[0] < len(self._entity_kinds)
+            else "polyline",
+            meta=self._entity_meta[indices[0]]
+            if indices[0] < len(self._entity_meta)
+            else None,
+            transform="translate",
+            dx=(ax + ux * length) - bx,
+            dy=(ay + uy * length) - by,
+        )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1497,6 +1824,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 target_min = cur_edge + spacing
                 dx = target_min - b[0]
                 self._polys[idx] = [(x + dx, y) for x, y in self._polys[idx]]
+                self._transform_entity_meta(
+                    idx,
+                    center=(0.0, 0.0),
+                    kind=self._entity_kinds[idx]
+                    if idx < len(self._entity_kinds)
+                    else "polyline",
+                    meta=self._entity_meta[idx]
+                    if idx < len(self._entity_meta)
+                    else None,
+                    transform="translate",
+                    dx=dx,
+                    dy=0.0,
+                )
                 nb = self._poly_bounds(self._polys[idx])
                 cur_edge = nb[2]
         elif axis == "vertical":
@@ -1507,6 +1847,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 target_min = cur_edge + spacing
                 dy = target_min - b[1]
                 self._polys[idx] = [(x, y + dy) for x, y in self._polys[idx]]
+                self._transform_entity_meta(
+                    idx,
+                    center=(0.0, 0.0),
+                    kind=self._entity_kinds[idx]
+                    if idx < len(self._entity_kinds)
+                    else "polyline",
+                    meta=self._entity_meta[idx]
+                    if idx < len(self._entity_meta)
+                    else None,
+                    transform="translate",
+                    dx=0.0,
+                    dy=dy,
+                )
                 nb = self._poly_bounds(self._polys[idx])
                 cur_edge = nb[3]
         else:
@@ -1773,7 +2126,16 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._redraw()
 
     def _set_draw_primitive(self, tool: str) -> None:
-        valid = {"polyline", "line", "arc", "rectangle", "circle", "ellipse", "polygon"}
+        valid = {
+            "polyline",
+            "line",
+            "arc",
+            "spline",
+            "rectangle",
+            "circle",
+            "ellipse",
+            "polygon",
+        }
         if tool not in valid:
             return
         self._draw_primitive = tool
@@ -1841,13 +2203,17 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._redraw()
 
     def _append_draw_polyline(
-        self, poly: list[tuple[float, float]], *, enter_edit: bool = False
+        self,
+        poly: list[tuple[float, float]],
+        *,
+        enter_edit: bool = False,
+        kind: str = "polyline",
+        meta: dict[str, Any] | None = None,
     ) -> None:
         if len(poly) < 2:
             return
         self._push_undo()
-        self._polys.append(list(poly))
-        new_idx = len(self._polys) - 1
+        new_idx = self._append_entity(list(poly), kind=kind, meta=meta)
         if self._draw_construction_mode:
             self._construction_polys.add(new_idx)
         self._sel = {new_idx}
@@ -1874,13 +2240,42 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         split_closed = 0
         split_open = 0
         can_cut_split = self._draw_split_enabled and (
-            primitive in {"line", "polyline", "arc"} or self._draw_construction_mode
+            primitive in {"line", "polyline", "arc", "spline"}
+            or self._draw_construction_mode
         )
         if can_cut_split and not close and len(poly) >= 2:
             split_happened, split_closed, split_open = self._split_geometry_with_line(
                 poly
             )
 
+        kind = "polyline"
+        meta: dict[str, Any] | None = None
+        if primitive == "line" and len(poly) >= 2:
+            kind = "line"
+            meta = {"start": tuple(poly[0]), "end": tuple(poly[-1])}
+        elif primitive == "arc" and len(poly) >= 3:
+            kind = "arc"
+            from src.backend.geometry.arc import (
+                arc_spec_from_center_start_end,
+                arc_spec_from_three_points,
+            )
+
+            if self._draw_arc_mode == "center-start-end":
+                spec = arc_spec_from_center_start_end(poly[0], poly[1], poly[2])
+            else:
+                spec = arc_spec_from_three_points(poly[0], poly[1], poly[2])
+            if spec is not None:
+                meta = {
+                    "center": spec.center,
+                    "radius": spec.radius,
+                    "start_angle": spec.start_angle,
+                    "end_angle": spec.end_angle,
+                }
+        elif primitive == "spline" and len(poly) >= 2:
+            kind = "spline"
+            meta = {"segments": 24, "closed": close}
+        self._entity_kinds.append(kind)
+        self._entity_meta.append(meta)
         self._polys.append(list(poly))
         new_idx = len(self._polys) - 1
         if self._draw_construction_mode:
@@ -1939,12 +2334,18 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         h = abs(ey - sy)
 
         poly: list[tuple[float, float]] = []
+        kind = "polyline"
+        meta: dict[str, Any] | None = None
         if self._draw_primitive == "rectangle":
             poly = build_rect_poly(cx, cy, w, h)
         elif self._draw_primitive == "circle":
             poly = build_circle_poly(cx, cy, min(w, h) / 2.0)
+            kind = "circle"
+            meta = {"center": (cx, cy), "radius": min(w, h) / 2.0}
         elif self._draw_primitive == "ellipse":
             poly = build_ellipse_poly(cx, cy, w / 2.0, h / 2.0)
+            kind = "ellipse"
+            meta = {"center": (cx, cy), "rx": w / 2.0, "ry": h / 2.0, "rotation": 0.0}
         elif self._draw_primitive == "polygon":
             poly = build_polygon_poly(cx, cy, min(w, h) / 2.0, 6)
 
@@ -1953,7 +2354,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._draw_shape_cursor_w = None
 
         if len(poly) >= 2:
-            self._append_draw_polyline(poly, enter_edit=False)
+            self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
             self._show_flash(f"{self._draw_primitive.title()} created", 800)
             self._refresh_draw_sidebar_state()
             self._redraw()
@@ -1968,6 +2369,11 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             [list(p) for p in self._polys],
             set(self._sel),
             set(self._construction_polys),
+            list(self._entity_kinds),
+            [
+                deepcopy(meta) if meta is not None else None
+                for meta in self._entity_meta
+            ],
         ))
         if len(self._undo_stack) > 30:
             self._undo_stack.pop(0)
@@ -1992,6 +2398,23 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             for idx, poly in enumerate(self._polys)
             if idx not in self._construction_polys
         ]
+
+    def get_export_dxf_state(self) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for idx, poly in enumerate(self._polys):
+            if idx in self._construction_polys:
+                continue
+            kind = (
+                self._entity_kinds[idx] if idx < len(self._entity_kinds) else "polyline"
+            )
+            meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+            result.append({
+                "index": idx,
+                "polyline": list(poly),
+                "kind": kind,
+                "meta": deepcopy(meta) if meta is not None else None,
+            })
+        return result
 
     def _bbox(self) -> tuple[float, float, float, float]:
         pts = [pt for p in self._polys for pt in p]
@@ -2350,7 +2773,15 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 popped_was_construction = i in self._construction_polys
                 survivor_was_construction = survivor_idx in self._construction_polys
                 self._polys[survivor_idx] = merged
+                if survivor_idx < len(self._entity_kinds):
+                    self._entity_kinds[survivor_idx] = "polyline"
+                if survivor_idx < len(self._entity_meta):
+                    self._entity_meta[survivor_idx] = None
                 self._polys.pop(i)
+                if i < len(self._entity_kinds):
+                    self._entity_kinds.pop(i)
+                if i < len(self._entity_meta):
+                    self._entity_meta.pop(i)
                 remapped: set[int] = set()
                 for ci in self._construction_polys:
                     if ci == i:
@@ -2682,10 +3113,24 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
+            render_poly = poly
+            if (
+                idx < len(self._entity_kinds)
+                and self._entity_kinds[idx] == "spline"
+                and len(poly) >= 2
+            ):
+                meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+                render_poly = build_spline_poly(
+                    poly,
+                    segments=int(meta.get("segments", 24)) if meta else 24,
+                    closed=bool(meta.get("closed", False)) if meta else False,
+                )
+                if len(render_poly) < 2:
+                    continue
             path = QPainterPath()
-            sx, sy = self._w2c(*poly[0])
+            sx, sy = self._w2c(*render_poly[0])
             path.moveTo(sx, sy)
-            for pt in poly[1:]:
+            for pt in render_poly[1:]:
                 px, py_ = self._w2c(*pt)
                 path.lineTo(px, py_)
             if (
@@ -2833,6 +3278,7 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         if self._mode == "draw":
             self._paint_draw_shape_preview(painter)
             self._paint_arc_preview(painter)
+            self._paint_spline_preview(painter)
             self._paint_draw_preview_badges(painter)
 
         # In-progress draw polygon (BEFORE snap indicators so snaps render on top)
@@ -3992,6 +4438,17 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 self._redraw()
                 return
 
+            if self._draw_primitive == "spline":
+                self._draw_pts.append((wx, wy))
+                self._draw_point_snap_types.append(self._draw_snap_type or None)
+                if len(self._draw_pts) == 1:
+                    self._show_dim_inputs()
+                self._dim_distance_dirty = False
+                self._dim_angle_dirty = False
+                self._refresh_draw_sidebar_state()
+                self._redraw()
+                return
+
             # B. If dim inputs have user-typed values, compute point from those
             if self._draw_pts and (self._dim_distance_dirty or self._dim_angle_dirty):
                 self._apply_dim_input()
@@ -4053,9 +4510,21 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 shift_toggle = bool(
                     event.modifiers() & Qt.KeyboardModifier.ShiftModifier
                 )
-                if ctrl or shift_toggle:
+                if target in self._groups:
+                    gid = self._groups[target]
+                    members = {
+                        i
+                        for i, g in self._groups.items()
+                        if g == gid and i < len(self._polys)
+                    }
+                    if ctrl or shift_toggle:
+                        self._sel |= members
+                    elif target not in self._sel:
+                        self._sel = members
+                    # else: already selected — preserve current selection for group move
+                elif ctrl or shift_toggle:
                     self._sel.add(target)
-                else:
+                elif target not in self._sel:
                     self._sel = {target}
                 self._notify()
                 hit = self._find_nearest_vertex(pos.x(), pos.y())
@@ -4383,6 +4852,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                         self._polys[idx] = [
                             (x + dx_w, y + dy_w) for x, y in self._polys[idx]
                         ]
+                        self._transform_entity_meta(
+                            idx,
+                            center=(0.0, 0.0),
+                            kind=self._entity_kinds[idx]
+                            if idx < len(self._entity_kinds)
+                            else "polyline",
+                            meta=self._entity_meta[idx]
+                            if idx < len(self._entity_meta)
+                            else None,
+                            transform="translate",
+                            dx=dx_w,
+                            dy=dy_w,
+                        )
                     self._move_origin = (new_wx, new_wy)
                     self._cursor_wx, self._cursor_wy = new_wx, new_wy
                     if move_snap_type:
@@ -4631,9 +5113,20 @@ class PolylineView(QGraphicsView, CanvasRenderer):
     def _copy_selected(self) -> None:
         if not self._sel:
             return
-        self._clipboard = [
-            list(self._polys[i]) for i in sorted(self._sel) if i < len(self._polys)
-        ]
+        self._clipboard = []
+        for i in sorted(self._sel):
+            if i >= len(self._polys):
+                continue
+            self._clipboard.append({
+                "polyline": list(self._polys[i]),
+                "kind": self._entity_kinds[i]
+                if i < len(self._entity_kinds)
+                else "polyline",
+                "meta": deepcopy(self._entity_meta[i])
+                if i < len(self._entity_meta) and self._entity_meta[i] is not None
+                else None,
+                "construction": i in self._construction_polys,
+            })
 
     def _paste_clipboard(self) -> None:
         if not self._clipboard:
@@ -4641,10 +5134,20 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._push_undo()
         offset = 1.0  # mm
         new_indices = []
-        for poly in self._clipboard:
+        for record in self._clipboard:
+            poly = list(record.get("polyline", []))
             new_poly = [(x + offset, y + offset) for x, y in poly]
-            self._polys.append(new_poly)
-            new_indices.append(len(self._polys) - 1)
+            kind = str(record.get("kind", "polyline"))
+            meta = self._translated_entity_meta(
+                kind,
+                record.get("meta"),
+                offset,
+                offset,
+            )
+            new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
+            if record.get("construction"):
+                self._construction_polys.add(new_idx)
+            new_indices.append(new_idx)
         self._sel = set(new_indices)
         self._redraw()
         self._notify()
@@ -4662,11 +5165,11 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         cut_set = {idx for idx in self._sel if idx not in self._locked_polys}
         if not cut_set:
             return
-        self._clipboard = [
-            list(self._polys[i]) for i in sorted(cut_set) if i < len(self._polys)
-        ]
+        self._copy_selected()
         self._push_undo()
         kept: list[list[tuple[float, float]]] = []
+        kept_kinds: list[str] = []
+        kept_meta: list[dict[str, Any] | None] = []
         new_construction: set[int] = set()
         new_hidden: set[int] = set()
         new_locked: set[int] = set()
@@ -4675,6 +5178,14 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 continue
             new_idx = len(kept)
             kept.append(p)
+            kept_kinds.append(
+                self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
+            )
+            kept_meta.append(
+                deepcopy(self._entity_meta[i])
+                if i < len(self._entity_meta) and self._entity_meta[i] is not None
+                else None
+            )
             if i in self._construction_polys:
                 new_construction.add(new_idx)
             if i in self._hidden_polys:
@@ -4682,6 +5193,8 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             if i in self._locked_polys:
                 new_locked.add(new_idx)
         self._polys = kept
+        self._entity_kinds = kept_kinds
+        self._entity_meta = kept_meta
         self._construction_polys = new_construction
         self._hidden_polys = new_hidden
         self._locked_polys = new_locked
@@ -4703,6 +5216,19 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         for idx in mutable:
             if idx < len(self._polys):
                 self._polys[idx] = [(x + dx, y + dy) for x, y in self._polys[idx]]
+                self._transform_entity_meta(
+                    idx,
+                    center=(0.0, 0.0),
+                    kind=self._entity_kinds[idx]
+                    if idx < len(self._entity_kinds)
+                    else "polyline",
+                    meta=self._entity_meta[idx]
+                    if idx < len(self._entity_meta)
+                    else None,
+                    transform="translate",
+                    dx=dx,
+                    dy=dy,
+                )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -4723,6 +5249,17 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             [(cx + (x - cx) * factor, cy + (y - cy) * factor) for x, y in poly]
             for poly in self._polys
         ]
+        for idx in range(len(self._polys)):
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="scale",
+                factor=factor,
+            )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -5168,6 +5705,12 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             "Bottom", lambda: _run_transform(lambda: self.align_selected("bottom"))
         )
 
+        # Group / Ungroup
+        if len(self._sel) >= 2:
+            menu.addAction("Group", self._group_selected)
+        if any(i in self._groups for i in self._sel):
+            menu.addAction("Ungroup", self._ungroup_selected)
+
         topology_menu = menu.addMenu("Polyline topology")
         topology_menu.addAction(
             "Close selected  [⇧C]",
@@ -5237,6 +5780,28 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         mode_menu.addAction("Draw  [D]", lambda: self.set_mode("draw"))
         mode_menu.addAction("Edit  [E]", lambda: self.set_mode("edit"))
         menu.popup(self.mapToGlobal(QPointF(cx, cy).toPoint()))
+
+    def _group_selected(self) -> None:
+        if len(self._sel) < 2:
+            self._show_flash("Select 2+ shapes to group", 1000)
+            return
+        gid = self._next_group_id
+        self._next_group_id += 1
+        for idx in self._sel:
+            self._groups[idx] = gid
+        self._show_flash(f"Grouped {len(self._sel)} shapes", 900)
+        self._notify()
+
+    def _ungroup_selected(self) -> None:
+        ungrouped = {self._groups.pop(idx) for idx in self._sel if idx in self._groups}
+        if not ungrouped:
+            return
+        # Also remove other group members if their whole group is being dissolved
+        stale = {idx for idx, gid in list(self._groups.items()) if gid in ungrouped}
+        for idx in stale:
+            self._groups.pop(idx, None)
+        self._show_flash("Ungrouped", 700)
+        self._notify()
 
     def _delete_vertex(self, pi: int, vi: int) -> None:
         # Check if shape is currently closed BEFORE deletion

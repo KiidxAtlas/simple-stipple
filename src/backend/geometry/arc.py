@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import logging
 import math
+from typing import NamedTuple
 
 _LOG = logging.getLogger(__name__)
 
 Point = tuple[float, float]
+
+
+class ArcSpec(NamedTuple):
+    center: Point
+    radius: float
+    start_angle: float
+    end_angle: float
 
 
 def _straight_line_pts(p0: Point, p2: Point, steps: int) -> list[Point]:
@@ -122,4 +130,57 @@ def arc_from_center_start_end(
     ]
 
 
-__all__ = ["arc_from_center_start_end", "arc_from_three_points"]
+def arc_spec_from_center_start_end(
+    center: Point,
+    start: Point,
+    end: Point,
+) -> ArcSpec | None:
+    cx, cy = center
+    sx, sy = start
+    ex, ey = end
+    radius = math.hypot(sx - cx, sy - cy)
+    end_radius = math.hypot(ex - cx, ey - cy)
+    if radius < 1e-9 or end_radius < 1e-9:
+        return None
+
+    start_angle = math.degrees(math.atan2(sy - cy, sx - cx)) % 360.0
+    end_angle = math.degrees(math.atan2(ey - cy, ex - cx)) % 360.0
+    return ArcSpec((cx, cy), radius, start_angle, end_angle)
+
+
+def arc_spec_from_three_points(
+    p0: Point,
+    p1: Point,
+    p2: Point,
+) -> ArcSpec | None:
+    x1, y1 = p0
+    x2, y2 = p1
+    x3, y3 = p2
+    d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+    if abs(d) < 1e-9:
+        return None
+    ux = (
+        (x1 * x1 + y1 * y1) * (y2 - y3)
+        + (x2 * x2 + y2 * y2) * (y3 - y1)
+        + (x3 * x3 + y3 * y3) * (y1 - y2)
+    ) / d
+    uy = (
+        (x1 * x1 + y1 * y1) * (x3 - x2)
+        + (x2 * x2 + y2 * y2) * (x1 - x3)
+        + (x3 * x3 + y3 * y3) * (x2 - x1)
+    ) / d
+    radius = math.hypot(x1 - ux, y1 - uy)
+    if radius < 1e-9:
+        return None
+    a0 = math.degrees(math.atan2(y1 - uy, x1 - ux)) % 360.0
+    a2 = math.degrees(math.atan2(y3 - uy, x3 - ux)) % 360.0
+    return ArcSpec((ux, uy), radius, a0, a2)
+
+
+__all__ = [
+    "ArcSpec",
+    "arc_from_center_start_end",
+    "arc_from_three_points",
+    "arc_spec_from_center_start_end",
+    "arc_spec_from_three_points",
+]

@@ -31,6 +31,7 @@ from src.backend.geometry.primitives import (
     build_polygon_poly,
     build_rect_poly,
 )
+from src.backend.geometry.spline import build_spline_poly
 from src.constants import DIM
 from src.ui.canvas._constants import (
     BADGE_BG as _BADGE_BG,
@@ -177,6 +178,11 @@ class CanvasRenderer:
 
     def _paint_edit_handles(self, painter: QPainter) -> None:
         for pi, poly in enumerate(self._polys):
+            kind = (
+                self._entity_kinds[pi] if pi < len(self._entity_kinds) else "polyline"
+            )
+            if kind in {"arc", "circle", "ellipse"}:
+                continue
             for vi, pt in enumerate(poly):
                 cx, cy = self._w2c(*pt)
                 is_hover = self._hover_vert == (pi, vi)
@@ -213,6 +219,11 @@ class CanvasRenderer:
         for pi in sorted(self._sel):
             if pi < 0 or pi >= len(self._polys):
                 continue
+            kind = (
+                self._entity_kinds[pi] if pi < len(self._entity_kinds) else "polyline"
+            )
+            if kind in {"arc", "circle", "ellipse"}:
+                continue
             poly = self._polys[pi]
             for vi, pt in enumerate(poly):
                 cx, cy = self._w2c(*pt)
@@ -239,9 +250,10 @@ class CanvasRenderer:
         draw_color = _GUIDE_COLOR if self._draw_construction_mode else _DRAW_COLOR
         pts_screen = [self._w2c(*pt) for pt in self._draw_pts]
         near_close = self._is_near_start()
+        spline_mode = self._draw_primitive == "spline"
 
         # ── Placed segments (solid, thick) ──
-        if len(pts_screen) >= 2:
+        if len(pts_screen) >= 2 and not spline_mode:
             pen = QPen(draw_color, _DRAW_LINE_W)
             painter.setPen(pen)
             path = QPainterPath()
@@ -251,7 +263,7 @@ class CanvasRenderer:
             painter.drawPath(path)
 
         # ── Close-polygon preview ──
-        if near_close:
+        if near_close and not spline_mode:
             start_cx, start_cy = self._w2c(*self._draw_pts[0])
             last_cx, last_cy = self._w2c(*self._draw_pts[-1])
 
@@ -311,7 +323,7 @@ class CanvasRenderer:
                 eff_wx, eff_wy = self._cursor_wx, self._cursor_wy
             cur_c = self._w2c(eff_wx, eff_wy)
 
-            if not near_close:
+            if not near_close and not spline_mode:
                 # Constraint color: blue when H/V constrained, amber otherwise
                 if self._draw_constraint is not None:
                     rub_color = QColor("#4a9eff")
@@ -337,6 +349,7 @@ class CanvasRenderer:
             and self._cursor_wy is not None
             and self._draw_pts
             and not near_close
+            and not spline_mode
         ):
             last_w = self._draw_pts[-1]
             eff_wx2 = self._draw_snap[0] if self._draw_snap else self._cursor_wx
@@ -403,6 +416,13 @@ class CanvasRenderer:
             poly = build_ellipse_poly(cx, cy, w / 2.0, h / 2.0)
         elif self._draw_primitive == "polygon":
             poly = build_polygon_poly(cx, cy, min(w, h) / 2.0, 6)
+        elif self._draw_primitive == "spline":
+            pts = list(self._draw_pts)
+            if self._cursor_wx is not None and self._cursor_wy is not None:
+                pts.append((self._cursor_wx, self._cursor_wy))
+            if len(pts) < 2:
+                return
+            poly = build_spline_poly(pts, segments=24, closed=False)
         else:
             return
 
@@ -470,6 +490,30 @@ class CanvasRenderer:
                     px, py = self._w2c(*pt)
                     path.lineTo(px, py)
                 painter.drawPath(path)
+
+    def _paint_spline_preview(self, painter: QPainter) -> None:
+        if self._draw_primitive != "spline" or len(self._draw_pts) < 2:
+            return
+
+        pts = list(self._draw_pts)
+        if self._cursor_wx is not None and self._cursor_wy is not None:
+            pts.append((self._cursor_wx, self._cursor_wy))
+
+        spline_poly = build_spline_poly(pts, segments=24, closed=False)
+        if len(spline_poly) < 2:
+            return
+
+        draw_color = _GUIDE_COLOR if self._draw_construction_mode else _DRAW_COLOR
+        painter.setPen(QPen(draw_color, _DRAW_LINE_W))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        path = QPainterPath()
+        sx, sy = self._w2c(*spline_poly[0])
+        path.moveTo(sx, sy)
+        for pt in spline_poly[1:]:
+            px, py = self._w2c(*pt)
+            path.lineTo(px, py)
+        painter.drawPath(path)
 
     def _paint_draw_preview_badges(self, painter: QPainter) -> None:
         outcomes = self._draw_preview_outcomes()

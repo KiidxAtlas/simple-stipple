@@ -46,6 +46,7 @@ from src.backend.generators.tiling import (
     gen_fish_scale,
     gen_gradient_honeycomb,
     gen_honeycomb,
+    gen_mesh,
     gen_square_grid,
     gen_triangle_grid,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "gen_honeycomb",
     "gen_image_halftone",
     "gen_lissajous",
+    "gen_mesh",
     "gen_moroccan_zellige",
     "gen_penrose_tiling",
     "gen_reaction_diffuse",
@@ -84,6 +86,7 @@ __all__ = [
     "gen_triangle_grid",
     "gen_voronoi",
     "gen_wave_fill",
+    "get_generator",
 ]
 
 GeneratorFn = Callable[..., list[list[tuple[float, float]]]]

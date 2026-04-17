@@ -247,38 +247,6 @@ class CanvasPrecisionBar(QFrame):
         self._after_change()
 
 
-class ContextCoachStrip(QFrame):
-    """Short, progressive workflow hints that avoid dense keyboard dumps."""
-
-    def __init__(self, *, title: str = "Workflow coach") -> None:
-        super().__init__()
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("surface", "panel")
-        self.setProperty("role", "coach-strip")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(2)
-
-        self._title = QLabel(title)
-        self._title.setStyleSheet("color: #79c0ff; font-size: 11px; font-weight: 700;")
-        layout.addWidget(self._title)
-
-        self._primary = QLabel("")
-        self._primary.setStyleSheet("color: #c9d1d9; font-size: 11px;")
-        self._primary.setWordWrap(True)
-        layout.addWidget(self._primary)
-
-        self._secondary = QLabel("")
-        self._secondary.setStyleSheet("color: #8b949e; font-size: 10px;")
-        self._secondary.setWordWrap(True)
-        layout.addWidget(self._secondary)
-
-    def set_message(self, primary: str, secondary: str = "") -> None:
-        self._primary.setText(primary)
-        self._secondary.setText(secondary)
-
-
 class CanvasStatusStrip(QFrame):
     """Compact status bar — mode, selection, zoom, coordinates, and readiness."""
 
@@ -627,6 +595,5 @@ __all__ = [
     "CanvasPrecisionBar",
     "CanvasStatusStrip",
     "CollapsibleSection",
-    "ContextCoachStrip",
     "DxfLayersTree",
 ]

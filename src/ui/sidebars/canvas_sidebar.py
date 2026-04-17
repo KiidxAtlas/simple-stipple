@@ -61,6 +61,18 @@ class DrawToolButton(QPushButton):
             path.lineTo(cx - 1, cy)
             path.lineTo(icon_rect.right() - 1, icon_rect.top() + 2)
             painter.drawPath(path)
+        elif self._tool == "spline":
+            path = QPainterPath()
+            path.moveTo(icon_rect.left() + 1, icon_rect.bottom() - 2)
+            path.cubicTo(
+                icon_rect.left() + 4,
+                icon_rect.top() + 1,
+                icon_rect.right() - 4,
+                icon_rect.bottom() - 1,
+                icon_rect.right() - 1,
+                icon_rect.top() + 2,
+            )
+            painter.drawPath(path)
         elif self._tool == "rectangle":
             painter.drawRect(icon_rect.adjusted(1, 2, -1, -2))
         elif self._tool == "circle":
@@ -167,6 +179,7 @@ class DrawSidebar(QFrame):
             ("Line", "line"),
             ("Arc", "arc"),
             ("Polyline", "polyline"),
+            ("Spline", "spline"),
             ("Rectangle", "rectangle"),
             ("Circle", "circle"),
             ("Ellipse", "ellipse"),

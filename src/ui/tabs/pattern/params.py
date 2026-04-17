@@ -136,9 +136,15 @@ def build_tile_library_widget(tab: Any, schedule_fn) -> QWidget:
     tab._tile_gap.setToolTip("Spacing between repeated tile instances")
     tab._tile_angle = _param_entry(g, 1, "Tile rotation (°)", "0")
     tab._tile_angle.setToolTip("Rotate the tile pattern by this angle")
+    tab._tile_interlock_cb = QCheckBox("Interlock rows")
+    tab._tile_interlock_cb.setToolTip(
+        "Stagger alternate rows by half a tile width like a brick bond"
+    )
     tab._tile_gap.textChanged.connect(schedule_fn)
     tab._tile_angle.textChanged.connect(schedule_fn)
+    tab._tile_interlock_cb.stateChanged.connect(schedule_fn)
     vl.addLayout(g)
+    vl.addWidget(tab._tile_interlock_cb)
     hint = QLabel("DXF files in the folder appear in the pattern list as Tile: Name")
     hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
     vl.addWidget(hint)
@@ -273,6 +279,15 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
                 tab._sq_spacing, "Grid spacing", minimum=0.001, maximum=1000
             )
         }
+    elif pattern == "Mesh":
+        params = {
+            "r": tab._parse_float_field(
+                tab._mesh_r, "Circle radius", minimum=0.001, maximum=100
+            ),
+            "spacing": tab._parse_float_field(
+                tab._mesh_spacing, "Grid spacing", minimum=0.001, maximum=1000
+            ),
+        }
     elif pattern == "Concentric Rings":
         params = {
             "spacing": tab._parse_float_field(
@@ -404,6 +419,7 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
                 tab._tile_gap, "Gap", minimum=0.0, maximum=1000
             ),
             "angle": tab._parse_float_field(tab._tile_angle, "Tile rotation"),
+            "interlock": tab._tile_interlock_cb.isChecked(),
         }
     elif pattern == "Image Halftone":
         img_path = tab._parse_path_field(tab._htone_img_edit, "Halftone image")

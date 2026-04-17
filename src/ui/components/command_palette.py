@@ -28,7 +28,6 @@ class CommandPaletteDialog(QDialog):
         self.resize(620, 420)
         self.setMinimumSize(500, 320)
         self._commands = commands
-        self._filtered_indices: list[int] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -66,7 +65,6 @@ class CommandPaletteDialog(QDialog):
 
     def _refresh_list(self) -> None:
         text = self._query.text().strip().lower()
-        self._filtered_indices = []
         self._list.clear()
         for idx, cmd in enumerate(self._commands):
             hay = " ".join(
@@ -78,7 +76,6 @@ class CommandPaletteDialog(QDialog):
             ).lower()
             if text and text not in hay:
                 continue
-            self._filtered_indices.append(idx)
             title = str(cmd.get("title", ""))
             shortcut = str(cmd.get("shortcut", "")).strip()
             subtitle = str(cmd.get("subtitle", "")).strip()

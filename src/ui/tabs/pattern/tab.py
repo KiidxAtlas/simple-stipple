@@ -42,7 +42,9 @@ from src.backend.generators import (
 from src.backend.dxf.io import (
     analyze_outline_polylines,
     load_dxf_polylines,
+    load_dxf_polylines_with_report,
     polylines_to_outline,
+    summarize_dxf_import_report,
     write_polylines_dxf,
 )
 from src.backend.document.graph import DocumentGraph
@@ -63,9 +65,7 @@ from src.ui.components.factories import (
     _section_label,
     _sidebar_panel,
     _surface_frame,
-    clear_line_edit_error,
-    parse_float_field,
-    set_line_edit_error,
+    parse_float_field_with_feedback,
 )
 from src.ui.tabs.pattern.params import (
     build_halftone_widget,
@@ -105,6 +105,8 @@ class PatternTab(QWidget):
         self._presets: dict[str, dict] = dict(self._settings.get("pattern_presets", {}))
         self._base_patterns: list[str] = list(PATTERNS)
         self._library_patterns: dict[str, str] = {}
+        self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
+        self._tile_interlock_cb: QCheckBox | None = None
 
         self._showing_preview: bool = False
         self._preview_polys_cache: list[list[tuple[float, float]]] = []
@@ -310,6 +312,7 @@ class PatternTab(QWidget):
         self._brick_w = build_param_widget(self, "Brick", _sp)
         self._diagonal_w = build_param_widget(self, "Diagonal Lines", _sp)
         self._square_grid_w = build_param_widget(self, "Square Grid", _sp)
+        self._mesh_w = build_param_widget(self, "Mesh", _sp)
         self._concentric_w = build_param_widget(self, "Concentric Rings", _sp)
         self._wave_w = build_param_widget(self, "Wave Fill", _sp)
         self._sunburst_w = build_param_widget(self, "Sunburst", _sp)
@@ -335,6 +338,7 @@ class PatternTab(QWidget):
             self._brick_w,
             self._diagonal_w,
             self._square_grid_w,
+            self._mesh_w,
             self._concentric_w,
             self._wave_w,
             self._sunburst_w,
@@ -512,6 +516,7 @@ class PatternTab(QWidget):
             "Brick": self._brick_w,
             "Diagonal Lines": self._diagonal_w,
             "Square Grid": self._square_grid_w,
+            "Mesh": self._mesh_w,
             "Concentric Rings": self._concentric_w,
             "Wave Fill": self._wave_w,
             "Sunburst": self._sunburst_w,
@@ -776,13 +781,20 @@ class PatternTab(QWidget):
 
     def _load_dxf(self, path: str) -> None:
         try:
-            polys = load_dxf_polylines(path)
+            polys, report = load_dxf_polylines_with_report(path)
             self._orig_polys = polys
             self._edit_polys = list(polys)
             self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
+            self._exclusion_ids.clear()
+            self._imported_dxf_layers = [
+                (name, count, False, False)
+                for name, count in report.layer_counts.items()
+            ]
             self._zones.clear()
             self._refresh_zone_list()
             self._canvas.load(polys)
+            self._sync_canvas_cutout_highlight()
+            self._refresh_cutout_status()
 
             all_pts = [pt for p in polys for pt in p]
             if all_pts:
@@ -809,6 +821,14 @@ class PatternTab(QWidget):
             recent.insert(0, path)
             self._settings["recent_dxf"] = recent[:8]
             save_settings(self._settings)
+            if report.has_issues:
+                detail = summarize_dxf_import_report(report)
+                if detail:
+                    QMessageBox.warning(
+                        self,
+                        "DXF Import Notice",
+                        f"{Path(path).name} loaded, but some DXF content could not be preserved.\n\n{detail}",
+                    )
             self._update_preview_controls()
             self._update_zone_actions()
             self._schedule_preview()
@@ -900,11 +920,7 @@ class PatternTab(QWidget):
             return
         if self._zones:
             self._invalidate_zones_for_geometry_change()
-            self._edit_polys = self._canvas.get_polylines_state()
-        elif self._canvas.sel_count:
-            self._edit_polys = self._canvas.get_selected()
-        else:
-            self._edit_polys = self._canvas.get_polylines_state()
+        self._edit_polys = self._canvas.get_polylines_state()
         self._outline_ids = self._sync_outline_ids(self._edit_polys)
         self._refresh_canvas_panels()
         self._schedule_preview()
@@ -989,9 +1005,8 @@ class PatternTab(QWidget):
             active_name = (
                 "pattern_preview" if self._showing_preview else "pattern_active"
             )
-            rows: list[tuple[str, int, bool, bool]] = [
-                (active_name, self._canvas.poly_count, False, True)
-            ]
+            rows: list[tuple[str, int, bool, bool]] = list(self._imported_dxf_layers)
+            rows.append((active_name, self._canvas.poly_count, False, True))
             if self._orig_polys:
                 rows.append((
                     "geometry",
@@ -1213,6 +1228,8 @@ class PatternTab(QWidget):
             "diag_spacing": self._diag_spacing.text(),
             "diag_angle": self._diag_angle.text(),
             "sq_spacing": self._sq_spacing.text(),
+            "mesh_r": self._mesh_r.text(),
+            "mesh_spacing": self._mesh_spacing.text(),
             "conc_spacing": self._conc_spacing.text(),
             "wave_spacing": self._wave_spacing.text(),
             "wave_amplitude": self._wave_amplitude.text(),
@@ -1249,6 +1266,7 @@ class PatternTab(QWidget):
             ),
             "tile_gap": self._tile_gap.text(),
             "tile_angle": self._tile_angle.text(),
+            "tile_interlock": self._tile_interlock_cb.isChecked(),
             "htone_img_path": self._htone_img_edit.text(),
             "htone_r_min": self._htone_r_min.text(),
             "htone_r_max": self._htone_r_max.text(),
@@ -1311,6 +1329,8 @@ class PatternTab(QWidget):
         self._diag_spacing.setText(str(values.get("diag_spacing", "1.0")))
         self._diag_angle.setText(str(values.get("diag_angle", "45")))
         self._sq_spacing.setText(str(values.get("sq_spacing", "1.0")))
+        self._mesh_r.setText(str(values.get("mesh_r", "0.35")))
+        self._mesh_spacing.setText(str(values.get("mesh_spacing", "1.2")))
         self._conc_spacing.setText(str(values.get("conc_spacing", "1.5")))
         self._wave_spacing.setText(str(values.get("wave_spacing", "1.5")))
         self._wave_amplitude.setText(str(values.get("wave_amplitude", "0.5")))
@@ -1344,6 +1364,7 @@ class PatternTab(QWidget):
         self._rose_margin.setText(str(values.get("rose_margin", "1.0")))
         self._tile_gap.setText(str(values.get("tile_gap", "0.5")))
         self._tile_angle.setText(str(values.get("tile_angle", "0")))
+        self._tile_interlock_cb.setChecked(bool(values.get("tile_interlock", False)))
         self._htone_img_edit.setText(str(values.get("htone_img_path", "")))
         self._htone_r_min.setText(str(values.get("htone_r_min", "0.3")))
         self._htone_r_max.setText(str(values.get("htone_r_max", "1.8")))
@@ -1432,6 +1453,7 @@ class PatternTab(QWidget):
         self._suspend_state_changes = True
         if not isinstance(state, dict):
             state = {}
+        self._imported_dxf_layers = []
         self._dxf_edit.setText(str(state.get("dxf_path", "")))
         self._apply_param_text_payload(state.get("params", {}))
         self._orig_polys = [list(poly) for poly in state.get("orig_polys", [])]
@@ -1493,6 +1515,7 @@ class PatternTab(QWidget):
 
     def clear_workspace_state(self) -> None:
         self.apply_workspace_state({})
+        self._imported_dxf_layers = []
         self._outline_ids = []
         self._set_status("")
         self._refresh_canvas_panels()
@@ -1503,15 +1526,7 @@ class PatternTab(QWidget):
         label: str,
         **kw,
     ) -> float | None:
-        try:
-            value = parse_float_field(entry.text(), **kw)
-        except ValueError as exc:
-            message = f"{label} {exc}"
-            set_line_edit_error(entry, message)
-            self._set_status(message, "#f85149")
-            raise ValueError(message) from exc
-        clear_line_edit_error(entry)
-        return value
+        return parse_float_field_with_feedback(entry, label, self._set_status, **kw)
 
     def _parse_int_field(
         self,
@@ -2301,6 +2316,8 @@ class PatternTab(QWidget):
             )
         elif pattern == "Square Grid":
             polys = get_generator("gen_square_grid")(outline, params["spacing"])
+        elif pattern == "Mesh":
+            polys = get_generator("gen_mesh")(outline, params["r"], params["spacing"])
         elif pattern == "Concentric Rings":
             polys = get_generator("gen_concentric_rings")(outline, params["spacing"])
         elif pattern == "Wave Fill":
@@ -2372,6 +2389,7 @@ class PatternTab(QWidget):
                 tile_polys,
                 params["gap"],
                 params["angle"],
+                params.get("interlock", False),
             )
         else:  # Image Halftone
             polys = get_generator("gen_image_halftone")(
@@ -2503,6 +2521,9 @@ class PatternTab(QWidget):
 
     def _on_canvas_cutout_toggle(self, idx: int) -> None:
         """Toggle cutout status for a canvas poly index (called from right-click menu)."""
+        if self._showing_preview:
+            self._canvas._show_flash("Exit preview mode to assign cutouts", 1200)
+            return
         if not (0 <= idx < len(self._outline_ids)):
             return
         oid = self._outline_ids[idx]

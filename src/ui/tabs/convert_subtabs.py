@@ -25,6 +25,26 @@ from src.backend.io import svg_to_dxf
 from src.ui.components.factories import _section_label
 
 
+def _append_ignored_entities_note(msg: str, stats: dict) -> str:
+    ignored = int(stats.get("ignored_entities", 0) or 0)
+    if not ignored:
+        return msg
+    ignored_summary = stats.get("ignored_entity_summary")
+    if ignored_summary:
+        return f"{msg}  · ignored {ignored} ({ignored_summary})"
+    return f"{msg}  · ignored {ignored} unsupported entity(s)"
+
+
+class _StatusMixin:
+    """Mixin that provides _set_status() for subtabs with a self._status QLabel."""
+
+    _status: QLabel
+
+    def _set_status(self, text: str, color: str = "#8b949e") -> None:
+        self._status.setText(text)
+        self._status.setStyleSheet(f"color: {color};")
+
+
 class FviSubTab(QWidget):
     log_line = Signal(str)
     preview_path = Signal(str)
@@ -219,7 +239,7 @@ class FviSubTab(QWidget):
             self.preview_path.emit(last_dxf)
 
 
-class FixerSubTab(QWidget):
+class FixerSubTab(_StatusMixin, QWidget):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -308,10 +328,6 @@ class FixerSubTab(QWidget):
         if path:
             self._out_edit.setText(path)
 
-    def _set_status(self, text: str, color: str = "#8b949e") -> None:
-        self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color};")
-
     def _run(self) -> None:
         src = self._src_edit.text().strip()
         if not src:
@@ -349,6 +365,7 @@ class FixerSubTab(QWidget):
                 f"  · simplified {stats['simplified']}"
                 f"  · discarded {stats['discarded']}"
             )
+            msg = _append_ignored_entities_note(msg, stats)
             self.log_line.emit(msg)
             self._btn_state.emit(True)
             self._reveal_state.emit(True)
@@ -373,7 +390,7 @@ class FixerSubTab(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
 
 
-class SvgSubTab(QWidget):
+class SvgSubTab(_StatusMixin, QWidget):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -464,10 +481,6 @@ class SvgSubTab(QWidget):
         if path:
             self._out_edit.setText(path)
 
-    def _set_status(self, text: str, color: str = "#8b949e") -> None:
-        self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color};")
-
     def _run(self) -> None:
         src = self._src_edit.text().strip()
         if not src:
@@ -488,6 +501,7 @@ class SvgSubTab(QWidget):
                 f"Done — {stats['polylines']} polyline(s)"
                 f"  · {stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm"
             )
+            msg = _append_ignored_entities_note(msg, stats)
             self.log_line.emit(msg)
             self._btn_state.emit(True)
             self._reveal_state.emit(True)
@@ -512,7 +526,7 @@ class SvgSubTab(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
 
 
-class SvgToDxfSubTab(QWidget):
+class SvgToDxfSubTab(_StatusMixin, QWidget):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -598,10 +612,6 @@ class SvgToDxfSubTab(QWidget):
         )
         if path:
             self._out_edit.setText(path)
-
-    def _set_status(self, text: str, color: str = "#8b949e") -> None:
-        self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color};")
 
     def _run(self) -> None:
         src = self._src_edit.text().strip()

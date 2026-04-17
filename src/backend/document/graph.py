@@ -266,31 +266,7 @@ class DocumentGraph:
         self.params[name] = node
         return node
 
-    def add_source(
-        self, kind: str, payload: dict[str, Any] | None = None
-    ) -> SourceNode:
-        node = SourceNode(id=self._next_id(), kind=kind, payload=dict(payload or {}))
-        self.sources[node.id] = node
-        return node
-
     # ── Relationships ────────────────────────────────────────────────────
-
-    def add_constraint_edge(
-        self,
-        kind: str,
-        source: EntityRef,
-        target: EntityRef,
-        data: dict[str, Any] | None = None,
-    ) -> ConstraintEdge:
-        edge = ConstraintEdge(
-            id=self._next_id(),
-            kind=kind,
-            source=source,
-            target=target,
-            data=dict(data or {}),
-        )
-        self.constraints[edge.id] = edge
-        return edge
 
     def add_derivation_edge(
         self,
@@ -310,13 +286,6 @@ class DocumentGraph:
         )
         self.derivations[edge.id] = edge
         return edge
-
-    def dependent_layers(self, layer: str) -> set[str]:
-        return {
-            edge.target_layer
-            for edge in self.derivations.values()
-            if edge.source_layer == layer
-        }
 
     def reachable_dependents(self, layers: set[str]) -> set[str]:
         adjacency: dict[str, set[str]] = defaultdict(set)

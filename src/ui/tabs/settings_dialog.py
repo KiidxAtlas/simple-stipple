@@ -40,6 +40,11 @@ class SettingsDialog(QDialog):
 
     _TOGGLE_FIELDS = [
         ("auto_fetch_on_startup", "Fetch repository on startup", False),
+        (
+            "auto_fetch_periodic",
+            "Fetch repository periodically while app is open",
+            False,
+        ),
         ("check_updates_on_startup", "Check for app updates on startup", False),
     ]
 
@@ -138,6 +143,21 @@ class SettingsDialog(QDialog):
         _section_label(behavior_layout, "Application Behavior")
         for key, label, default in self._TOGGLE_FIELDS:
             self._add_toggle(behavior_layout, key, label, default)
+
+        interval_row, self._auto_fetch_interval_entry = self._add_text_row(
+            behavior_layout,
+            "Auto-fetch interval (minutes)",
+            str(self._settings.get("auto_fetch_interval_minutes", 10)),
+            placeholder="10",
+        )
+        self._auto_fetch_interval_entry.setToolTip(
+            "How often to run background repository fetch while app is open"
+        )
+        interval_hint = QLabel(
+            "Used only when periodic auto-fetch is enabled. Minimum 1 minute."
+        )
+        interval_hint.setStyleSheet("color: #8b949e; font-size: 11px;")
+        behavior_layout.addWidget(interval_hint)
         content_layout.addWidget(behavior_card)
 
         keybinding_card = _surface_frame("panel")
@@ -180,13 +200,7 @@ class SettingsDialog(QDialog):
         self, layout: QVBoxLayout, key: str, label: str, browse: bool = False
     ) -> None:
         """Add a folder path input row with optional browse button."""
-        row = QHBoxLayout()
-        lbl = QLabel(label)
-        lbl.setFixedWidth(200)
-        row.addWidget(lbl)
-        e = QLineEdit()
-        e.setText(self._settings.get(key, ""))
-        row.addWidget(e, stretch=1)
+        row, e = self._add_text_row(layout, label, self._settings.get(key, ""))
         self._entries[key] = e
         if browse:
             btn = QPushButton("…")
@@ -198,7 +212,6 @@ class SettingsDialog(QDialog):
             clear_btn.setToolTip("Clear this saved folder path")
             clear_btn.clicked.connect(e.clear)
             row.addWidget(clear_btn)
-        layout.addLayout(row)
 
     def _add_toggle(
         self, layout: QVBoxLayout, key: str, label: str, default: bool = False
@@ -213,23 +226,38 @@ class SettingsDialog(QDialog):
         layout.addLayout(row)
 
     def _add_keybinding_row(self, layout: QVBoxLayout, key: str, label: str) -> None:
+        _, entry = self._add_text_row(
+            layout,
+            label,
+            str(
+                self._settings.get("keybindings", {}).get(
+                    key, DEFAULT_KEYBINDINGS.get(key, "")
+                )
+            ),
+            placeholder=DEFAULT_KEYBINDINGS.get(key, ""),
+        )
+        entry.setToolTip(f"Shortcut id: {key}")
+        self._keybinding_entries[key] = entry
+
+    def _add_text_row(
+        self,
+        layout: QVBoxLayout,
+        label: str,
+        text: str,
+        *,
+        placeholder: str = "",
+    ) -> tuple[QHBoxLayout, QLineEdit]:
         row = QHBoxLayout()
         lbl = QLabel(label)
         lbl.setFixedWidth(200)
         row.addWidget(lbl)
         entry = QLineEdit()
-        entry.setPlaceholderText(DEFAULT_KEYBINDINGS.get(key, ""))
-        entry.setText(
-            str(
-                self._settings.get("keybindings", {}).get(
-                    key, DEFAULT_KEYBINDINGS.get(key, "")
-                )
-            )
-        )
-        entry.setToolTip(f"Shortcut id: {key}")
+        if placeholder:
+            entry.setPlaceholderText(placeholder)
+        entry.setText(text)
         row.addWidget(entry, stretch=1)
-        self._keybinding_entries[key] = entry
         layout.addLayout(row)
+        return row, entry
 
     def _browse_dir(self, key: str) -> None:
         """Open file browser to select a directory."""
@@ -260,6 +288,17 @@ class SettingsDialog(QDialog):
         # Save toggles
         for key, toggle in self._toggles.items():
             self._settings[key] = toggle.isChecked()
+
+        interval_raw = self._auto_fetch_interval_entry.text().strip()
+        if interval_raw:
+            try:
+                self._settings["auto_fetch_interval_minutes"] = max(
+                    1, int(interval_raw)
+                )
+            except ValueError:
+                self._settings["auto_fetch_interval_minutes"] = 10
+        else:
+            self._settings["auto_fetch_interval_minutes"] = 10
 
         keybindings = dict(DEFAULT_KEYBINDINGS)
         for key, entry in self._keybinding_entries.items():

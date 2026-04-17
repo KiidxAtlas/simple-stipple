@@ -15,7 +15,10 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from src.backend.dxf.io import load_dxf_polylines
+from src.backend.dxf.io import (
+    load_dxf_polylines_with_report,
+    summarize_dxf_import_report,
+)
 
 
 def _bbox(
@@ -64,7 +67,7 @@ def dxf_to_svg(
     -------
     dict with keys ``polylines``, ``width_mm``, ``height_mm``.
     """
-    polys = load_dxf_polylines(str(input_path))
+    polys, report = load_dxf_polylines_with_report(str(input_path))
     if not polys:
         # Write empty SVG
         root = ET.Element(
@@ -77,7 +80,11 @@ def dxf_to_svg(
         ET.ElementTree(root).write(
             str(output_path), xml_declaration=True, encoding="utf-8"
         )
-        return {"polylines": 0, "width_mm": 0.0, "height_mm": 0.0}
+        result = {"polylines": 0, "width_mm": 0.0, "height_mm": 0.0}
+        if report.has_issues:
+            result["ignored_entities"] = report.ignored_entities
+            result["ignored_entity_summary"] = summarize_dxf_import_report(report)
+        return result
 
     x0, y0, x1, y1 = _bbox(polys)
     vw = (x1 - x0) + padding * 2
@@ -112,8 +119,12 @@ def dxf_to_svg(
     ET.indent(tree, space="  ")
     tree.write(str(output_path), xml_declaration=True, encoding="utf-8")
 
-    return {
+    result = {
         "polylines": len(polys),
         "width_mm": round(vw, 4),
         "height_mm": round(vh, 4),
     }
+    if report.has_issues:
+        result["ignored_entities"] = report.ignored_entities
+        result["ignored_entity_summary"] = summarize_dxf_import_report(report)
+    return result

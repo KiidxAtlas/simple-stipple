@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -38,13 +41,6 @@ def _sep(parent_layout) -> QFrame:
     line.setFixedHeight(1)
     parent_layout.addWidget(line)
     return line
-
-
-def _row() -> QHBoxLayout:
-    """Create a zero-margin horizontal row layout."""
-    h = QHBoxLayout()
-    h.setContentsMargins(0, 0, 0, 0)
-    return h
 
 
 def _info_chip(text: str, tone: str = "neutral") -> QLabel:
@@ -198,6 +194,24 @@ def parse_float_field(
     return value
 
 
+def parse_float_field_with_feedback(
+    entry: QLineEdit,
+    label: str,
+    status_callback: Callable[[str, str], None],
+    **kw,
+) -> float | None:
+    """Parse a float from a line edit and surface validation feedback."""
+    try:
+        value = parse_float_field(entry.text(), **kw)
+    except ValueError as exc:
+        message = f"{label} {exc}"
+        set_line_edit_error(entry, message)
+        status_callback(message, "#f85149")
+        raise ValueError(message) from exc
+    clear_line_edit_error(entry)
+    return value
+
+
 def set_line_edit_error(widget, message: str) -> None:
     """Highlight a line edit and attach a validation message."""
     widget.setProperty("error", True)
@@ -218,12 +232,12 @@ __all__ = [
     "_canvas_toolbar",
     "_content_splitter",
     "_info_chip",
-    "_row",
     "_section_label",
     "_sep",
     "_sidebar_panel",
     "_surface_frame",
     "clear_line_edit_error",
     "parse_float_field",
+    "parse_float_field_with_feedback",
     "set_line_edit_error",
 ]

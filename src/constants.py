@@ -38,6 +38,7 @@ PATTERNS = [
     "Honeycomb",
     "Image Halftone",
     "Lissajous",
+    "Mesh",
     "Penrose Tiling",
     "Reaction Diffuse",
     "Rose Curve",

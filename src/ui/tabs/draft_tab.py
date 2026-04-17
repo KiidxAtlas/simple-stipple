@@ -8,7 +8,6 @@ Design goals:
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Signal
@@ -26,7 +25,11 @@ from PySide6.QtWidgets import (
 from src.backend.document.actions import set_active_layer
 from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines
-from src.backend.dxf.io import load_dxf_polylines, write_polylines_dxf
+from src.backend.dxf.io import (
+    load_dxf_polylines_with_report,
+    summarize_dxf_import_report,
+    write_polylines_dxf,
+)
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.graph_adapter import CanvasGraphAdapter
 from src.ui.components.containers import (
@@ -58,6 +61,7 @@ class ShapeTab(QWidget):
         self._suspend_state: bool = False
         self._last_out_path: str | None = None
         self._last_in_path: str | None = None
+        self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
         self._doc_graph = DocumentGraph()
         set_active_layer(self._doc_graph, "geometry")
         self._graph_adapter = CanvasGraphAdapter(
@@ -261,24 +265,6 @@ class ShapeTab(QWidget):
             return ""
         return f"Multi-selection across {len(sel)} objects"
 
-    def _apply_live_geometry(
-        self,
-        width_mm: float | None,
-        height_mm: float | None,
-        length_mm: float | None,
-    ) -> None:
-        changed = False
-        if width_mm is not None:
-            changed = self._canvas._set_selected_width(width_mm) or changed
-        if height_mm is not None:
-            changed = self._canvas._set_selected_height(height_mm) or changed
-        if length_mm is not None:
-            changed = self._canvas._set_selected_line_length(length_mm) or changed
-        if changed:
-            self._graph_adapter.capture_from_canvas(self._canvas)
-            self._refresh_status()
-            self._emit_state_changed()
-
     def _fit_selection(self) -> None:
         if self._canvas.fit_selection():
             self._refresh_status()
@@ -383,8 +369,8 @@ class ShapeTab(QWidget):
     # ── Export ─────────────────────────────────────────────────────────────
 
     def _export(self) -> None:
-        polys = self._canvas.get_export_polylines_state()
-        if not polys:
+        records = self._canvas.get_export_dxf_state()
+        if not records:
             QMessageBox.information(
                 self,
                 "Nothing to Export",
@@ -402,7 +388,13 @@ class ShapeTab(QWidget):
             return
 
         try:
-            write_polylines_dxf(polys, out_path, close=True)
+            write_polylines_dxf(
+                [list(r["polyline"]) for r in records],
+                out_path,
+                close=True,
+                entity_kinds=[str(r.get("kind", "polyline")) for r in records],
+                entity_meta=[r.get("meta") for r in records],
+            )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -464,7 +456,8 @@ class ShapeTab(QWidget):
 
         if hasattr(self, "_layers_tree"):
             active = getattr(self._doc_graph, "active_layer", "geometry")
-            rows = [
+            rows = list(self._imported_dxf_layers)
+            rows.extend([
                 (
                     name,
                     len(layer.polylines),
@@ -472,7 +465,7 @@ class ShapeTab(QWidget):
                     name == active,
                 )
                 for name, layer in sorted(self._doc_graph.layers.items())
-            ]
+            ])
             if not rows:
                 rows = [("geometry", self._canvas.poly_count, False, True)]
             self._layers_tree.set_layers(rows)
@@ -567,30 +560,6 @@ class ShapeTab(QWidget):
             )
             self._properties_panel.set_actions(actions)
 
-            width_mm: float | None = None
-            height_mm: float | None = None
-            length_mm: float | None = None
-            editor_enabled = False
-            if selection_indices:
-                bounds = self._canvas._selection_bounds(selection_indices)
-                if bounds is not None:
-                    width_mm = max(0.0, bounds[2] - bounds[0])
-                    height_mm = max(0.0, bounds[3] - bounds[1])
-                    editor_enabled = True
-                if len(selection_indices) == 1:
-                    poly = self._canvas.get_polylines_state()[selection_indices[0]]
-                    if len(poly) == 2:
-                        ax, ay = poly[0]
-                        bx, by = poly[1]
-                        length_mm = math.hypot(bx - ax, by - ay)
-            self._properties_panel.set_geometry_editor(
-                width_mm,
-                height_mm,
-                length_mm,
-                self._apply_live_geometry,
-                enabled=editor_enabled and not locked_selected,
-            )
-
         self._shape_mode_label.setText(
             f"Shape: {self._canvas.quick_shape_mode.title()}"
         )
@@ -629,8 +598,12 @@ class ShapeTab(QWidget):
 
     def _load_dxf(self, path: str) -> None:
         try:
-            polys = load_dxf_polylines(path)
+            polys, report = load_dxf_polylines_with_report(path)
             self._last_in_path = path
+            self._imported_dxf_layers = [
+                (name, count, False, False)
+                for name, count in report.layer_counts.items()
+            ]
             self._canvas.set_polylines_state(polys, fit=bool(polys))
             self._canvas.set_mode("select")
             self._doc_graph = graph_from_polylines(
@@ -642,6 +615,14 @@ class ShapeTab(QWidget):
                 self._doc_graph, display_layer="geometry"
             )
             self._canvas._show_flash(f"Loaded DXF: {Path(path).name}", 1200)
+            if report.has_issues:
+                detail = summarize_dxf_import_report(report)
+                if detail:
+                    QMessageBox.warning(
+                        self,
+                        "DXF Import Notice",
+                        f"{Path(path).name} loaded, but some DXF content could not be preserved.\n\n{detail}",
+                    )
             self._refresh_status()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:
@@ -657,6 +638,7 @@ class ShapeTab(QWidget):
         if not polys:
             return
         incoming = [[(x, y) for x, y in poly] for poly in polys]
+        self._imported_dxf_layers = []
         self._canvas.set_polylines_state(incoming, fit=True)
         self._canvas.set_mode("select")
         self._doc_graph = graph_from_polylines(
@@ -690,6 +672,7 @@ class ShapeTab(QWidget):
             state = {}
         self._hidden_indices.clear()
         self._locked_indices.clear()
+        self._imported_dxf_layers = []
 
         graph_state = state.get("document_graph")
         if isinstance(graph_state, dict):
@@ -735,13 +718,12 @@ class ShapeTab(QWidget):
                 }
         self._sync_browser_interaction_state()
 
-        if state.get("quick_shape_mode"):
+        quick_shape_enabled = bool(state.get("quick_shape_enabled", False))
+        self._canvas.set_quick_shape_enabled(quick_shape_enabled)
+        if quick_shape_enabled and state.get("quick_shape_mode"):
             self._canvas.set_quick_shape_mode(
                 str(state["quick_shape_mode"]), flash=False
             )
-        self._canvas.set_quick_shape_enabled(
-            bool(state.get("quick_shape_enabled", True))
-        )
         self._last_in_path = str(state.get("last_input_dxf", "") or "") or None
 
         self._suspend_state = False
@@ -751,6 +733,7 @@ class ShapeTab(QWidget):
         self._suspend_state = True
         self._hidden_indices.clear()
         self._locked_indices.clear()
+        self._imported_dxf_layers = []
         self._doc_graph = DocumentGraph()
         set_active_layer(self._doc_graph, "geometry")
         self._graph_adapter = CanvasGraphAdapter(
@@ -760,7 +743,7 @@ class ShapeTab(QWidget):
         self._canvas.set_mode("select")
         self._sync_browser_interaction_state()
         self._canvas.set_quick_shape_mode("rectangle", flash=False)
-        self._canvas.set_quick_shape_enabled(True)
+        self._canvas.set_quick_shape_enabled(False)
         self._last_in_path = None
         self._suspend_state = False
         self._refresh_status()

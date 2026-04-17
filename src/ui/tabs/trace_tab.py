@@ -22,11 +22,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.constants import DIM, SEL
 from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.io import image_to_outlines
+from src.constants import DIM, SEL
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.action_maps import IMAGE_ACTION_MAP
 from src.ui.components.containers import (
@@ -41,9 +41,7 @@ from src.ui.components.factories import (
     _section_label,
     _sidebar_panel,
     _surface_frame,
-    clear_line_edit_error,
-    parse_float_field,
-    set_line_edit_error,
+    parse_float_field_with_feedback,
 )
 from src.ui.components.trace_form import (
     PathField,
@@ -537,15 +535,7 @@ class ImageTab(QWidget):
         label: str,
         **kw,
     ) -> float | None:
-        try:
-            value = parse_float_field(entry.text(), **kw)
-        except ValueError as exc:
-            message = f"{label} {exc}"
-            set_line_edit_error(entry, message)
-            self._set_status(message, "#f85149")
-            raise ValueError(message) from exc
-        clear_line_edit_error(entry)
-        return value
+        return parse_float_field_with_feedback(entry, label, self._set_status, **kw)
 
     def _on_sel_change(self, count: int) -> None:
         if count:
@@ -949,37 +939,54 @@ class ImageTab(QWidget):
         return path or None
 
     def _export_all(self) -> None:
-        polys = self._canvas.get_polylines_state()
-        if not polys:
+        records = self._canvas.get_export_dxf_state()
+        if not records:
             QMessageBox.critical(self, "Export", "No polylines to export.")
             return
         out = self._get_save_path("Export all outlines as DXF")
         if not out:
             return
         try:
-            write_polylines_dxf(polys, out, close=True)
+            write_polylines_dxf(
+                [list(r["polyline"]) for r in records],
+                out,
+                close=True,
+                entity_kinds=[str(r.get("kind", "polyline")) for r in records],
+                entity_meta=[r.get("meta") for r in records],
+            )
             self._last_out = out
             self._reveal_btn.setEnabled(True)
             self._set_status(
-                f"Exported {len(polys)} polylines → {Path(out).name}", "#3fb950"
+                f"Exported {len(records)} shapes → {Path(out).name}", "#3fb950"
             )
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_selected(self) -> None:
-        polys = self._canvas.get_selected()
-        if not polys:
+        selected = self._canvas.get_selection_indices()
+        records = [
+            r
+            for r in self._canvas.get_export_dxf_state()
+            if int(r.get("index", -1)) in selected
+        ]
+        if not records:
             QMessageBox.information(self, "Export Selected", "Nothing is selected.")
             return
         out = self._get_save_path("Export selected outlines as DXF")
         if not out:
             return
         try:
-            write_polylines_dxf(polys, out, close=True)
+            write_polylines_dxf(
+                [list(r["polyline"]) for r in records],
+                out,
+                close=True,
+                entity_kinds=[str(r.get("kind", "polyline")) for r in records],
+                entity_meta=[r.get("meta") for r in records],
+            )
             self._last_out = out
             self._reveal_btn.setEnabled(True)
             self._set_status(
-                f"Exported {len(polys)} selected polylines → {Path(out).name}",
+                f"Exported {len(records)} selected shapes → {Path(out).name}",
                 "#3fb950",
             )
         except (OSError, ValueError) as exc:

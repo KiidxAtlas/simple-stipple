@@ -2,13 +2,14 @@
 
 from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
 from src.backend.geometry.primitives import (
-    clip_line_to_outline,
-    clip_polygon_to_outline,
     build_circle_poly,
     build_ellipse_poly,
     build_polygon_poly,
     build_rect_poly,
+    clip_line_to_outline,
+    clip_polygon_to_outline,
 )
+from src.backend.geometry.spline import build_spline_poly
 
 __all__ = [
     "arc_from_center_start_end",
@@ -17,6 +18,7 @@ __all__ = [
     "build_ellipse_poly",
     "build_polygon_poly",
     "build_rect_poly",
+    "build_spline_poly",
     "clip_line_to_outline",
     "clip_polygon_to_outline",
 ]

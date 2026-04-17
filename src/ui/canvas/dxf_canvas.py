@@ -57,7 +57,7 @@ class DxfCanvas(PolylineView):
         self._draft_profile = bool(draft_profile or selectable)
 
         self._quick_shape_mode: str = "rectangle"
-        self._quick_shape_enabled: bool = bool(self._draft_profile)
+        self._quick_shape_enabled: bool = False
         self._shape_drag_active: bool = False
         self._shape_drag_mode: str = "rectangle"
         self._shape_start_w: tuple[float, float] | None = None
@@ -265,7 +265,9 @@ class DxfCanvas(PolylineView):
             if callable(self._on_cutout_toggle):
                 is_cutout = idx in self._cutout_indices
                 cutout_label = "Remove Cutout" if is_cutout else "Mark as Cutout"
-                menu.addAction(cutout_label, lambda _idx=idx: self._on_cutout_toggle(_idx))
+                cutout_toggle = self._on_cutout_toggle
+                if callable(cutout_toggle):
+                    menu.addAction(cutout_label, lambda _idx=idx: cutout_toggle(_idx))
             menu.addSeparator()
 
         context_idx = poly_hit
@@ -317,6 +319,10 @@ class DxfCanvas(PolylineView):
                 "Merge segments to object",
                 lambda: _run_transform(self.merge_selected_segments_to_objects),
             )
+            if len(self._sel) >= 2:
+                menu.addAction("Group", self._group_selected)
+            if any(i in self._groups for i in self._sel):
+                menu.addAction("Ungroup", self._ungroup_selected)
         else:
             menu.addAction("Select all", self.select_all)
 
@@ -638,8 +644,24 @@ class DxfCanvas(PolylineView):
         poly = self._build_drag_shape(self._shape_drag_mode, sx, sy, ex, ey)
         if poly:
             was_empty = len(self._polys) == 0
-            self._push_undo()
-            self._polys.append(poly)
+            kind = "polyline"
+            meta = None
+            cx = (sx + ex) / 2.0
+            cy = (sy + ey) / 2.0
+            w = abs(ex - sx)
+            h = abs(ey - sy)
+            if self._shape_drag_mode == "circle":
+                kind = "circle"
+                meta = {"center": (cx, cy), "radius": min(w, h) / 2.0}
+            elif self._shape_drag_mode == "ellipse":
+                kind = "ellipse"
+                meta = {
+                    "center": (cx, cy),
+                    "rx": w / 2.0,
+                    "ry": h / 2.0,
+                    "rotation": 0.0,
+                }
+            self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
             self._sel = {len(self._polys) - 1}
             if was_empty:
                 self._fit()

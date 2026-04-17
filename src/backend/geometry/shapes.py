@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Any
 
 from shapely.affinity import scale as shapely_scale  # type: ignore[import-untyped]
-from shapely.geometry import LineString, Point, box  # type: ignore[import-untyped]
+from shapely.geometry import LineString, Point  # type: ignore[import-untyped]
 
 PointTuple = tuple[float, float]
 
@@ -28,20 +28,6 @@ def shape_rect(w: float, h: float) -> list[tuple[float, float]]:
         return []
     hw, hh = w / 2, h / 2
     return [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh), (-hw, -hh)]
-
-
-def shape_rect_rounded(
-    w: float, h: float, r: float, n_corner: int = 8
-) -> list[tuple[float, float]]:
-    """Rectangle with rounded corners, centred at origin."""
-    if w <= 0 or h <= 0:
-        return []
-    r = min(r, w / 2, h / 2)
-    hw, hh = w / 2, h / 2
-    # Shrink inner box by radius, then buffer outward with round joins
-    inner = box(-hw + r, -hh + r, hw - r, hh - r)
-    rounded = inner.buffer(r, resolution=n_corner, join_style="round")
-    return _to_coords(rounded)
 
 
 @lru_cache(maxsize=256)

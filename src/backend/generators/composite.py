@@ -169,6 +169,7 @@ def gen_custom_tile(
     tile_polys: list[list[tuple[float, float]]],
     gap: float,
     angle_deg: float = 0.0,
+    interlock: bool = False,
 ) -> list[list[tuple[float, float]]]:
     """Tile an arbitrary DXF shape across the outline, clipped to it."""
     if not tile_polys:
@@ -198,7 +199,7 @@ def gen_custom_tile(
     a = math.radians(angle_deg)
     ca, sa = math.cos(a), math.sin(a)
     col_step = max(tw + gap, 0.01)
-    row_step = max(th + gap, 0.01)
+    row_step = max((th * 0.75 + gap) if interlock else (th + gap), 0.01)
     minx, miny, maxx, maxy = outline_poly.bounds
     pad = max(tw, th) * 2.0 + gap
     prep = prepared.prep(outline_poly)
@@ -206,16 +207,25 @@ def gen_custom_tile(
     row = 0
     y = miny - pad
     while y <= maxy + pad:
-        off = col_step / 2.0 if row & 1 else 0.0
+        off = col_step / 2.0 if (interlock and (row & 1)) else 0.0
         x = minx - pad + off
         while x <= maxx + pad:
+            flip_row = interlock and (row & 1)
             for tile_pts in tile_polys:
                 if len(tile_pts) < 3:
                     continue
                 transformed = [
                     (
-                        x + (px - t_cx) * ca - (py - t_cy) * sa,
-                        y + (px - t_cx) * sa + (py - t_cy) * ca,
+                        x
+                        + (
+                            (-(px - t_cx) if flip_row else (px - t_cx)) * ca
+                            - (py - t_cy) * sa
+                        ),
+                        y
+                        + (
+                            (-(px - t_cx) if flip_row else (px - t_cx)) * sa
+                            + (py - t_cy) * ca
+                        ),
                     )
                     for px, py in tile_pts
                 ]

@@ -4,15 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
 
 class PropertiesPanel(QWidget):
@@ -29,9 +21,6 @@ class PropertiesPanel(QWidget):
         self.setProperty("surface", "panel")
         self._action_buttons: list[QPushButton] = []
         self._empty_actions_label: QLabel | None = None
-        self._apply_geometry_callback: (
-            Callable[[float | None, float | None, float | None], None] | None
-        ) = None
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(10, 8, 10, 8)
@@ -41,7 +30,7 @@ class PropertiesPanel(QWidget):
         self._title.setProperty("role", "callout-title")
         self._layout.addWidget(self._title)
 
-        self._summary = QLabel("Select an object to view editable properties")
+        self._summary = QLabel("Select an object to view contextual actions")
         self._summary.setProperty("role", "callout-body")
         self._summary.setWordWrap(True)
         self._layout.addWidget(self._summary)
@@ -67,45 +56,6 @@ class PropertiesPanel(QWidget):
         self._actions_layout.setContentsMargins(0, 0, 0, 0)
         self._actions_layout.setSpacing(4)
         self._layout.addWidget(self._actions_host)
-
-        self._editor_header = QLabel("Geometry")
-        self._editor_header.setStyleSheet(
-            "color: #8b949e; font-size: 10px; font-weight: 700;"
-        )
-        self._layout.addWidget(self._editor_header)
-
-        self._editor_host = QWidget(self)
-        self._editor_layout = QVBoxLayout(self._editor_host)
-        self._editor_layout.setContentsMargins(0, 0, 0, 0)
-        self._editor_layout.setSpacing(4)
-
-        self._width_edit = QLineEdit(self)
-        self._height_edit = QLineEdit(self)
-        self._length_edit = QLineEdit(self)
-        for edit, placeholder in (
-            (self._width_edit, "Width (mm)"),
-            (self._height_edit, "Height (mm)"),
-            (self._length_edit, "Length (mm)"),
-        ):
-            edit.setPlaceholderText(placeholder)
-            edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-            edit.returnPressed.connect(self._apply_geometry_editor)
-
-        wh_row = QHBoxLayout()
-        wh_row.setContentsMargins(0, 0, 0, 0)
-        wh_row.setSpacing(4)
-        wh_row.addWidget(self._width_edit)
-        wh_row.addWidget(self._height_edit)
-        self._editor_layout.addLayout(wh_row)
-        self._editor_layout.addWidget(self._length_edit)
-
-        self._apply_geometry_btn = QPushButton("Apply geometry")
-        self._apply_geometry_btn.setMinimumHeight(26)
-        self._apply_geometry_btn.clicked.connect(self._apply_geometry_editor)
-        self._editor_layout.addWidget(self._apply_geometry_btn)
-        self._layout.addWidget(self._editor_host)
-
-        self.set_geometry_editor(None, None, None, None, enabled=False)
 
         self._layout.addStretch()
 
@@ -159,58 +109,6 @@ class PropertiesPanel(QWidget):
             button.clicked.connect(callback)
             self._actions_layout.addWidget(button)
             self._action_buttons.append(button)
-
-    def set_geometry_editor(
-        self,
-        width_mm: float | None,
-        height_mm: float | None,
-        length_mm: float | None,
-        on_apply: Callable[[float | None, float | None, float | None], None] | None,
-        *,
-        enabled: bool,
-    ) -> None:
-        self._apply_geometry_callback = on_apply
-        self._editor_host.setVisible(enabled)
-        self._editor_header.setVisible(enabled)
-
-        def _set(edit: QLineEdit, value: float | None) -> None:
-            if value is None:
-                edit.clear()
-            else:
-                edit.setText(f"{value:.3f}")
-
-        _set(self._width_edit, width_mm)
-        _set(self._height_edit, height_mm)
-        _set(self._length_edit, length_mm)
-
-        self._width_edit.setEnabled(enabled and width_mm is not None)
-        self._height_edit.setEnabled(enabled and height_mm is not None)
-        self._length_edit.setEnabled(enabled and length_mm is not None)
-        self._apply_geometry_btn.setEnabled(enabled and on_apply is not None)
-
-    def _apply_geometry_editor(self) -> None:
-        if self._apply_geometry_callback is None:
-            return
-
-        def _parse(edit: QLineEdit) -> float | None:
-            if not edit.isEnabled():
-                return None
-            text = edit.text().strip()
-            if not text:
-                return None
-            try:
-                value = float(text)
-            except ValueError:
-                return None
-            if value <= 0:
-                return None
-            return value
-
-        self._apply_geometry_callback(
-            _parse(self._width_edit),
-            _parse(self._height_edit),
-            _parse(self._length_edit),
-        )
 
 
 __all__ = ["PropertiesPanel"]

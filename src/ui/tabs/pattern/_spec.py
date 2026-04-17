@@ -122,6 +122,17 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "_sq_spacing", "Grid spacing (mm)", "1.0", "Distance between grid lines"
         ),
     ],
+    "Mesh": [
+        ParamField(
+            "_mesh_r", "Circle radius (mm)", "0.35", "Radius of each mesh circle"
+        ),
+        ParamField(
+            "_mesh_spacing",
+            "Grid spacing (mm)",
+            "1.2",
+            "Centre-to-centre distance between mesh circles",
+        ),
+    ],
     "Concentric Rings": [
         ParamField(
             "_conc_spacing",

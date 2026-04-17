@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
+from shapely.geometry import LineString, Point, Polygon  # type: ignore[import-untyped]
 
 from src.backend.generators._shared import (
     _clip_to_outline,
@@ -268,6 +268,26 @@ def gen_square_grid(outline_poly, spacing: float) -> list[list[tuple[float, floa
     return gen_diagonal_lines(outline_poly, spacing, 0.0) + gen_diagonal_lines(
         outline_poly, spacing, 90.0
     )
+
+
+def gen_mesh(outline_poly, r: float, spacing: float) -> list[list[tuple[float, float]]]:
+    """Regular orthogonal grid of small circles clipped to the outline."""
+    if r <= 0 or spacing <= 0:
+        return []
+    minx, miny, maxx, maxy = outline_poly.bounds
+    pad = r * 2.0
+    prep = prepared.prep(outline_poly)
+    result: list[list[tuple[float, float]]] = []
+
+    y = miny - pad
+    while y <= maxy + pad:
+        x = minx - pad
+        while x <= maxx + pad:
+            circle = Point(x, y).buffer(r, resolution=16)
+            _clip_to_outline(circle, outline_poly, prep, result)
+            x += spacing
+        y += spacing
+    return result
 
 
 def gen_triangle_grid(

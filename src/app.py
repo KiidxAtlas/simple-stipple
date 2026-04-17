@@ -57,6 +57,11 @@ class App(QMainWindow):
         self._workspace_timer.setSingleShot(True)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
 
+        # Periodic auto-fetch while app is open (when enabled in settings)
+        self._auto_fetch_timer = QTimer(self)
+        self._auto_fetch_timer.setSingleShot(False)
+        self._auto_fetch_timer.timeout.connect(self._attempt_auto_fetch)
+
         # Auto-save every 60 seconds if workspace has a path and is dirty
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setInterval(60_000)
@@ -501,6 +506,9 @@ class App(QMainWindow):
         if self._settings.get("auto_fetch_on_startup", False):
             QTimer.singleShot(500, self._attempt_auto_fetch)
 
+        # Keep fetching periodically while app remains open (if enabled)
+        self._configure_auto_fetch_timer()
+
         # Check for updates on startup if setting is enabled
         if self._settings.get("check_updates_on_startup", False):
             QTimer.singleShot(1000, self._attempt_startup_update_check)
@@ -511,6 +519,30 @@ class App(QMainWindow):
             self._repo_tab.auto_fetch()
         except (OSError, RuntimeError, ValueError) as exc:
             logging.warning("Auto-fetch failed: %s", exc)
+
+    def _auto_fetch_interval_ms(self) -> int:
+        """Return periodic auto-fetch interval in milliseconds."""
+        raw = self._settings.get("auto_fetch_interval_minutes", 10)
+        try:
+            minutes = int(raw)
+        except (TypeError, ValueError):
+            minutes = 10
+        minutes = max(1, minutes)
+        return minutes * 60_000
+
+    def _configure_auto_fetch_timer(self) -> None:
+        """Start/stop periodic auto-fetch based on current settings."""
+        enabled = bool(self._settings.get("auto_fetch_periodic", False))
+        if not enabled:
+            self._auto_fetch_timer.stop()
+            return
+
+        interval_ms = self._auto_fetch_interval_ms()
+        if self._auto_fetch_timer.interval() != interval_ms:
+            self._auto_fetch_timer.setInterval(interval_ms)
+
+        if not self._auto_fetch_timer.isActive():
+            self._auto_fetch_timer.start()
 
     def _attempt_startup_update_check(self) -> None:
         """Check for updates on startup (silent if up-to-date)."""
@@ -794,6 +826,8 @@ class App(QMainWindow):
             self._save_workspace_as_action.setShortcut(
                 QKeySequence(self._shortcut("workspace.save_as"))
             )
+
+            self._configure_auto_fetch_timer()
 
     def _open_update_check(self) -> None:
         """Open the update check dialog."""

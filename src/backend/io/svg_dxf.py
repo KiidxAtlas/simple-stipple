@@ -13,12 +13,12 @@ Supported SVG elements:
 
 from __future__ import annotations
 
-import math
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, cast
 
-from src.backend.dxf.io import write_polylines_dxf
+import ezdxf  # type: ignore[attr-defined]
 
 _NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _CMD_RE = re.compile(rf"[MmLlHhVvZz]|{_NUM_RE}")
@@ -42,15 +42,9 @@ def _parse_points_attr(points: str) -> list[tuple[float, float]]:
     return pts
 
 
-def _circle_poly(
-    cx: float, cy: float, rx: float, ry: float, segments: int = 64
-) -> list[tuple[float, float]]:
-    pts = []
-    for i in range(segments):
-        a = (2.0 * math.pi * i) / segments
-        pts.append((cx + rx * math.cos(a), cy + ry * math.sin(a)))
-    pts.append(pts[0])
-    return pts
+def _ensure_layer(doc: Any, name: str) -> None:
+    if name not in doc.layers:
+        doc.layers.add(name, color=7)
 
 
 def _parse_path_d(d: str) -> list[list[tuple[float, float]]]:
@@ -169,7 +163,13 @@ def svg_to_dxf(
             return y
         return y_flip - y if y_flip else -y
 
+    doc = cast(Any, ezdxf).new("R2010")
+    doc.header["$INSUNITS"] = 4
+    msp = doc.modelspace()
+    _ensure_layer(doc, "0")
+
     polylines: list[list[tuple[float, float]]] = []
+    native_entities = {"LINE": 0, "CIRCLE": 0, "ELLIPSE": 0}
 
     for elem in root.iter():
         tag = elem.tag.split("}")[-1].lower()
@@ -191,7 +191,8 @@ def svg_to_dxf(
             y1 = _parse_float(elem.attrib.get("y1"))
             x2 = _parse_float(elem.attrib.get("x2"))
             y2 = _parse_float(elem.attrib.get("y2"))
-            polylines.append([(x1, yf(y1)), (x2, yf(y2))])
+            msp.add_line((x1, yf(y1)), (x2, yf(y2)))
+            native_entities["LINE"] += 1
 
         elif tag == "rect":
             x = _parse_float(elem.attrib.get("x"))
@@ -207,8 +208,8 @@ def svg_to_dxf(
             cy = _parse_float(elem.attrib.get("cy"))
             r = _parse_float(elem.attrib.get("r"))
             if r > 0:
-                pts = _circle_poly(cx, cy, r, r)
-                polylines.append([(x, yf(y)) for x, y in pts])
+                msp.add_circle((cx, yf(cy)), r)
+                native_entities["CIRCLE"] += 1
 
         elif tag == "ellipse":
             cx = _parse_float(elem.attrib.get("cx"))
@@ -216,8 +217,13 @@ def svg_to_dxf(
             rx = _parse_float(elem.attrib.get("rx"))
             ry = _parse_float(elem.attrib.get("ry"))
             if rx > 0 and ry > 0:
-                pts = _circle_poly(cx, cy, rx, ry)
-                polylines.append([(x, yf(y)) for x, y in pts])
+                ratio = ry / rx if rx else 1.0
+                msp.add_ellipse(
+                    (cx, yf(cy)),
+                    (rx, 0.0),
+                    ratio=ratio,
+                )
+                native_entities["ELLIPSE"] += 1
 
         elif tag == "path":
             d = elem.attrib.get("d", "")
@@ -227,7 +233,11 @@ def svg_to_dxf(
                 if len(p) >= 2:
                     polylines.append([(x, yf(y)) for x, y in p])
 
-    write_polylines_dxf(polylines, str(output_path), close=False)
+    for pts in polylines:
+        if len(pts) >= 2:
+            msp.add_lwpolyline(pts)
+
+    doc.saveas(str(output_path))
 
     all_pts = [pt for poly in polylines for pt in poly]
     if all_pts:
@@ -237,8 +247,10 @@ def svg_to_dxf(
     else:
         width = height = 0.0
 
-    return {
+    stats = {
         "polylines": len(polylines),
         "width_mm": round(width, 4),
         "height_mm": round(height, 4),
+        "native_entities": native_entities,
     }
+    return stats
