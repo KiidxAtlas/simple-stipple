@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Any, Literal
 
-EntityKind = Literal["point", "segment", "param", "source", "layer"]
+EntityKind = Literal["point", "segment", "param", "source", "layer", "layer-polyline"]
 EntityRef = tuple[EntityKind, int | str]
 
 
@@ -101,6 +101,7 @@ class DocumentGraph:
 
         self.actions: list[ActionRecord] = []
         self.active_layer: str = "geometry"
+        self.layer_order: list[str] = []
 
         self.ensure_layer("geometry")
 
@@ -113,16 +114,183 @@ class DocumentGraph:
     ) -> list[list[tuple[float, float]]]:
         return [list(poly) for poly in polylines]
 
+    def ordered_layer_names(self) -> list[str]:
+        return [name for name in self.layer_order if name in self.layers]
+
+    def iter_layers(self) -> list[tuple[str, LayerNode]]:
+        return [(name, self.layers[name]) for name in self.ordered_layer_names()]
+
+    def _purge_orphan_points(self) -> None:
+        referenced: set[int] = set()
+        for seg in self.segments.values():
+            referenced.add(seg.p0)
+            referenced.add(seg.p1)
+        for pid in list(self.points):
+            if pid not in referenced:
+                self.points.pop(pid, None)
+
     # ── Layers ────────────────────────────────────────────────────────────
 
     def ensure_layer(self, name: str) -> LayerNode:
         if name not in self.layers:
             self.layers[name] = LayerNode(id=self._next_id(), name=name)
+            if name not in self.layer_order:
+                self.layer_order.append(name)
         return self.layers[name]
+
+    def create_layer(self, name: str) -> LayerNode:
+        if name in self.layers:
+            raise ValueError(f"Layer already exists: {name}")
+        layer = LayerNode(id=self._next_id(), name=name)
+        self.layers[name] = layer
+        self.layer_order.append(name)
+        return layer
 
     def set_active_layer(self, name: str) -> None:
         self.ensure_layer(name)
         self.active_layer = name
+
+    def rename_layer(self, old_name: str, new_name: str) -> LayerNode:
+        old_name = str(old_name)
+        new_name = str(new_name).strip()
+
+        if not new_name:
+            raise ValueError("Layer name cannot be empty.")
+        if old_name == "geometry" or new_name == "geometry":
+            raise ValueError("geometry is reserved and cannot be renamed.")
+        if old_name not in self.layers:
+            raise ValueError(f"Layer does not exist: {old_name}")
+        if old_name == new_name:
+            return self.layers[old_name]
+        if new_name in self.layers:
+            raise ValueError(f"Layer already exists: {new_name}")
+
+        layer = self.layers.pop(old_name)
+        layer.name = new_name
+        self.layers[new_name] = layer
+        self.layer_order = [new_name if name == old_name else name for name in self.layer_order]
+
+        for seg in self.segments.values():
+            if seg.layer == old_name:
+                seg.layer = new_name
+
+        for edge in self.derivations.values():
+            if edge.source_layer == old_name:
+                edge.source_layer = new_name
+            if edge.target_layer == old_name:
+                edge.target_layer = new_name
+
+        if self.active_layer == old_name:
+            self.active_layer = new_name
+        return layer
+
+    def delete_layer(self, name: str, *, fallback_layer: str = "geometry") -> None:
+        name = str(name)
+        if name == "geometry":
+            raise ValueError("geometry is reserved and cannot be deleted.")
+        if name not in self.layers:
+            raise ValueError(f"Layer does not exist: {name}")
+
+        if self.active_layer == name:
+            fallback = fallback_layer if fallback_layer in self.layers else "geometry"
+            self.active_layer = fallback if fallback != name else "geometry"
+            self.ensure_layer(self.active_layer)
+
+        self.layers.pop(name, None)
+        self.layer_order = [layer_name for layer_name in self.layer_order if layer_name != name]
+
+        seg_ids = [sid for sid, seg in self.segments.items() if seg.layer == name]
+        for sid in seg_ids:
+            self.remove_segment(sid)
+
+        derivation_ids = [
+            did
+            for did, edge in self.derivations.items()
+            if edge.source_layer == name or edge.target_layer == name
+        ]
+        for did in derivation_ids:
+            self.derivations.pop(did, None)
+
+        self._purge_orphan_points()
+
+    def move_layer(self, name: str, new_index: int) -> None:
+        if name == "geometry":
+            raise ValueError("geometry cannot be reordered.")
+        if name not in self.layers:
+            raise ValueError(f"Layer does not exist: {name}")
+
+        ordered = self.ordered_layer_names()
+        if name not in ordered:
+            return
+        ordered.remove(name)
+        new_index = max(1, min(int(new_index), len(ordered)))
+        ordered.insert(new_index, name)
+        self.layer_order = ordered
+
+    def move_entities_to_layer(
+        self,
+        refs: list[EntityRef],
+        *,
+        source_layer: str,
+        target_layer: str,
+    ) -> None:
+        source_layer = str(source_layer)
+        target_layer = str(target_layer)
+        if source_layer == target_layer:
+            return
+
+        self.ensure_layer(source_layer)
+        target = self.ensure_layer(target_layer)
+
+        moved_polylines: list[list[tuple[float, float]]] = []
+
+        if source_layer == "geometry":
+            seg_ids = sorted(
+                {
+                    int(ref)
+                    for kind, ref in refs
+                    if kind == "segment" and isinstance(ref, int)
+                }
+            )
+            for sid in seg_ids:
+                seg = self.segments.get(sid)
+                if seg is None:
+                    continue
+                p0 = self.points.get(seg.p0)
+                p1 = self.points.get(seg.p1)
+                if p0 is None or p1 is None:
+                    continue
+                moved_polylines.append([(p0.x, p0.y), (p1.x, p1.y)])
+                self.remove_segment(sid)
+        else:
+            source = self.ensure_layer(source_layer)
+            poly_refs = sorted(
+                {
+                    int(ref)
+                    for kind, ref in refs
+                    if kind == "layer-polyline" and isinstance(ref, int)
+                },
+                reverse=True,
+            )
+            extracted: list[tuple[int, list[tuple[float, float]]]] = []
+            for idx in poly_refs:
+                if 0 <= idx < len(source.polylines):
+                    extracted.append((idx, list(source.polylines.pop(idx))))
+            extracted.sort(key=lambda item: item[0])
+            moved_polylines.extend(poly for _idx, poly in extracted)
+            source.entity_refs = []
+
+        if not moved_polylines:
+            return
+
+        if target_layer == "geometry":
+            for poly in moved_polylines:
+                self.add_polyline_as_segments(poly, layer="geometry", merge_points=False)
+        else:
+            target.polylines.extend(self._clone_polylines(moved_polylines))
+            target.entity_refs = []
+
+        self._purge_orphan_points()
 
     def set_layer_polylines(
         self,
@@ -208,6 +376,7 @@ class DocumentGraph:
         ]
         for cid in to_remove:
             self.constraints.pop(cid, None)
+        self._purge_orphan_points()
 
     def geometry_polylines(self) -> list[list[tuple[float, float]]]:
         polylines: list[list[tuple[float, float]]] = []
@@ -352,8 +521,9 @@ class DocumentGraph:
                     "entity_refs": list(layer.entity_refs),
                     "dirty": layer.dirty,
                 }
-                for name, layer in self.layers.items()
+                for name, layer in self.iter_layers()
             },
+            "layer_order": list(self.ordered_layer_names()),
             "constraints": {
                 cid: {
                     "kind": edge.kind,
@@ -430,6 +600,14 @@ class DocumentGraph:
                 dirty=bool(payload.get("dirty", False)),
             )
 
+        layer_order = [str(name) for name in state.get("layer_order", [])]
+        if not layer_order:
+            layer_order = [str(name) for name in state.get("layers", {})]
+        self.layer_order = [name for name in layer_order if name in self.layers]
+        for name in self.layers:
+            if name not in self.layer_order:
+                self.layer_order.append(name)
+
         for cid, payload in state.get("constraints", {}).items():
             cid_i = int(cid)
             self.constraints[cid_i] = ConstraintEdge(
@@ -465,6 +643,10 @@ class DocumentGraph:
         self.active_layer = str(state.get("active_layer", "geometry"))
         self.ensure_layer("geometry")
         self.ensure_layer(self.active_layer)
+
+        if "geometry" in self.layer_order:
+            self.layer_order.remove("geometry")
+        self.layer_order.insert(0, "geometry")
 
         next_id = int(state.get("next_id", 1))
         self._id_counter = count(next_id)

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import DEFAULT_KEYBINDINGS, save_settings
-from src.ui.components.factories import _section_label, _sep, _surface_frame
+from src.ui.components.common.factories import _section_label, _sep, _surface_frame
 
 
 class SettingsDialog(QDialog):
@@ -60,11 +60,11 @@ class SettingsDialog(QDialog):
         ("canvas.edit_mode", "Canvas edit mode"),
         ("canvas.measure", "Canvas measure"),
         ("canvas.fit", "Canvas fit view"),
-        ("tab.draft", "Switch to Draft tab"),
-        ("tab.pattern", "Switch to Pattern tab"),
-        ("tab.trace", "Switch to Trace tab"),
-        ("tab.convert", "Switch to Convert tab"),
-        ("tab.repo", "Switch to Repo tab"),
+        ("tab.draft", "Switch to Draft page"),
+        ("tab.pattern", "Switch to Pattern page"),
+        ("tab.trace", "Switch to Trace page"),
+        ("tab.convert", "Switch to Convert page"),
+        ("tab.repo", "Switch to Repo page"),
     ]
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):

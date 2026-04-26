@@ -1,15 +1,15 @@
-"""Pattern Generator tab."""
+"""Pattern Generator page."""
 
 # isort: skip_file
+# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportGeneralTypeIssues=false, reportOptionalMemberAccess=false, reportUndefinedVariable=false
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-import math
 from pathlib import Path
 import threading
-from uuid import uuid4
+from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -31,55 +31,59 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.constants import DIM, PATTERNS, SEL
-from src.backend.generators import (
-    apply_border_fade,
-    apply_interlace,
-    apply_invert_fill,
-    apply_mirror,
-    get_generator,
-)
+from src.constants import DIM, PATTERNS
 from src.backend.dxf.io import (
-    analyze_outline_polylines,
-    load_dxf_polylines,
     load_dxf_polylines_with_report,
-    polylines_to_outline,
     summarize_dxf_import_report,
     write_polylines_dxf,
 )
-from src.backend.document.graph import DocumentGraph
-from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.settings import save_settings
+from src.ui.pages.pattern.session import (
+    apply_pattern_workspace_state,
+    clear_pattern_workspace_state,
+    get_pattern_workspace_state,
+)
+from src.ui.pages.pattern.workers import (
+    compute_preview,
+    compute_preview_zones,
+    run_generate,
+    run_generate_zones,
+)
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.components.action_maps import PATTERN_ACTION_MAP
-from src.ui.components.containers import (
-    CanvasObjectBrowser,
-    CanvasPrecisionBar,
+from src.ui.components.canvas.modules import (
+    CanvasGridModule,
+    CanvasLayerTreeModule,
+    CanvasToolbarModule,
+)
+from src.ui.components.canvas.page_runtimes import PatternCanvasPageRuntime
+from src.ui.components.canvas.widgets import (
     CanvasStatusStrip,
     CollapsibleSection,
-    DxfLayersTree,
 )
-from src.ui.components.factories import (
-    _canvas_toolbar,
+from src.ui.components.common.factories import (
     _content_splitter,
     _section_label,
     _sidebar_panel,
     _surface_frame,
+    clear_line_edit_error,
     parse_float_field_with_feedback,
+    set_line_edit_error,
 )
-from src.ui.tabs.pattern.params import (
+from src.ui.pages.pattern.params import (
     build_halftone_widget,
     build_param_widget,
     build_tile_library_widget,
+    collect_form_state,
     collect_pattern_params,
+    restore_form_state,
 )
-from src.ui.tabs.task_state import CancellableTaskState
+from src.ui.pages.pattern.services import PatternProcessingService
+from src.ui.pages.pattern.task_state import CancellableTaskState
 
-ACTION_MAP = PATTERN_ACTION_MAP
 LOGGER = logging.getLogger(__name__)
 
 
-class PatternTab(QWidget):
+class PatternPage(QWidget):
     _gen_done = Signal(object)  # (count, name, polys)
     _gen_error = Signal(object)
     _preview_done = Signal(object)  # (display_polys, count)
@@ -113,6 +117,7 @@ class PatternTab(QWidget):
         self._outline_ids: list[str] = []
         self._preview_revision: int = 0
         self._generation_revision: int = 0
+        self._pattern_service = PatternProcessingService()
         # Per-zone pattern assignments: each zone is a snapshot of
         # {"outline_ids": [...], "pattern": str, "params": dict,
         #  "interlace": bool, "scale": (w, h), "label": str}
@@ -178,6 +183,15 @@ class PatternTab(QWidget):
     # ── Left panel ────────────────────────────────────────────────────────────
 
     def _build_left(self, layout: QVBoxLayout) -> None:
+        self._build_source_section(layout)
+        self._build_scale_section(layout)
+        self._build_fill_params_section(layout)
+        self._build_zones_section(layout)
+        self._build_output_options_section(layout)
+        self._build_export_section(layout)
+        layout.addStretch()
+
+    def _build_source_section(self, layout: QVBoxLayout) -> None:
         _section_label(layout, "Source")
 
         file_row = QHBoxLayout()
@@ -205,6 +219,7 @@ class PatternTab(QWidget):
         reload_btn.clicked.connect(self._reload_dxf)
         layout.addWidget(reload_btn)
 
+    def _build_scale_section(self, layout: QVBoxLayout) -> None:
         scale_content = QWidget()
         scale_layout = QVBoxLayout(scale_content)
         scale_layout.setContentsMargins(0, 0, 0, 0)
@@ -246,6 +261,7 @@ class PatternTab(QWidget):
             CollapsibleSection("Scale & Outline", scale_content, expanded=True)
         )
 
+    def _build_fill_params_section(self, layout: QVBoxLayout) -> None:
         fill_content = QWidget()
         fill_layout = QVBoxLayout(fill_content)
         fill_layout.setContentsMargins(0, 0, 0, 0)
@@ -301,62 +317,45 @@ class PatternTab(QWidget):
         rot_row.addWidget(self._pattern_rotation, 0, 1)
         fill_layout.addLayout(rot_row)
 
-        # Pattern param panels (stacked manually — show/hide)
+        # Pattern param panels keyed by pattern name — show/hide on selection
         _sp = self._schedule_preview
-        self._honeycomb_w = build_param_widget(self, "Honeycomb", _sp)
-        self._gradient_w = build_param_widget(self, "Gradient Honeycomb", _sp)
-        self._basketweave_w = build_param_widget(self, "Basketweave", _sp)
-        self._braid_w = build_param_widget(self, "Braid", _sp)
-        self._fishscale_w = build_param_widget(self, "Fish Scale", _sp)
-        self._stipple_w = build_param_widget(self, "Stipple Dots", _sp)
-        self._brick_w = build_param_widget(self, "Brick", _sp)
-        self._diagonal_w = build_param_widget(self, "Diagonal Lines", _sp)
-        self._square_grid_w = build_param_widget(self, "Square Grid", _sp)
-        self._mesh_w = build_param_widget(self, "Mesh", _sp)
-        self._concentric_w = build_param_widget(self, "Concentric Rings", _sp)
-        self._wave_w = build_param_widget(self, "Wave Fill", _sp)
-        self._sunburst_w = build_param_widget(self, "Sunburst", _sp)
-        self._voronoi_w = build_param_widget(self, "Voronoi", _sp)
-        self._penrose_w = build_param_widget(self, "Penrose Tiling", _sp)
-        self._topographic_w = build_param_widget(self, "Topographic", _sp)
-        self._hilbert_w = build_param_widget(self, "Hilbert Curve", _sp)
-        self._reaction_diffuse_w = build_param_widget(self, "Reaction Diffuse", _sp)
-        self._celtic_w = build_param_widget(self, "Celtic Knot", _sp)
-        self._lissajous_w = build_param_widget(self, "Lissajous", _sp)
-        self._golden_spiral_w = build_param_widget(self, "Golden Spiral", _sp)
-        self._rose_curve_w = build_param_widget(self, "Rose Curve", _sp)
-        self._tile_library_w = build_tile_library_widget(self, _sp)
-        self._halftone_w = build_halftone_widget(self, _sp)
-
-        self._pattern_widgets = [
-            self._honeycomb_w,
-            self._gradient_w,
-            self._basketweave_w,
-            self._braid_w,
-            self._fishscale_w,
-            self._stipple_w,
-            self._brick_w,
-            self._diagonal_w,
-            self._square_grid_w,
-            self._mesh_w,
-            self._concentric_w,
-            self._wave_w,
-            self._sunburst_w,
-            self._voronoi_w,
-            self._penrose_w,
-            self._topographic_w,
-            self._hilbert_w,
-            self._reaction_diffuse_w,
-            self._celtic_w,
-            self._lissajous_w,
-            self._golden_spiral_w,
-            self._rose_curve_w,
-            self._tile_library_w,
-            self._halftone_w,
+        _named_patterns = [
+            "Honeycomb",
+            "Gradient Honeycomb",
+            "Basketweave",
+            "Braid",
+            "Fish Scale",
+            "Stipple Dots",
+            "Brick",
+            "Diagonal Lines",
+            "Square Grid",
+            "Mesh",
+            "Concentric Rings",
+            "Wave Fill",
+            "Sunburst",
+            "Voronoi",
+            "Penrose Tiling",
+            "Topographic",
+            "Hilbert Curve",
+            "Reaction Diffuse",
+            "Celtic Knot",
+            "Lissajous",
+            "Golden Spiral",
+            "Rose Curve",
         ]
-        for w in self._pattern_widgets:
+        self._pattern_widgets: dict[str, QWidget] = {}
+        for name in _named_patterns:
+            w = build_param_widget(self, name, _sp)
+            self._pattern_widgets[name] = w
             fill_layout.addWidget(w)
             w.hide()
+        self._tile_library_w = build_tile_library_widget(self, _sp)
+        fill_layout.addWidget(self._tile_library_w)
+        self._tile_library_w.hide()
+        halftone_w = build_halftone_widget(self, _sp)
+        self._pattern_widgets["Image Halftone"] = halftone_w
+        fill_layout.addWidget(halftone_w)
+        halftone_w.hide()
 
         self._include_border_cb = QCheckBox("Include border on separate layer")
         self._include_border_cb.setToolTip(
@@ -368,7 +367,7 @@ class PatternTab(QWidget):
             CollapsibleSection("Fill Parameters", fill_content, expanded=False)
         )
 
-        # ── Pattern Zones ─────────────────────────────────────────────────────
+    def _build_zones_section(self, layout: QVBoxLayout) -> None:
         zones_content = QWidget()
         zones_layout = QVBoxLayout(zones_content)
         zones_layout.setContentsMargins(0, 0, 0, 0)
@@ -425,7 +424,7 @@ class PatternTab(QWidget):
             CollapsibleSection("Pattern Zones", zones_content, expanded=False)
         )
 
-        # ── Output Options (always visible) ───────────────────────────────────
+    def _build_output_options_section(self, layout: QVBoxLayout) -> None:
         _section_label(layout, "Output Options")
 
         opt_row1 = QHBoxLayout()
@@ -474,7 +473,7 @@ class PatternTab(QWidget):
         self._cutout_status_label.setStyleSheet(f"color: {DIM}; font-size: 10px;")
         layout.addWidget(self._cutout_status_label)
 
-        # ── Export ───────────────────────────────────────────────────────────
+    def _build_export_section(self, layout: QVBoxLayout) -> None:
         _section_label(layout, "Export")
 
         self._gen_btn = QPushButton("Export DXF")
@@ -501,44 +500,18 @@ class PatternTab(QWidget):
         self._reveal_btn.clicked.connect(self._reveal_in_finder)
         layout.addWidget(self._reveal_btn)
 
-        layout.addStretch()
-
     # ── Pattern param builders removed — now data-driven via params.py ──────────
 
     def _switch_pattern(self, value: str) -> None:
-        mapping = {
-            "Honeycomb": self._honeycomb_w,
-            "Gradient Honeycomb": self._gradient_w,
-            "Basketweave": self._basketweave_w,
-            "Braid": self._braid_w,
-            "Fish Scale": self._fishscale_w,
-            "Stipple Dots": self._stipple_w,
-            "Brick": self._brick_w,
-            "Diagonal Lines": self._diagonal_w,
-            "Square Grid": self._square_grid_w,
-            "Mesh": self._mesh_w,
-            "Concentric Rings": self._concentric_w,
-            "Wave Fill": self._wave_w,
-            "Sunburst": self._sunburst_w,
-            "Voronoi": self._voronoi_w,
-            "Penrose Tiling": self._penrose_w,
-            "Topographic": self._topographic_w,
-            "Hilbert Curve": self._hilbert_w,
-            "Reaction Diffuse": self._reaction_diffuse_w,
-            "Celtic Knot": self._celtic_w,
-            "Lissajous": self._lissajous_w,
-            "Golden Spiral": self._golden_spiral_w,
-            "Rose Curve": self._rose_curve_w,
-            "Image Halftone": self._halftone_w,
-        }
-        for w in self._pattern_widgets:
+        for w in self._pattern_widgets.values():
             w.hide()
-        target = (
-            self._tile_library_w if self._is_tile_pattern(value) else mapping.get(value)
-        )
+        self._tile_library_w.hide()
         self._update_tile_library_panel()
-        if target:
-            target.show()
+        if self._is_tile_pattern(value):
+            self._tile_library_w.show()
+            self._schedule_preview()
+        elif value in self._pattern_widgets:
+            self._pattern_widgets[value].show()
             self._schedule_preview()
 
     # ── Dimension callbacks ───────────────────────────────────────────────────
@@ -587,35 +560,9 @@ class PatternTab(QWidget):
         self._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
         self._reset_preview_btn.clicked.connect(self._reset_preview)
 
-        toolbar, self._mode_btns, self._sel_label = _canvas_toolbar(
-            self._on_toolbar_mode,
-            lambda: self._canvas.fit(),
-        )
-        toolbar_layout = toolbar.layout()
-        if isinstance(toolbar_layout, QHBoxLayout):
-            toolbar_layout.insertWidget(toolbar_layout.count() - 1, self._preview_btn)
-            toolbar_layout.insertWidget(
-                toolbar_layout.count() - 1, self._reset_preview_btn
-            )
-        layout.addWidget(toolbar)
-
-        self._precision_bar = CanvasPrecisionBar(
-            None, on_changed=self._refresh_canvas_panels
-        )
-        layout.addWidget(self._precision_bar)
-
-        self._canvas_status = CanvasStatusStrip(show_readiness=False)
-        layout.addWidget(self._canvas_status)
-
-        canvas_shell = QWidget()
-        canvas_shell_layout = QVBoxLayout(canvas_shell)
-        canvas_shell_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_shell_layout.setSpacing(8)
-
         self._preview_status = QLabel("No preview available")
         self._set_preview_status("No preview available")
         self._preview_status.setWordWrap(True)
-        canvas_shell_layout.addWidget(self._preview_status)
 
         self._canvas = DxfCanvas(
             selectable=True,
@@ -629,7 +576,30 @@ class PatternTab(QWidget):
         self._canvas.set_grid_visible(True)
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(1.0)
-        self._precision_bar.bind_canvas(self._canvas)
+
+        self._toolbar_module = CanvasToolbarModule(
+            canvas=self._canvas,
+            on_mode=self._on_toolbar_mode,
+            on_fit=self._canvas.fit,
+            extra_widgets=[self._preview_btn, self._reset_preview_btn],
+        )
+        layout.addWidget(self._toolbar_module)
+
+        self._grid_module = CanvasGridModule(
+            canvas=self._canvas,
+            on_changed=self._refresh_canvas_panels,
+        )
+        layout.addWidget(self._grid_module)
+        self._precision_bar = self._grid_module
+
+        self._canvas_status = CanvasStatusStrip(show_readiness=False)
+        layout.addWidget(self._canvas_status)
+
+        canvas_shell = QWidget()
+        canvas_shell_layout = QVBoxLayout(canvas_shell)
+        canvas_shell_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_shell_layout.setSpacing(8)
+        canvas_shell_layout.addWidget(self._preview_status)
         canvas_shell_layout.addWidget(self._canvas, stretch=1)
 
         side_panel = QWidget()
@@ -637,15 +607,34 @@ class PatternTab(QWidget):
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
 
-        self._object_browser = CanvasObjectBrowser("Outline Objects")
-        self._object_browser.selectionRequested.connect(
-            self._on_browser_selection_requested
+        self._layer_module = CanvasLayerTreeModule(
+            canvas=self._canvas,
+            title="Layers",
+            editable=False,
+            get_active_layer_name=lambda: (
+                "pattern_preview" if self._showing_preview else "pattern_active"
+            ),
+            build_layer_rows=self._build_layer_tree_rows,
+            on_selection_requested=self._on_browser_selection_requested,
+            on_fit_requested=self._fit_selection,
+            on_visibility_changed=self._refresh_canvas_panels,
         )
-        self._object_browser.fitRequested.connect(self._fit_selection)
-        side_layout.addWidget(self._object_browser, stretch=3)
+        self._layers_tree = self._layer_module.tree
+        self._layer_sidebar = self._layer_module.controller
+        side_layout.addWidget(self._layer_module, stretch=1)
 
-        self._layers_tree = DxfLayersTree("DXF Layers")
-        side_layout.addWidget(self._layers_tree, stretch=2)
+        self._canvas_runtime = PatternCanvasPageRuntime(
+            canvas=self._canvas,
+            toolbar_module=self._toolbar_module,
+            layer_sidebar=self._layer_sidebar,
+            canvas_status=self._canvas_status,
+            precision_bar=self._precision_bar,
+            get_orig_polys=lambda: self._orig_polys,
+            get_showing_preview=lambda: self._showing_preview,
+            is_preview_running=lambda: self._preview_task.running,
+            has_preview_cache=lambda: bool(self._preview_polys_cache),
+            has_zones=lambda: bool(self._zones),
+        )
 
         splitter = _content_splitter(canvas_shell, side_panel, sizes=(860, 260))
         layout.addWidget(splitter, stretch=1)
@@ -686,8 +675,7 @@ class PatternTab(QWidget):
     def _on_sel_change(self, count: int) -> None:
         if self._showing_preview:
             return
-        self._sel_label.setText(f"{count} selected" if count else "0 selected")
-        self._sel_label.setStyleSheet(f"color: {SEL};" if count else f"color: {DIM};")
+        self._canvas_runtime.on_selection_change(count)
         # When zones are active: always target all outlines so the composite
         # preview can show context for unassigned shapes alongside zone fills.
         # Without zones: target only selection when something is selected.
@@ -700,6 +688,12 @@ class PatternTab(QWidget):
         self._update_zone_actions()
         self._refresh_canvas_panels()
         self._schedule_preview()
+
+    def _build_layer_tree_rows(
+        self,
+        layer_view_state: dict[str, dict[str, set[int]]],
+    ) -> list[dict[str, Any]]:
+        return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
     def _browse_dxf(self) -> None:
         idir = self._settings.get("outline_dxf_dir", "")
@@ -746,7 +740,23 @@ class PatternTab(QWidget):
         self._canvas.set_mode("select")
         self._canvas.deselect_all()
 
-        all_pts = [pt for p in self._orig_polys for pt in p]
+        self._update_dims_from_polys(self._orig_polys)
+
+        self._dxf_edit.setText(f"[{source_label}]")
+        self._set_status(
+            f"Loaded {len(self._edit_polys)} outline(s) from {source_label}", "#3fb950"
+        )
+
+        self._suspend_state_changes = False
+        self._update_preview_controls()
+        self._update_zone_actions()
+        self._refresh_canvas_panels()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _update_dims_from_polys(self, polys: list[list[tuple[float, float]]]) -> None:
+        """Recompute orig_w/h and sync the scale fields from the polyline bounding box."""
+        all_pts = [pt for p in polys for pt in p]
         if all_pts:
             xs, ys = zip(*all_pts)
             self._orig_w = max(xs) - min(xs)
@@ -761,18 +771,6 @@ class PatternTab(QWidget):
         else:
             self._orig_w = self._orig_h = 0.0
             self._orig_dims_label.setText("—")
-
-        self._dxf_edit.setText(f"[{source_label}]")
-        self._set_status(
-            f"Loaded {len(self._edit_polys)} outline(s) from {source_label}", "#3fb950"
-        )
-
-        self._suspend_state_changes = False
-        self._update_preview_controls()
-        self._update_zone_actions()
-        self._refresh_canvas_panels()
-        self._schedule_preview()
-        self._emit_state_changed()
 
     def _reload_dxf(self) -> None:
         path = self._dxf_edit.text().strip()
@@ -796,23 +794,7 @@ class PatternTab(QWidget):
             self._sync_canvas_cutout_highlight()
             self._refresh_cutout_status()
 
-            all_pts = [pt for p in polys for pt in p]
-            if all_pts:
-                xs, ys = zip(*all_pts)
-                self._orig_w = max(xs) - min(xs)
-                self._orig_h = max(ys) - min(ys)
-                self._orig_dims_label.setText(
-                    f"{self._orig_w:.2f} × {self._orig_h:.2f} mm"
-                )
-                self._scale_w.blockSignals(True)
-                self._scale_h.blockSignals(True)
-                self._scale_w.setText(f"{self._orig_w:.3f}")
-                self._scale_h.setText(f"{self._orig_h:.3f}")
-                self._scale_w.blockSignals(False)
-                self._scale_h.blockSignals(False)
-            else:
-                self._orig_w = self._orig_h = 0.0
-                self._orig_dims_label.setText("—")
+            self._update_dims_from_polys(polys)
 
             self._set_status(f"Loaded {len(polys)} polylines from {Path(path).name}")
             recent = self._settings.get("recent_dxf", [])
@@ -899,20 +881,12 @@ class PatternTab(QWidget):
             self._schedule_preview()
             self._emit_state_changed()
 
-    def _set_active_mode_btn(self, value: str) -> None:
-        v = value.lower()
-        for k, b in self._mode_btns.items():
-            b.setProperty("active", k.lower() == v)
-            b.style().unpolish(b)
-            b.style().polish(b)
-
     def _on_toolbar_mode(self, value: str) -> None:
-        self._set_active_mode_btn(value)
-        self._canvas.set_mode(value.lower())
+        self._canvas_runtime.on_toolbar_mode(value)
         self._refresh_canvas_panels()
 
     def _on_canvas_mode_change(self, mode: str) -> None:
-        self._set_active_mode_btn(mode)
+        self._canvas_runtime.on_canvas_mode_change(mode)
         self._refresh_canvas_panels()
 
     def _on_canvas_geometry_change(self) -> None:
@@ -930,7 +904,7 @@ class PatternTab(QWidget):
         if self._showing_preview:
             self._on_preview_toggled(False)
             self._preview_btn.setChecked(False)
-        self._canvas.set_selection(indices)
+        self._canvas_runtime.on_tree_selection_requested(indices)
         self._refresh_canvas_panels()
 
     def _on_send_selected_to_draft_from_canvas(
@@ -945,76 +919,13 @@ class PatternTab(QWidget):
         if self._showing_preview:
             self._on_preview_toggled(False)
             self._preview_btn.setChecked(False)
-        if self._canvas.fit_selection():
+        if self._canvas_runtime.fit_selection():
             self._refresh_canvas_panels()
 
     def _refresh_canvas_panels(self) -> None:
         if not hasattr(self, "_canvas_status"):
             return
-        summary = self._canvas.get_status_summary()
-        topo = self._canvas.get_topology_summary()
-        if self._preview_task.running:
-            readiness_text = "Previewing"
-            readiness_tone = "warn"
-        elif self._showing_preview:
-            readiness_text = "Preview"
-            readiness_tone = "success"
-        elif topo["open"] > 0 and not self._zones:
-            readiness_text = f"{topo['open']} open outline(s)"
-            readiness_tone = "warn"
-        elif self._preview_polys_cache:
-            readiness_text = "Preview ready"
-            readiness_tone = "success"
-        elif self._canvas.poly_count:
-            readiness_text = "Outline ready"
-            readiness_tone = "accent"
-        else:
-            readiness_text = "No outline"
-            readiness_tone = "warn"
-        zoom = (
-            self._canvas.get_zoom_percent()
-            if hasattr(self._canvas, "get_zoom_percent")
-            else 100
-        )
-        cursor = (
-            self._canvas.get_cursor_world_pos()
-            if hasattr(self._canvas, "get_cursor_world_pos")
-            else None
-        )
-        self._canvas_status.set_snapshot(
-            mode=str(summary["mode"]),
-            selected_count=self._canvas.sel_count,
-            object_count=self._canvas.poly_count,
-            precision_text=str(summary["precision"]),
-            topology_text=str(summary.get("topology", "")),
-            readiness_text=readiness_text,
-            readiness_tone=readiness_tone,
-            zoom_percent=zoom,
-            cursor_pos=cursor,
-        )
-        if hasattr(self, "_precision_bar"):
-            self._precision_bar.refresh()
-
-        if hasattr(self, "_object_browser"):
-            self._object_browser.set_objects(
-                self._canvas.get_polylines_state(),
-                self._canvas.get_selection_indices(),
-            )
-
-        if hasattr(self, "_layers_tree"):
-            active_name = (
-                "pattern_preview" if self._showing_preview else "pattern_active"
-            )
-            rows: list[tuple[str, int, bool, bool]] = list(self._imported_dxf_layers)
-            rows.append((active_name, self._canvas.poly_count, False, True))
-            if self._orig_polys:
-                rows.append((
-                    "geometry",
-                    len(self._orig_polys),
-                    False,
-                    active_name == "geometry",
-                ))
-            self._layers_tree.set_layers(rows)
+        self._canvas_runtime.refresh_canvas_panels()
 
     def _reveal_in_finder(self) -> None:
         if self._last_out_path:
@@ -1197,191 +1108,12 @@ class PatternTab(QWidget):
         self._preset_combo.setCurrentIndex(max(idx, 0))
         self._preset_combo.blockSignals(False)
 
-    def _current_param_text_payload(self) -> dict:
-        return {
-            "pattern": self._pattern_combo.currentText(),
-            "rotation": self._pattern_rotation.text(),
-            "scale_w": self._scale_w.text(),
-            "scale_h": self._scale_h.text(),
-            "ar_locked": self._ar_cb.isChecked(),
-            "include_border": self._include_border_cb.isChecked(),
-            "interlace": self._interlace_cb.isChecked(),
-            "hex_r": self._hex_r.text(),
-            "hex_gap": self._hex_gap.text(),
-            "grad_r_min": self._grad_r_min.text(),
-            "grad_r_max": self._grad_r_max.text(),
-            "grad_gap": self._grad_gap.text(),
-            "grad_angle": self._grad_angle.text(),
-            "basket_strip_w": self._basket_strip_w.text(),
-            "basket_strip_l": self._basket_strip_l.text(),
-            "basket_gap": self._basket_gap.text(),
-            "braid_strip_w": self._braid_strip_w.text(),
-            "braid_spacing": self._braid_spacing.text(),
-            "fish_w": self._fish_w.text(),
-            "fish_h": self._fish_h.text(),
-            "stip_r": self._stip_r.text(),
-            "stip_spacing": self._stip_spacing.text(),
-            "stip_layout": self._stip_layout.isChecked(),
-            "brick_w": self._brick_w_e.text(),
-            "brick_h": self._brick_h_e.text(),
-            "brick_gap": self._brick_gap.text(),
-            "diag_spacing": self._diag_spacing.text(),
-            "diag_angle": self._diag_angle.text(),
-            "sq_spacing": self._sq_spacing.text(),
-            "mesh_r": self._mesh_r.text(),
-            "mesh_spacing": self._mesh_spacing.text(),
-            "conc_spacing": self._conc_spacing.text(),
-            "wave_spacing": self._wave_spacing.text(),
-            "wave_amplitude": self._wave_amplitude.text(),
-            "wave_wavelength": self._wave_wavelength.text(),
-            "sunburst_spacing": self._sunburst_spacing.text(),
-            "vor_cells": self._vor_cells.text(),
-            "vor_gap": self._vor_gap.text(),
-            "vor_seed": self._vor_seed.text(),
-            "penrose_scale": self._penrose_scale.text(),
-            "penrose_gap": self._penrose_gap.text(),
-            "topo_spacing": self._topo_spacing.text(),
-            "hilbert_order": self._hilbert_order.text(),
-            "hilbert_margin": self._hilbert_margin.text(),
-            "rd_pattern": self._rd_pattern.currentText(),
-            "rd_cell": self._rd_cell.text(),
-            "rd_iters": self._rd_iters.text(),
-            "rd_threshold": self._rd_threshold.text(),
-            "rd_seed": self._rd_seed.text(),
-            "celtic_cell": self._celtic_cell.text(),
-            "celtic_line_w": self._celtic_line_w.text(),
-            "celtic_gap": self._celtic_gap.text(),
-            "liss_freq_x": self._liss_freq_x.text(),
-            "liss_freq_y": self._liss_freq_y.text(),
-            "liss_spacing": self._liss_spacing.text(),
-            "liss_amplitude": self._liss_amplitude.text(),
-            "golden_turns": self._golden_turns.text(),
-            "golden_spacing": self._golden_spacing.text(),
-            "golden_dir": self._golden_dir.currentText(),
-            "rose_petals": self._rose_petals.text(),
-            "rose_copies": self._rose_copies.text(),
-            "rose_margin": self._rose_margin.text(),
-            "tile_pattern_path": self._library_patterns.get(
-                self._pattern_combo.currentText(), ""
-            ),
-            "tile_gap": self._tile_gap.text(),
-            "tile_angle": self._tile_angle.text(),
-            "tile_interlock": self._tile_interlock_cb.isChecked(),
-            "htone_img_path": self._htone_img_edit.text(),
-            "htone_r_min": self._htone_r_min.text(),
-            "htone_r_max": self._htone_r_max.text(),
-            "htone_spacing": self._htone_spacing.text(),
-            "htone_invert": self._htone_invert.isChecked(),
-            "invert_fill": self._invert_fill_cb.isChecked(),
-            "border_fade": self._border_fade.text(),
-            "mirror_v": self._mirror_v_cb.isChecked(),
-            "mirror_h": self._mirror_h_cb.isChecked(),
-        }
-
-    def _apply_param_text_payload(self, payload: dict) -> None:
-        values = self._current_param_text_payload()
-        values.update(payload or {})
-        tile_path = str(values.get("tile_pattern_path", "")).strip()
-        self._refresh_pattern_choices(
-            current=str(values.get("pattern", "— None —")),
-            extra_tile_path=tile_path or None,
-        )
-        pattern = str(values.get("pattern", "— None —"))
-        if (
-            pattern not in self._base_patterns
-            and self._pattern_combo.findText(pattern) < 0
-            and tile_path
-        ):
-            pattern = next(
-                (
-                    label
-                    for label, path in self._library_patterns.items()
-                    if path == tile_path
-                ),
-                "— None —",
-            )
-        self._pattern_combo.setCurrentText(pattern)
-        self._pattern_rotation.setText(str(values.get("rotation", "0")))
-        self._scale_w.setText(str(values.get("scale_w", "")))
-        self._scale_h.setText(str(values.get("scale_h", "")))
-        self._ar_cb.setChecked(bool(values.get("ar_locked", True)))
-        self._include_border_cb.setChecked(bool(values.get("include_border", False)))
-        self._interlace_cb.setChecked(bool(values.get("interlace", False)))
-        self._hex_r.setText(str(values.get("hex_r", "1.75")))
-        self._hex_gap.setText(str(values.get("hex_gap", "0.5")))
-        self._grad_r_min.setText(str(values.get("grad_r_min", "0.8")))
-        self._grad_r_max.setText(str(values.get("grad_r_max", "2.5")))
-        self._grad_gap.setText(str(values.get("grad_gap", "0.5")))
-        self._grad_angle.setText(str(values.get("grad_angle", "0")))
-        self._basket_strip_w.setText(str(values.get("basket_strip_w", "2.0")))
-        self._basket_strip_l.setText(str(values.get("basket_strip_l", "8.0")))
-        self._basket_gap.setText(str(values.get("basket_gap", "0.2")))
-        self._braid_strip_w.setText(str(values.get("braid_strip_w", "2.0")))
-        self._braid_spacing.setText(str(values.get("braid_spacing", "3.0")))
-        self._fish_w.setText(str(values.get("fish_w", "3.0")))
-        self._fish_h.setText(str(values.get("fish_h", "2.0")))
-        self._stip_r.setText(str(values.get("stip_r", "0.4")))
-        self._stip_spacing.setText(str(values.get("stip_spacing", "1.2")))
-        self._stip_layout.setChecked(bool(values.get("stip_layout", False)))
-        self._brick_w_e.setText(str(values.get("brick_w", "4.0")))
-        self._brick_h_e.setText(str(values.get("brick_h", "2.0")))
-        self._brick_gap.setText(str(values.get("brick_gap", "0.5")))
-        self._diag_spacing.setText(str(values.get("diag_spacing", "1.0")))
-        self._diag_angle.setText(str(values.get("diag_angle", "45")))
-        self._sq_spacing.setText(str(values.get("sq_spacing", "1.0")))
-        self._mesh_r.setText(str(values.get("mesh_r", "0.35")))
-        self._mesh_spacing.setText(str(values.get("mesh_spacing", "1.2")))
-        self._conc_spacing.setText(str(values.get("conc_spacing", "1.5")))
-        self._wave_spacing.setText(str(values.get("wave_spacing", "1.5")))
-        self._wave_amplitude.setText(str(values.get("wave_amplitude", "0.5")))
-        self._wave_wavelength.setText(str(values.get("wave_wavelength", "3.0")))
-        self._sunburst_spacing.setText(str(values.get("sunburst_spacing", "5.0")))
-        self._vor_cells.setText(str(values.get("vor_cells", "60")))
-        self._vor_gap.setText(str(values.get("vor_gap", "0.15")))
-        self._vor_seed.setText(str(values.get("vor_seed", "42")))
-        self._penrose_scale.setText(str(values.get("penrose_scale", "3.0")))
-        self._penrose_gap.setText(str(values.get("penrose_gap", "0.1")))
-        self._topo_spacing.setText(str(values.get("topo_spacing", "1.5")))
-        self._hilbert_order.setText(str(values.get("hilbert_order", "5")))
-        self._hilbert_margin.setText(str(values.get("hilbert_margin", "1.0")))
-        self._rd_pattern.setCurrentText(str(values.get("rd_pattern", "labyrinth")))
-        self._rd_cell.setText(str(values.get("rd_cell", "0.8")))
-        self._rd_iters.setText(str(values.get("rd_iters", "1200")))
-        self._rd_threshold.setText(str(values.get("rd_threshold", "0.22")))
-        self._rd_seed.setText(str(values.get("rd_seed", "42")))
-        self._celtic_cell.setText(str(values.get("celtic_cell", "5.0")))
-        self._celtic_line_w.setText(str(values.get("celtic_line_w", "1.0")))
-        self._celtic_gap.setText(str(values.get("celtic_gap", "0.2")))
-        self._liss_freq_x.setText(str(values.get("liss_freq_x", "3")))
-        self._liss_freq_y.setText(str(values.get("liss_freq_y", "2")))
-        self._liss_spacing.setText(str(values.get("liss_spacing", "2.0")))
-        self._liss_amplitude.setText(str(values.get("liss_amplitude", "5.0")))
-        self._golden_turns.setText(str(values.get("golden_turns", "4.5")))
-        self._golden_spacing.setText(str(values.get("golden_spacing", "1.5")))
-        self._golden_dir.setCurrentText(str(values.get("golden_dir", "ccw")))
-        self._rose_petals.setText(str(values.get("rose_petals", "7")))
-        self._rose_copies.setText(str(values.get("rose_copies", "2")))
-        self._rose_margin.setText(str(values.get("rose_margin", "1.0")))
-        self._tile_gap.setText(str(values.get("tile_gap", "0.5")))
-        self._tile_angle.setText(str(values.get("tile_angle", "0")))
-        self._tile_interlock_cb.setChecked(bool(values.get("tile_interlock", False)))
-        self._htone_img_edit.setText(str(values.get("htone_img_path", "")))
-        self._htone_r_min.setText(str(values.get("htone_r_min", "0.3")))
-        self._htone_r_max.setText(str(values.get("htone_r_max", "1.8")))
-        self._htone_spacing.setText(str(values.get("htone_spacing", "2.2")))
-        self._htone_invert.setChecked(bool(values.get("htone_invert", False)))
-        self._invert_fill_cb.setChecked(bool(values.get("invert_fill", False)))
-        self._border_fade.setText(str(values.get("border_fade", "0")))
-        self._mirror_v_cb.setChecked(bool(values.get("mirror_v", False)))
-        self._mirror_h_cb.setChecked(bool(values.get("mirror_h", False)))
-        self._update_tile_library_panel()
-
     def _save_preset(self) -> None:
         name, ok = QInputDialog.getText(self, "Save Pattern Preset", "Preset name")
         name = name.strip()
         if not ok or not name:
             return
-        self._presets[name] = self._current_param_text_payload()
+        self._presets[name] = collect_form_state(self)
         self._settings["pattern_presets"] = dict(self._presets)
         save_settings(self._settings)
         self._refresh_preset_combo()
@@ -1397,7 +1129,7 @@ class PatternTab(QWidget):
         if not payload:
             return
         self._suspend_state_changes = True
-        self._apply_param_text_payload(payload)
+        restore_form_state(self, payload)
         self._suspend_state_changes = False
         self._set_status(f"Loaded preset: {name}", "#3fb950")
         self._schedule_preview()
@@ -1422,103 +1154,13 @@ class PatternTab(QWidget):
         self._refresh_preset_combo()
 
     def get_workspace_state(self) -> dict:
-        # If showing preview, the canvas has preview polys — save edit_polys from our snapshot
-        polys_to_save = (
-            self._edit_polys
-            if self._showing_preview
-            else self._canvas.get_polylines_state()
-        )
-        doc_graph = graph_from_polylines(
-            polys_to_save,
-            layer="pattern_active",
-            as_segments=False,
-        )
-        return {
-            "dxf_path": self._dxf_edit.text(),
-            "params": self._current_param_text_payload(),
-            "orig_polys": self._orig_polys,
-            "edit_polys": polys_to_save,
-            "outline_ids": list(self._outline_ids),
-            "orig_w": self._orig_w,
-            "orig_h": self._orig_h,
-            "canvas_view": self._canvas.get_view_state(),
-            "preview_polys": self._preview_polys_cache,
-            "showing_preview": self._showing_preview,
-            "document_graph": doc_graph.snapshot(),
-            "zones": list(self._zones),
-            "exclusion_ids": list(self._exclusion_ids),
-        }
+        return get_pattern_workspace_state(self)
 
     def apply_workspace_state(self, state: dict | None) -> None:
-        self._suspend_state_changes = True
-        if not isinstance(state, dict):
-            state = {}
-        self._imported_dxf_layers = []
-        self._dxf_edit.setText(str(state.get("dxf_path", "")))
-        self._apply_param_text_payload(state.get("params", {}))
-        self._orig_polys = [list(poly) for poly in state.get("orig_polys", [])]
-        graph_state = state.get("document_graph")
-        if isinstance(graph_state, dict):
-            doc_graph = DocumentGraph()
-            doc_graph.restore(graph_state)
-            migrated = polylines_from_graph(doc_graph, layer="pattern_active")
-            if not migrated:
-                migrated = polylines_from_graph(doc_graph, layer="geometry")
-            edit_polys = [list(poly) for poly in migrated]
-        else:
-            edit_polys = [
-                list(poly) for poly in state.get("edit_polys", self._orig_polys)
-            ]
-        self._edit_polys = [list(poly) for poly in edit_polys]
-        outline_ids = state.get("outline_ids", [])
-        if isinstance(outline_ids, list) and len(outline_ids) == len(self._edit_polys):
-            self._outline_ids = [str(v) for v in outline_ids]
-        else:
-            self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
-        self._orig_w = float(state.get("orig_w", 0.0))
-        self._orig_h = float(state.get("orig_h", 0.0))
-        if self._orig_w > 0 and self._orig_h > 0:
-            self._orig_dims_label.setText(f"{self._orig_w:.2f} × {self._orig_h:.2f} mm")
-        else:
-            self._orig_dims_label.setText("—")
-        self._preview_polys_cache = [
-            list(poly) for poly in state.get("preview_polys", [])
-        ]
-        show_preview = bool(state.get("showing_preview", False)) and bool(
-            self._preview_polys_cache
-        )
-        if show_preview:
-            self._canvas.set_polylines_state(self._preview_polys_cache, fit=True)
-            self._showing_preview = True
-            self._preview_btn.setChecked(True)
-            self._preview_btn.setProperty("active", True)
-            self._preview_btn.style().unpolish(self._preview_btn)
-            self._preview_btn.style().polish(self._preview_btn)
-        else:
-            self._canvas.set_polylines_state(
-                self._edit_polys, fit=bool(self._edit_polys)
-            )
-            self._showing_preview = False
-            self._preview_btn.setChecked(False)
-            self._preview_btn.setProperty("active", False)
-            self._preview_btn.style().unpolish(self._preview_btn)
-            self._preview_btn.style().polish(self._preview_btn)
-        if state.get("canvas_view"):
-            self._canvas.set_view_state(state["canvas_view"])
-        self._suspend_state_changes = False
-        self._refresh_canvas_panels()
-        self._zones = list(state.get("zones", []))
-        self._refresh_zone_list()
-        self._exclusion_ids = [str(v) for v in state.get("exclusion_ids", [])]
-        self._sync_canvas_cutout_highlight()
-        self._refresh_cutout_status()
+        apply_pattern_workspace_state(self, state)
 
     def clear_workspace_state(self) -> None:
-        self.apply_workspace_state({})
-        self._imported_dxf_layers = []
-        self._outline_ids = []
-        self._set_status("")
-        self._refresh_canvas_panels()
+        clear_pattern_workspace_state(self)
 
     def _parse_float_field(
         self,
@@ -1598,7 +1240,7 @@ class PatternTab(QWidget):
                 self._set_status(str(exc), "#f85149")
                 return
             threading.Thread(
-                target=self._run_generate_zones,
+                target=run_generate_zones,
                 args=(
                     zones_snap,
                     out_path,
@@ -1611,6 +1253,13 @@ class PatternTab(QWidget):
                     generation_token,
                     cancel_event,
                 ),
+                kwargs={
+                    "pattern_service": self._pattern_service,
+                    "orig_w": self._orig_w,
+                    "orig_h": self._orig_h,
+                    "on_done": self._gen_done.emit,
+                    "on_error": self._gen_error.emit,
+                },
                 daemon=True,
             ).start()
         else:
@@ -1628,7 +1277,7 @@ class PatternTab(QWidget):
             )
             interlace = self._interlace_cb.isChecked()
             threading.Thread(
-                target=self._run_generate,
+                target=run_generate,
                 args=(
                     polys_snap,
                     out_path,
@@ -1645,156 +1294,15 @@ class PatternTab(QWidget):
                     generation_token,
                     cancel_event,
                 ),
+                kwargs={
+                    "pattern_service": self._pattern_service,
+                    "orig_w": self._orig_w,
+                    "orig_h": self._orig_h,
+                    "on_done": self._gen_done.emit,
+                    "on_error": self._gen_error.emit,
+                },
                 daemon=True,
             ).start()
-
-    def _run_generate(
-        self,
-        active: list[list[tuple[float, float]]],
-        out_path: str,
-        pattern: str,
-        params: dict,
-        scale: tuple[float, float],
-        border_polys: list[list[tuple[float, float]]] | None,
-        interlace: bool = False,
-        invert_fill: bool = False,
-        mirror_v: bool = False,
-        mirror_h: bool = False,
-        border_fade: float = 0.0,
-        exclusion_polys: list[list[tuple[float, float]]] | None = None,
-        generation_token: int = 0,
-        cancel_event: threading.Event | None = None,
-    ) -> None:
-        try:
-            if cancel_event and cancel_event.is_set():
-                return
-            scaled = self._apply_scale(active, *scale)
-            if cancel_event and cancel_event.is_set():
-                return
-            orig_outline = polylines_to_outline(scaled)
-            fill_outline = orig_outline
-            if exclusion_polys:
-                excl_scaled = self._apply_scale(exclusion_polys, *scale)
-                excl_outline = polylines_to_outline(excl_scaled)
-                fill_outline = fill_outline.difference(excl_outline)
-            if invert_fill:
-                fill_outline = apply_invert_fill(orig_outline)
-                if exclusion_polys:
-                    excl_scaled = self._apply_scale(exclusion_polys, *scale)
-                    excl_outline = polylines_to_outline(excl_scaled)
-                    fill_outline = fill_outline.difference(excl_outline)
-            if cancel_event and cancel_event.is_set():
-                return
-            polys = self._gen_pattern(fill_outline, pattern, params)
-            if interlace:
-                polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
-            if mirror_v or mirror_h:
-                polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
-            if border_fade > 0:
-                polys = apply_border_fade(polys, orig_outline, border_fade)
-            if cancel_event and cancel_event.is_set():
-                return
-            close = pattern not in (
-                "Fish Scale",
-                "Diagonal Lines",
-                "Square Grid",
-                "Concentric Rings",
-                "Wave Fill",
-                "Sunburst",
-                "Topographic",
-                "Hilbert Curve",
-                "Reaction Diffuse",
-                "Golden Spiral",
-                "Rose Curve",
-            )
-            write_polylines_dxf(
-                polys,
-                out_path,
-                close=close,
-                border_polys=border_polys,
-                pattern_layer="background" if border_polys else None,
-                border_layer_prefix="outline",
-            )
-
-            count = len(polys)
-            name = Path(out_path).name
-            self._gen_done.emit((generation_token, count, name, out_path, polys))
-
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
-            if cancel_event and cancel_event.is_set():
-                return
-            LOGGER.debug("Pattern generation failed: %s", exc)
-            self._gen_error.emit((generation_token, str(exc)))
-
-    def _run_generate_zones(
-        self,
-        zones: list[dict],
-        out_path: str,
-        include_border: bool,
-        invert_fill: bool = False,
-        mirror_v: bool = False,
-        mirror_h: bool = False,
-        border_fade: float = 0.0,
-        exclusion_polys: list[list[tuple[float, float]]] | None = None,
-        generation_token: int = 0,
-        cancel_event: threading.Event | None = None,
-    ) -> None:
-        """Worker: generate all zone patterns and write to a single DXF."""
-        try:
-            all_polys: list[list[tuple[float, float]]] = []
-            border_polys: list[list[tuple[float, float]]] = []
-            for zone in zones:
-                if cancel_event and cancel_event.is_set():
-                    return
-                scaled = self._apply_scale(zone["polys"], *zone["scale"])
-                if cancel_event and cancel_event.is_set():
-                    return
-                orig_outline = polylines_to_outline(scaled)
-                fill_outline = orig_outline
-                if exclusion_polys:
-                    excl_scaled = self._apply_scale(exclusion_polys, *zone["scale"])
-                    excl_outline = polylines_to_outline(excl_scaled)
-                    fill_outline = fill_outline.difference(excl_outline)
-                if invert_fill:
-                    fill_outline = apply_invert_fill(orig_outline)
-                    if exclusion_polys:
-                        excl_scaled = self._apply_scale(
-                            exclusion_polys, *zone["scale"]
-                        )
-                        excl_outline = polylines_to_outline(excl_scaled)
-                        fill_outline = fill_outline.difference(excl_outline)
-                if cancel_event and cancel_event.is_set():
-                    return
-                polys = self._gen_pattern(fill_outline, zone["pattern"], zone["params"])
-                if zone["interlace"]:
-                    polys = apply_interlace(
-                        polys, spacing=zone["params"].get("spacing", 1.0)
-                    )
-                if mirror_v or mirror_h:
-                    polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
-                if border_fade > 0:
-                    polys = apply_border_fade(polys, orig_outline, border_fade)
-                all_polys.extend(polys)
-                if include_border:
-                    border_polys.extend(scaled)
-            if cancel_event and cancel_event.is_set():
-                return
-            write_polylines_dxf(
-                all_polys,
-                out_path,
-                close=True,
-                border_polys=border_polys if border_polys else None,
-                pattern_layer="background" if border_polys else None,
-                border_layer_prefix="outline",
-            )
-            count = len(all_polys)
-            name = Path(out_path).name
-            self._gen_done.emit((generation_token, count, name, out_path, all_polys))
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
-            if cancel_event and cancel_event.is_set():
-                return
-            LOGGER.debug("Zone pattern generation failed: %s", exc)
-            self._gen_error.emit((generation_token, str(exc)))
 
     def _handle_gen_done(self, payload: tuple) -> None:
         generation_token, count, name, out_path, polys = payload
@@ -1887,7 +1395,7 @@ class PatternTab(QWidget):
                 return
             all_polys_snap = list(self._edit_polys)
             threading.Thread(
-                target=self._compute_preview_zones,
+                target=compute_preview_zones,
                 args=(
                     zones_snap,
                     all_polys_snap,
@@ -1899,6 +1407,13 @@ class PatternTab(QWidget):
                     preview_token,
                     cancel_event,
                 ),
+                kwargs={
+                    "pattern_service": self._pattern_service,
+                    "orig_w": self._orig_w,
+                    "orig_h": self._orig_h,
+                    "on_done": self._preview_done.emit,
+                    "on_error": self._preview_error.emit,
+                },
                 daemon=True,
             ).start()
         else:
@@ -1907,7 +1422,7 @@ class PatternTab(QWidget):
                 self._apply_scale(polys_snap, *scale) if include_border else None
             )
             threading.Thread(
-                target=self._compute_preview,
+                target=compute_preview,
                 args=(
                     polys_snap,
                     pattern,
@@ -1923,136 +1438,15 @@ class PatternTab(QWidget):
                     preview_token,
                     cancel_event,
                 ),
+                kwargs={
+                    "pattern_service": self._pattern_service,
+                    "orig_w": self._orig_w,
+                    "orig_h": self._orig_h,
+                    "on_done": self._preview_done.emit,
+                    "on_error": self._preview_error.emit,
+                },
                 daemon=True,
             ).start()
-
-    def _compute_preview(
-        self,
-        outline_polys,
-        pattern: str,
-        params: dict,
-        scale: tuple[float, float],
-        border_polys: list[list[tuple[float, float]]] | None,
-        interlace: bool = False,
-        invert_fill: bool = False,
-        mirror_v: bool = False,
-        mirror_h: bool = False,
-        border_fade: float = 0.0,
-        exclusion_polys: list[list[tuple[float, float]]] | None = None,
-        preview_token: int = 0,
-        cancel_event: threading.Event | None = None,
-    ) -> None:
-        try:
-            if cancel_event and cancel_event.is_set():
-                return
-            scaled = self._apply_scale(outline_polys, *scale)
-            if cancel_event and cancel_event.is_set():
-                return
-            orig_outline = polylines_to_outline(scaled)
-            fill_outline = orig_outline
-            if exclusion_polys:
-                excl_scaled = self._apply_scale(exclusion_polys, *scale)
-                excl_outline = polylines_to_outline(excl_scaled)
-                fill_outline = fill_outline.difference(excl_outline)
-            if invert_fill:
-                fill_outline = apply_invert_fill(orig_outline)
-                if exclusion_polys:
-                    excl_scaled = self._apply_scale(exclusion_polys, *scale)
-                    excl_outline = polylines_to_outline(excl_scaled)
-                    fill_outline = fill_outline.difference(excl_outline)
-            if cancel_event and cancel_event.is_set():
-                return
-            polys = self._gen_pattern(fill_outline, pattern, params)
-            if cancel_event and cancel_event.is_set():
-                return
-            if interlace:
-                polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
-            if mirror_v or mirror_h:
-                polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
-            if border_fade > 0:
-                polys = apply_border_fade(polys, orig_outline, border_fade)
-            if border_polys:
-                display_polys = polys + border_polys
-            else:
-                display_polys = polys
-            self._preview_done.emit((preview_token, display_polys, len(polys)))
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
-            if cancel_event and cancel_event.is_set():
-                return
-            LOGGER.debug("Preview generation failed: %s", exc)
-            self._preview_error.emit((preview_token, str(exc)))
-
-    def _compute_preview_zones(
-        self,
-        zones: list[dict],
-        all_polys: list[list[tuple[float, float]]],
-        invert_fill: bool = False,
-        mirror_v: bool = False,
-        mirror_h: bool = False,
-        border_fade: float = 0.0,
-        exclusion_polys: list[list[tuple[float, float]]] | None = None,
-        preview_token: int = 0,
-        cancel_event: threading.Event | None = None,
-    ) -> None:
-        """Worker: generate each zone's pattern and combine for composite preview."""
-        try:
-            # Collect every poly that belongs to at least one zone (for context detection)
-            zone_poly_ids: set[int] = set()
-            zone_results: list[list[tuple[float, float]]] = []
-
-            for zone in zones:
-                if cancel_event and cancel_event.is_set():
-                    return
-                zone_polys = zone["polys"]
-                scaled = self._apply_scale(zone_polys, *zone["scale"])
-                if cancel_event and cancel_event.is_set():
-                    return
-                orig_outline = polylines_to_outline(scaled)
-                fill_outline = orig_outline
-                if exclusion_polys:
-                    excl_scaled = self._apply_scale(exclusion_polys, *zone["scale"])
-                    excl_outline = polylines_to_outline(excl_scaled)
-                    fill_outline = fill_outline.difference(excl_outline)
-                if invert_fill:
-                    fill_outline = apply_invert_fill(orig_outline)
-                    if exclusion_polys:
-                        excl_scaled = self._apply_scale(
-                            exclusion_polys, *zone["scale"]
-                        )
-                        excl_outline = polylines_to_outline(excl_scaled)
-                        fill_outline = fill_outline.difference(excl_outline)
-                if cancel_event and cancel_event.is_set():
-                    return
-                polys = self._gen_pattern(fill_outline, zone["pattern"], zone["params"])
-                if cancel_event and cancel_event.is_set():
-                    return
-                if zone["interlace"]:
-                    polys = apply_interlace(
-                        polys, spacing=zone["params"].get("spacing", 1.0)
-                    )
-                if mirror_v or mirror_h:
-                    polys = apply_mirror(polys, orig_outline, mirror_v, mirror_h)
-                if border_fade > 0:
-                    polys = apply_border_fade(polys, orig_outline, border_fade)
-                zone_results.extend(polys)
-                # Track which canvas polys are covered by a zone (by identity comparison)
-                for zp in zone_polys:
-                    for idx, cp in enumerate(all_polys):
-                        if cp == zp:
-                            zone_poly_ids.add(idx)
-
-            # Unassigned polys shown as plain context borders
-            context_polys = [
-                p for i, p in enumerate(all_polys) if i not in zone_poly_ids
-            ]
-            # Always show unassigned polys as context borders in preview
-            display_polys = zone_results + context_polys
-            self._preview_done.emit((preview_token, display_polys, len(zone_results)))
-        except (OSError, ValueError, RuntimeError, TypeError, KeyError) as exc:
-            if cancel_event and cancel_event.is_set():
-                return
-            LOGGER.debug("Zone preview generation failed: %s", exc)
-            self._preview_error.emit((preview_token, str(exc)))
 
     def _handle_preview_done(self, payload: tuple) -> None:
         preview_token, display_polys, count = payload
@@ -2185,241 +1579,50 @@ class PatternTab(QWidget):
         sw: float,
         sh: float,
     ) -> list[list[tuple[float, float]]]:
-        if self._orig_w <= 0 or self._orig_h <= 0:
-            return polys
-        if sw <= 0 or sh <= 0:
-            return polys
-        sx = sw / self._orig_w
-        sy = sh / self._orig_h
-        if abs(sx - 1.0) < 1e-9 and abs(sy - 1.0) < 1e-9:
-            return polys
-        all_pts = [pt for p in polys for pt in p]
-        if not all_pts:
-            return polys
-        xs, ys = zip(*all_pts)
-        ox, oy = min(xs), min(ys)
-        return [
-            [(ox + (x - ox) * sx, oy + (y - oy) * sy) for x, y in poly]
-            for poly in polys
-        ]
+        return self._pattern_service.apply_scale(
+            polys,
+            sw,
+            sh,
+            orig_w=self._orig_w,
+            orig_h=self._orig_h,
+        )
 
     def _fresh_outline_ids(self, count: int) -> list[str]:
-        return [uuid4().hex for _ in range(count)]
-
-    @staticmethod
-    def _poly_signature(
-        poly: list[tuple[float, float]],
-    ) -> tuple[tuple[float, float], ...]:
-        return tuple((round(x, 6), round(y, 6)) for x, y in poly)
+        return self._pattern_service.fresh_outline_ids(count)
 
     def _sync_outline_ids(
         self, new_polys: list[list[tuple[float, float]]]
     ) -> list[str]:
-        old_polys = list(self._edit_polys)
-        old_ids = list(self._outline_ids)
-        if len(new_polys) == len(old_ids):
-            return list(old_ids)
-        sig_to_ids: dict[tuple[tuple[float, float], ...], list[str]] = {}
-        for poly, oid in zip(old_polys, old_ids):
-            sig_to_ids.setdefault(self._poly_signature(poly), []).append(oid)
-        resolved: list[str] = []
-        for poly in new_polys:
-            sig = self._poly_signature(poly)
-            ids = sig_to_ids.get(sig, [])
-            if ids:
-                resolved.append(ids.pop(0))
-            else:
-                resolved.append(uuid4().hex)
-        return resolved
+        return self._pattern_service.sync_outline_ids(
+            new_polys,
+            list(self._edit_polys),
+            list(self._outline_ids),
+        )
 
     def _resolve_outline_ids(self, ids: list[str]) -> list[list[tuple[float, float]]]:
-        id_map = {oid: poly for oid, poly in zip(self._outline_ids, self._edit_polys)}
-        return [list(id_map[oid]) for oid in ids if oid in id_map]
+        return self._pattern_service.resolve_outline_ids(
+            ids,
+            self._outline_ids,
+            self._edit_polys,
+        )
 
     def _validate_outline_inputs(self, polys: list[list[tuple[float, float]]]) -> None:
-        analysis = analyze_outline_polylines(polys)
-        if analysis.usable_closed_count <= 0:
-            raise ValueError(
-                "No valid closed outline was found. Close or repair the outline before generating a pattern."
-            )
-        if analysis.open_count > 0:
+        warning = self._pattern_service.validate_outline_inputs(polys)
+        if warning:
             self._set_status(
-                f"Using {analysis.usable_closed_count} closed outline(s); ignoring {analysis.open_count} open outline(s).",
+                warning,
                 "#e3b341",
             )
 
     def _snapshot_zone_jobs(self) -> list[dict]:
-        jobs: list[dict] = []
-        for zone in self._zones:
-            outline_ids = [str(v) for v in zone.get("outline_ids", [])]
-            resolved = self._resolve_outline_ids(outline_ids)
-            if not resolved:
-                continue
-            self._validate_outline_inputs(resolved)
-            jobs.append({**zone, "polys": resolved})
-        if not jobs:
-            raise ValueError(
-                "No valid closed zone outlines were found. Reassign zones after repairing the outlines."
-            )
+        jobs, warnings = self._pattern_service.snapshot_zone_jobs(
+            self._zones,
+            self._outline_ids,
+            self._edit_polys,
+        )
+        if warnings:
+            self._set_status(warnings[-1], "#e3b341")
         return jobs
-
-    def _gen_pattern(
-        self,
-        outline,
-        pattern: str,
-        params: dict,
-    ) -> list[list[tuple[float, float]]]:
-        rot_deg = float(params.get("rotation", 0.0) or 0.0)
-
-        if pattern == "Honeycomb":
-            polys = get_generator("gen_honeycomb")(outline, params["r"], params["gap"])
-        elif pattern == "Gradient Honeycomb":
-            polys = get_generator("gen_gradient_honeycomb")(
-                outline,
-                params["r_min"],
-                params["r_max"],
-                params["gap"],
-                params["angle"],
-            )
-        elif pattern == "Basketweave":
-            polys = get_generator("gen_basketweave")(
-                outline, params["strip_w"], params["strip_l"], params["gap"]
-            )
-        elif pattern == "Braid":
-            polys = get_generator("gen_braid")(
-                outline, params["strip_width"], params["spacing"]
-            )
-        elif pattern == "Fish Scale":
-            polys = get_generator("gen_fish_scale")(outline, params["sw"], params["sh"])
-        elif pattern == "Stipple Dots":
-            if params.get("interlaced"):
-                polys = get_generator("gen_stipple_interlaced")(
-                    outline,
-                    params["r"],
-                    params["spacing"],
-                )
-            else:
-                polys = get_generator("gen_stipple_dots")(
-                    outline,
-                    params["r"],
-                    params["spacing"],
-                )
-        elif pattern == "Brick":
-            polys = get_generator("gen_brick")(
-                outline, params["brick_w"], params["brick_h"], params["gap"]
-            )
-        elif pattern == "Diagonal Lines":
-            polys = get_generator("gen_diagonal_lines")(
-                outline,
-                params["spacing"],
-                params["angle"],
-            )
-        elif pattern == "Square Grid":
-            polys = get_generator("gen_square_grid")(outline, params["spacing"])
-        elif pattern == "Mesh":
-            polys = get_generator("gen_mesh")(outline, params["r"], params["spacing"])
-        elif pattern == "Concentric Rings":
-            polys = get_generator("gen_concentric_rings")(outline, params["spacing"])
-        elif pattern == "Wave Fill":
-            polys = get_generator("gen_wave_fill")(
-                outline, params["spacing"], params["amplitude"], params["wavelength"]
-            )
-        elif pattern == "Sunburst":
-            polys = get_generator("gen_sunburst")(outline, params["spacing_deg"])
-        elif pattern == "Voronoi":
-            polys = get_generator("gen_voronoi")(
-                outline, params["n_cells"], params["gap"], params["seed"]
-            )
-        elif pattern == "Penrose Tiling":
-            polys = get_generator("gen_penrose_tiling")(
-                outline,
-                params["scale"],
-                params["gap"],
-            )
-        elif pattern == "Topographic":
-            polys = get_generator("gen_topographic")(outline, params["spacing"])
-        elif pattern == "Hilbert Curve":
-            polys = get_generator("gen_hilbert_curve")(
-                outline,
-                params["order"],
-                params["margin"],
-            )
-        elif pattern == "Reaction Diffuse":
-            polys = get_generator("gen_reaction_diffuse")(
-                outline,
-                params["cell"],
-                params["iters"],
-                params["threshold"],
-                params["seed"],
-                params.get("pattern", "labyrinth"),
-            )
-        elif pattern == "Celtic Knot":
-            polys = get_generator("gen_celtic_knot")(
-                outline,
-                params["cell_size"],
-                params["line_width"],
-                params["gap"],
-            )
-        elif pattern == "Lissajous":
-            polys = get_generator("gen_lissajous")(
-                outline,
-                params["freq_x"],
-                params["freq_y"],
-                params["spacing"],
-                params["amplitude"],
-            )
-        elif pattern == "Golden Spiral":
-            polys = get_generator("gen_golden_spiral")(
-                outline,
-                params["turns"],
-                params["spacing_mm"],
-                params["direction"],
-            )
-        elif pattern == "Rose Curve":
-            polys = get_generator("gen_rose_curve")(
-                outline,
-                params["petals"],
-                params["copies"],
-                params["margin_mm"],
-            )
-        elif self._is_tile_pattern(pattern):
-            tile_polys = load_dxf_polylines(params["tile_path"])
-            polys = get_generator("gen_custom_tile")(
-                outline,
-                tile_polys,
-                params["gap"],
-                params["angle"],
-                params.get("interlock", False),
-            )
-        else:  # Image Halftone
-            polys = get_generator("gen_image_halftone")(
-                outline,
-                params["img_path"],
-                params["r_min"],
-                params["r_max"],
-                params["spacing"],
-                params["invert"],
-            )
-
-        if abs(rot_deg) > 1e-9:
-            all_pts = [pt for poly in polys for pt in poly]
-            if all_pts:
-                xs, ys = zip(*all_pts)
-                cx = (min(xs) + max(xs)) / 2.0
-                cy = (min(ys) + max(ys)) / 2.0
-                rad = rot_deg * 3.141592653589793 / 180.0
-                ca, sa = math.cos(rad), math.sin(rad)
-                polys = [
-                    [
-                        (
-                            cx + (x - cx) * ca - (y - cy) * sa,
-                            cy + (x - cx) * sa + (y - cy) * ca,
-                        )
-                        for x, y in poly
-                    ]
-                    for poly in polys
-                ]
-        return polys
 
     # ── Pattern Zone management ───────────────────────────────────────────────
 
@@ -2564,16 +1767,12 @@ class PatternTab(QWidget):
             self._cutout_status_label.setText(
                 "No cutouts \u2014 right-click a shape on canvas to mark it"
             )
-            self._cutout_status_label.setStyleSheet(
-                f"color: {DIM}; font-size: 10px;"
-            )
+            self._cutout_status_label.setStyleSheet(f"color: {DIM}; font-size: 10px;")
         else:
             self._cutout_status_label.setText(
                 f"{n} cutout{'s' if n != 1 else ''} active \u2014 shown orange on canvas"
             )
-            self._cutout_status_label.setStyleSheet(
-                "color: #f0883e; font-size: 10px;"
-            )
+            self._cutout_status_label.setStyleSheet("color: #f0883e; font-size: 10px;")
 
     def _resolve_exclusion_polys(self) -> list[list[tuple[float, float]]]:
         """Return polylines for all current exclusion IDs."""

@@ -22,21 +22,27 @@ from PySide6.QtWidgets import (
 
 from src.backend.document.state import (
     WORKSPACE_FILE_SUFFIX,
-    build_workspace_document,
     normalize_workspace_path,
-    validate_workspace_document,
 )
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
-from src.ui.components.command_palette import CommandPaletteDialog
-from src.ui.components.factories import _info_chip, _surface_frame
-from src.ui.components.update_dialog import UpdateDialog
-from src.ui.tabs.convert_tab import UtilitiesTab
-from src.ui.tabs.draft_tab import ShapeTab
-from src.ui.tabs.pattern import PatternTab
-from src.ui.tabs.repo_tab import RepoTab
-from src.ui.tabs.settings_dialog import SettingsDialog
-from src.ui.tabs.trace_tab import ImageTab
+from src.ui.components.common.command_palette import CommandPaletteDialog
+from src.ui.components.common.factories import _info_chip, _surface_frame
+from src.ui.components.common.update_dialog import UpdateDialog
+from src.ui.shell.registry import PageSpec, default_page_specs
+from src.ui.shell.runtime import PageRuntime
+from src.ui.shell.settings_dialog import SettingsDialog
+from src.ui.workspace.session import (
+    apply_workspace_document,
+    clear_workspace_state,
+    collect_workspace_document,
+    recent_workspace_paths,
+    remember_workspace_path,
+    workspace_default_dir,
+    workspace_title,
+)
+
+LOGGER = logging.getLogger(__name__)
 
 
 class App(QMainWindow):
@@ -81,40 +87,13 @@ class App(QMainWindow):
         self._tabs = QTabWidget()
         central_layout.addWidget(self._tabs, stretch=1)
 
-        self._utilities_tab = UtilitiesTab(settings=self._settings)
-        self._pattern_tab = PatternTab(settings=self._settings)
-        self._shape_tab = ShapeTab(settings=self._settings)
-        self._image_tab = ImageTab(settings=self._settings)
-        self._repo_tab = RepoTab(settings=self._settings)
-
-        self._tabs.addTab(self._shape_tab, "Draft")
-        self._tabs.addTab(self._pattern_tab, "Pattern Fill")
-        self._tabs.addTab(self._image_tab, "Trace")
-        self._tabs.addTab(self._utilities_tab, "Convert")
-        self._tabs.addTab(self._repo_tab, "Repo")
-
-        for tab in (
-            self._pattern_tab,
-            self._shape_tab,
-            self._image_tab,
-            self._repo_tab,
-        ):
-            tab.stateChanged.connect(self._schedule_workspace_dirty_check)
-        self._shape_tab.sendSelectedToPatternRequested.connect(
-            self._send_shape_selection_to_pattern
+        self._page_specs: tuple[PageSpec, ...] = default_page_specs()
+        self._page_runtime = PageRuntime(
+            tab_widget=self._tabs,
+            settings=self._settings,
+            specs=self._page_specs,
         )
-        self._shape_tab.useSelectedAsFillPatternRequested.connect(
-            self._use_shape_selection_as_fill_pattern
-        )
-        self._pattern_tab.sendSelectedToDraftRequested.connect(
-            self._send_pattern_selection_to_draft
-        )
-        self._image_tab.sendSelectedToDraftRequested.connect(
-            self._send_pattern_selection_to_draft
-        )
-        self._image_tab.sendSelectedToPatternRequested.connect(
-            self._send_shape_selection_to_pattern
-        )
+        self._init_tab_bindings()
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
 
@@ -131,16 +110,46 @@ class App(QMainWindow):
         self._last_saved_document = self._collect_workspace_document()
         self._update_title()
 
-    def _has_workspace_content(self) -> bool:
-        shape_canvas = getattr(self._shape_tab, "_canvas", None)
-        pattern_canvas = getattr(self._pattern_tab, "_canvas", None)
-        trace_canvas = getattr(self._image_tab, "_canvas", None)
-        util_canvas = getattr(self._utilities_tab, "_preview_canvas", None)
-        return any(
-            bool(getattr(canvas, "poly_count", 0))
-            for canvas in (shape_canvas, pattern_canvas, trace_canvas, util_canvas)
-            if canvas is not None
+    def _init_tab_bindings(self) -> None:
+        self._draft_page: Any = self._page_runtime.get("draft")
+        self._pattern_page: Any = self._page_runtime.get("pattern")
+        self._trace_page: Any = self._page_runtime.get("trace")
+        self._convert_page: Any = self._page_runtime.get("convert")
+        self._repo_page: Any = self._page_runtime.get("repo")
+
+        self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
+
+        self._page_runtime.connect_signal_if_present(
+            page_id="draft",
+            signal_name="sendSelectedToPatternRequested",
+            slot=self._send_shape_selection_to_pattern,
         )
+        self._page_runtime.connect_signal_if_present(
+            page_id="draft",
+            signal_name="useSelectedAsFillPatternRequested",
+            slot=self._use_shape_selection_as_fill_pattern,
+        )
+        self._page_runtime.connect_signal_if_present(
+            page_id="pattern",
+            signal_name="sendSelectedToDraftRequested",
+            slot=self._send_pattern_selection_to_draft,
+        )
+        self._page_runtime.connect_signal_if_present(
+            page_id="trace",
+            signal_name="sendSelectedToDraftRequested",
+            slot=self._send_pattern_selection_to_draft,
+        )
+        self._page_runtime.connect_signal_if_present(
+            page_id="trace",
+            signal_name="sendSelectedToPatternRequested",
+            slot=self._send_shape_selection_to_pattern,
+        )
+
+    def _switch_to_page(self, page_id: str) -> None:
+        self._page_runtime.switch_to(page_id)
+
+    def _has_workspace_content(self) -> bool:
+        return self._page_runtime.has_workspace_content()
 
     def _build_shell_header(self) -> QWidget:
         shell = _surface_frame("panel")
@@ -260,60 +269,36 @@ class App(QMainWindow):
         self._workspace_menu.addSeparator()
 
     def _workspace_default_dir(self) -> str:
-        return self._settings.get(
-            "workspace_dir",
-            self._settings.get("last_workspace_dir", str(Path.home())),
-        )
+        return workspace_default_dir(self._settings)
+
+    def _workspace_pages(self):
+        return self._page_runtime.iter_workspace_pages()
+
+    def _preset_pages(self):
+        return self._page_runtime.iter_preset_pages()
 
     def _collect_workspace_document(self) -> dict:
-        workspace_name = (
-            self._workspace_path.stem.replace(
-                WORKSPACE_FILE_SUFFIX.replace(".json", ""), ""
-            )
-            if self._workspace_path
-            else "Untitled Workspace"
-        )
-        return build_workspace_document(
-            workspace_name=workspace_name,
-            app_state={"current_tab": self._tabs.currentIndex()},
-            tab_states={
-                "shape": self._shape_tab.get_workspace_state(),
-                "pattern": self._pattern_tab.get_workspace_state(),
-                "image": self._image_tab.get_workspace_state(),
-                "utilities": self._utilities_tab.get_workspace_state(),
-                "repo": self._repo_tab.get_workspace_state(),
-            },
-            preset_state={
-                "shape": self._shape_tab.get_preset_state(),
-                "pattern": self._pattern_tab.get_preset_state(),
-            },
-            meta={
-                "workspace_path": str(self._workspace_path)
-                if self._workspace_path
-                else ""
-            },
+        return collect_workspace_document(
+            workspace_path=self._workspace_path,
+            current_tab_index=self._tabs.currentIndex(),
+            workspace_pages=self._workspace_pages(),
+            preset_pages=self._preset_pages(),
         )
 
     def _apply_workspace_document(self, document: dict) -> None:
-        data = validate_workspace_document(document)
-        self._shape_tab.apply_preset_state(data.get("presets", {}).get("shape", {}))
-        self._pattern_tab.apply_preset_state(data.get("presets", {}).get("pattern", {}))
-        tabs = data.get("tabs", {})
-        self._shape_tab.apply_workspace_state(tabs.get("shape", {}))
-        self._pattern_tab.apply_workspace_state(tabs.get("pattern", {}))
-        self._image_tab.apply_workspace_state(tabs.get("image", {}))
-        self._utilities_tab.apply_workspace_state(tabs.get("utilities", {}))
-        self._repo_tab.apply_workspace_state(tabs.get("repo", {}))
-        idx = int(data.get("app", {}).get("current_tab", 0))
-        self._tabs.setCurrentIndex(max(0, min(idx, self._tabs.count() - 1)))
+        apply_workspace_document(
+            document=document,
+            workspace_pages=self._workspace_pages(),
+            preset_pages=self._preset_pages(),
+            tab_count=self._tabs.count(),
+            set_current_tab_index=self._tabs.setCurrentIndex,
+        )
 
     def _clear_workspace_state(self) -> None:
-        self._shape_tab.clear_workspace_state()
-        self._pattern_tab.clear_workspace_state()
-        self._image_tab.clear_workspace_state()
-        self._utilities_tab.clear_workspace_state()
-        self._repo_tab.clear_workspace_state()
-        self._tabs.setCurrentIndex(0)
+        clear_workspace_state(
+            workspace_pages=self._workspace_pages(),
+            set_current_tab_index=self._tabs.setCurrentIndex,
+        )
 
     def _schedule_workspace_dirty_check(self) -> None:
         self._workspace_timer.start(150)
@@ -324,8 +309,8 @@ class App(QMainWindow):
     ) -> None:
         if not polys:
             return
-        self._pattern_tab.load_outline_polys(polys, source_label="Draft selection")
-        self._tabs.setCurrentWidget(self._pattern_tab)
+        self._pattern_page.load_outline_polys(polys, source_label="Draft selection")
+        self._tabs.setCurrentWidget(self._pattern_page)
         self._schedule_workspace_dirty_check()
 
     def _send_pattern_selection_to_draft(
@@ -334,8 +319,8 @@ class App(QMainWindow):
     ) -> None:
         if not polys:
             return
-        self._shape_tab.load_outline_polys(polys, source_label="Pattern selection")
-        self._tabs.setCurrentWidget(self._shape_tab)
+        self._draft_page.load_outline_polys(polys, source_label="Pattern selection")
+        self._tabs.setCurrentWidget(self._draft_page)
         self._schedule_workspace_dirty_check()
 
     def _use_shape_selection_as_fill_pattern(
@@ -344,11 +329,11 @@ class App(QMainWindow):
     ) -> None:
         if not polys:
             return
-        if self._pattern_tab.use_polys_as_fill_pattern(
+        if self._pattern_page.use_polys_as_fill_pattern(
             polys,
             source_label="Draft selection",
         ):
-            self._tabs.setCurrentWidget(self._pattern_tab)
+            self._tabs.setCurrentWidget(self._pattern_page)
             self._schedule_workspace_dirty_check()
 
     def _update_workspace_dirty(self) -> None:
@@ -361,34 +346,19 @@ class App(QMainWindow):
         self._update_title()
 
     def _update_title(self) -> None:
-        if self._workspace_path:
-            name = self._workspace_path.name
-        else:
-            name = "Untitled Workspace"
-        dirty = " *" if self._workspace_dirty else ""
-        self.setWindowTitle(f"AA Laser Studio — {name}{dirty}")
+        self.setWindowTitle(
+            workspace_title(self._workspace_path, self._workspace_dirty)
+        )
         self._refresh_workspace_header()
 
     def _remember_workspace_path(self, path: Path) -> None:
-        # Preserve user-configured workspace_dir from Settings; keep runtime
-        # navigation convenience in a separate key.
-        self._settings["last_workspace_dir"] = str(path.parent)
-        self._settings["current_workspace"] = str(path)
-        recent = [
-            p for p in self._settings.get("recent_workspaces", []) if p != str(path)
-        ]
-        recent.insert(0, str(path))
-        self._settings["recent_workspaces"] = recent[:8]
+        remember_workspace_path(settings=self._settings, path=path, max_recent=8)
         save_settings(self._settings)
         self._rebuild_recent_workspaces_menu()
 
     def _rebuild_recent_workspaces_menu(self) -> None:
         self._recent_workspaces_menu.clear()
-        recent = [
-            Path(path)
-            for path in self._settings.get("recent_workspaces", [])
-            if Path(path).exists()
-        ]
+        recent = recent_workspace_paths(self._settings)
         if not recent:
             action = QAction("No recent workspaces", self)
             action.setEnabled(False)
@@ -516,9 +486,9 @@ class App(QMainWindow):
     def _attempt_auto_fetch(self) -> None:
         """Attempt to fetch remote repository metadata without altering the working tree."""
         try:
-            self._repo_tab.auto_fetch()
+            self._repo_page.auto_fetch()
         except (OSError, RuntimeError, ValueError) as exc:
-            logging.warning("Auto-fetch failed: %s", exc)
+            LOGGER.warning("Auto-fetch failed: %s", exc)
 
     def _auto_fetch_interval_ms(self) -> int:
         """Return periodic auto-fetch interval in milliseconds."""
@@ -600,31 +570,14 @@ class App(QMainWindow):
             "Canvas Fit",
             self._invoke_canvas_fit,
         )
-        self._register_action(
-            "tab.draft",
-            "Switch to Draft Tab",
-            lambda: self._tabs.setCurrentWidget(self._shape_tab),
-        )
-        self._register_action(
-            "tab.pattern",
-            "Switch to Pattern Tab",
-            lambda: self._tabs.setCurrentWidget(self._pattern_tab),
-        )
-        self._register_action(
-            "tab.trace",
-            "Switch to Trace Tab",
-            lambda: self._tabs.setCurrentWidget(self._image_tab),
-        )
-        self._register_action(
-            "tab.convert",
-            "Switch to Convert Tab",
-            lambda: self._tabs.setCurrentWidget(self._utilities_tab),
-        )
-        self._register_action(
-            "tab.repo",
-            "Switch to Repo Tab",
-            lambda: self._tabs.setCurrentWidget(self._repo_tab),
-        )
+        for spec in self._page_specs:
+            self._register_action(
+                spec.shortcut_id,
+                f"Switch to {spec.title} Page",
+                lambda checked=False, page_id=spec.page_id: self._switch_to_page(
+                    page_id
+                ),
+            )
 
     def _register_action(self, action_id: str, text: str, callback) -> None:
         action = QAction(text, self)
@@ -664,7 +617,7 @@ class App(QMainWindow):
 
     def _build_command_palette_commands(self) -> list[dict[str, object]]:
         """Return command-palette entries exposed to users."""
-        return [
+        commands = [
             self._command_entry(
                 command_id="workspace.new",
                 title="Workspace: New",
@@ -725,37 +678,17 @@ class App(QMainWindow):
                 keywords="canvas fit zoom",
                 run=self._invoke_canvas_fit,
             ),
-            self._command_entry(
-                command_id="tab.draft",
-                title="Tab: Draft",
-                keywords="tab draft",
-                run=lambda: self._tabs.setCurrentWidget(self._shape_tab),
-            ),
-            self._command_entry(
-                command_id="tab.pattern",
-                title="Tab: Pattern Fill",
-                keywords="tab pattern",
-                run=lambda: self._tabs.setCurrentWidget(self._pattern_tab),
-            ),
-            self._command_entry(
-                command_id="tab.trace",
-                title="Tab: Trace",
-                keywords="tab trace",
-                run=lambda: self._tabs.setCurrentWidget(self._image_tab),
-            ),
-            self._command_entry(
-                command_id="tab.convert",
-                title="Tab: Convert",
-                keywords="tab convert utilities",
-                run=lambda: self._tabs.setCurrentWidget(self._utilities_tab),
-            ),
-            self._command_entry(
-                command_id="tab.repo",
-                title="Tab: Repo",
-                keywords="tab repo git",
-                run=lambda: self._tabs.setCurrentWidget(self._repo_tab),
-            ),
         ]
+        for spec in self._page_specs:
+            commands.append(
+                self._command_entry(
+                    command_id=spec.shortcut_id,
+                    title=spec.command_title,
+                    keywords=spec.command_keywords,
+                    run=lambda page_id=spec.page_id: self._switch_to_page(page_id),
+                )
+            )
+        return commands
 
     def _invoke_canvas_mode(self, mode: str) -> None:
         canvas = self._active_canvas()
@@ -786,7 +719,7 @@ class App(QMainWindow):
                 self._workspace_dirty = False
                 self._update_title()
             except (OSError, TypeError, ValueError) as exc:
-                logging.warning("Auto-save failed: %s", exc)
+                LOGGER.warning("Auto-save failed: %s", exc)
                 self._workspace_state_chip.setText("Auto-save failed")
                 self._workspace_state_chip.setProperty("tone", "danger")
                 self._workspace_state_chip.style().unpolish(self._workspace_state_chip)
@@ -798,15 +731,8 @@ class App(QMainWindow):
             # Propagate changed settings to tabs that cache paths at init time.
             self._settings = dlg._settings
             self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
-            for tab in (
-                self._utilities_tab,
-                self._pattern_tab,
-                self._shape_tab,
-                self._image_tab,
-                self._repo_tab,
-            ):
-                tab._settings = self._settings
-            self._repo_tab.sync_from_settings()
+            self._page_runtime.apply_settings(self._settings)
+            self._repo_page.sync_from_settings()
 
             for action_id, action in self._global_actions.items():
                 shortcut = self._shortcut(action_id)

@@ -1,4 +1,4 @@
-"""Repository tab — basic Git pull/commit/push workflow."""
+"""Repository page — basic Git pull/commit/push workflow."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import save_settings
-from src.ui.components.factories import _surface_frame
+from src.ui.components.common.factories import _surface_frame
 
 
-class RepoTab(QWidget):
+class RepoPage(QWidget):
     stateChanged = Signal()
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):

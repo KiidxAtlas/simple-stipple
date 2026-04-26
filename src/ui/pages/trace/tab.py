@@ -1,4 +1,4 @@
-"""Image to Outline tab."""
+"""Image to Outline page."""
 
 from __future__ import annotations
 
@@ -22,44 +22,45 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.document.graph import DocumentGraph
-from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.io import image_to_outlines
-from src.constants import DIM, SEL
+from src.constants import DIM
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.components.action_maps import IMAGE_ACTION_MAP
-from src.ui.components.containers import (
-    CanvasObjectBrowser,
-    CanvasPrecisionBar,
-    CanvasStatusStrip,
-    DxfLayersTree,
+from src.ui.components.canvas.modules import (
+    CanvasGridModule,
+    CanvasLayerTreeModule,
+    CanvasToolbarModule,
 )
-from src.ui.components.factories import (
-    _canvas_toolbar,
+from src.ui.components.canvas.page_runtimes import TraceCanvasPageRuntime
+from src.ui.components.canvas.widgets import CanvasStatusStrip
+from src.ui.components.common.factories import (
     _content_splitter,
     _section_label,
     _sidebar_panel,
     _surface_frame,
     parse_float_field_with_feedback,
 )
-from src.ui.components.trace_form import (
+from src.ui.pages.trace.form import (
     PathField,
     TextField,
     TraceFieldBindings,
     build_lazy_section,
     build_trace_kwargs,
 )
+from src.ui.pages.trace.session import (
+    apply_trace_workspace_state,
+    clear_trace_workspace_state,
+    get_trace_workspace_state,
+)
 
-ACTION_MAP = IMAGE_ACTION_MAP
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
 TRACE_BG_BLEND_ALPHA = 0.7
 
 LOGGER = logging.getLogger(__name__)
 
 
-class ImageTab(QWidget):
-    """Image → outline tracing tab."""
+class TracePage(QWidget):
+    """Image → outline tracing page."""
 
     _trace_done = Signal(object)  # (display_img, polys, img_w_px, img_h_px, width_mm)
     _trace_error = Signal(object)
@@ -435,25 +436,6 @@ class ImageTab(QWidget):
     # ── Right panel ───────────────────────────────────────────────────────────
 
     def _build_right(self, layout: QVBoxLayout) -> None:
-        toolbar, self._mode_btns, self._sel_label = _canvas_toolbar(
-            self._on_toolbar_mode,
-            lambda: self._canvas.fit(),
-        )
-        layout.addWidget(toolbar)
-
-        self._precision_bar = CanvasPrecisionBar(
-            None, on_changed=self._refresh_canvas_panels
-        )
-        layout.addWidget(self._precision_bar)
-
-        self._canvas_status = CanvasStatusStrip(show_readiness=False)
-        layout.addWidget(self._canvas_status)
-
-        canvas_shell = QWidget()
-        canvas_layout = QVBoxLayout(canvas_shell)
-        canvas_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_layout.setSpacing(8)
-
         self._canvas = DxfCanvas(
             selectable=True,
             on_change=self._on_sel_change,
@@ -466,7 +448,28 @@ class ImageTab(QWidget):
         self._canvas.set_grid_visible(True)
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(1.0)
-        self._precision_bar.bind_canvas(self._canvas)
+
+        self._toolbar_module = CanvasToolbarModule(
+            canvas=self._canvas,
+            on_mode=self._on_toolbar_mode,
+            on_fit=self._canvas.fit,
+        )
+        layout.addWidget(self._toolbar_module)
+
+        self._grid_module = CanvasGridModule(
+            canvas=self._canvas,
+            on_changed=self._refresh_canvas_panels,
+        )
+        layout.addWidget(self._grid_module)
+        self._precision_bar = self._grid_module
+
+        self._canvas_status = CanvasStatusStrip(show_readiness=False)
+        layout.addWidget(self._canvas_status)
+
+        canvas_shell = QWidget()
+        canvas_layout = QVBoxLayout(canvas_shell)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(8)
         canvas_layout.addWidget(self._canvas, stretch=1)
 
         side_panel = QWidget()
@@ -474,18 +477,33 @@ class ImageTab(QWidget):
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
 
-        self._object_browser = CanvasObjectBrowser("Extracted Objects")
-        self._object_browser.selectionRequested.connect(
-            self._on_browser_selection_requested
+        self._layer_module = CanvasLayerTreeModule(
+            canvas=self._canvas,
+            title="Layers",
+            editable=False,
+            get_active_layer_name=lambda: "trace_preview",
+            build_layer_rows=self._build_layer_tree_rows,
+            on_selection_requested=self._on_browser_selection_requested,
+            on_fit_requested=self._fit_selection,
+            on_visibility_changed=self._refresh_canvas_panels,
         )
-        self._object_browser.fitRequested.connect(self._fit_selection)
-        side_layout.addWidget(self._object_browser, stretch=3)
+        self._layers_tree = self._layer_module.tree
+        self._layer_sidebar = self._layer_module.controller
+        side_layout.addWidget(self._layer_module, stretch=1)
 
-        self._layers_tree = DxfLayersTree("DXF Layers")
-        side_layout.addWidget(self._layers_tree, stretch=2)
+        self._canvas_runtime = TraceCanvasPageRuntime(
+            canvas=self._canvas,
+            toolbar_module=self._toolbar_module,
+            layer_sidebar=self._layer_sidebar,
+            canvas_status=self._canvas_status,
+            precision_bar=self._precision_bar,
+            is_running=lambda: self._running,
+            has_image=lambda: bool(self._img_path),
+        )
 
         splitter = _content_splitter(canvas_shell, side_panel, sizes=(860, 260))
         layout.addWidget(splitter, stretch=1)
+
         self._refresh_canvas_panels()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -538,12 +556,9 @@ class ImageTab(QWidget):
         return parse_float_field_with_feedback(entry, label, self._set_status, **kw)
 
     def _on_sel_change(self, count: int) -> None:
-        if count:
-            self._sel_label.setText(f"{count} selected")
-            self._sel_label.setStyleSheet(f"color: {SEL};")
-        else:
-            self._sel_label.setText("")
-            self._sel_label.setStyleSheet(f"color: {DIM};")
+        if hasattr(self, "_canvas_runtime"):
+            self._canvas_runtime.on_selection_change(count)
+        if count == 0:
             self._refresh_canvas_panels()
         self._update_trace_action_states()
 
@@ -835,20 +850,12 @@ class ImageTab(QWidget):
             self._canvas.clear_background_image()
         self._update_trace_action_states()
 
-    def _set_active_mode_btn(self, value: str) -> None:
-        v = value.lower()
-        for k, b in self._mode_btns.items():
-            b.setProperty("active", k.lower() == v)
-            b.style().unpolish(b)
-            b.style().polish(b)
-
     def _on_toolbar_mode(self, value: str) -> None:
-        self._set_active_mode_btn(value)
-        self._canvas.set_mode(value.lower())
+        self._canvas_runtime.on_toolbar_mode(value)
         self._refresh_canvas_panels()
 
     def _on_canvas_mode_change(self, mode: str) -> None:
-        self._set_active_mode_btn(mode)
+        self._canvas_runtime.on_canvas_mode_change(mode)
         self._refresh_canvas_panels()
 
     def _on_canvas_geometry_change(self) -> None:
@@ -856,8 +863,14 @@ class ImageTab(QWidget):
         self._emit_state_changed()
 
     def _on_browser_selection_requested(self, indices: list[int]) -> None:
-        self._canvas.set_selection(indices)
+        self._canvas_runtime.on_tree_selection_requested(indices)
         self._refresh_canvas_panels()
+
+    def _build_layer_tree_rows(
+        self,
+        layer_view_state: dict[str, dict[str, set[int]]],
+    ) -> list[dict[str, object]]:
+        return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
     def _on_send_selected_to_draft(
         self,
@@ -874,57 +887,13 @@ class ImageTab(QWidget):
             self.sendSelectedToPatternRequested.emit(polys)
 
     def _fit_selection(self) -> None:
-        if self._canvas.fit_selection():
+        if self._canvas_runtime.fit_selection():
             self._refresh_canvas_panels()
 
     def _refresh_canvas_panels(self) -> None:
         if not hasattr(self, "_canvas_status"):
             return
-        summary = self._canvas.get_status_summary()
-        if self._running:
-            readiness_text = "Tracing"
-            readiness_tone = "warn"
-        elif self._canvas.poly_count:
-            readiness_text = "Trace ready"
-            readiness_tone = "success"
-        elif self._img_path:
-            readiness_text = "Ready to trace"
-            readiness_tone = "accent"
-        else:
-            readiness_text = "No image"
-            readiness_tone = "warn"
-        zoom = (
-            self._canvas.get_zoom_percent()
-            if hasattr(self._canvas, "get_zoom_percent")
-            else 100
-        )
-        cursor = (
-            self._canvas.get_cursor_world_pos()
-            if hasattr(self._canvas, "get_cursor_world_pos")
-            else None
-        )
-        self._canvas_status.set_snapshot(
-            mode=str(summary["mode"]),
-            selected_count=self._canvas.sel_count,
-            object_count=self._canvas.poly_count,
-            precision_text=str(summary["precision"]),
-            readiness_text=readiness_text,
-            readiness_tone=readiness_tone,
-            zoom_percent=zoom,
-            cursor_pos=cursor,
-        )
-        if hasattr(self, "_precision_bar"):
-            self._precision_bar.refresh()
-
-        if hasattr(self, "_object_browser"):
-            self._object_browser.set_objects(
-                self._canvas.get_polylines_state(),
-                self._canvas.get_selection_indices(),
-            )
-
-        if hasattr(self, "_layers_tree"):
-            rows = [("trace_preview", self._canvas.poly_count, False, True)]
-            self._layers_tree.set_layers(rows)
+        self._canvas_runtime.refresh_canvas_panels()
 
     # ── Export ────────────────────────────────────────────────────────────────
 
@@ -1023,122 +992,10 @@ class ImageTab(QWidget):
             self._canvas.clear_background_image()
 
     def get_workspace_state(self) -> dict:
-        doc_graph = graph_from_polylines(
-            self._canvas.get_polylines_state(),
-            layer="trace_preview",
-            as_segments=False,
-        )
-        return {
-            "image_path": self._img_path or self._img_edit.text(),
-            "blur": self._blur.text(),
-            "threshold": self._thresh_entry.text(),
-            "auto_threshold": self._auto_thresh_cb.isChecked(),
-            "invert": self._invert_cb.isChecked(),
-            "edge_mode": self._edge_mode_cb.isChecked(),
-            "canny_low": self._canny_low.text(),
-            "canny_high": self._canny_high.text(),
-            "outer_only": self._outer_only_cb.isChecked(),
-            "simplify": self._simplify.text(),
-            "min_area": self._min_area.text(),
-            "max_area": self._max_area.text(),
-            "close_r": self._close_r.text(),
-            "width_mm": self._width_mm.text(),
-            "height_mm": self._height_mm.text(),
-            "max_res": self._max_res.text(),
-            "aspect_locked": self._lock_cb.isChecked(),
-            "bg_visible": self._bg_visible_cb.isChecked(),
-            "img_w_px": self._img_w_px,
-            "img_h_px": self._img_h_px,
-            "img_aspect": self._img_aspect,
-            "last_width_mm": self._last_width_mm,
-            "last_height_mm": self._last_height_mm,
-            "canvas_polys": self._canvas.get_polylines_state(),
-            "canvas_view": self._canvas.get_view_state(),
-            "document_graph": doc_graph.snapshot(),
-        }
+        return get_trace_workspace_state(self)
 
     def apply_workspace_state(self, state: dict | None) -> None:
-        self._suspend_state_changes = True
-        if not isinstance(state, dict):
-            state = {}
-        self._reset_trace_runtime_state()
-        image_path = str(state.get("image_path", "")).strip()
-        self._img_path = image_path or None
-        self._img_edit.setText(str(state.get("image_path", "")))
-        self._blur.setText(str(state.get("blur", "1.5")))
-        self._thresh_entry.setText(str(state.get("threshold", "128")))
-        self._auto_thresh_cb.setChecked(bool(state.get("auto_threshold", True)))
-        self._update_thresh_controls()
-        self._invert_cb.setChecked(bool(state.get("invert", False)))
-        self._edge_mode_cb.setChecked(bool(state.get("edge_mode", False)))
-        self._canny_low.setText(str(state.get("canny_low", "50")))
-        self._canny_high.setText(str(state.get("canny_high", "150")))
-        self._outer_only_cb.setChecked(bool(state.get("outer_only", True)))
-        self._simplify.setText(str(state.get("simplify", "2.0")))
-        self._min_area.setText(str(state.get("min_area", "100")))
-        self._max_area.setText(str(state.get("max_area", "")))
-        self._close_r.setText(str(state.get("close_r", "1")))
-        self._width_mm.setText(str(state.get("width_mm", "50.0")))
-        self._height_mm.setText(str(state.get("height_mm", "---")))
-        self._max_res.setText(str(state.get("max_res", "1200")))
-        self._lock_cb.setChecked(bool(state.get("aspect_locked", True)))
-        self._bg_visible_cb.setChecked(bool(state.get("bg_visible", True)))
-        try:
-            self._img_w_px = int(state.get("img_w_px", 0))
-        except (TypeError, ValueError):
-            self._img_w_px = 0
-        try:
-            self._img_h_px = int(state.get("img_h_px", 0))
-        except (TypeError, ValueError):
-            self._img_h_px = 0
-        try:
-            self._img_aspect = float(state.get("img_aspect", 1.0))
-        except (TypeError, ValueError):
-            self._img_aspect = 1.0
-        try:
-            self._last_width_mm = float(state.get("last_width_mm", 0.0))
-        except (TypeError, ValueError):
-            self._last_width_mm = 0.0
-        try:
-            self._last_height_mm = float(state.get("last_height_mm", 0.0))
-        except (TypeError, ValueError):
-            self._last_height_mm = 0.0
-        if image_path and Path(image_path).exists():
-            self._load_thumbnail(image_path)
-        else:
-            self._img_info_lbl.setText("")
-        polys: list[list[tuple[float, float]]]
-        graph_state = state.get("document_graph")
-        if isinstance(graph_state, dict):
-            doc_graph = DocumentGraph()
-            doc_graph.restore(graph_state)
-            polys = polylines_from_graph(doc_graph, layer="trace_preview")
-            if not polys:
-                polys = polylines_from_graph(doc_graph, layer="geometry")
-        else:
-            polys = [list(poly) for poly in state.get("canvas_polys", [])]
-        self._canvas.set_polylines_state(polys, fit=bool(polys))
-        if self._last_width_mm > 0 and self._last_height_mm > 0:
-            self._canvas.set_image_bounds(self._last_width_mm, self._last_height_mm)
-        if polys and state.get("canvas_view"):
-            self._canvas.set_view_state(state["canvas_view"])
-        if image_path and self._bg_visible_cb.isChecked() and self._last_width_mm > 0:
-            self._restore_background_from_path(image_path)
-        elif not self._bg_visible_cb.isChecked():
-            self._canvas.clear_background_image()
-        self._export_all_btn.setEnabled(bool(polys))
-        self._export_sel_btn.setEnabled(False)
-        self._suspend_state_changes = False
-        self._update_trace_action_states()
-        self._refresh_canvas_panels()
+        apply_trace_workspace_state(self, state)
 
     def clear_workspace_state(self) -> None:
-        self.apply_workspace_state({})
-        self._reset_trace_runtime_state()
-        self._img_path = None
-        self._img_edit.setText("")
-        self._canvas.clear_background_image()
-        self._canvas.set_image_bounds(0.0, 0.0)
-        self._set_status("No image loaded.")
-        self._update_trace_action_states()
-        self._refresh_canvas_panels()
+        clear_trace_workspace_state(self)

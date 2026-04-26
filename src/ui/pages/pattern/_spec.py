@@ -102,8 +102,8 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
         ),
     ],
     "Brick": [
-        ParamField("_brick_w_e", "Brick width (mm)", "4.0", "Width of each brick"),
-        ParamField("_brick_h_e", "Brick height (mm)", "2.0", "Height of each brick"),
+        ParamField("_brick_w", "Brick width (mm)", "4.0", "Width of each brick"),
+        ParamField("_brick_h", "Brick height (mm)", "2.0", "Height of each brick"),
         ParamField("_brick_gap", "Gap (mm)", "0.5", "Mortar gap between bricks"),
     ],
     "Diagonal Lines": [

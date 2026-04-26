@@ -1,4 +1,4 @@
-"""Utilities tab — FVI → DXF | DXF Fixer | DXF → SVG | SVG → DXF."""
+"""Convert page — FVI → DXF | DXF Fixer | DXF → SVG | SVG → DXF."""
 
 from __future__ import annotations
 
@@ -17,22 +17,21 @@ from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.backend.dxf.io import load_dxf_polylines
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.components.action_maps import UTILITIES_ACTION_MAP
-from src.ui.components.containers import CanvasPrecisionBar, CanvasStatusStrip
-from src.ui.components.factories import _content_splitter, _surface_frame
-from src.ui.tabs.convert_subtabs import (
+from src.ui.components.canvas.modules import CanvasGridModule
+from src.ui.components.canvas.widgets import CanvasStatusStrip
+from src.ui.components.common.factories import _content_splitter, _surface_frame
+from src.ui.pages.convert.subtabs import (
     FixerSubTab,
     FviSubTab,
     SvgSubTab,
     SvgToDxfSubTab,
 )
 
-ACTION_MAP = UTILITIES_ACTION_MAP
 LOGGER = logging.getLogger(__name__)
 
 
-class UtilitiesTab(QWidget):
-    """Utilities — conversion and repair helpers for vector workflows."""
+class ConvertPage(QWidget):
+    """Convert page — conversion and repair helpers for vector workflows."""
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -81,8 +80,8 @@ class UtilitiesTab(QWidget):
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
 
-        self._precision_bar = CanvasPrecisionBar(
-            None, on_changed=self._refresh_preview_ui
+        self._precision_bar = CanvasGridModule(
+            canvas=None, on_changed=self._refresh_preview_ui
         )
         right.addWidget(self._precision_bar)
 

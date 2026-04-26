@@ -3,6 +3,8 @@
 Provides:
   build_param_widget(tab, pattern_name, schedule_fn) -> QWidget
   collect_pattern_params(tab, pattern) -> dict
+  collect_form_state(page) -> dict
+  restore_form_state(page, payload)
   build_tile_library_widget(tab, schedule_fn) -> QWidget
   build_halftone_widget(tab, schedule_fn) -> QWidget
 """
@@ -24,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.constants import DIM
-from src.ui.tabs.pattern._spec import PARAM_SPECS
+from src.ui.pages.pattern._spec import PARAM_SPECS
 
 # ── Internal widget helpers ───────────────────────────────────────────────────
 
@@ -257,10 +259,10 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
     elif pattern == "Brick":
         params = {
             "brick_w": tab._parse_float_field(
-                tab._brick_w_e, "Brick width", minimum=0.001, maximum=1000
+                tab._brick_w, "Brick width", minimum=0.001, maximum=1000
             ),
             "brick_h": tab._parse_float_field(
-                tab._brick_h_e, "Brick height", minimum=0.001, maximum=1000
+                tab._brick_h, "Brick height", minimum=0.001, maximum=1000
             ),
             "gap": tab._parse_float_field(
                 tab._brick_gap, "Gap", minimum=0.0, maximum=1000
@@ -443,3 +445,123 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
         tab._pattern_rotation, "Pattern rotation"
     )
     return params
+
+
+# ── Form-state serialization ──────────────────────────────────────────────────
+# These functions own the complete read/write of all fill-parameter widget
+# values for workspace saves, preset load/save, and workspace restore.
+# They live here (not on the page) so the page class only needs to do layout.
+
+
+def collect_form_state(page: Any) -> dict:
+    """Read all fill-parameter widget values into a plain dict (for presets / workspace)."""
+    data: dict = {
+        "pattern": page._pattern_combo.currentText(),
+        "rotation": page._pattern_rotation.text(),
+        "scale_w": page._scale_w.text(),
+        "scale_h": page._scale_h.text(),
+        "ar_locked": page._ar_cb.isChecked(),
+        "include_border": page._include_border_cb.isChecked(),
+        "interlace": page._interlace_cb.isChecked(),
+        "invert_fill": page._invert_fill_cb.isChecked(),
+        "border_fade": page._border_fade.text(),
+        "mirror_v": page._mirror_v_cb.isChecked(),
+        "mirror_h": page._mirror_h_cb.isChecked(),
+        # Tile library (set by build_tile_library_widget)
+        "tile_pattern_path": page._library_patterns.get(
+            page._pattern_combo.currentText(), ""
+        ),
+        "tile_gap": page._tile_gap.text(),
+        "tile_angle": page._tile_angle.text(),
+        "tile_interlock": page._tile_interlock_cb.isChecked(),
+        # Halftone (set by build_halftone_widget)
+        "htone_img_path": page._htone_img_edit.text(),
+        "htone_r_min": page._htone_r_min.text(),
+        "htone_r_max": page._htone_r_max.text(),
+        "htone_spacing": page._htone_spacing.text(),
+        "htone_invert": page._htone_invert.isChecked(),
+    }
+    # All PARAM_SPECS pattern fields — key derived from attr name (strip leading _)
+    for specs in PARAM_SPECS.values():
+        for spec in specs:
+            w = getattr(page, spec.attr, None)
+            if w is None:
+                continue
+            key = spec.attr[1:]  # e.g. "_hex_r" -> "hex_r"
+            if spec.kind == "checkbox":
+                data[key] = w.isChecked()
+            elif spec.kind == "combobox":
+                data[key] = w.currentText()
+            else:
+                data[key] = w.text()
+    return data
+
+
+def restore_form_state(page: Any, payload: dict) -> None:
+    """Write fill-parameter widget values from a plain dict.
+
+    Missing keys fall back to the current widget values, so partial payloads
+    (e.g. presets that predate a new field) apply safely.
+    """
+    # Merge: current state supplies defaults for any missing keys
+    values = collect_form_state(page)
+    values.update(payload or {})
+
+    tile_path = str(values.get("tile_pattern_path", "")).strip()
+    page._refresh_pattern_choices(
+        current=str(values.get("pattern", "— None —")),
+        extra_tile_path=tile_path or None,
+    )
+    pattern = str(values.get("pattern", "— None —"))
+    if (
+        pattern not in page._base_patterns
+        and page._pattern_combo.findText(pattern) < 0
+        and tile_path
+    ):
+        pattern = next(
+            (
+                label
+                for label, path in page._library_patterns.items()
+                if path == tile_path
+            ),
+            "— None —",
+        )
+    page._pattern_combo.setCurrentText(pattern)
+    page._pattern_rotation.setText(str(values.get("rotation", "0")))
+    page._scale_w.setText(str(values.get("scale_w", "")))
+    page._scale_h.setText(str(values.get("scale_h", "")))
+    page._ar_cb.setChecked(bool(values.get("ar_locked", True)))
+    page._include_border_cb.setChecked(bool(values.get("include_border", False)))
+    page._interlace_cb.setChecked(bool(values.get("interlace", False)))
+    page._invert_fill_cb.setChecked(bool(values.get("invert_fill", False)))
+    page._border_fade.setText(str(values.get("border_fade", "0")))
+    page._mirror_v_cb.setChecked(bool(values.get("mirror_v", False)))
+    page._mirror_h_cb.setChecked(bool(values.get("mirror_h", False)))
+
+    # All PARAM_SPECS pattern fields
+    for specs in PARAM_SPECS.values():
+        for spec in specs:
+            w = getattr(page, spec.attr, None)
+            if w is None:
+                continue
+            key = spec.attr[1:]
+            if spec.kind == "checkbox":
+                w.setChecked(bool(values.get(key, False)))
+            elif spec.kind == "combobox":
+                w.setCurrentText(str(values.get(key, spec.default)))
+            else:
+                w.setText(str(values.get(key, spec.default)))
+
+    # Tile library fields
+    page._tile_gap.setText(str(values.get("tile_gap", "0.5")))
+    page._tile_angle.setText(str(values.get("tile_angle", "0")))
+    page._tile_interlock_cb.setChecked(bool(values.get("tile_interlock", False)))
+
+    # Halftone fields
+    page._htone_img_edit.setText(str(values.get("htone_img_path", "")))
+    page._htone_r_min.setText(str(values.get("htone_r_min", "0.3")))
+    page._htone_r_max.setText(str(values.get("htone_r_max", "1.8")))
+    page._htone_spacing.setText(str(values.get("htone_spacing", "2.2")))
+    page._htone_invert.setChecked(bool(values.get("htone_invert", False)))
+
+    page._update_tile_library_panel()

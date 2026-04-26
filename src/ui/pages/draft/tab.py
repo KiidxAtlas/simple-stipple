@@ -1,4 +1,4 @@
-"""Draft tab — interaction-first 2D drafting.
+"""Draft page — interaction-first 2D drafting.
 
 Design goals:
 - Maximize canvas space; minimize persistent chrome
@@ -9,11 +9,11 @@ Design goals:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QPoint, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
@@ -22,24 +22,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.document.actions import set_active_layer
-from src.backend.document.graph import DocumentGraph
-from src.backend.document.migration import graph_from_polylines
 from src.backend.dxf.io import (
     load_dxf_polylines_with_report,
     summarize_dxf_import_report,
     write_polylines_dxf,
 )
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.canvas.graph_adapter import CanvasGraphAdapter
-from src.ui.components.containers import (
-    CanvasObjectBrowser,
-    CanvasPrecisionBar,
-    CanvasStatusStrip,
-    DxfLayersTree,
+from src.ui.components.canvas.modules import (
+    CanvasGridModule,
+    CanvasLayerTreeModule,
+    CanvasToolbarModule,
 )
-from src.ui.components.factories import _content_splitter, _surface_frame
-from src.ui.sidebars.properties import PropertiesPanel
+from src.ui.components.canvas.runtime import CanvasRuntime
+from src.ui.components.canvas.widgets import (
+    CanvasStatusStrip,
+)
+from src.ui.components.common.factories import _content_splitter, _surface_frame
+from src.ui.pages.draft.session import (
+    apply_draft_workspace_state,
+    clear_draft_workspace_state,
+    get_draft_workspace_state,
+)
 
 
 def _toolbar_sep() -> QLabel:
@@ -48,8 +51,10 @@ def _toolbar_sep() -> QLabel:
     return sep
 
 
-class ShapeTab(QWidget):
-    """Canvas-first drafting tab optimized for interaction speed."""
+class DraftPage(QWidget):
+    """Canvas-first drafting page optimized for interaction speed."""
+
+    DEFAULT_LAYER = "Layer 1"
 
     stateChanged = Signal()
     sendSelectedToPatternRequested = Signal(object)
@@ -62,20 +67,16 @@ class ShapeTab(QWidget):
         self._last_out_path: str | None = None
         self._last_in_path: str | None = None
         self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
-        self._doc_graph = DocumentGraph()
-        set_active_layer(self._doc_graph, "geometry")
-        self._graph_adapter = CanvasGraphAdapter(
-            self._doc_graph, display_layer="geometry"
-        )
-        self._hidden_indices: set[int] = set()
-        self._locked_indices: set[int] = set()
+        self._runtime: CanvasRuntime | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        canvas_host = self._build_canvas()
         root.addWidget(self._build_toolbar())
-        root.addWidget(self._build_canvas(), stretch=1)
+        root.addWidget(self._build_grid())
+        root.addWidget(canvas_host, stretch=1)
 
         self._canvas_status = CanvasStatusStrip(show_readiness=False)
         root.addWidget(self._canvas_status)
@@ -84,63 +85,53 @@ class ShapeTab(QWidget):
 
         self._refresh_status()
 
+    def _rt(self) -> CanvasRuntime:
+        assert self._runtime is not None
+        return self._runtime
+
     # ── Toolbar ───────────────────────────────────────────────────────────
 
     def _build_toolbar(self) -> QWidget:
-        bar = QWidget()
-        bar.setProperty("surface", "panel")
-        container = QVBoxLayout(bar)
-        container.setContentsMargins(6, 6, 6, 6)
-        container.setSpacing(4)
-
-        lay = QHBoxLayout()
-        lay.setContentsMargins(2, 0, 2, 0)
-        lay.setSpacing(4)
-
-        # Mode group
-        self._mode_btns: dict[str, QPushButton] = {}
-        for mode in ("Select", "Draw", "Edit"):
-            btn = QPushButton(mode)
-            btn.setMinimumHeight(28)
-            btn.setProperty("active", mode == "Select")
-            mode_shortcut = {"Select": "S", "Draw": "D", "Edit": "E"}[mode]
-            btn.setToolTip(f"{mode} mode ({mode_shortcut})")
-            btn.clicked.connect(lambda checked=False, m=mode: self._on_toolbar_mode(m))
-            lay.addWidget(btn)
-            self._mode_btns[mode] = btn
-
         open_btn = QPushButton("Open DXF")
         open_btn.setMinimumHeight(28)
         open_btn.setToolTip("Open a DXF file into the draft canvas for editing")
         open_btn.clicked.connect(self._browse_dxf)
-        lay.addWidget(open_btn)
 
-        lay.addWidget(_toolbar_sep())
         self._shape_mode_label = QLabel("Shape: Rectangle")
         self._shape_mode_label.setStyleSheet("color: #8b949e; font-size: 11px;")
-        lay.addWidget(self._shape_mode_label)
 
         self._actions_btn = QPushButton("Actions ▾")
         self._actions_btn.setMinimumHeight(28)
         self._actions_btn.setToolTip("Context actions for current selection")
         self._actions_btn.clicked.connect(self._show_context_actions_menu)
-        lay.addWidget(self._actions_btn)
-
-        lay.addStretch()
 
         export_btn = QPushButton("Export DXF")
         export_btn.setFixedHeight(28)
         export_btn.setMinimumWidth(90)
         export_btn.setProperty("role", "primary")
         export_btn.clicked.connect(self._export)
-        lay.addWidget(export_btn)
 
-        container.addLayout(lay)
+        self._toolbar_module = CanvasToolbarModule(
+            canvas=self._canvas,
+            on_mode=self._on_toolbar_mode,
+            on_fit=self._fit_view,
+            extra_widgets=[
+                open_btn,
+                _toolbar_sep(),
+                self._shape_mode_label,
+                self._actions_btn,
+                export_btn,
+            ],
+        )
+        return self._toolbar_module
 
-        self._precision_bar = CanvasPrecisionBar(None, on_changed=self._refresh_status)
-        container.addWidget(self._precision_bar)
-
-        return bar
+    def _build_grid(self) -> QWidget:
+        self._grid_module = CanvasGridModule(
+            canvas=self._canvas,
+            on_changed=self._refresh_status,
+        )
+        self._precision_bar = self._grid_module
+        return self._grid_module
 
     # ── Canvas ────────────────────────────────────────────────────────────
 
@@ -164,31 +155,38 @@ class ShapeTab(QWidget):
         self._canvas.quickShapeEnabledChanged.connect(
             self._on_quick_shape_enabled_changed
         )
-        if hasattr(self, "_precision_bar"):
-            self._precision_bar.bind_canvas(self._canvas)
-        self._graph_adapter.load_to_canvas(self._canvas, fit=False)
+        self._runtime = CanvasRuntime(
+            canvas=self._canvas,
+            default_layer=self.DEFAULT_LAYER,
+        )
+        self._runtime.graph_adapter.load_to_canvas(self._canvas, fit=False)
 
         side_panel = QWidget()
         side_layout = QVBoxLayout(side_panel)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
 
-        self._object_browser = CanvasObjectBrowser("Draft Objects")
-        self._object_browser.selectionRequested.connect(
-            self._on_browser_selection_requested
+        self._layer_module = CanvasLayerTreeModule(
+            canvas=self._canvas,
+            title="Layers",
+            editable=True,
+            get_active_layer_name=self._current_layer_name,
+            build_layer_rows=self._build_layer_tree_rows,
+            on_selection_requested=self._on_tree_selection_requested,
+            on_fit_requested=self._fit_selection,
+            on_visibility_changed=self._refresh_status,
         )
-        self._object_browser.visibilityChanged.connect(
-            self._on_browser_visibility_changed
-        )
-        self._object_browser.lockChanged.connect(self._on_browser_lock_changed)
-        self._object_browser.fitRequested.connect(self._fit_selection)
-        side_layout.addWidget(self._object_browser, stretch=3)
+        self._layers_tree = self._layer_module.tree
+        self._layer_sidebar = self._layer_module.controller
 
-        self._layers_tree = DxfLayersTree("DXF Layers")
-        side_layout.addWidget(self._layers_tree, stretch=2)
-
-        self._properties_panel = PropertiesPanel()
-        side_layout.addWidget(self._properties_panel, stretch=2)
+        self._layers_tree.layerActivated.connect(self._on_layer_activated)
+        self._layers_tree.layerAdded.connect(self._on_layer_added)
+        self._layers_tree.layerRenamed.connect(self._on_layer_renamed)
+        self._layers_tree.layerDeleted.connect(self._on_layer_deleted)
+        self._layers_tree.layerMoved.connect(self._on_layer_moved)
+        self._layers_tree.shapeMoveRequested.connect(self._on_shape_move_requested)
+        self._layers_tree.moveSelectedRequested.connect(self._on_move_selected_to_layer)
+        side_layout.addWidget(self._layer_module, stretch=1)
 
         splitter = _content_splitter(self._canvas, side_panel, sizes=(860, 280))
         layout.addWidget(splitter, stretch=1)
@@ -196,20 +194,14 @@ class ShapeTab(QWidget):
 
     # ── Mode / callbacks ──────────────────────────────────────────────────
 
-    def _set_active_mode_btn(self, mode: str) -> None:
-        v = mode.lower()
-        for k, b in self._mode_btns.items():
-            b.setProperty("active", k.lower() == v)
-            b.style().unpolish(b)
-            b.style().polish(b)
-
     def _on_toolbar_mode(self, mode: str) -> None:
-        self._set_active_mode_btn(mode)
+        self._toolbar_module.set_active_mode(mode)
         self._canvas.set_mode(mode.lower())
         self._refresh_status()
 
     def _on_canvas_mode_change(self, mode: str) -> None:
-        self._set_active_mode_btn(mode)
+        if hasattr(self, "_toolbar_module"):
+            self._toolbar_module.set_active_mode(mode)
         self._refresh_status()
 
     def _on_quick_shape_changed(self, mode: str) -> None:
@@ -220,36 +212,92 @@ class ShapeTab(QWidget):
         _ = enabled
         self._refresh_status()
 
-    def _on_sel_change(self, _count: int) -> None:
+    def _on_sel_change(self, count: int) -> None:
+        if hasattr(self, "_toolbar_module"):
+            self._toolbar_module.set_selection_count(count)
         self._refresh_status()
 
-    def _on_browser_selection_requested(self, indices: list[int]) -> None:
-        self._canvas.set_selection(indices)
+    def _current_layer_name(self) -> str:
+        return self._rt().current_layer_name()
+
+    def _on_tree_selection_requested(self, indices: list[int]) -> None:
+        self._rt().on_tree_selection_requested(indices)
         self._refresh_status()
 
-    def _on_browser_visibility_changed(self, idx: int, visible: bool) -> None:
-        if visible:
-            self._hidden_indices.discard(idx)
-        else:
-            self._hidden_indices.add(idx)
-        self._sync_browser_interaction_state()
-        self._refresh_status()
+    def _layer_view_bucket(self, layer: str | None = None) -> dict[str, set[int]]:
+        return self._rt().layer_view_bucket(layer)
 
-    def _on_browser_lock_changed(self, idx: int, locked: bool) -> None:
-        if locked:
-            self._locked_indices.add(idx)
-        else:
-            self._locked_indices.discard(idx)
-        self._sync_browser_interaction_state()
+    def _set_current_layer_view(self, layer: str | None = None) -> None:
+        self._rt().set_current_layer_view(layer)
+
+    def _rename_layer_view_state(self, old: str, new: str) -> None:
+        self._rt().rename_layer_view_state(old, new)
+
+    def _delete_layer_view_state(self, name: str) -> None:
+        self._rt().delete_layer_view_state(name)
+
+    def _normalize_graph_for_ui(self) -> None:
+        self._rt().normalize_graph_for_ui()
+
+    def _reload_active_layer(self, *, fit: bool = False) -> None:
+        self._rt().reload_active_layer(fit=fit)
+
+    def _switch_active_layer(self, layer: str, *, fit: bool = False) -> None:
+        if self._rt().switch_active_layer(layer, fit=fit):
+            self._refresh_status()
+            self._emit_state_changed()
+
+    def _add_layer_and_activate(self, layer: str) -> None:
+        self._rt().add_layer_and_activate(layer)
         self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_layer_activated(self, layer: str) -> None:
+        self._switch_active_layer(layer, fit=False)
+
+    def _on_shape_move_requested(
+        self, source_layer: str, shape_key: object, target_layer: str
+    ) -> None:
+        if self._rt().shape_move_requested(source_layer, shape_key, target_layer):
+            self._refresh_status()
+            self._emit_state_changed()
+
+    def _on_layer_added(self, layer: str) -> None:
+        self._add_layer_and_activate(layer)
+
+    def _on_layer_renamed(self, old_name: str, new_name: str) -> None:
+        self._rt().layer_renamed(old_name, new_name)
+        self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_layer_deleted(self, layer: str) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Delete Layer",
+            f"Delete layer '{layer}' and all of its contents?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._rt().layer_deleted(layer)
+        self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_layer_moved(self, layer: str, new_index: int) -> None:
+        self._rt().layer_moved(layer, new_index)
+        self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_move_selected_to_layer(self, target_layer: str) -> None:
+        if not self._rt().move_selected_to_layer(target_layer):
+            self._canvas._show_flash("Select shape(s) first", 1000)
+            return
+        self._refresh_status()
+        self._emit_state_changed()
 
     def _sync_browser_interaction_state(self) -> None:
-        max_idx = self._canvas.poly_count
-        valid = set(range(max_idx))
-        self._hidden_indices &= valid
-        self._locked_indices &= valid
-        self._canvas.set_hidden_indices(sorted(self._hidden_indices))
-        self._canvas.set_locked_indices(sorted(self._locked_indices))
+        self._rt().sync_browser_interaction_state()
 
     def _selection_relationship_summary(self) -> str:
         sel = self._canvas.get_selection_indices()
@@ -270,15 +318,14 @@ class ShapeTab(QWidget):
             self._refresh_status()
 
     def _on_canvas_edit(self) -> None:
-        self._graph_adapter.capture_from_canvas(self._canvas)
-        self._sync_browser_interaction_state()
+        self._rt().on_canvas_edit()
         self._refresh_status()
         self._emit_state_changed()
 
     def _close_selected_polylines(self) -> None:
         changed = self._canvas.close_selected_polylines()
         if changed:
-            self._graph_adapter.capture_from_canvas(self._canvas)
+            self._rt().graph_adapter.capture_from_canvas(self._canvas)
             self._canvas._show_flash(f"Closed {changed} polyline(s)", 900)
             self._refresh_status()
             self._emit_state_changed()
@@ -288,7 +335,7 @@ class ShapeTab(QWidget):
     def _open_selected_polylines(self) -> None:
         changed = self._canvas.open_selected_polylines()
         if changed:
-            self._graph_adapter.capture_from_canvas(self._canvas)
+            self._rt().graph_adapter.capture_from_canvas(self._canvas)
             self._canvas._show_flash(f"Opened {changed} polyline(s)", 900)
             self._refresh_status()
             self._emit_state_changed()
@@ -321,13 +368,13 @@ class ShapeTab(QWidget):
     def _delete_selected(self) -> None:
         deleted = self._canvas.delete_selected()
         if deleted:
-            self._graph_adapter.capture_from_canvas(self._canvas)
+            self._rt().graph_adapter.capture_from_canvas(self._canvas)
             self._refresh_status()
             self._emit_state_changed()
 
     def _duplicate_selected(self) -> None:
         if self._canvas.duplicate_selected():
-            self._graph_adapter.capture_from_canvas(self._canvas)
+            self._rt().graph_adapter.capture_from_canvas(self._canvas)
             self._refresh_status()
             self._emit_state_changed()
 
@@ -340,12 +387,13 @@ class ShapeTab(QWidget):
         self._refresh_status()
 
     def _on_canvas_action(self, action_type: str, payload: dict | None = None) -> None:
-        self._doc_graph.record_action(
+        active = self._rt().current_layer_name()
+        self._rt().doc_graph.record_action(
             f"canvas:{action_type}",
             payload or {},
-            touched=[("layer", "geometry")],
+            touched=[("layer", active)],
             invalidated_layers=sorted(
-                self._doc_graph.reachable_dependents({"geometry"})
+                self._rt().doc_graph.reachable_dependents({active})
             ),
             user_initiated=True,
         )
@@ -445,124 +493,21 @@ class ShapeTab(QWidget):
         if hasattr(self, "_precision_bar"):
             self._precision_bar.refresh()
 
-        if hasattr(self, "_object_browser"):
-            self._sync_browser_interaction_state()
-            self._object_browser.set_objects(
-                self._canvas.get_polylines_state(),
-                self._canvas.get_selection_indices(),
-                hidden_indices=sorted(self._hidden_indices),
-                locked_indices=sorted(self._locked_indices),
-            )
-
         if hasattr(self, "_layers_tree"):
-            active = getattr(self._doc_graph, "active_layer", "geometry")
-            rows = list(self._imported_dxf_layers)
-            rows.extend([
-                (
-                    name,
-                    len(layer.polylines),
-                    bool(layer.dirty),
-                    name == active,
-                )
-                for name, layer in sorted(self._doc_graph.layers.items())
-            ])
-            if not rows:
-                rows = [("geometry", self._canvas.poly_count, False, True)]
-            self._layers_tree.set_layers(rows)
+            self._layer_sidebar.refresh_tree()
 
-        if hasattr(self, "_properties_panel"):
-            sel_count = self._canvas.sel_count
-            mode = self._canvas.get_mode()
-            selection_indices = self._canvas.get_selection_indices()
-            locked_selected = [
-                i for i in selection_indices if i in self._locked_indices
-            ]
-            if sel_count:
-                summary_text = (
-                    f"{sel_count} object{'s' if sel_count != 1 else ''} selected"
-                )
-                next_step = "Drag to move, right-click for transform options"
-                details_text = (
-                    "Double-click selects connected object. Right-click always opens context actions. "
-                    + self._selection_relationship_summary()
-                ).strip()
-                actions = [
-                    (
-                        "Fit Selection",
-                        "Zoom to selected objects",
-                        self._fit_selection,
-                        True,
-                    ),
-                    (
-                        "Close Polyline",
-                        "Close selected open polylines (Shift+C)",
-                        self._close_selected_polylines,
-                        True,
-                    ),
-                    (
-                        "Open Polyline",
-                        "Open selected closed polylines (Shift+O)",
-                        self._open_selected_polylines,
-                        True,
-                    ),
-                    (
-                        "Delete Selected",
-                        "Delete selected geometry (Delete)",
-                        self._delete_selected,
-                        bool(
-                            selection_indices
-                            and len(locked_selected) < len(selection_indices)
-                        ),
-                    ),
-                ]
-            elif mode == "draw":
-                summary_text = "Draw mode active"
-                next_step = "Click to place points, double-click to close polygon"
-                details_text = "Smart snap and preview are active before commit."
-                actions = [
-                    (
-                        "Back to Select",
-                        "Exit draw mode (D)",
-                        lambda: self._canvas.set_mode("select"),
-                        True,
-                    ),
-                    ("Fit View", "Fit all geometry (F)", self._fit_view, True),
-                ]
-            else:
-                summary_text = "No active selection"
-                next_step = "Canvas ready"
-                details_text = (
-                    "Use Q for radial menu, or Cmd/Ctrl+K for command palette."
-                )
-                actions = [
-                    (
-                        "Enable Quick Rectangle",
-                        "Set quick-shape drag mode to rectangle (Shift+R)",
-                        lambda: self._canvas.set_quick_shape_mode("rectangle"),
-                        True,
-                    ),
-                    ("Fit View", "Fit all geometry (F)", self._canvas.fit, True),
-                    (
-                        "Select All",
-                        "Select all objects (Ctrl+A)",
-                        self._select_all,
-                        self._canvas.poly_count > 0,
-                    ),
-                ]
+    def _build_layer_shape_rows(
+        self,
+        layer_name: str,
+        polylines: list[list[tuple[float, float]]],
+    ) -> list[dict[str, Any]]:
+        return self._rt().build_layer_shape_rows(layer_name, polylines)
 
-            self._properties_panel.set_context(
-                mode=mode,
-                selected_count=sel_count,
-                object_count=n,
-                summary=summary_text,
-                next_step=next_step,
-                details=details_text,
-            )
-            self._properties_panel.set_actions(actions)
-
-        self._shape_mode_label.setText(
-            f"Shape: {self._canvas.quick_shape_mode.title()}"
-        )
+    def _build_layer_tree_rows(
+        self,
+        layer_view_state: dict[str, dict[str, set[int]]],
+    ) -> list[dict[str, Any]]:
+        return self._rt().build_layer_tree_rows(layer_view_state)
 
     def _emit_state_changed(self) -> None:
         if not self._suspend_state:
@@ -604,16 +549,7 @@ class ShapeTab(QWidget):
                 (name, count, False, False)
                 for name, count in report.layer_counts.items()
             ]
-            self._canvas.set_polylines_state(polys, fit=bool(polys))
-            self._canvas.set_mode("select")
-            self._doc_graph = graph_from_polylines(
-                polys,
-                layer="geometry",
-                as_segments=True,
-            )
-            self._graph_adapter = CanvasGraphAdapter(
-                self._doc_graph, display_layer="geometry"
-            )
+            self._rt().load_polys(polys, fit=bool(polys))
             self._canvas._show_flash(f"Loaded DXF: {Path(path).name}", 1200)
             if report.has_issues:
                 detail = summarize_dxf_import_report(report)
@@ -638,17 +574,7 @@ class ShapeTab(QWidget):
         if not polys:
             return
         incoming = [[(x, y) for x, y in poly] for poly in polys]
-        self._imported_dxf_layers = []
-        self._canvas.set_polylines_state(incoming, fit=True)
-        self._canvas.set_mode("select")
-        self._doc_graph = graph_from_polylines(
-            incoming,
-            layer="geometry",
-            as_segments=True,
-        )
-        self._graph_adapter = CanvasGraphAdapter(
-            self._doc_graph, display_layer="geometry"
-        )
+        self._rt().load_polys(incoming, fit=True)
         self._canvas._show_flash(f"Loaded {len(incoming)} from {source_label}", 1200)
         self._refresh_status()
         self._emit_state_changed()
@@ -656,97 +582,13 @@ class ShapeTab(QWidget):
     # ── Workspace persistence ─────────────────────────────────────────────
 
     def get_workspace_state(self) -> dict:
-        self._graph_adapter.capture_from_canvas(self._canvas)
-        return {
-            "canvas_polys": self._canvas.get_polylines_state(),
-            "canvas_view": self._canvas.get_view_state(),
-            "quick_shape_mode": self._canvas.quick_shape_mode,
-            "quick_shape_enabled": self._canvas.quick_shape_enabled,
-            "last_input_dxf": self._last_in_path,
-            "document_graph": self._doc_graph.snapshot(),
-        }
+        return get_draft_workspace_state(self)
 
     def apply_workspace_state(self, state: dict | None) -> None:
-        self._suspend_state = True
-        if not isinstance(state, dict):
-            state = {}
-        self._hidden_indices.clear()
-        self._locked_indices.clear()
-        self._imported_dxf_layers = []
-
-        graph_state = state.get("document_graph")
-        if isinstance(graph_state, dict):
-            self._doc_graph.restore(graph_state)
-            self._graph_adapter = CanvasGraphAdapter(
-                self._doc_graph, display_layer="geometry"
-            )
-            self._graph_adapter.load_to_canvas(
-                self._canvas, fit=bool(self._canvas.poly_count == 0)
-            )
-
-        polys = state.get("canvas_polys", [])
-        if polys and not isinstance(graph_state, dict):
-            self._canvas.set_polylines_state(polys, fit=True)
-            self._doc_graph = graph_from_polylines(
-                polys, layer="geometry", as_segments=True
-            )
-            self._graph_adapter = CanvasGraphAdapter(
-                self._doc_graph, display_layer="geometry"
-            )
-        else:
-            if not isinstance(graph_state, dict):
-                self._canvas.load([])
-                self._doc_graph = DocumentGraph()
-                set_active_layer(self._doc_graph, "geometry")
-                self._graph_adapter = CanvasGraphAdapter(
-                    self._doc_graph, display_layer="geometry"
-                )
-
-        if state.get("canvas_view"):
-            self._canvas.set_view_state(state["canvas_view"])
-            view_state = state["canvas_view"]
-            if isinstance(view_state, dict):
-                self._hidden_indices = {
-                    int(i)
-                    for i in view_state.get("hidden_indices", [])
-                    if isinstance(i, int)
-                }
-                self._locked_indices = {
-                    int(i)
-                    for i in view_state.get("locked_indices", [])
-                    if isinstance(i, int)
-                }
-        self._sync_browser_interaction_state()
-
-        quick_shape_enabled = bool(state.get("quick_shape_enabled", False))
-        self._canvas.set_quick_shape_enabled(quick_shape_enabled)
-        if quick_shape_enabled and state.get("quick_shape_mode"):
-            self._canvas.set_quick_shape_mode(
-                str(state["quick_shape_mode"]), flash=False
-            )
-        self._last_in_path = str(state.get("last_input_dxf", "") or "") or None
-
-        self._suspend_state = False
-        self._refresh_status()
+        apply_draft_workspace_state(self, state)
 
     def clear_workspace_state(self) -> None:
-        self._suspend_state = True
-        self._hidden_indices.clear()
-        self._locked_indices.clear()
-        self._imported_dxf_layers = []
-        self._doc_graph = DocumentGraph()
-        set_active_layer(self._doc_graph, "geometry")
-        self._graph_adapter = CanvasGraphAdapter(
-            self._doc_graph, display_layer="geometry"
-        )
-        self._graph_adapter.load_to_canvas(self._canvas, fit=False)
-        self._canvas.set_mode("select")
-        self._sync_browser_interaction_state()
-        self._canvas.set_quick_shape_mode("rectangle", flash=False)
-        self._canvas.set_quick_shape_enabled(False)
-        self._last_in_path = None
-        self._suspend_state = False
-        self._refresh_status()
+        clear_draft_workspace_state(self)
 
     def get_preset_state(self) -> dict[str, dict]:
         return {}

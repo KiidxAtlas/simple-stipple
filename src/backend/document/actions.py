@@ -18,7 +18,12 @@ from src.backend.geometry.shapes import (
 class ActionType:
     CREATE_SEGMENT = "create_segment"
     CREATE_SHAPE = "create_shape"
+    CREATE_LAYER = "create_layer"
     DELETE_ENTITIES = "delete_entities"
+    DELETE_LAYER = "delete_layer"
+    RENAME_LAYER = "rename_layer"
+    REORDER_LAYER = "reorder_layer"
+    MOVE_LAYER_ENTITIES = "move_layer_entities"
     SET_PARAM = "set_param"
     SET_ACTIVE_LAYER = "set_active_layer"
     APPLY_TRANSFORM = "apply_transform"
@@ -158,7 +163,7 @@ def delete_entities(
         elif kind == "layer":
             lname = str(ref)
             if lname in graph.layers:
-                graph.layers.pop(lname, None)
+                graph.delete_layer(lname)
                 affected_layers.add(lname)
                 touched.append(("layer", lname))
         elif kind == "param":
@@ -211,6 +216,99 @@ def set_active_layer(graph: DocumentGraph, layer: str) -> ActionResult:
         {"layer": layer},
         touched=[("layer", layer)],
         invalidated_layers=[],
+    )
+    return ActionResult(rec.id, rec.touched, rec.invalidated_layers)
+
+
+def create_layer(
+    graph: DocumentGraph,
+    name: str,
+    *,
+    activate: bool = True,
+) -> ActionResult:
+    created = name not in graph.layers
+    graph.ensure_layer(name)
+    if activate:
+        graph.set_active_layer(name)
+    rec = graph.record_action(
+        ActionType.CREATE_LAYER,
+        {"name": name, "activate": activate, "created": created},
+        touched=[("layer", name)],
+        invalidated_layers=[],
+    )
+    return ActionResult(rec.id, rec.touched, rec.invalidated_layers)
+
+
+def rename_layer(
+    graph: DocumentGraph,
+    old_name: str,
+    new_name: str,
+) -> ActionResult:
+    invalidated = sorted(graph.reachable_dependents({old_name}))
+    graph.rename_layer(old_name, new_name)
+    rec = graph.record_action(
+        ActionType.RENAME_LAYER,
+        {"old_name": old_name, "new_name": new_name},
+        touched=[("layer", new_name)],
+        invalidated_layers=invalidated,
+    )
+    return ActionResult(rec.id, rec.touched, rec.invalidated_layers)
+
+
+def delete_layer(
+    graph: DocumentGraph,
+    name: str,
+    *,
+    fallback_layer: str = "geometry",
+) -> ActionResult:
+    invalidated = sorted(graph.reachable_dependents({name}))
+    graph.delete_layer(name, fallback_layer=fallback_layer)
+    rec = graph.record_action(
+        ActionType.DELETE_LAYER,
+        {"name": name, "fallback_layer": fallback_layer},
+        touched=[("layer", name)],
+        invalidated_layers=invalidated,
+    )
+    return ActionResult(rec.id, rec.touched, rec.invalidated_layers)
+
+
+def reorder_layer(
+    graph: DocumentGraph,
+    name: str,
+    new_index: int,
+) -> ActionResult:
+    graph.move_layer(name, new_index)
+    rec = graph.record_action(
+        ActionType.REORDER_LAYER,
+        {"name": name, "new_index": new_index},
+        touched=[("layer", name)],
+        invalidated_layers=[],
+    )
+    return ActionResult(rec.id, rec.touched, rec.invalidated_layers)
+
+
+def move_entities_to_layer(
+    graph: DocumentGraph,
+    refs: list[EntityRef],
+    *,
+    source_layer: str,
+    target_layer: str,
+) -> ActionResult:
+    invalidated = sorted(graph.reachable_dependents({source_layer, target_layer}))
+    graph.move_entities_to_layer(
+        refs,
+        source_layer=source_layer,
+        target_layer=target_layer,
+    )
+    rec = graph.record_action(
+        ActionType.MOVE_LAYER_ENTITIES,
+        {
+            "refs": refs,
+            "source_layer": source_layer,
+            "target_layer": target_layer,
+        },
+        touched=list(refs) + [("layer", source_layer), ("layer", target_layer)],
+        invalidated_layers=invalidated,
     )
     return ActionResult(rec.id, rec.touched, rec.invalidated_layers)
 

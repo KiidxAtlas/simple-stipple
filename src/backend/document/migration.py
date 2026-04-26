@@ -15,9 +15,9 @@ def graph_from_polylines(
     graph = DocumentGraph()
     graph.set_active_layer(layer)
 
-    if as_segments and layer == "geometry":
+    if as_segments:
         for poly in polylines:
-            graph.add_polyline_as_segments(poly, layer="geometry", merge_points=False)
+            graph.add_polyline_as_segments(poly, layer=layer, merge_points=False)
     else:
         graph.set_layer_polylines(layer, polylines)
 

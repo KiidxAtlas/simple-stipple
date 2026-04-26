@@ -22,7 +22,7 @@ from src.backend.dxf.fix import fix_dxf
 from src.backend.dxf.fvi import convert_fvi_to_dxf
 from src.backend.dxf.svg import dxf_to_svg
 from src.backend.io import svg_to_dxf
-from src.ui.components.factories import _section_label
+from src.ui.components.common.factories import _section_label
 
 
 def _append_ignored_entities_note(msg: str, stats: dict) -> str:
