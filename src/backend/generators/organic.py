@@ -19,17 +19,20 @@ from shapely.geometry import (  # type: ignore[import-untyped]
 from shapely.ops import voronoi_diagram  # type: ignore[import-untyped]
 
 from src.backend.generators._shared import (
-    _clip_to_outline,
-    _collect_lines,
-    _coords_to_polyline,
     LOGGER,
+    _clip_to_outline,
+    _coords_to_polyline,
 )
 
 
 def gen_stipple_dots(
-    outline_poly, radius: float, spacing: float
+    outline_poly, radius: float, spacing: float, *, seed: int | None = None
 ) -> list[list[tuple[float, float]]]:
-    """Poisson-Disk sampled filled circles clipped to the outline."""
+    """Poisson-Disk sampled filled circles clipped to the outline.
+
+    ``seed`` controls the RNG used for sampling; when ``None`` a stable
+    default is used so renders remain deterministic across runs.
+    """
     if radius <= 0 or spacing <= 0:
         return []
 
@@ -42,7 +45,8 @@ def gen_stipple_dots(
     scale = max(w, h)
     r_scaled = spacing / scale
 
-    engine = PoissonDisk(d=2, radius=r_scaled, rng=np.random.default_rng(42))
+    rng_seed = 42 if seed is None else int(seed)
+    engine = PoissonDisk(d=2, radius=r_scaled, rng=np.random.default_rng(rng_seed))
     n_candidates = max(64, int(w * h / (spacing**2) * 4))
     samples = engine.random(n_candidates)
 

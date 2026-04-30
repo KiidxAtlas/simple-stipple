@@ -13,7 +13,6 @@ from typing import Any
 
 from PySide6.QtCore import QPoint, Signal
 from PySide6.QtWidgets import (
-    QFileDialog,
     QLabel,
     QMenu,
     QMessageBox,
@@ -23,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.dxf.io import (
-    load_dxf_polylines_with_report,
+    load_dxf_polylines_by_layer_with_report,
     summarize_dxf_import_report,
     write_polylines_dxf,
 )
@@ -38,11 +37,14 @@ from src.ui.components.canvas.widgets import (
     CanvasStatusStrip,
 )
 from src.ui.components.common.factories import _content_splitter, _surface_frame
+from src.ui.components.common.recent_files_button import RecentFilesButton
 from src.ui.pages.draft.session import (
     apply_draft_workspace_state,
     clear_draft_workspace_state,
     get_draft_workspace_state,
 )
+from src.ui.util.dialog_paths import pick_open_file, pick_save_file
+from src.ui.util.recent_files import KIND_DXF, record_recent
 
 
 def _toolbar_sep() -> QLabel:
@@ -97,6 +99,15 @@ class DraftPage(QWidget):
         open_btn.setToolTip("Open a DXF file into the draft canvas for editing")
         open_btn.clicked.connect(self._browse_dxf)
 
+        self._recent_btn = RecentFilesButton(
+            self._settings,
+            KIND_DXF,
+            empty_message="No recent DXF files.",
+        )
+        self._recent_btn.setMinimumHeight(28)
+        self._recent_btn.setToolTip("Pick from recently opened DXF files")
+        self._recent_btn.fileSelected.connect(self._load_dxf)
+
         self._shape_mode_label = QLabel("Shape: Rectangle")
         self._shape_mode_label.setStyleSheet("color: #8b949e; font-size: 11px;")
 
@@ -117,6 +128,7 @@ class DraftPage(QWidget):
             on_fit=self._fit_view,
             extra_widgets=[
                 open_btn,
+                self._recent_btn,
                 _toolbar_sep(),
                 self._shape_mode_label,
                 self._actions_btn,
@@ -149,6 +161,7 @@ class DraftPage(QWidget):
             on_action=self._on_canvas_action,
             on_send_selected_to_pattern=self._on_send_selected_to_pattern,
             on_use_selected_as_fill_pattern=self._on_use_selected_as_fill_pattern,
+            on_ghost_click=self._on_ghost_poly_click,
             draft_profile=True,
         )
         self._canvas.quickShapeChanged.connect(self._on_quick_shape_changed)
@@ -185,7 +198,9 @@ class DraftPage(QWidget):
         self._layers_tree.layerDeleted.connect(self._on_layer_deleted)
         self._layers_tree.layerMoved.connect(self._on_layer_moved)
         self._layers_tree.shapeMoveRequested.connect(self._on_shape_move_requested)
+        self._layers_tree.shapesMoveRequested.connect(self._on_shapes_move_requested)
         self._layers_tree.moveSelectedRequested.connect(self._on_move_selected_to_layer)
+        self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
         side_layout.addWidget(self._layer_module, stretch=1)
 
         splitter = _content_splitter(self._canvas, side_panel, sizes=(860, 280))
@@ -215,14 +230,19 @@ class DraftPage(QWidget):
     def _on_sel_change(self, count: int) -> None:
         if hasattr(self, "_toolbar_module"):
             self._toolbar_module.set_selection_count(count)
-        self._refresh_status()
+        # Update only the selection count in the status strip — do NOT call
+        # _refresh_status() here because that rebuilds the layer tree and
+        # immediately erases the visual selection the user just made.
+        if hasattr(self, "_canvas_status"):
+            self._canvas_status.set_selection_count(count)
 
     def _current_layer_name(self) -> str:
         return self._rt().current_layer_name()
 
     def _on_tree_selection_requested(self, indices: list[int]) -> None:
         self._rt().on_tree_selection_requested(indices)
-        self._refresh_status()
+        # Do NOT call _refresh_status() — that rebuilds the tree and clears
+        # the selection highlight the user just created.
 
     def _layer_view_bucket(self, layer: str | None = None) -> dict[str, set[int]]:
         return self._rt().layer_view_bucket(layer)
@@ -262,6 +282,27 @@ class DraftPage(QWidget):
             self._refresh_status()
             self._emit_state_changed()
 
+    def _on_shape_renamed(
+        self, layer_name: str, shape_key: object, new_label: str
+    ) -> None:
+        self._rt().rename_shape(layer_name, shape_key, new_label)
+        self._refresh_status()
+
+    def _on_shapes_move_requested(
+        self, source_layer: str, shape_keys: list, target_layer: str
+    ) -> None:
+        if self._rt().shapes_move_requested(source_layer, shape_keys, target_layer):
+            count = len([k for k in shape_keys if isinstance(k, int)])
+            try:
+                self._canvas._show_flash(
+                    f"Moved {count} shape{'s' if count != 1 else ''} to {target_layer}",
+                    1200,
+                )
+            except Exception:
+                pass
+            self._refresh_status()
+            self._emit_state_changed()
+
     def _on_layer_added(self, layer: str) -> None:
         self._add_layer_and_activate(layer)
 
@@ -293,6 +334,10 @@ class DraftPage(QWidget):
         if not self._rt().move_selected_to_layer(target_layer):
             self._canvas._show_flash("Select shape(s) first", 1000)
             return
+        try:
+            self._canvas._show_flash(f"Moved selection to {target_layer}", 1200)
+        except Exception:
+            pass
         self._refresh_status()
         self._emit_state_changed()
 
@@ -398,6 +443,18 @@ class DraftPage(QWidget):
             user_initiated=True,
         )
 
+    def _on_ghost_poly_click(self, ghost_idx: int) -> None:
+        """Clicking a shape from another layer activates that layer and selects the shape."""
+        result = self._rt().layer_for_ghost_index(ghost_idx)
+        if result is None:
+            return
+        layer_name, local_idx = result
+        # Switch to the target layer (loads its polys into the canvas).
+        self._switch_active_layer(layer_name, fit=False)
+        # Now select the shape by its local index within the newly active layer.
+        self._canvas.set_selection([local_idx])
+        self._refresh_status()
+
     def _on_send_selected_to_pattern(
         self,
         polys: list[list[tuple[float, float]]],
@@ -426,23 +483,84 @@ class DraftPage(QWidget):
             )
             return
 
-        out_path, _ = QFileDialog.getSaveFileName(
+        out_path = pick_save_file(
             self,
+            self._settings,
+            "draft_output",
             "Export DXF",
-            str(Path(self._settings.get("draft_output_dir", "")) / "draft.dxf"),
+            "draft.dxf",
             "DXF files (*.dxf);;All files (*)",
+            fallback_dir=self._settings.get("draft_output_dir", ""),
         )
         if not out_path:
             return
 
         try:
-            write_polylines_dxf(
-                [list(r["polyline"]) for r in records],
-                out_path,
-                close=True,
-                entity_kinds=[str(r.get("kind", "polyline")) for r in records],
-                entity_meta=[r.get("meta") for r in records],
-            )
+            # Capture in-canvas edits back into the active layer of the
+            # document graph so the export sees the latest state of every
+            # layer rather than just whatever happens to live in self._polys.
+            rt = self._rt()
+            try:
+                rt.graph_adapter.capture_from_canvas(self._canvas)
+            except (AttributeError, ValueError, TypeError):
+                pass
+
+            active_name = rt.current_layer_name()
+            active_polys = [list(r["polyline"]) for r in records]
+            active_kinds = [str(r.get("kind", "polyline")) for r in records]
+            active_metas = [r.get("meta") for r in records]
+
+            # Build {layer_name: polys} preserving layer_order. Skip the
+            # "geometry" sentinel (it's the legacy single-layer fallback).
+            layered: dict[str, list[list[tuple[float, float]]]] = {}
+            for name, layer in rt.doc_graph.iter_layers():
+                if name == "geometry":
+                    continue
+                if name == active_name:
+                    polys = active_polys
+                else:
+                    polys = [list(p) for p in layer.polylines]
+                if polys:
+                    layered[name] = polys
+
+            if not layered:
+                # No graph layers populated — fall back to flat export so
+                # we never lose the user's work. Emit onto a named layer
+                # (instead of the AutoCAD default "0") so downstream CAM
+                # tools assign it a real color and can fill it; layer "0"
+                # is locked to color 7 which many laser apps treat as
+                # "BYBLOCK / no color set" and refuse to fill.
+                fallback_layer = active_name or "Layer"
+                write_polylines_dxf(
+                    active_polys,
+                    out_path,
+                    close=True,
+                    pattern_layer=fallback_layer,
+                    entity_kinds=active_kinds,
+                    entity_meta=active_metas,
+                )
+            else:
+                # First layer in iter order becomes the "main" entity stream
+                # so it can carry kind/meta info (lines, circles, ellipses,
+                # arcs). Remaining layers are emitted as additional DXF
+                # layers via extra_layers.
+                first_name = next(iter(layered))
+                first_polys = layered.pop(first_name)
+                if first_name == active_name:
+                    main_kinds: list[str] | None = active_kinds
+                    main_metas: list[dict[str, Any] | None] | None = active_metas
+                else:
+                    main_kinds = None
+                    main_metas = None
+                write_polylines_dxf(
+                    first_polys,
+                    out_path,
+                    close=True,
+                    pattern_layer=first_name,
+                    entity_kinds=main_kinds,
+                    entity_meta=main_metas,
+                    extra_layers=layered or None,
+                )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -495,6 +613,7 @@ class DraftPage(QWidget):
 
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
+            self._rt()._update_ghost_layers()
 
     def _build_layer_shape_rows(
         self,
@@ -531,26 +650,36 @@ class DraftPage(QWidget):
         event.ignore()
 
     def _browse_dxf(self) -> None:
-        idir = self._settings.get("draft_input_dxf_dir", "")
-        path, _ = QFileDialog.getOpenFileName(
+        path = pick_open_file(
             self,
+            self._settings,
+            "draft_input_dxf",
             "Open DXF for Draft Editing",
-            idir,
             "DXF files (*.dxf *.Dxf *.DXF);;All files (*)",
+            fallback_dir=self._settings.get("draft_input_dxf_dir", ""),
         )
         if path:
             self._load_dxf(path)
 
     def _load_dxf(self, path: str) -> None:
         try:
-            polys, report = load_dxf_polylines_with_report(path)
+            by_layer, report = load_dxf_polylines_by_layer_with_report(path)
             self._last_in_path = path
             self._imported_dxf_layers = [
                 (name, count, False, False)
                 for name, count in report.layer_counts.items()
             ]
-            self._rt().load_polys(polys, fit=bool(polys))
+            # Flatten for fit-bounds / fallback consumers.
+            flat: list[list[tuple[float, float]]] = []
+            for polys in by_layer.values():
+                flat.extend(polys)
+            rt = self._rt()
+            if len(by_layer) > 1:
+                rt.load_polys_by_layer(by_layer, fit=bool(flat))
+            else:
+                rt.load_polys(flat, fit=bool(flat))
             self._canvas._show_flash(f"Loaded DXF: {Path(path).name}", 1200)
+            record_recent(self._settings, KIND_DXF, path)
             if report.has_issues:
                 detail = summarize_dxf_import_report(report)
                 if detail:

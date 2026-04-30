@@ -39,6 +39,7 @@ class DxfCanvas(PolylineView):
         on_send_selected_to_draft=None,
         on_use_selected_as_fill_pattern=None,
         on_cutout_toggle=None,
+        on_ghost_click=None,
         draft_profile: bool = False,
     ):
         super().__init__(
@@ -53,6 +54,7 @@ class DxfCanvas(PolylineView):
         self._send_selected_to_draft_cb = on_send_selected_to_draft
         self._use_selected_as_fill_pattern_cb = on_use_selected_as_fill_pattern
         self._on_cutout_toggle = on_cutout_toggle
+        self._on_ghost_click = on_ghost_click
         self._cutout_indices: set[int] = set()
         self._draft_profile = bool(draft_profile or selectable)
 
@@ -133,6 +135,11 @@ class DxfCanvas(PolylineView):
             pos = event.position()
             hit = self._find_poly_at(pos.x(), pos.y())
             if hit is None:
+                # Check if the user clicked on a ghost (other-layer) poly.
+                ghost_hit = self._find_ghost_poly_at(pos.x(), pos.y())
+                if ghost_hit is not None and callable(self._on_ghost_click):
+                    self._on_ghost_click(ghost_hit)
+                    return
                 if self._quick_shape_enabled:
                     mode = self._shape_mode_from_modifiers(event.modifiers())
                     self._start_shape_drag(mode, pos)
@@ -268,6 +275,21 @@ class DxfCanvas(PolylineView):
                 cutout_toggle = self._on_cutout_toggle
                 if callable(cutout_toggle):
                     menu.addAction(cutout_label, lambda _idx=idx: cutout_toggle(_idx))
+                # When multiple shapes are selected, offer bulk cutout toggle.
+                if len(self._sel) > 1 and idx in self._sel:
+                    all_cutout = all(i in self._cutout_indices for i in self._sel)
+                    bulk_label = (
+                        "Remove Cutout for all selected"
+                        if all_cutout
+                        else "Mark all selected as Cutout"
+                    )
+                    sel_snapshot = set(self._sel)
+                    menu.addAction(
+                        bulk_label,
+                        lambda _cb=cutout_toggle, _sel=sel_snapshot: [
+                            _cb(i) for i in _sel
+                        ],
+                    )
             menu.addSeparator()
 
         context_idx = poly_hit
@@ -333,6 +355,11 @@ class DxfCanvas(PolylineView):
             menu.addAction(
                 "Use as pattern fill",
                 lambda: _run_transform(self._use_selected_as_fill_pattern),
+            )
+        if callable(getattr(self, "_send_selected_to_draft_cb", None)):
+            menu.addAction(
+                "Send to Draft",
+                lambda: _run_transform(self._send_selected_to_draft),
             )
 
         transform_menu = menu.addMenu("Transform")

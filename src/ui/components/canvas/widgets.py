@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -351,6 +351,13 @@ class CanvasStatusStrip(QFrame):
         self._readiness_chip.style().unpolish(self._readiness_chip)
         self._readiness_chip.style().polish(self._readiness_chip)
 
+    def set_selection_count(self, count: int) -> None:
+        """Lightweight update — change only the selection label without a full snapshot."""
+        self._selection_label.setText(f"{count} sel")
+        self._selection_label.setStyleSheet(
+            f"color: {'#79c0ff' if count else '#8b949e'}; font-size: 11px;"
+        )
+
 
 class DxfLayersTree(QFrame):
     """Hierarchical layer and shape tree for canvas sidebars."""
@@ -363,9 +370,13 @@ class DxfLayersTree(QFrame):
     layerRenamed = Signal(str, str)
     layerDeleted = Signal(str)
     layerMoved = Signal(str, int)
+    layerSoloRequested = Signal(str)
+    bulkVisibilityRequested = Signal(bool)
     shapeVisibilityChanged = Signal(str, object, bool)
     shapeMoveRequested = Signal(str, object, str)
+    shapesMoveRequested = Signal(str, list, str)
     moveSelectedRequested = Signal(str)
+    shapeRenamed = Signal(str, object, str)  # layer, key, new_label
 
     _ROLE_KIND = int(Qt.ItemDataRole.UserRole)
     _ROLE_INTERNAL_NAME = int(Qt.ItemDataRole.UserRole + 1)
@@ -383,10 +394,35 @@ class DxfLayersTree(QFrame):
         def startDrag(self, supportedActions) -> None:  # type: ignore[override]
             if not self._owner._editable:
                 return
+            current = self.currentItem()
+            # Layer-reorder drag: when the user grabs a single layer row we
+            # emit a "layer" payload so dropEvent can reposition it.
+            selected = self.selectedItems()
+            if (
+                current is not None
+                and current.data(0, DxfLayersTree._ROLE_KIND) == "layer"
+                and (not selected or selected == [current])
+            ):
+                layer_name = str(
+                    current.data(0, DxfLayersTree._ROLE_INTERNAL_NAME) or ""
+                )
+                if layer_name and layer_name != "geometry":
+                    payload = {"kind": "layer", "name": layer_name}
+                    drag = QDrag(self)
+                    mime = self.mimeData([current])
+                    mime.setData(
+                        "application/x-simple-stipple-layer-tree",
+                        json.dumps(payload).encode("utf-8"),
+                    )
+                    drag.setMimeData(mime)
+                    drag.exec(supportedActions)
+                    return
+
             shape_items = [
                 item
                 for item in self.selectedItems()
                 if item.data(0, DxfLayersTree._ROLE_KIND) == "shape"
+                and bool(item.flags() & Qt.ItemFlag.ItemIsDragEnabled)
             ]
             if not shape_items:
                 item = self.currentItem()
@@ -429,9 +465,6 @@ class DxfLayersTree(QFrame):
             if not self._owner._editable:
                 return
             target = self.itemAt(event.position().toPoint())
-            if target is None or target.data(0, DxfLayersTree._ROLE_KIND) != "layer":
-                return
-
             raw = event.mimeData().data("application/x-simple-stipple-layer-tree")
             if raw.isEmpty():
                 return
@@ -439,7 +472,44 @@ class DxfLayersTree(QFrame):
                 payload = json.loads(bytes(raw).decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 return
-            if payload.get("kind") != "shape":
+            kind = payload.get("kind")
+
+            if kind == "layer":
+                source_layer = str(payload.get("name", ""))
+                if not source_layer or source_layer not in self._owner._layer_order:
+                    return
+                # Determine the destination index from the drop target.
+                if target is None:
+                    new_index = len(self._owner._layer_order) - 1
+                else:
+                    target_layer_item = (
+                        target
+                        if target.data(0, DxfLayersTree._ROLE_KIND) == "layer"
+                        else target.parent()
+                    )
+                    if target_layer_item is None:
+                        return
+                    target_name = str(
+                        target_layer_item.data(0, DxfLayersTree._ROLE_INTERNAL_NAME)
+                        or ""
+                    )
+                    if not target_name or target_name not in self._owner._layer_order:
+                        return
+                    if target_name == source_layer:
+                        return
+                    new_index = self._owner._layer_order.index(target_name)
+                self._owner.layerMoved.emit(source_layer, new_index)
+                event.acceptProposedAction()
+                return
+
+            if kind != "shape":
+                return
+            if target is None:
+                return
+            # Allow dropping onto a shape item — resolve to its parent layer.
+            if target.data(0, DxfLayersTree._ROLE_KIND) == "shape":
+                target = target.parent()
+            if target is None or target.data(0, DxfLayersTree._ROLE_KIND) != "layer":
                 return
 
             source_layer = str(payload.get("source_layer", ""))
@@ -450,10 +520,14 @@ class DxfLayersTree(QFrame):
             if not source_layer or not target_layer or source_layer == target_layer:
                 return
 
-            for shape_key in shape_keys:
-                self._owner.shapeMoveRequested.emit(
-                    source_layer, shape_key, target_layer
-                )
+            # Emit a single batched signal so listeners can move every
+            # dropped shape in one graph operation. (We deliberately do NOT
+            # also emit per-key shapeMoveRequested here — that would cause
+            # double-moves when both are connected. Per-key emissions remain
+            # available for callers that need them, e.g. tests.)
+            self._owner.shapesMoveRequested.emit(
+                source_layer, list(shape_keys), target_layer
+            )
             event.acceptProposedAction()
 
     def __init__(self, title: str = "DXF Layers", *, editable: bool = False) -> None:
@@ -465,6 +539,7 @@ class DxfLayersTree(QFrame):
         self._syncing = False
         self._layer_order: list[str] = []
         self._shape_keys_by_layer: dict[str, list[Any]] = {}
+        self._filter_text: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -472,24 +547,49 @@ class DxfLayersTree(QFrame):
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(4)
         title_label = QLabel(title)
         title_label.setProperty("role", "callout-title")
         header.addWidget(title_label)
         self._summary = QLabel("0 layers")
         self._summary.setProperty("role", "callout-body")
         header.addWidget(self._summary)
-        if self._editable:
-            self._add_button = QToolButton()
-            self._add_button.setText("+")
-            self._add_button.setToolTip("Add layer")
-            self._add_button.clicked.connect(self._prompt_add_layer)
-            header.addWidget(self._add_button)
         header.addStretch()
+        if self._editable:
+            self._add_button = self._make_tool_button(
+                "+",
+                "Add a new layer.\n"
+                "Right-click any layer to rename / delete / reorder.\n"
+                "Drag shapes onto a layer row to move them between layers.",
+                self._prompt_add_layer,
+            )
+            header.addWidget(self._add_button)
+            self._show_all_button = self._make_tool_button(
+                "\u25c9",
+                "Show all layers",
+                lambda: self.bulkVisibilityRequested.emit(True),
+            )
+            header.addWidget(self._show_all_button)
+            self._hide_all_button = self._make_tool_button(
+                "\u25cb",
+                "Hide all layers",
+                lambda: self.bulkVisibilityRequested.emit(False),
+            )
+            header.addWidget(self._hide_all_button)
         layout.addLayout(header)
+
+        # Search / filter row — narrows the visible layer set as the user types.
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Filter layers and shapes…")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._on_filter_changed)
+        layout.addWidget(self._search)
 
         self._tree = self._LayerTreeWidget(self)
         self._tree.setHeaderHidden(True)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setIndentation(14)
         self._tree.setDragEnabled(self._editable)
         self._tree.setAcceptDrops(self._editable)
         self._tree.setDropIndicatorShown(self._editable)
@@ -501,14 +601,67 @@ class DxfLayersTree(QFrame):
         self._tree.currentItemChanged.connect(self._emit_current_item_change)
         self._tree.itemChanged.connect(self._handle_item_changed)
         self._tree.itemSelectionChanged.connect(self._emit_selection_request)
-        self._tree.itemDoubleClicked.connect(
-            lambda _item, _col=0: self.fitRequested.emit()
-        )
+        self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         if self._editable:
             self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._tree.customContextMenuRequested.connect(self._show_context_menu)
             self._tree.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
+            # Del key on the focused tree row deletes the active layer.
+            self._delete_shortcut = QShortcut(
+                QKeySequence(QKeySequence.StandardKey.Delete), self._tree
+            )
+            self._delete_shortcut.setContext(
+                Qt.ShortcutContext.WidgetWithChildrenShortcut
+            )
+            self._delete_shortcut.activated.connect(self._delete_current_layer)
         layout.addWidget(self._tree, stretch=1)
+
+    @staticmethod
+    def _make_tool_button(text: str, tooltip: str, slot) -> QToolButton:
+        btn = QToolButton()
+        btn.setText(text)
+        btn.setToolTip(tooltip)
+        btn.setAutoRaise(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(slot)
+        return btn
+
+    def _delete_current_layer(self) -> None:
+        if not self._editable:
+            return
+        item = self._tree.currentItem()
+        if item is None:
+            return
+        target = item if self._item_kind(item) == "layer" else item.parent()
+        if target is None:
+            return
+        name = self._item_internal_name(target)
+        if not name or name == "geometry":
+            return
+        self.layerDeleted.emit(name)
+
+    def _on_filter_changed(self, text: str) -> None:
+        self._filter_text = text.strip().lower()
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        needle = self._filter_text
+        for row in range(self._tree.topLevelItemCount()):
+            layer_item = self._tree.topLevelItem(row)
+            if layer_item is None:
+                continue
+            layer_text = layer_item.text(0).lower()
+            any_child_match = False
+            for child_idx in range(layer_item.childCount()):
+                child = layer_item.child(child_idx)
+                child_visible = not needle or needle in child.text(0).lower()
+                child.setHidden(not child_visible)
+                if child_visible:
+                    any_child_match = True
+            if not needle:
+                layer_item.setHidden(False)
+                continue
+            layer_item.setHidden(needle not in layer_text and not any_child_match)
 
     def set_layers(self, layers: Sequence[tuple[Any, ...] | dict[str, Any]]) -> None:
         self._syncing = True
@@ -551,7 +704,11 @@ class DxfLayersTree(QFrame):
             self._layer_order.append(internal_name)
             self._shape_keys_by_layer[internal_name] = []
 
-            layer_item = QTreeWidgetItem([display_name])
+            # Compose a label with an inline shape-count badge so the user can
+            # see relative weight at a glance without expanding the layer.
+            shape_count = len(shapes)
+            badge = f"  ·  {shape_count}" if shape_count else ""
+            layer_item = QTreeWidgetItem([f"{display_name}{badge}"])
             layer_item.setData(0, self._ROLE_KIND, "layer")
             layer_item.setData(0, self._ROLE_INTERNAL_NAME, internal_name)
             layer_item.setData(0, self._ROLE_DISPLAY_NAME, display_name)
@@ -598,6 +755,7 @@ class DxfLayersTree(QFrame):
                 shape_item = QTreeWidgetItem([shape_label])
                 shape_item.setData(0, self._ROLE_KIND, "shape")
                 shape_item.setData(0, self._ROLE_INTERNAL_NAME, internal_name)
+                shape_item.setData(0, self._ROLE_DISPLAY_NAME, shape_label)
                 shape_item.setData(0, self._ROLE_SHAPE_KEY, shape_key)
                 shape_item.setData(0, self._ROLE_VISIBLE, shape_visible)
                 shape_item.setData(0, self._ROLE_EDITABLE, shape_editable)
@@ -607,6 +765,8 @@ class DxfLayersTree(QFrame):
                 shape_flags |= Qt.ItemFlag.ItemIsUserCheckable
                 if self._editable and draggable:
                     shape_flags |= Qt.ItemFlag.ItemIsDragEnabled
+                if self._editable and shape_editable:
+                    shape_flags |= Qt.ItemFlag.ItemIsEditable
                 shape_item.setFlags(shape_flags)
                 shape_item.setCheckState(
                     0,
@@ -620,6 +780,8 @@ class DxfLayersTree(QFrame):
         if active_item is not None:
             self._tree.setCurrentItem(active_item)
         self._tree.expandAll()
+        # Re-apply any active filter so newly rebuilt rows obey it.
+        self._apply_filter()
         self._syncing = False
 
     def _item_kind(self, item: QTreeWidgetItem | None) -> str:
@@ -669,6 +831,20 @@ class DxfLayersTree(QFrame):
         if self._item_kind(current) == "layer":
             self.layerActivated.emit(self._item_internal_name(current))
 
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, _col: int = 0) -> None:
+        """Double-click: rename shape items inline; fit view for layer items."""
+        if item is None:
+            return
+        kind = self._item_kind(item)
+        if (
+            kind == "shape"
+            and self._editable
+            and bool(item.data(0, self._ROLE_EDITABLE))
+        ):
+            self._tree.editItem(item, 0)
+        else:
+            self.fitRequested.emit()
+
     def _emit_selection_request(self) -> None:
         if self._syncing:
             return
@@ -698,7 +874,12 @@ class DxfLayersTree(QFrame):
         if kind == "layer":
             editable = bool(item.data(0, self._ROLE_EDITABLE))
             old_display = str(item.data(0, self._ROLE_DISPLAY_NAME) or "")
-            new_display = item.text(0).strip()
+            # Strip the inline " · N" badge that set_layers appends so the
+            # user's edit is interpreted as a pure name.
+            raw_text = item.text(0).strip()
+            if "  ·  " in raw_text:
+                raw_text = raw_text.split("  ·  ", 1)[0].strip()
+            new_display = raw_text
             if editable and new_display and new_display != old_display:
                 old_internal = self._item_internal_name(item)
                 if new_display in self._layer_order:
@@ -733,6 +914,23 @@ class DxfLayersTree(QFrame):
             self.layerVisibilityChanged.emit(self._item_internal_name(item), visible)
             return
         if kind == "shape":
+            # Check for a rename first — text changed while checkbox unchanged.
+            old_display = str(item.data(0, self._ROLE_DISPLAY_NAME) or "")
+            new_text = item.text(0).strip()
+            if (
+                bool(item.data(0, self._ROLE_EDITABLE))
+                and new_text
+                and new_text != old_display
+            ):
+                self._syncing = True
+                item.setData(0, self._ROLE_DISPLAY_NAME, new_text)
+                self._syncing = False
+                self.shapeRenamed.emit(
+                    self._item_internal_name(item),
+                    self._item_shape_key(item),
+                    new_text,
+                )
+                return
             self.shapeVisibilityChanged.emit(
                 self._item_internal_name(item), self._item_shape_key(item), visible
             )
@@ -768,8 +966,26 @@ class DxfLayersTree(QFrame):
             menu.addAction(
                 "Activate layer", lambda: self.layerActivated.emit(layer_name)
             )
-            menu.addAction("Rename layer", lambda: self._tree.editItem(item, 0))
-            menu.addAction("Delete layer", lambda: self.layerDeleted.emit(layer_name))
+            menu.addAction("Rename layer\tF2", lambda: self._tree.editItem(item, 0))
+            del_action = menu.addAction(
+                "Delete layer\tDel", lambda: self.layerDeleted.emit(layer_name)
+            )
+            if layer_name == "geometry":
+                del_action.setEnabled(False)
+            menu.addSeparator()
+            menu.addAction(
+                "Solo (isolate)",
+                lambda: self.layerSoloRequested.emit(layer_name),
+            )
+            menu.addAction(
+                "Show all",
+                lambda: self.bulkVisibilityRequested.emit(True),
+            )
+            menu.addAction(
+                "Hide all",
+                lambda: self.bulkVisibilityRequested.emit(False),
+            )
+            menu.addSeparator()
             idx = (
                 self._layer_order.index(layer_name)
                 if layer_name in self._layer_order
@@ -790,7 +1006,9 @@ class DxfLayersTree(QFrame):
                 lambda: self.moveSelectedRequested.emit(layer_name),
             )
         elif kind == "shape":
+            shape_key = self._item_shape_key(item)
             menu.addSeparator()
+            menu.addAction("Rename shape\tF2", lambda: self._tree.editItem(item, 0))
             menu.addAction(
                 "Hide shape",
                 lambda: self.shapeVisibilityChanged.emit(
@@ -803,6 +1021,17 @@ class DxfLayersTree(QFrame):
                     layer_name, self._item_shape_key(item), True
                 ),
             )
+            # "Move to Layer" submenu — lists every other layer as a target.
+            other_layers = [n for n in self._layer_order if n != layer_name]
+            if other_layers:
+                move_menu = menu.addMenu("Move to Layer")
+                for target in other_layers:
+                    move_menu.addAction(
+                        target,
+                        lambda _lname=layer_name, _key=shape_key, _t=target: (
+                            self.shapeMoveRequested.emit(_lname, _key, _t)
+                        ),
+                    )
             menu.addAction(
                 "Move selected here",
                 lambda: self.moveSelectedRequested.emit(layer_name),

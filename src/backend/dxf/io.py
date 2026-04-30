@@ -17,6 +17,65 @@ _LOG = logging.getLogger(__name__)
 OUTLINE_CLOSE_TOLERANCE_MM = 2.0
 OUTLINE_MIN_AREA_MM2 = 1.0
 
+# Tolerance (in drawing units) for detecting that a polyline's first and
+# last points coincide.  Tight enough to avoid false positives on real
+# open chains, loose enough to absorb float round-trips through shapely.
+_DXF_CLOSURE_EPS = 1e-4
+_DXF_DEDUP_EPS = 1e-9
+
+
+def _normalize_polyline_for_dxf(
+    pts: list[tuple[float, float]],
+    *,
+    closure_eps: float = _DXF_CLOSURE_EPS,
+    force_close: bool = False,
+) -> tuple[list[tuple[float, float]], bool]:
+    """Clean a polyline for DXF emission.
+
+    * Drops consecutive duplicate points (zero-length segments) which break
+      some downstream CAD tools and inflate file size.
+    * Detects whether the polyline is closed (first \u2248 last within
+      ``closure_eps``) and strips the trailing duplicate so callers can
+      hand the points to ezdxf with ``close=True`` cleanly.
+
+    Returns ``(coords, is_closed)``.  ``is_closed`` is True when either
+    the input was naturally closed or ``force_close`` is requested AND
+    the result has \u2265 3 distinct points.
+    """
+    if not pts:
+        return [], False
+
+    # Pass 0: drop NaN / inf coordinates that would corrupt the DXF.
+    finite: list[tuple[float, float]] = [
+        (float(x), float(y)) for x, y in pts if math.isfinite(x) and math.isfinite(y)
+    ]
+    if not finite:
+        return [], False
+
+    # Pass 1: drop runs of identical points.
+    cleaned: list[tuple[float, float]] = [finite[0]]
+    for p in finite[1:]:
+        last = cleaned[-1]
+        if abs(p[0] - last[0]) > _DXF_DEDUP_EPS or abs(p[1] - last[1]) > _DXF_DEDUP_EPS:
+            cleaned.append(p)
+
+    if len(cleaned) < 2:
+        return cleaned, False
+
+    # Pass 2: detect closure (first ~ last) and strip the trailing copy.
+    first, last = cleaned[0], cleaned[-1]
+    naturally_closed = (
+        abs(first[0] - last[0]) <= closure_eps
+        and abs(first[1] - last[1]) <= closure_eps
+    )
+    if naturally_closed and len(cleaned) >= 3:
+        cleaned = cleaned[:-1]
+        is_closed = True
+    else:
+        is_closed = bool(force_close) and len(cleaned) >= 3
+
+    return cleaned, is_closed
+
 
 class OutlinePreflight(NamedTuple):
     usable_polygons: list[Polygon]
@@ -130,32 +189,45 @@ def _ellipse_points(
 def _load_dxf_polylines_with_report(
     path: str,
 ) -> tuple[list[list[tuple[float, float]]], DxfImportReport]:
+    by_layer, report = _load_dxf_polylines_by_layer_with_report(path)
+    flat: list[list[tuple[float, float]]] = []
+    for polys in by_layer.values():
+        flat.extend(polys)
+    return flat, report
+
+
+def _load_dxf_polylines_by_layer_with_report(
+    path: str,
+) -> tuple[dict[str, list[list[tuple[float, float]]]], DxfImportReport]:
     doc = _ezdxf_readfile(path)
     msp = doc.modelspace()
-    result: list[list[tuple[float, float]]] = []
+    by_layer: dict[str, list[list[tuple[float, float]]]] = {}
     flattened_entities: Counter[str] = Counter()
     unsupported_entities: Counter[str] = Counter()
     layer_counts: Counter[str] = Counter()
     invalid_polylines = 0
+    total_supported = 0
 
-    def _append(pts: list[tuple[float, float]], closed: bool) -> None:
+    def _append(layer: str, pts: list[tuple[float, float]], closed: bool) -> None:
+        nonlocal total_supported
         if len(pts) < 2:
             return
-        result.append(_polyline_points_closed(pts, closed=closed))
+        bucket = by_layer.setdefault(layer, [])
+        bucket.append(_polyline_points_closed(pts, closed=closed))
+        total_supported += 1
 
     for ent in msp:
         dxftype = ent.dxftype()
         try:
-            layer_name = str(ent.dxf.layer).strip()
-        except Exception:
+            layer_name = str(ent.dxf.layer).strip() or "0"
+        except (AttributeError, ValueError, TypeError):
             layer_name = "0"
-        if layer_name:
-            layer_counts[layer_name] += 1
+        layer_counts[layer_name] += 1
         if dxftype == "LWPOLYLINE":
             try:
                 lw = cast(Any, ent)
                 pts = [(float(p[0]), float(p[1])) for p in lw.get_points()]
-                _append(pts, bool(lw.is_closed))
+                _append(layer_name, pts, bool(lw.is_closed))
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid LWPOLYLINE in %s: %s", path, exc)
                 invalid_polylines += 1
@@ -169,7 +241,7 @@ def _load_dxf_polylines_with_report(
                     (float(v.dxf.location.x), float(v.dxf.location.y))
                     for v in poly.vertices
                 ]
-                _append(pts, bool(poly.is_closed))
+                _append(layer_name, pts, bool(poly.is_closed))
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid POLYLINE in %s: %s", path, exc)
                 invalid_polylines += 1
@@ -179,7 +251,7 @@ def _load_dxf_polylines_with_report(
                 line = cast(Any, ent)
                 start = (float(line.dxf.start.x), float(line.dxf.start.y))
                 end = (float(line.dxf.end.x), float(line.dxf.end.y))
-                _append([start, end], False)
+                _append(layer_name, [start, end], False)
                 flattened_entities[dxftype] += 1
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid LINE in %s: %s", path, exc)
@@ -196,7 +268,7 @@ def _load_dxf_polylines_with_report(
                     float(arc.dxf.end_angle),
                     closed=False,
                 )
-                _append(pts, False)
+                _append(layer_name, pts, False)
                 flattened_entities[dxftype] += 1
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid ARC in %s: %s", path, exc)
@@ -213,7 +285,7 @@ def _load_dxf_polylines_with_report(
                     360.0,
                     closed=True,
                 )
-                _append(pts, True)
+                _append(layer_name, pts, True)
                 flattened_entities[dxftype] += 1
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid CIRCLE in %s: %s", path, exc)
@@ -234,7 +306,7 @@ def _load_dxf_polylines_with_report(
                     float(ellipse.dxf.end_param),
                     closed=bool(getattr(ellipse, "closed", False)),
                 )
-                _append(pts, bool(getattr(ellipse, "closed", False)))
+                _append(layer_name, pts, bool(getattr(ellipse, "closed", False)))
                 flattened_entities[dxftype] += 1
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid ELLIPSE in %s: %s", path, exc)
@@ -243,9 +315,9 @@ def _load_dxf_polylines_with_report(
             unsupported_entities[dxftype] += 1
 
     return (
-        result,
+        by_layer,
         DxfImportReport(
-            supported_polylines=len(result),
+            supported_polylines=total_supported,
             flattened_entities=dict(sorted(flattened_entities.items())),
             unsupported_entities=dict(sorted(unsupported_entities.items())),
             invalid_polylines=invalid_polylines,
@@ -270,6 +342,13 @@ def load_dxf_polylines_with_report(
 ) -> tuple[list[list[tuple[float, float]]], DxfImportReport]:
     """Return polylines plus a report describing skipped DXF content."""
     return _load_dxf_polylines_with_report(path)
+
+
+def load_dxf_polylines_by_layer_with_report(
+    path: str,
+) -> tuple[dict[str, list[list[tuple[float, float]]]], DxfImportReport]:
+    """Return polylines grouped by source layer plus the import report."""
+    return _load_dxf_polylines_by_layer_with_report(path)
 
 
 def summarize_dxf_import_report(report: DxfImportReport) -> str | None:
@@ -365,15 +444,22 @@ def write_polylines_dxf(
     border_layer_prefix: str = "BORDER",
     entity_kinds: list[str] | None = None,
     entity_meta: list[dict[str, Any] | None] | None = None,
+    extra_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
 ) -> None:
     doc = _ezdxf_new("R2010")
     doc.header["$INSUNITS"] = 4
     msp = doc.modelspace()
 
+    # Cycling palette used for both the main layer and any extra layers.
+    # We deliberately avoid color 7 here: many CAM/laser tools treat DXF
+    # color 7 as "BYBLOCK / no color set" and refuse to fill those
+    # entities, which would silently break the user's first layer.
+    _LAYER_COLORS = [5, 4, 6, 1, 2, 8]  # blue, cyan, magenta, red, yellow, gray
+
     dxfattrs: dict[str, str] = {}
     if pattern_layer:
         if pattern_layer not in doc.layers:
-            doc.layers.add(pattern_layer, color=7)
+            doc.layers.add(pattern_layer, color=_LAYER_COLORS[0])
         dxfattrs = {"layer": pattern_layer}
 
     kinds = entity_kinds if entity_kinds is not None else ["polyline"] * len(polylines)
@@ -426,28 +512,66 @@ def write_polylines_dxf(
                 )
                 continue
 
-            if (
-                close
-                and len(c) >= 3
-                and math.hypot(c[-1][0] - c[0][0], c[-1][1] - c[0][1]) < 0.5
-            ):
-                poly_close = True
-                coords = c[:-1]
-            else:
-                poly_close = False
-                coords = c
-            msp.add_lwpolyline(coords, close=poly_close, dxfattribs=dxfattrs or None)
+            coords, is_closed = _normalize_polyline_for_dxf(c, force_close=bool(close))
+            if len(coords) < 2:
+                continue
+            msp.add_lwpolyline(coords, close=is_closed, dxfattribs=dxfattrs or None)
 
     if border_polys:
-        count = len(border_polys)
-        for idx, c in enumerate(border_polys):
-            if len(c) < 2:
-                continue
+        # Pre-normalize so layer suffixes (_1, _2…) reflect the *valid*
+        # borders only — otherwise a single surviving border could be
+        # named "outline_2" with no "outline_1" anywhere in the file.
+        valid_borders: list[list[tuple[float, float]]] = []
+        for c in border_polys:
+            coords, _ = _normalize_polyline_for_dxf(c, force_close=True)
+            if len(coords) >= 3:
+                valid_borders.append(coords)
+        count = len(valid_borders)
+        for idx, coords in enumerate(valid_borders):
             layer_name = border_layer_prefix
             if count > 1:
                 layer_name = f"{border_layer_prefix}_{idx + 1}"
             if layer_name not in doc.layers:
                 doc.layers.add(layer_name, color=3)
-            msp.add_lwpolyline(c, close=True, dxfattribs={"layer": layer_name})
+            msp.add_lwpolyline(coords, close=True, dxfattribs={"layer": layer_name})
 
-    doc.saveas(out_path)
+    if extra_layers:
+        # Each entry produces its own DXF layer. Polylines are written as
+        # LWPOLYLINE entities; closure is inferred from coordinate equality.
+        # Colors cycle so layers are visually distinguishable in CAD viewers.
+        # Offset by 1 when a pattern_layer was emitted so the main layer's
+        # color (LAYER_COLORS[0]) isn't reused on the first extra.
+        color_offset = 1 if pattern_layer else 0
+        for color_idx, (layer_name, layer_polys) in enumerate(extra_layers.items()):
+            if not layer_polys:
+                continue
+            color = _LAYER_COLORS[(color_idx + color_offset) % len(_LAYER_COLORS)]
+            if layer_name not in doc.layers:
+                doc.layers.add(layer_name, color=color)
+            attrs = {"layer": layer_name}
+            for c in layer_polys:
+                if len(c) < 2:
+                    continue
+                coords, is_closed = _normalize_polyline_for_dxf(c, force_close=False)
+                if len(coords) < 2:
+                    continue
+                msp.add_lwpolyline(coords, close=is_closed, dxfattribs=attrs)
+
+    # Audit the document before persisting so structural problems surface in
+    # the log instead of producing a file that crashes downstream CAD tools.
+    try:
+        auditor = doc.audit()
+        if auditor.has_errors:
+            _LOG.warning(
+                "write_polylines_dxf: %d audit error(s) in %s; writing anyway",
+                len(auditor.errors),
+                out_path,
+            )
+    except (AttributeError, RuntimeError, ValueError) as exc:
+        # Audit is best-effort; older ezdxf versions or unusual docs may
+        # not expose the same surface.
+        _LOG.debug("ezdxf audit unavailable: %s", exc)
+
+    from ..io.persistence import atomic_write_via
+
+    atomic_write_via(out_path, lambda p: doc.saveas(str(p)))

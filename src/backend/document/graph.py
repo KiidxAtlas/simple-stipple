@@ -121,6 +121,15 @@ class DocumentGraph:
         return [(name, self.layers[name]) for name in self.ordered_layer_names()]
 
     def _purge_orphan_points(self) -> None:
+        """Remove points no longer referenced by any segment.
+
+        This is O(points + segments). Callers that perform many segment
+        removals in a row should batch via :meth:`begin_bulk_edit` /
+        :meth:`end_bulk_edit` to avoid repeated scans.
+        """
+        if getattr(self, "_bulk_edit_depth", 0) > 0:
+            self._bulk_edit_dirty = True
+            return
         referenced: set[int] = set()
         for seg in self.segments.values():
             referenced.add(seg.p0)
@@ -128,6 +137,38 @@ class DocumentGraph:
         for pid in list(self.points):
             if pid not in referenced:
                 self.points.pop(pid, None)
+
+    def begin_bulk_edit(self) -> None:
+        """Suspend orphan-point purges until :meth:`end_bulk_edit` is called."""
+        self._bulk_edit_depth = getattr(self, "_bulk_edit_depth", 0) + 1
+
+    def end_bulk_edit(self) -> None:
+        depth = getattr(self, "_bulk_edit_depth", 0)
+        if depth <= 0:
+            return
+        self._bulk_edit_depth = depth - 1
+        if self._bulk_edit_depth == 0 and getattr(self, "_bulk_edit_dirty", False):
+            self._bulk_edit_dirty = False
+            self._purge_orphan_points()
+
+    def _entity_ref_exists(self, ref) -> bool:
+        """Return True if an (kind, id) tuple still resolves in this graph."""
+        if not isinstance(ref, tuple) or len(ref) != 2:
+            return False
+        kind, ident = ref
+        if not isinstance(ident, int):
+            try:
+                ident = int(ident)
+            except (TypeError, ValueError):
+                return False
+        if kind == "point":
+            return ident in self.points
+        if kind == "segment":
+            return ident in self.segments
+        if kind == "layer":
+            return any(layer.id == ident for layer in self.layers.values())
+        # Unknown kinds are tolerated (forward-compat); treat as valid.
+        return True
 
     # ── Layers ────────────────────────────────────────────────────────────
 
@@ -610,11 +651,18 @@ class DocumentGraph:
 
         for cid, payload in state.get("constraints", {}).items():
             cid_i = int(cid)
+            source = tuple(payload.get("source", ("point", 0)))
+            target = tuple(payload.get("target", ("point", 0)))
+            # Drop dangling constraint edges whose endpoints don't exist.
+            if not self._entity_ref_exists(source) or not self._entity_ref_exists(
+                target
+            ):
+                continue
             self.constraints[cid_i] = ConstraintEdge(
                 id=cid_i,
                 kind=str(payload.get("kind", "")),
-                source=tuple(payload.get("source", ("point", 0))),  # type: ignore[arg-type]
-                target=tuple(payload.get("target", ("point", 0))),  # type: ignore[arg-type]
+                source=source,  # type: ignore[arg-type]
+                target=target,  # type: ignore[arg-type]
                 data=dict(payload.get("data", {})),
             )
 

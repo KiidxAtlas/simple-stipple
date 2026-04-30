@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
-    QFileDialog,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -40,6 +40,7 @@ from src.ui.components.common.factories import (
     _surface_frame,
     parse_float_field_with_feedback,
 )
+from src.ui.components.common.recent_files_button import RecentFilesButton
 from src.ui.pages.trace.form import (
     PathField,
     TextField,
@@ -52,6 +53,8 @@ from src.ui.pages.trace.session import (
     clear_trace_workspace_state,
     get_trace_workspace_state,
 )
+from src.ui.util.dialog_paths import pick_open_file, pick_save_file
+from src.ui.util.recent_files import KIND_IMAGE, record_recent
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
 TRACE_BG_BLEND_ALPHA = 0.7
@@ -149,6 +152,7 @@ class TracePage(QWidget):
                 self._img_edit.setText(path)
                 self._img_path = path
                 self._load_thumbnail(path)
+                record_recent(self._settings, KIND_IMAGE, path)
                 self._schedule_trace()
                 self._emit_state_changed()
                 event.acceptProposedAction()
@@ -168,7 +172,19 @@ class TracePage(QWidget):
             tooltip="Path to a raster image file (drag-and-drop supported)",
         )
         self._img_edit = self._source_field.entry
-        layout.addWidget(self._source_field)
+        self._recent_btn = RecentFilesButton(
+            self._settings,
+            KIND_IMAGE,
+            empty_message="No recent images.",
+        )
+        self._recent_btn.setToolTip("Pick from recently opened images")
+        self._recent_btn.fileSelected.connect(self._load_image_from_recent)
+        source_row = QHBoxLayout()
+        source_row.setContentsMargins(0, 0, 0, 0)
+        source_row.setSpacing(6)
+        source_row.addWidget(self._source_field, stretch=1)
+        source_row.addWidget(self._recent_btn)
+        layout.addLayout(source_row)
 
         self._img_info_lbl = QLabel("")
         self._img_info_lbl.setStyleSheet(f"color: {DIM}; font-size: 10px;")
@@ -565,11 +581,13 @@ class TracePage(QWidget):
     # ── Image loading ─────────────────────────────────────────────────────────
 
     def _browse_image(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path = pick_open_file(
             self,
+            self._settings,
+            "trace_image",
             "Select image",
-            "",
             "Image files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)",
+            recent_kind=KIND_IMAGE,
         )
         if path:
             self._img_edit.setText(path)
@@ -577,6 +595,14 @@ class TracePage(QWidget):
             self._load_thumbnail(path)
             self._schedule_trace()
             self._emit_state_changed()
+
+    def _load_image_from_recent(self, path: str) -> None:
+        self._img_edit.setText(path)
+        self._img_path = path
+        self._load_thumbnail(path)
+        record_recent(self._settings, KIND_IMAGE, path)
+        self._schedule_trace()
+        self._emit_state_changed()
 
     def _load_thumbnail(self, path: str) -> None:
         try:
@@ -682,9 +708,13 @@ class TracePage(QWidget):
 
         self._running = True
         self._trace_pending = False
-        self._cancel_event.set()
+        # Cancel any in-flight worker BEFORE swapping out the event so its
+        # reference (captured by the worker thread) is signalled. The new
+        # event is freshly unset and only the new worker thread observes it.
+        old_event = self._cancel_event
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
+        old_event.set()
         trace_token = self._trace_revision
         self._progress.setRange(0, 0)  # indeterminate
         self._set_status("Tracing…")
@@ -899,8 +929,10 @@ class TracePage(QWidget):
 
     def _get_save_path(self, title: str) -> str | None:
         stem = Path(self._img_path).stem if self._img_path else "outline"
-        path, _ = QFileDialog.getSaveFileName(
+        path = pick_save_file(
             self,
+            self._settings,
+            "trace_output",
             title,
             f"{stem}_outline.dxf",
             "DXF files (*.dxf);;All files (*)",

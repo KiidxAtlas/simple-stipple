@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.error_reporting import report_error
+
 
 class CommandPaletteDialog(QDialog):
     def __init__(
@@ -65,7 +67,12 @@ class CommandPaletteDialog(QDialog):
 
     def _refresh_list(self) -> None:
         text = self._query.text().strip().lower()
+        prev_item = self._list.currentItem()
+        prev_idx = (
+            prev_item.data(Qt.ItemDataRole.UserRole) if prev_item is not None else None
+        )
         self._list.clear()
+        first_row_for_prev: int | None = None
         for idx, cmd in enumerate(self._commands):
             hay = " ".join(
                 [
@@ -87,7 +94,13 @@ class CommandPaletteDialog(QDialog):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, idx)
             self._list.addItem(item)
-        if self._list.count() > 0:
+            if prev_idx == idx:
+                first_row_for_prev = self._list.count() - 1
+        if self._list.count() == 0:
+            return
+        if first_row_for_prev is not None:
+            self._list.setCurrentRow(first_row_for_prev)
+        else:
             self._list.setCurrentRow(0)
 
     def _run_selected(self) -> None:
@@ -100,6 +113,13 @@ class CommandPaletteDialog(QDialog):
             self.reject()
             return
         callback = self._commands[idx].get("run")
-        if callable(callback):
-            callback()
+        # Accept first so failures don't leave the modal dialog stuck.
         self.accept()
+        if callable(callback):
+            try:
+                callback()
+            except Exception as exc:  # noqa: BLE001
+                report_error(
+                    f"Command '{self._commands[idx].get('title', '?')}' failed",
+                    exc,
+                )

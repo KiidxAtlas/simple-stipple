@@ -40,8 +40,13 @@ def _poly_to_svg_d(
     for i, (x, y) in enumerate(pts):
         cmd = "M" if i == 0 else "L"
         parts.append(f"{cmd}{x:.4f},{y_flip - y:.4f}")
-    if len(pts) >= 3 and pts[0] == pts[-1]:
-        parts.append("Z")
+    if len(pts) >= 3:
+        # Use epsilon-based closure detection so float drift through DXF
+        # round-trips still emits a proper Z command.
+        fx, fy = pts[0]
+        lx, ly = pts[-1]
+        if abs(fx - lx) <= 1e-4 and abs(fy - ly) <= 1e-4:
+            parts.append("Z")
     return " ".join(parts)
 
 
@@ -77,8 +82,13 @@ def dxf_to_svg(
             width="10mm",
             height="10mm",
         )
-        ET.ElementTree(root).write(
-            str(output_path), xml_declaration=True, encoding="utf-8"
+        from ..io.persistence import atomic_write_via
+
+        atomic_write_via(
+            output_path,
+            lambda p: ET.ElementTree(root).write(
+                str(p), xml_declaration=True, encoding="utf-8"
+            ),
         )
         result = {"polylines": 0, "width_mm": 0.0, "height_mm": 0.0}
         if report.has_issues:
@@ -117,7 +127,12 @@ def dxf_to_svg(
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
-    tree.write(str(output_path), xml_declaration=True, encoding="utf-8")
+    from ..io.persistence import atomic_write_via
+
+    atomic_write_via(
+        output_path,
+        lambda p: tree.write(str(p), xml_declaration=True, encoding="utf-8"),
+    )
 
     result = {
         "polylines": len(polys),

@@ -132,6 +132,8 @@ class PatternCanvasPageRuntime:
         is_preview_running: Callable[[], bool],
         has_preview_cache: Callable[[], bool],
         has_zones: Callable[[], bool],
+        get_preview_categories: Callable[[], dict[str, list[list[tuple[float, float]]]]]
+        | None = None,
     ) -> None:
         self._canvas = canvas
         self._toolbar_module = toolbar_module
@@ -143,6 +145,9 @@ class PatternCanvasPageRuntime:
         self._is_preview_running = is_preview_running
         self._has_preview_cache = has_preview_cache
         self._has_zones = has_zones
+        self._get_preview_categories = get_preview_categories
+        # Custom shape labels for outline mode: layer_name → {poly_index: label}
+        self._shape_labels: dict[str, dict[int, str]] = {}
 
     def on_toolbar_mode(self, value: str) -> None:
         self._toolbar_module.set_active_mode(value)
@@ -160,6 +165,27 @@ class PatternCanvasPageRuntime:
     def fit_selection(self) -> bool:
         return bool(self._canvas.fit_selection())
 
+    def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
+        """Persist a custom display label for an outline shape."""
+        if not isinstance(shape_key, int):
+            return
+        self._shape_labels.setdefault(layer_name, {})[int(shape_key)] = new_label
+
+    def _shape_label_builder(self, layer_name: str):
+        """Return a label function that uses custom names if set."""
+        labels = self._shape_labels.get(layer_name, {})
+
+        def _label(idx: int, poly: list[tuple[float, float]]) -> str:
+            custom = labels.get(idx)
+            geo = describe_polyline(idx, poly)
+            if not custom:
+                return geo
+            parts = geo.split("  ", 1)
+            geo_suffix = parts[1] if len(parts) > 1 else geo
+            return f"{custom}  ·  {geo_suffix}"
+
+        return _label
+
     def _active_tree_layer_name(self) -> str:
         return "pattern_preview" if self._get_showing_preview() else "pattern_active"
 
@@ -170,45 +196,100 @@ class PatternCanvasPageRuntime:
         layer_view_state: dict[str, dict[str, set[int]]],
     ) -> list[dict[str, Any]]:
         hidden = layer_view_state.setdefault(layer_name, {}).setdefault("hidden", set())
+        # Outline layer (not preview) is editable/draggable so users get the
+        # same rename and selection features as the Draft tab.
+        is_outline = layer_name == "pattern_active"
+        label_fn = (
+            self._shape_label_builder(layer_name) if is_outline else describe_polyline
+        )
         return build_shape_rows(
             polylines,
             hidden,
-            describe_polyline,
-            editable=False,
-            draggable=False,
+            label_fn,
+            editable=is_outline,
+            draggable=is_outline,
         )
 
     def build_layer_tree_rows(
         self,
         layer_view_state: dict[str, dict[str, set[int]]],
     ) -> list[dict[str, Any]]:
-        active_name = self._active_tree_layer_name()
+        showing_preview = self._get_showing_preview()
         rows: list[dict[str, Any]] = []
-        orig_polys = self._get_orig_polys()
-        if orig_polys:
+        # While previewing the pattern fill, split the layer tree into the
+        # three DXF export categories (outline / pattern / fill) so the user
+        # sees exactly what each layer of the export will contain.
+        if showing_preview:
+            categories: dict[str, list[list[tuple[float, float]]]] = {}
+            if self._get_preview_categories is not None:
+                try:
+                    categories = self._get_preview_categories() or {}
+                except Exception:
+                    categories = {}
+
+            outline_polys = categories.get("outline") or self._get_orig_polys()
+            pattern_polys = categories.get("pattern", [])
+            fill_polys = categories.get("fill", [])
+
+            if outline_polys:
+                rows.append(
+                    build_layer_row(
+                        name="pattern_outline",
+                        display_name="Outline",
+                        active=False,
+                        visible=True,
+                        editable=False,
+                        shapes=self._build_tree_shape_rows(
+                            "pattern_outline",
+                            outline_polys,
+                            layer_view_state,
+                        ),
+                    )
+                )
             rows.append(
                 build_layer_row(
-                    name="outline_source",
-                    display_name="Outline",
-                    active=False,
+                    name="pattern_preview",
+                    display_name="Pattern",
+                    active=True,
                     visible=True,
                     editable=False,
                     shapes=self._build_tree_shape_rows(
-                        "outline_source",
-                        orig_polys,
+                        "pattern_preview",
+                        pattern_polys
+                        if categories
+                        else self._canvas.get_polylines_state(),
                         layer_view_state,
                     ),
                 )
             )
+            if fill_polys:
+                rows.append(
+                    build_layer_row(
+                        name="pattern_fill",
+                        display_name="Fill",
+                        active=False,
+                        visible=True,
+                        editable=False,
+                        shapes=self._build_tree_shape_rows(
+                            "pattern_fill",
+                            fill_polys,
+                            layer_view_state,
+                        ),
+                    )
+                )
+            return rows
+
+        # Edit mode: the canvas state IS the outline. Show a single row
+        # so the tree is honest about what is actually on the canvas.
         rows.append(
             build_layer_row(
-                name=active_name,
-                display_name="Preview" if self._get_showing_preview() else "Pattern",
+                name="pattern_active",
+                display_name="Outline",
                 active=True,
                 visible=True,
                 editable=False,
                 shapes=self._build_tree_shape_rows(
-                    active_name,
+                    "pattern_active",
                     self._canvas.get_polylines_state(),
                     layer_view_state,
                 ),
@@ -218,6 +299,19 @@ class PatternCanvasPageRuntime:
 
     def refresh_canvas_panels(self) -> None:
         self._layer_sidebar.apply_current_visibility()
+        # Sync ghost-overlay visibility with the outline_source row in the
+        # layer tree (only present while previewing the pattern). The ghost
+        # respects both per-shape toggles and the layer-level eye.
+        if hasattr(self._canvas, "set_ghost_polylines") and self._get_showing_preview():
+            orig_polys = self._get_orig_polys()
+            if orig_polys:
+                outline_hidden = self._layer_sidebar.hidden_for("pattern_outline")
+                visible_polys = [
+                    poly
+                    for idx, poly in enumerate(orig_polys)
+                    if idx not in outline_hidden
+                ]
+                self._canvas.set_ghost_polylines(visible_polys, visible=True)
         summary = self._canvas.get_status_summary()
         topo = self._canvas.get_topology_summary()
         if self._is_preview_running():

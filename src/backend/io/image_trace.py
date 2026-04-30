@@ -52,7 +52,16 @@ def _close_poly(poly: Poly, tol: float = _CLOSE_TOL) -> Poly:
 
 def _load_image(path: str, max_px: int = 1200) -> tuple[Image.Image, np.ndarray]:
     """Load image via PIL, composite on white, downscale; return (rgb_img, bgr_array)."""
-    img = Image.open(path).convert("RGBA")
+    # Clamp ``max_px`` to a sane range so a malicious or corrupted call
+    # site cannot allocate gigabytes of RGBA pixels.
+    max_px = max(64, min(int(max_px), 8192))
+    img = Image.open(path)
+    # Reject pathologically large source images outright — PIL otherwise
+    # decompresses the full file before we get a chance to downscale.
+    src_w, src_h = img.size
+    if src_w * src_h > 80_000_000:  # ~80 MP — well above any realistic input
+        raise ValueError(f"Image too large to trace: {src_w}×{src_h}px (limit ~80 MP)")
+    img = img.convert("RGBA")
     bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
     img = Image.alpha_composite(bg, img).convert("RGB")
     w, h = img.size

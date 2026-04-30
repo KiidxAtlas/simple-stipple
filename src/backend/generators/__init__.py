@@ -5,7 +5,9 @@ from functools import cache, lru_cache
 from importlib import import_module
 
 from src.backend.generators._shared import (
+    HATCH_MODES,
     apply_border_fade,
+    apply_hatch_fill,
     apply_interlace,
     apply_invert_fill,
     apply_mirror,
@@ -52,7 +54,9 @@ from src.backend.generators.tiling import (
 )
 
 __all__ = [
+    "HATCH_MODES",
     "apply_border_fade",
+    "apply_hatch_fill",
     "apply_interlace",
     "apply_invert_fill",
     "apply_mirror",

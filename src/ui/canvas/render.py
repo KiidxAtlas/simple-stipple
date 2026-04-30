@@ -122,14 +122,15 @@ class CanvasRenderer:
             self._bg_pixmap is None
             or abs(self._scale - self._bg_cached_scale) > self._bg_cached_scale * 0.01
         ):
+            if self._bg_pil is None:
+                return
             try:
-                assert self._bg_pil is not None
                 resized = self._bg_pil.resize(
                     (target_w, target_h), PILImage.Resampling.LANCZOS
                 )
                 self._bg_pixmap = _pil_to_qpixmap(resized)
                 self._bg_cached_scale = self._scale
-            except (AssertionError, OSError, ValueError):
+            except (OSError, ValueError):
                 return
 
         # Always render background into the exact world bounds rectangle so image
@@ -775,8 +776,8 @@ class CanvasRenderer:
         self._mbtn_rect = (x1, y1, x2, y2)
 
     def _paint_measure_overlay(self, painter: QPainter) -> None:
-        assert self._measure_anchor is not None
-        assert self._measure_hover is not None
+        if self._measure_anchor is None or self._measure_hover is None:
+            return
         ax, ay = self._measure_anchor
         hx, hy = self._measure_hover
         cax, cay = self._w2c(ax, ay)

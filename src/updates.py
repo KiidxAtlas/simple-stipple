@@ -125,11 +125,21 @@ def _compare_versions(v1: str, v2: str) -> int:
     """
 
     def normalize(v: str) -> tuple[int, ...]:
+        # Strip leading 'v' and any pre-release/build suffix (PEP 440-ish).
+        v = v.strip().lstrip("vV")
+        for sep in ("-", "+"):
+            if sep in v:
+                v = v.split(sep, 1)[0]
         parts = v.split(".")
-        try:
-            return tuple(int(p) for p in parts)
-        except ValueError:
-            return tuple()
+        out: list[int] = []
+        for p in parts:
+            try:
+                out.append(int(p))
+            except ValueError:
+                # Stop at first non-numeric segment instead of returning ()
+                # which would treat "1.2.3rc1" as equal to all others.
+                break
+        return tuple(out)
 
     v1_parts = normalize(v1)
     v2_parts = normalize(v2)
@@ -170,26 +180,79 @@ def _get_download_url_for_platform(assets: list[dict]) -> str | None:
     return None
 
 
-def download_update(url: str, dest_path: Path, timeout: int = 60) -> bool:
-    """Download an update file.
+def download_update(
+    url: str,
+    dest_path: Path,
+    timeout: int = 60,
+    *,
+    expected_sha256: str | None = None,
+    progress_cb=None,
+) -> bool:
+    """Stream-download an update file with optional SHA-256 verification.
 
     Args:
         url: Download URL.
         dest_path: Where to save the file.
-        timeout: Request timeout in seconds.
+        timeout: Per-read timeout in seconds.
+        expected_sha256: If provided, the download is rejected when its
+            SHA-256 digest does not match (case-insensitive).
+        progress_cb: Optional callable ``(bytes_done, total_or_None)``.
 
     Returns:
         True if successful, False otherwise.
     """
+    import hashlib
+    import os
+    import tempfile
+
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         req = urllib.request.Request(
             url, headers={"User-Agent": "SimpleStipple/update-checker"}
         )
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            with open(dest_path, "wb") as f:
-                f.write(response.read())
-        _LOG.info("Downloaded update to %s", dest_path)
+        digest = hashlib.sha256()
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{dest_path.name}.", suffix=".part", dir=dest_path.parent
+        )
+        tmp_path = Path(tmp_name)
+        bytes_done = 0
+        total: int | None = None
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                length = response.headers.get("Content-Length")
+                if length and length.isdigit():
+                    total = int(length)
+                with os.fdopen(fd, "wb") as f:
+                    while True:
+                        chunk = response.read(64 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        digest.update(chunk)
+                        bytes_done += len(chunk)
+                        if progress_cb is not None:
+                            try:
+                                progress_cb(bytes_done, total)
+                            except Exception:  # noqa: BLE001 - progress is best-effort
+                                pass
+            if expected_sha256:
+                got = digest.hexdigest().lower()
+                want = expected_sha256.strip().lower()
+                if got != want:
+                    _LOG.error("Update sha256 mismatch: got %s expected %s", got, want)
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
+                    return False
+            os.replace(tmp_path, dest_path)
+        except BaseException:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise
+        _LOG.info("Downloaded update to %s (%d bytes)", dest_path, bytes_done)
         return True
     except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
         _LOG.error("Failed to download update: %s", exc)

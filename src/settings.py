@@ -53,12 +53,36 @@ def load_settings() -> dict:
     try:
         data = read_json_file(_SETTINGS_FILE, default={})
         if not isinstance(data, dict):
+            _LOG.warning(
+                "Settings file %s did not contain a JSON object; resetting.",
+                _SETTINGS_FILE,
+            )
+            _backup_corrupt_settings()
             return {}
         data = _migrate_settings(data)
         return data
     except (OSError, json.JSONDecodeError) as exc:
-        _LOG.warning("Failed to load settings from %s: %s", _SETTINGS_FILE, exc)
+        # Corrupt file: back it up so the user can recover, but don't keep
+        # crashing on every launch.
+        _LOG.warning(
+            "Failed to load settings from %s (%s); backing up and starting fresh.",
+            _SETTINGS_FILE,
+            exc,
+        )
+        _backup_corrupt_settings()
         return {}
+
+
+def _backup_corrupt_settings() -> None:
+    try:
+        if not _SETTINGS_FILE.exists():
+            return
+        backup = _SETTINGS_FILE.with_suffix(_SETTINGS_FILE.suffix + ".corrupt")
+        # Overwrite any prior backup so we don't accumulate cruft.
+        _SETTINGS_FILE.replace(backup)
+        _LOG.info("Backed up corrupt settings to %s", backup)
+    except OSError as exc:
+        _LOG.debug("Could not back up corrupt settings: %s", exc)
 
 
 def save_settings(d: dict) -> None:

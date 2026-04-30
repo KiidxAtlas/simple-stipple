@@ -8,7 +8,14 @@ from typing import NamedTuple
 
 _LOG = logging.getLogger(__name__)
 
+# Hard cap on arc tessellation segments to bound memory/CPU on bad inputs.
+MAX_ARC_SEGMENTS = 2048
+
 Point = tuple[float, float]
+
+
+def _clamp_segments(n: int) -> int:
+    return max(2, min(int(n), MAX_ARC_SEGMENTS))
 
 
 class ArcSpec(NamedTuple):
@@ -45,7 +52,7 @@ def arc_from_three_points(
         # approximation with the same point count so callers always receive
         # segments+1 points and never mistake 3 raw points for a dense arc.
         _LOG.debug("arc_from_three_points: collinear input, returning straight line")
-        return _straight_line_pts(p0, p2, max(2, segments))
+        return _straight_line_pts(p0, p2, _clamp_segments(segments))
     ux = (
         (x1 * x1 + y1 * y1) * (y2 - y3)
         + (x2 * x2 + y2 * y2) * (y3 - y1)
@@ -59,7 +66,7 @@ def arc_from_three_points(
     radius = math.hypot(x1 - ux, y1 - uy)
     if radius < 1e-9:
         _LOG.debug("arc_from_three_points: degenerate radius, returning straight line")
-        return _straight_line_pts(p0, p2, max(2, segments))
+        return _straight_line_pts(p0, p2, _clamp_segments(segments))
 
     a0 = math.atan2(y1 - uy, x1 - ux)
     a2 = math.atan2(y3 - uy, x3 - ux)
@@ -80,7 +87,7 @@ def arc_from_three_points(
     elif a2 >= a0:
         a2 -= 2 * math.pi
 
-    steps = max(2, segments)
+    steps = _clamp_segments(segments)
     step = (a2 - a0) / steps
     return [
         (ux + radius * math.cos(a0 + i * step), uy + radius * math.sin(a0 + i * step))
@@ -122,7 +129,7 @@ def arc_from_center_start_end(
     elif a1 >= a0:
         a1 -= 2 * math.pi
 
-    steps = max(2, segments)
+    steps = _clamp_segments(segments)
     step = (a1 - a0) / steps
     return [
         (cx + radius * math.cos(a0 + i * step), cy + radius * math.sin(a0 + i * step))

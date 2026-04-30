@@ -6,6 +6,8 @@ import math
 from typing import Any, cast
 from uuid import uuid4
 
+from shapely import prepared as _shp_prepared  # type: ignore[import-untyped]
+
 from src.backend.dxf.io import (
     analyze_outline_polylines,
     load_dxf_polylines,
@@ -14,10 +16,61 @@ from src.backend.dxf.io import (
 from src.backend.generators import (
     apply_border_fade,
     apply_interlace,
-    apply_invert_fill,
     apply_mirror,
     get_generator,
 )
+from src.backend.generators._shared import _collect_lines as _collect_lines_shared
+from src.backend.generators._shared import _extract_polys as _extract_polys_shared
+from src.ui.pages.pattern.fill import (
+    NULL_PATTERN,
+    FillSpec,
+    apply_fill,
+    build_fill_region,
+)
+
+
+def _clip_rotated_element(
+    poly: list[tuple[float, float]],
+    region: Any,
+    prep: Any,
+    out: list[list[tuple[float, float]]],
+) -> None:
+    """Clip a rotated polygon or open line string back to *region*.
+
+    Closed polygons are intersected as areas; open polylines (e.g. Hilbert Curve
+    segments, diagonal lines) are intersected as line strings so the topology
+    is preserved correctly.
+    """
+    if len(poly) < 2:
+        return
+    # Try closed-polygon path first (requires ≥3 distinct points and real area).
+    if len(poly) >= 3:
+        from shapely.geometry import Polygon as _P  # type: ignore[import-untyped]
+
+        pts = list(poly)
+        if pts[0] != pts[-1]:
+            pts = pts + [pts[0]]
+        try:
+            s = _P(pts)
+            if not s.is_valid:
+                s = s.buffer(0)
+            if not s.is_empty and s.area > 1e-6:
+                if prep.contains(s):
+                    out.append(poly)
+                elif prep.intersects(s):
+                    _extract_polys_shared(region.intersection(s), out)
+                return
+        except Exception:
+            pass
+    # Open line string path.
+    from shapely.geometry import LineString as _LS  # type: ignore[import-untyped]
+
+    try:
+        ls = _LS(poly)
+        if not ls.is_empty and prep.intersects(ls):
+            _collect_lines_shared(region.intersection(ls), out)
+    except Exception:
+        out.append(poly)
 
 
 class PatternProcessingService:
@@ -35,6 +88,20 @@ class PatternProcessingService:
         "Reaction Diffuse",
         "Golden Spiral",
         "Rose Curve",
+    }
+
+    # Patterns whose output is a regular grid of discrete tile-shaped polys
+    # where row-binning makes sense. For continuous curves (rings, spirals,
+    # waves, etc.) interlacing chops them into incoherent strips, so we no-op.
+    _INTERLACE_PATTERNS = {
+        "Brick",
+        "Honeycomb",
+        "Gradient Honeycomb",
+        "Basketweave",
+        "Square Grid",
+        "Mesh",
+        "Fish Scale",
+        "Stipple Dots",
     }
 
     @staticmethod
@@ -154,6 +221,11 @@ class PatternProcessingService:
         pattern: str,
         params: dict,
     ) -> list[list[tuple[float, float]]]:
+        # NULL_PATTERN ("— None —") = outline-only mode: no pattern strokes,
+        # only the outline (and optional fill) reach the output.
+        if pattern == NULL_PATTERN:
+            return []
+
         rot_deg = float(params.get("rotation", 0.0) or 0.0)
 
         if pattern == "Honeycomb":
@@ -287,23 +359,7 @@ class PatternProcessingService:
             )
 
         if abs(rot_deg) > 1e-9:
-            all_pts = [pt for poly in polys for pt in poly]
-            if all_pts:
-                xs, ys = zip(*all_pts)
-                cx = (min(xs) + max(xs)) / 2.0
-                cy = (min(ys) + max(ys)) / 2.0
-                rad = rot_deg * math.pi / 180.0
-                ca, sa = math.cos(rad), math.sin(rad)
-                polys = [
-                    [
-                        (
-                            cx + (x - cx) * ca - (y - cy) * sa,
-                            cy + (x - cx) * sa + (y - cy) * ca,
-                        )
-                        for x, y in poly
-                    ]
-                    for poly in polys
-                ]
+            pass  # rotation is applied in build_pattern_polys via outline transform
         return polys
 
     def build_pattern_polys(
@@ -321,6 +377,8 @@ class PatternProcessingService:
         mirror_h: bool = False,
         border_fade: float = 0.0,
         exclusion_polys: list[list[tuple[float, float]]] | None = None,
+        fill_options: dict | None = None,
+        fill_polys_out: list[list[tuple[float, float]]] | None = None,
     ) -> list[list[tuple[float, float]]]:
         scaled = self.apply_scale(
             outline_polys,
@@ -331,7 +389,13 @@ class PatternProcessingService:
         )
         orig_outline = polylines_to_outline(scaled)
         outline_poly = cast(Any, orig_outline)
-        fill_outline = orig_outline
+        # The pattern uses the merged outline (existing behavior). The fill
+        # region uses even-odd nesting so a donut's inner ring becomes a
+        # hole instead of being silently merged into a solid.
+        nested_fill_region = build_fill_region(scaled)
+        fill_outline = (
+            nested_fill_region if nested_fill_region is not None else orig_outline
+        )
         if exclusion_polys:
             excl_scaled = self.apply_scale(
                 exclusion_polys,
@@ -342,164 +406,88 @@ class PatternProcessingService:
             )
             excl_outline = polylines_to_outline(excl_scaled)
             fill_outline = fill_outline.difference(excl_outline)
-        if invert_fill:
-            fill_outline = apply_invert_fill(outline_poly)
-            if exclusion_polys:
-                excl_scaled = self.apply_scale(
-                    exclusion_polys,
-                    scale[0],
-                    scale[1],
-                    orig_w=orig_w,
-                    orig_h=orig_h,
-                )
-                excl_outline = polylines_to_outline(excl_scaled)
-                fill_outline = fill_outline.difference(excl_outline)
 
-        polys = self._gen_pattern(fill_outline, pattern, params)
-        if interlace:
-            polys = apply_interlace(polys, spacing=params.get("spacing", 1.0))
+        # invert_fill: generate the pattern in the area OUTSIDE the outline so
+        # the result looks like a background / frame around the shape.
+        # The outer region is the bounding box (+ 50 % padding) minus the outline.
+        # Normal fill (invert_fill=False) generates inside the outline as usual.
+        if invert_fill:
+            from shapely.geometry import box as _shp_box  # type: ignore[import-untyped]
+
+            minx, miny, maxx, maxy = fill_outline.bounds
+            pad = max(maxx - minx, maxy - miny) * 0.5
+            outer_box = _shp_box(minx - pad, miny - pad, maxx + pad, maxy + pad)
+            active_region: Any = outer_box.difference(fill_outline)
+        else:
+            active_region = fill_outline
+
+        # Rotation: rotate active_region inversely around the original outline's
+        # centroid, generate in that frame, rotate output forward and clip back.
+        rot_deg = float(params.get("rotation", 0.0) or 0.0)
+        cx: float = fill_outline.centroid.x  # always pivot around original outline
+        cy: float = fill_outline.centroid.y
+        if abs(rot_deg) > 1e-9:
+            from shapely.affinity import (
+                rotate as _shp_rot,  # type: ignore[import-untyped]
+            )
+
+            gen_outline = _shp_rot(active_region, -rot_deg, origin=(cx, cy))
+        else:
+            gen_outline = active_region
+
+        polys = self._gen_pattern(gen_outline, pattern, params)
+
+        if abs(rot_deg) > 1e-9:
+            # Rotate polys forward to the real coordinate frame.
+            rad = rot_deg * math.pi / 180.0
+            ca, sa = math.cos(rad), math.sin(rad)
+            rotated: list[list[tuple[float, float]]] = [
+                [
+                    (
+                        cx + (x - cx) * ca - (y - cy) * sa,
+                        cy + (x - cx) * sa + (y - cy) * ca,
+                    )
+                    for x, y in poly
+                ]
+                for poly in polys
+            ]
+            # Clip each rotated element back to active_region.
+            # Handles both closed polygons and open line strings correctly.
+            clipped: list[list[tuple[float, float]]] = []
+            prep_ar = _shp_prepared.prep(active_region)
+            for poly in rotated:
+                _clip_rotated_element(poly, active_region, prep_ar, clipped)
+            polys = clipped
+
+        # NOTE: apply_invert_fill is intentionally NOT called here — the
+        # inversion is achieved above by generating in the outer region when
+        # invert_fill=True.
+        if interlace and pattern in self._INTERLACE_PATTERNS:
+            polys = apply_interlace(
+                polys, active_region, spacing=params.get("spacing", 1.0)
+            )
         if mirror_v or mirror_h:
             polys = apply_mirror(polys, outline_poly, mirror_v, mirror_h)
         if border_fade > 0:
             polys = apply_border_fade(polys, outline_poly, border_fade)
-        # Close any open pattern polylines using the outline boundary as the
-        # missing arc, so callers always receive closed shapes.
-        polys = self._close_polys_with_outline(
-            polys,
-            fill_outline,
-            spacing_hint=float(params.get("spacing", 1.0) or 1.0),
-        )
+
+        # ── Fill (laser infill) ────────────────────────────────────────────
+        # The fill region is the input outline minus exclusions — pattern
+        # strokes are a pure overlay and do NOT subdivide the fill region.
+        # This is the deliberate redesign that replaced the old chamber-
+        # cutting algorithm: simpler, predictable, always covers the shape.
+        spec = FillSpec.from_dict(fill_options) if fill_options else FillSpec.disabled()
+        if spec.enabled:
+            fill_strokes = apply_fill(fill_outline, spec)
+            if fill_polys_out is not None:
+                fill_polys_out.extend(fill_strokes)
+                if not spec.keep_pattern:
+                    polys = []
+            else:
+                base = polys if spec.keep_pattern else []
+                polys = base + fill_strokes
         return polys
 
-    @staticmethod
-    def _close_polys_with_outline(
-        polys: list[list[tuple[float, float]]],
-        outline_geom: Any,
-        *,
-        spacing_hint: float = 1.0,
-    ) -> list[list[tuple[float, float]]]:
-        """Replace open pattern strokes with closed chamber polygons.
-
-        The outline boundary plus every pattern polyline are treated as edges
-        of a planar graph; ``polygonize`` returns the closed faces that graph
-        defines. Each face inside ``outline_geom`` is emitted as a closed
-        polyline. Already-closed pattern polys are kept as-is.
-        """
-        if not polys or outline_geom is None or outline_geom.is_empty:
-            return polys
-
-        # Fast path: every poly already closed → nothing to do.
-        def _is_closed(poly: list[tuple[float, float]]) -> bool:
-            return (
-                len(poly) >= 4
-                and abs(poly[0][0] - poly[-1][0]) < 1e-9
-                and abs(poly[0][1] - poly[-1][1]) < 1e-9
-            )
-
-        if all(_is_closed(p) for p in polys):
-            return polys
-
-        try:
-            from shapely.geometry import (  # type: ignore[import-untyped]
-                LineString as _LS,
-                MultiPolygon as _MP,
-                Point as _Pt,
-                Polygon as _Poly,
-            )
-            from shapely.ops import (  # type: ignore[import-untyped]
-                nearest_points as _nearest,
-                polygonize as _polygonize,
-                unary_union as _uu,
-            )
-        except ImportError:
-            return polys
-
-        edges: list[Any] = []
-        boundary = outline_geom.boundary
-
-        def _push_boundary(geom: Any) -> None:
-            if geom is None or geom.is_empty:
-                return
-            if isinstance(geom, _Poly):
-                ext = list(geom.exterior.coords)
-                if len(ext) >= 2:
-                    edges.append(_LS(ext))
-                for hole in geom.interiors:
-                    hc = list(hole.coords)
-                    if len(hc) >= 2:
-                        edges.append(_LS(hc))
-            elif isinstance(geom, _MP):
-                for g in geom.geoms:
-                    _push_boundary(g)
-
-        _push_boundary(outline_geom)
-
-        snap_tol = max(spacing_hint * 0.5, 1e-6)
-        closed_polys: list[list[tuple[float, float]]] = []
-        for poly in polys:
-            if len(poly) < 2:
-                continue
-            try:
-                pts = [(float(x), float(y)) for x, y in poly]
-            except (TypeError, ValueError):
-                continue
-
-            if _is_closed(pts):
-                closed_polys.append(pts)
-                try:
-                    edges.append(_LS(pts))
-                except (TypeError, ValueError):
-                    pass
-                continue
-
-            # Snap open endpoints onto the outline boundary so the stroke
-            # actually subdivides the region instead of dangling.
-            try:
-                start_pt = _Pt(pts[0])
-                end_pt = _Pt(pts[-1])
-                _, snap_start = _nearest(start_pt, boundary)
-                _, snap_end = _nearest(end_pt, boundary)
-                if start_pt.distance(snap_start) > snap_tol:
-                    pts = [(snap_start.x, snap_start.y), *pts]
-                if end_pt.distance(snap_end) > snap_tol:
-                    pts = [*pts, (snap_end.x, snap_end.y)]
-            except (ValueError, TypeError, AttributeError):
-                pass
-
-            try:
-                edges.append(_LS(pts))
-            except (TypeError, ValueError):
-                continue
-
-        try:
-            merged = _uu(edges)
-            faces = list(_polygonize(merged))
-        except (ValueError, TypeError, AttributeError):
-            return polys
-
-        if not faces:
-            return closed_polys or polys
-
-        min_area = max(spacing_hint * spacing_hint * 0.25, 1e-6)
-        result: list[list[tuple[float, float]]] = list(closed_polys)
-        seen: set[tuple[tuple[float, float], ...]] = {
-            tuple((round(x, 6), round(y, 6)) for x, y in p) for p in closed_polys
-        }
-        for face in faces:
-            if face is None or face.is_empty or face.area < min_area:
-                continue
-            try:
-                if not outline_geom.contains(face.representative_point()):
-                    continue
-            except (ValueError, TypeError, AttributeError):
-                continue
-            ring = [(float(x), float(y)) for x, y, *_ in face.exterior.coords]
-            sig = tuple((round(x, 6), round(y, 6)) for x, y in ring)
-            if sig in seen:
-                continue
-            seen.add(sig)
-            result.append(ring)
-        return result if result else polys
 
     def build_zone_pattern_polys(
         self,
@@ -513,10 +501,16 @@ class PatternProcessingService:
         mirror_h: bool = False,
         border_fade: float = 0.0,
         exclusion_polys: list[list[tuple[float, float]]] | None = None,
+        fill_options: dict | None = None,
+        fill_polys_out: list | None = None,
     ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
         all_polys: list[list[tuple[float, float]]] = []
         border_polys: list[list[tuple[float, float]]] = []
         for zone in zones:
+            zone_fill: list[list[tuple[float, float]]] = []
+            # Per-zone fill override: if the zone carries its own "fill"
+            # entry, use it; otherwise fall back to the global fill_options.
+            zone_fill_options = zone.get("fill") or fill_options
             zone_generated = self.build_pattern_polys(
                 zone["polys"],
                 pattern=zone["pattern"],
@@ -530,18 +524,25 @@ class PatternProcessingService:
                 mirror_h=mirror_h,
                 border_fade=border_fade,
                 exclusion_polys=exclusion_polys,
+                fill_options=zone_fill_options,
+                fill_polys_out=zone_fill if fill_polys_out is not None else None,
             )
             all_polys.extend(zone_generated)
-            if include_border:
-                border_polys.extend(
-                    self.apply_scale(
-                        zone["polys"],
-                        zone["scale"][0],
-                        zone["scale"][1],
-                        orig_w=orig_w,
-                        orig_h=orig_h,
-                    )
+            if fill_polys_out is not None and zone_fill:
+                fill_polys_out.extend(zone_fill)
+            # Always collect the outline so the export can ship it as a
+            # dedicated layer; include_border now only controls whether the
+            # outline is also baked into the pattern stream for legacy
+            # consumers.
+            border_polys.extend(
+                self.apply_scale(
+                    zone["polys"],
+                    zone["scale"][0],
+                    zone["scale"][1],
+                    orig_w=orig_w,
+                    orig_h=orig_h,
                 )
+            )
         return all_polys, border_polys
 
     def build_preview_polys(
@@ -560,8 +561,22 @@ class PatternProcessingService:
         mirror_h: bool = False,
         border_fade: float = 0.0,
         exclusion_polys: list[list[tuple[float, float]]] | None = None,
-    ) -> tuple[list[list[tuple[float, float]]], int]:
-        polys = self.build_pattern_polys(
+        fill_options: dict | None = None,
+    ) -> dict[str, Any]:
+        """Generate a preview payload split by DXF-layer category.
+
+        Returns a dict with three lists matching the export layer split:
+          - ``outline``: scaled outline polylines (always present so the
+            layer tree can show an Outline row even when the border-export
+            checkbox is off).
+          - ``pattern``: pattern strokes / closed face polygons.
+          - ``fill``: hatch fill strokes (empty if fill mode is "none").
+          - ``count``: total renderable shapes (excludes outline if
+            ``border_polys`` is None — matches legacy display count).
+          - ``display``: flat ordered list for canvas rendering.
+        """
+        fill_buf: list[list[tuple[float, float]]] = []
+        pattern_polys = self.build_pattern_polys(
             outline_polys,
             pattern=pattern,
             params=params,
@@ -574,9 +589,29 @@ class PatternProcessingService:
             mirror_h=mirror_h,
             border_fade=border_fade,
             exclusion_polys=exclusion_polys,
+            fill_options=fill_options,
+            fill_polys_out=fill_buf,
         )
-        display_polys = polys + (border_polys or [])
-        return display_polys, len(polys)
+        # Always supply a scaled outline so the layer tree has something to
+        # show in its Outline row even when the user did not enable the
+        # "include border" export option.
+        outline_scaled = (
+            border_polys
+            if border_polys is not None
+            else self.apply_scale(
+                outline_polys, scale[0], scale[1], orig_w=orig_w, orig_h=orig_h
+            )
+        )
+        # Display layering matches what the user expects to see:
+        # outline (background) → pattern → fill (on top).
+        display_polys = (border_polys or []) + pattern_polys + fill_buf
+        return {
+            "outline": outline_scaled,
+            "pattern": pattern_polys,
+            "fill": fill_buf,
+            "display": display_polys,
+            "count": len(pattern_polys) + len(fill_buf),
+        }
 
     def build_preview_zone_polys(
         self,
@@ -590,11 +625,15 @@ class PatternProcessingService:
         mirror_h: bool = False,
         border_fade: float = 0.0,
         exclusion_polys: list[list[tuple[float, float]]] | None = None,
-    ) -> tuple[list[list[tuple[float, float]]], int]:
+        fill_options: dict | None = None,
+    ) -> dict[str, Any]:
         zone_poly_ids: set[int] = set()
-        zone_results: list[list[tuple[float, float]]] = []
+        zone_pattern_polys: list[list[tuple[float, float]]] = []
+        zone_fill_polys: list[list[tuple[float, float]]] = []
 
         for zone in zones:
+            fill_buf: list[list[tuple[float, float]]] = []
+            zone_fill_options = zone.get("fill") or fill_options
             zone_generated = self.build_pattern_polys(
                 zone["polys"],
                 pattern=zone["pattern"],
@@ -608,13 +647,22 @@ class PatternProcessingService:
                 mirror_h=mirror_h,
                 border_fade=border_fade,
                 exclusion_polys=exclusion_polys,
+                fill_options=zone_fill_options,
+                fill_polys_out=fill_buf,
             )
-            zone_results.extend(zone_generated)
+            zone_pattern_polys.extend(zone_generated)
+            zone_fill_polys.extend(fill_buf)
             for zp in zone["polys"]:
                 for idx, cp in enumerate(all_polys):
                     if cp == zp:
                         zone_poly_ids.add(idx)
 
         context_polys = [p for i, p in enumerate(all_polys) if i not in zone_poly_ids]
-        display_polys = zone_results + context_polys
-        return display_polys, len(zone_results)
+        display_polys = context_polys + zone_pattern_polys + zone_fill_polys
+        return {
+            "outline": context_polys,
+            "pattern": zone_pattern_polys,
+            "fill": zone_fill_polys,
+            "display": display_polys,
+            "count": len(zone_pattern_polys) + len(zone_fill_polys),
+        }

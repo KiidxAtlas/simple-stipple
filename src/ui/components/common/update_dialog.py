@@ -323,3 +323,19 @@ class UpdateDialog(QDialog):
             self._download_btn.setText("Downloading…" if busy else "Download & Install")
         if self._close_btn is not None:
             self._close_btn.setEnabled(not busy)
+
+    def closeEvent(self, event) -> None:
+        """Ensure background QThreads are stopped before the dialog dies."""
+        for attr in ("_check_thread", "_download_thread"):
+            thread = getattr(self, attr, None)
+            if thread is None:
+                continue
+            try:
+                if thread.isRunning():
+                    thread.requestInterruption()
+                    thread.quit()
+                    thread.wait(1500)
+            except RuntimeError:
+                # Thread already deleted by Qt
+                pass
+        super().closeEvent(event)

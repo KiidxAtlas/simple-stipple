@@ -4,6 +4,12 @@ from __future__ import annotations
 
 Point = tuple[float, float]
 
+_CLOSURE_EPS = 1e-6
+
+
+def _points_close(a: Point, b: Point, eps: float = _CLOSURE_EPS) -> bool:
+    return abs(a[0] - b[0]) <= eps and abs(a[1] - b[1]) <= eps
+
 
 def _catmull_rom(p0: Point, p1: Point, p2: Point, p3: Point, t: float) -> Point:
     t2 = t * t
@@ -35,7 +41,7 @@ def build_spline_poly(
 
     steps = max(4, int(segments))
     pts: list[Point] = [(float(pt[0]), float(pt[1])) for pt in points]
-    if closed and len(pts) >= 3 and pts[0] == pts[-1]:
+    if closed and len(pts) >= 3 and _points_close(pts[0], pts[-1]):
         pts = pts[:-1]
 
     if len(pts) == 2:

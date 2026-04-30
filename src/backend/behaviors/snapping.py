@@ -15,6 +15,11 @@ from collections.abc import Callable, Sequence
 _SNAP_DIST = 14  # snap activation distance
 _MIN_SCALE = 1e-6  # minimum zoom scale
 
+# Geometry epsilons (kept local to avoid pulling backend.geometry into the
+# UI-only behaviors layer; values mirror src/backend/geometry/__init__.py).
+_EPS = 1e-6
+_EPS_SQ_DEGENERATE = 1e-12
+
 Point = tuple[float, float]
 Polyline = list[Point]
 SnapResult = tuple[float, float, str]

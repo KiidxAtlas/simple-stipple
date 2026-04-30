@@ -11,19 +11,18 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFileDialog,
+    QDialog,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
-    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -38,6 +37,13 @@ from src.backend.dxf.io import (
     write_polylines_dxf,
 )
 from src.settings import save_settings
+from src.ui.components.common.recent_files_button import RecentFilesButton
+from src.ui.util.dialog_paths import (
+    pick_directory,
+    pick_open_file,
+    pick_save_file,
+)
+from src.ui.util.recent_files import KIND_DXF, KIND_IMAGE, record_recent
 from src.ui.pages.pattern.session import (
     apply_pattern_workspace_state,
     clear_pattern_workspace_state,
@@ -77,6 +83,11 @@ from src.ui.pages.pattern.params import (
     collect_pattern_params,
     restore_form_state,
 )
+from src.ui.pages.pattern.presets import (
+    SETTINGS_KEY as PRESET_SETTINGS_KEY,
+    ensure_builtins_seeded,
+)
+from src.ui.pages.pattern.presets_dialog import PresetManagerDialog
 from src.ui.pages.pattern.services import PatternProcessingService
 from src.ui.pages.pattern.task_state import CancellableTaskState
 
@@ -107,6 +118,18 @@ class PatternPage(QWidget):
         self._last_out_path: str | None = None
         self._suspend_state_changes: bool = False
         self._presets: dict[str, dict] = dict(self._settings.get("pattern_presets", {}))
+        # Seed factory starter presets once on first run; respects deletions.
+        seeded = ensure_builtins_seeded(self._settings, self._presets)
+        if (
+            seeded is not self._presets
+            or self._settings.get("pattern_presets") != seeded
+        ):
+            self._presets = seeded
+            self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
+            try:
+                save_settings(self._settings)
+            except OSError:
+                LOGGER.exception("Failed to persist seeded pattern presets")
         self._base_patterns: list[str] = list(PATTERNS)
         self._library_patterns: dict[str, str] = {}
         self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
@@ -114,6 +137,11 @@ class PatternPage(QWidget):
 
         self._showing_preview: bool = False
         self._preview_polys_cache: list[list[tuple[float, float]]] = []
+        self._preview_categories: dict[str, list[list[tuple[float, float]]]] = {
+            "outline": [],
+            "pattern": [],
+            "fill": [],
+        }
         self._outline_ids: list[str] = []
         self._preview_revision: int = 0
         self._generation_revision: int = 0
@@ -201,10 +229,13 @@ class PatternPage(QWidget):
             "Path to a DXF outline file (drag-and-drop supported)"
         )
         file_row.addWidget(self._dxf_edit, stretch=1)
-        self._recent_btn = QPushButton("Recent ▾")
-        self._recent_btn.setFixedWidth(76)
+        self._recent_btn = RecentFilesButton(
+            self._settings,
+            KIND_DXF,
+            empty_message="No recent DXF files.",
+        )
         self._recent_btn.setToolTip("Pick from recently opened DXF files")
-        self._recent_btn.clicked.connect(self._show_recent_menu)
+        self._recent_btn.fileSelected.connect(self._quick_load)
         file_row.addWidget(self._recent_btn)
         browse_btn = QPushButton("Browse")
         browse_btn.setFixedWidth(72)
@@ -274,25 +305,42 @@ class PatternPage(QWidget):
         self._pattern_combo.currentTextChanged.connect(self._switch_pattern)
         fill_layout.addWidget(self._pattern_combo)
 
-        preset_row = QHBoxLayout()
+        preset_row = QGridLayout()
+        preset_row.setContentsMargins(0, 0, 0, 0)
+        preset_row.setHorizontalSpacing(4)
+        preset_row.setVerticalSpacing(4)
         self._preset_combo = QComboBox()
         self._preset_combo.setToolTip("Saved parameter presets for the current pattern")
-        preset_row.addWidget(self._preset_combo, stretch=1)
+        self._preset_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._preset_combo.setMinimumContentsLength(10)
+        # Combo spans the full row so long preset names stay readable.
+        preset_row.addWidget(self._preset_combo, 0, 0, 1, 4)
+        # Action buttons share row 2 equally — no fixed widths so the row
+        # always fits inside the sidebar's minimum width (~320 px).
         load_preset_btn = QPushButton("Load")
-        load_preset_btn.setFixedWidth(56)
         load_preset_btn.setToolTip("Apply the selected preset to the parameter fields")
         load_preset_btn.clicked.connect(self._apply_selected_preset)
-        preset_row.addWidget(load_preset_btn)
+        preset_row.addWidget(load_preset_btn, 1, 0)
         save_preset_btn = QPushButton("Save")
-        save_preset_btn.setFixedWidth(56)
-        save_preset_btn.setToolTip("Save the current parameters as a named preset")
+        save_preset_btn.setToolTip(
+            "Save the current parameters; reuses the selected name to update"
+        )
         save_preset_btn.clicked.connect(self._save_preset)
-        preset_row.addWidget(save_preset_btn)
+        preset_row.addWidget(save_preset_btn, 1, 1)
         delete_preset_btn = QPushButton("Delete")
-        delete_preset_btn.setFixedWidth(62)
         delete_preset_btn.setToolTip("Remove the selected preset permanently")
         delete_preset_btn.clicked.connect(self._delete_selected_preset)
-        preset_row.addWidget(delete_preset_btn)
+        preset_row.addWidget(delete_preset_btn, 1, 2)
+        manage_preset_btn = QPushButton("Manage…")
+        manage_preset_btn.setToolTip(
+            "Rename, duplicate, import or export pattern presets"
+        )
+        manage_preset_btn.clicked.connect(self._open_preset_manager)
+        preset_row.addWidget(manage_preset_btn, 1, 3)
+        for col in range(4):
+            preset_row.setColumnStretch(col, 1)
         fill_layout.addLayout(preset_row)
         self._refresh_preset_combo()
 
@@ -362,6 +410,8 @@ class PatternPage(QWidget):
             "Writes pattern fill to 'background' and each outline geometry\n"
             "to 'outline', 'outline_1', 'outline_2', ... layers."
         )
+        self._include_border_cb.setChecked(True)
+        self._include_border_cb.stateChanged.connect(self._schedule_preview)
         fill_layout.addWidget(self._include_border_cb)
         layout.addWidget(
             CollapsibleSection("Fill Parameters", fill_content, expanded=False)
@@ -430,8 +480,9 @@ class PatternPage(QWidget):
         opt_row1 = QHBoxLayout()
         self._invert_fill_cb = QCheckBox("Invert fill")
         self._invert_fill_cb.setToolTip(
-            "Stipple the area OUTSIDE the outline instead of inside.\n"
-            "Useful for backgrounds and frames around a clean design."
+            "Fill the area OUTSIDE the outline instead of inside.\n"
+            "Generates the pattern in a frame around the outline — useful\n"
+            "for backgrounds and engraved borders around a clean design."
         )
         self._invert_fill_cb.stateChanged.connect(self._schedule_preview)
         opt_row1.addWidget(self._invert_fill_cb)
@@ -448,6 +499,7 @@ class PatternPage(QWidget):
         layout.addLayout(opt_row1)
 
         opt_row2 = QHBoxLayout()
+        opt_row2.setSpacing(6)
         opt_row2.addWidget(QLabel("Symmetry:"))
         self._mirror_v_cb = QCheckBox("\u2190 \u2192")
         self._mirror_v_cb.setToolTip("Mirror pattern left \u2194 right")
@@ -458,13 +510,19 @@ class PatternPage(QWidget):
         self._mirror_h_cb.stateChanged.connect(self._schedule_preview)
         opt_row2.addWidget(self._mirror_h_cb)
         opt_row2.addStretch()
-        cutout_clear_btn = QPushButton("Clear cutouts")
-        cutout_clear_btn.setFixedHeight(22)
-        cutout_clear_btn.setStyleSheet("font-size: 10px;")
+        layout.addLayout(opt_row2)
+
+        # Cutouts get their own labelled row so the action verb is clearly
+        # separated from the symmetry toggles above it.
+        cutout_row = QHBoxLayout()
+        cutout_row.setSpacing(6)
+        cutout_row.addWidget(QLabel("Cutouts:"))
+        cutout_row.addStretch()
+        cutout_clear_btn = QPushButton("Clear all")
         cutout_clear_btn.setToolTip("Remove all cutout assignments")
         cutout_clear_btn.clicked.connect(self._clear_exclusions)
-        opt_row2.addWidget(cutout_clear_btn)
-        layout.addLayout(opt_row2)
+        cutout_row.addWidget(cutout_clear_btn)
+        layout.addLayout(cutout_row)
 
         self._cutout_status_label = QLabel(
             "No cutouts \u2014 right-click a shape on canvas to mark it"
@@ -472,6 +530,56 @@ class PatternPage(QWidget):
         self._cutout_status_label.setWordWrap(True)
         self._cutout_status_label.setStyleSheet(f"color: {DIM}; font-size: 10px;")
         layout.addWidget(self._cutout_status_label)
+
+        # ── Laser fill (infill) ──────────────────────────────────────────
+        # Fills the input outline (minus exclusions) with parallel infill
+        # polylines. The pattern strokes are an independent overlay — they
+        # do NOT subdivide the fill region. Use the per-zone "Assign zone"
+        # control to give each shape its own fill snapshot.
+        fill_label_row = QHBoxLayout()
+        fill_label_row.setContentsMargins(0, 6, 0, 0)
+        fill_label_row.addWidget(QLabel("Laser fill:"))
+        self._fill_mode_combo = QComboBox()
+        self._fill_mode_combo.addItem("None", "none")
+        self._fill_mode_combo.addItem("Lines", "lines")
+        self._fill_mode_combo.setToolTip(
+            "Fill the shape with parallel laser-engrave lines.\n"
+            "Combine with pattern '— None —' to get an outline-only or\n"
+            "fill-only result without any pattern strokes."
+        )
+        self._fill_mode_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
+        fill_label_row.addWidget(self._fill_mode_combo, stretch=1)
+        layout.addLayout(fill_label_row)
+
+        fill_params_row = QHBoxLayout()
+        fill_params_row.setContentsMargins(0, 0, 0, 0)
+        fill_params_row.setSpacing(6)
+        fill_params_row.addWidget(QLabel("Spacing (mm)"))
+        self._fill_spacing = QLineEdit("0.5")
+        self._fill_spacing.setFixedWidth(56)
+        self._fill_spacing.setToolTip("Distance between adjacent infill lines")
+        self._fill_spacing.textChanged.connect(self._schedule_preview)
+        fill_params_row.addWidget(self._fill_spacing)
+        fill_params_row.addWidget(QLabel("Angle (°)"))
+        self._fill_angle = QLineEdit("0")
+        self._fill_angle.setFixedWidth(56)
+        self._fill_angle.setToolTip("Angle of the infill line direction")
+        self._fill_angle.textChanged.connect(self._schedule_preview)
+        fill_params_row.addWidget(self._fill_angle)
+        fill_params_row.addStretch()
+        layout.addLayout(fill_params_row)
+
+        self._fill_keep_outline_cb = QCheckBox("Keep pattern strokes alongside fill")
+        self._fill_keep_outline_cb.setToolTip(
+            "Output both the pattern strokes and the laser-fill lines.\n"
+            "Uncheck for fill-only output (the pattern is suppressed)."
+        )
+        self._fill_keep_outline_cb.setChecked(True)
+        self._fill_keep_outline_cb.stateChanged.connect(self._schedule_preview)
+        layout.addWidget(self._fill_keep_outline_cb)
+
+        # Initial enable state — fill controls disabled while mode == None.
+        self._on_fill_mode_changed()
 
     def _build_export_section(self, layout: QVBoxLayout) -> None:
         _section_label(layout, "Export")
@@ -610,7 +718,7 @@ class PatternPage(QWidget):
         self._layer_module = CanvasLayerTreeModule(
             canvas=self._canvas,
             title="Layers",
-            editable=False,
+            editable=True,
             get_active_layer_name=lambda: (
                 "pattern_preview" if self._showing_preview else "pattern_active"
             ),
@@ -621,6 +729,8 @@ class PatternPage(QWidget):
         )
         self._layers_tree = self._layer_module.tree
         self._layer_sidebar = self._layer_module.controller
+        # Wire outline-mode shape rename to the runtime’s label store.
+        self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
         side_layout.addWidget(self._layer_module, stretch=1)
 
         self._canvas_runtime = PatternCanvasPageRuntime(
@@ -629,11 +739,12 @@ class PatternPage(QWidget):
             layer_sidebar=self._layer_sidebar,
             canvas_status=self._canvas_status,
             precision_bar=self._precision_bar,
-            get_orig_polys=lambda: self._orig_polys,
+            get_orig_polys=lambda: self._edit_polys,
             get_showing_preview=lambda: self._showing_preview,
             is_preview_running=lambda: self._preview_task.running,
             has_preview_cache=lambda: bool(self._preview_polys_cache),
             has_zones=lambda: bool(self._zones),
+            get_preview_categories=lambda: self._preview_categories,
         )
 
         splitter = _content_splitter(canvas_shell, side_panel, sizes=(860, 260))
@@ -648,6 +759,10 @@ class PatternPage(QWidget):
             # Switch to preview view
             self._showing_preview = True
             self._canvas.load(self._preview_polys_cache)
+            # Show the source outline as a faded ghost overlay so the user can
+            # see both the outline and the generated pattern at the same time.
+            if self._edit_polys:
+                self._canvas.set_ghost_polylines(self._edit_polys)
             self._set_preview_status(
                 f"{len(self._preview_polys_cache)} shapes — preview", "success"
             )
@@ -659,6 +774,7 @@ class PatternPage(QWidget):
         else:
             # Switch back to outline editing
             self._showing_preview = False
+            self._canvas.set_ghost_polylines(None)
             if self._edit_polys:
                 self._canvas.load(self._edit_polys)
             if self._preview_polys_cache:
@@ -675,19 +791,17 @@ class PatternPage(QWidget):
     def _on_sel_change(self, count: int) -> None:
         if self._showing_preview:
             return
-        self._canvas_runtime.on_selection_change(count)
-        # When zones are active: always target all outlines so the composite
-        # preview can show context for unassigned shapes alongside zone fills.
-        # Without zones: target only selection when something is selected.
-        if self._zones:
-            self._edit_polys = self._canvas.get_polylines_state()
-        elif count:
-            self._edit_polys = self._canvas.get_selected()
-        else:
-            self._edit_polys = self._canvas.get_polylines_state()
+        self._canvas_runtime.on_selection_change(count)  # updates toolbar
+        # `_edit_polys` always mirrors the FULL canvas state — never just the
+        # selection subset. Otherwise toggling preview off would only restore
+        # the previously-selected shapes (and silently drop all the others).
+        # If users want to pattern only specific outlines, they should create
+        # zones; selection is purely for selection, not for scoping the fill.
+        self._edit_polys = self._canvas.get_polylines_state()
         self._update_zone_actions()
-        self._refresh_canvas_panels()
-        self._schedule_preview()
+        # Update status strip selection count without rebuilding the tree.
+        if hasattr(self, "_canvas_status"):
+            self._canvas_status.set_selection_count(count)
 
     def _build_layer_tree_rows(
         self,
@@ -696,12 +810,13 @@ class PatternPage(QWidget):
         return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
     def _browse_dxf(self) -> None:
-        idir = self._settings.get("outline_dxf_dir", "")
-        path, _ = QFileDialog.getOpenFileName(
+        path = pick_open_file(
             self,
+            self._settings,
+            "pattern_outline_dxf",
             "Select outline DXF",
-            idir,
             "DXF files (*.dxf *.Dxf *.DXF);;All files (*)",
+            fallback_dir=self._settings.get("outline_dxf_dir", ""),
         )
         if path:
             self._dxf_edit.setText(path)
@@ -731,6 +846,7 @@ class PatternPage(QWidget):
         self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
         self._exclusion_ids.clear()
         self._preview_polys_cache = []
+        self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._zones.clear()
         self._refresh_zone_list()
 
@@ -797,12 +913,7 @@ class PatternPage(QWidget):
             self._update_dims_from_polys(polys)
 
             self._set_status(f"Loaded {len(polys)} polylines from {Path(path).name}")
-            recent = self._settings.get("recent_dxf", [])
-            if path in recent:
-                recent.remove(path)
-            recent.insert(0, path)
-            self._settings["recent_dxf"] = recent[:8]
-            save_settings(self._settings)
+            record_recent(self._settings, KIND_DXF, path)
             if report.has_issues:
                 detail = summarize_dxf_import_report(report)
                 if detail:
@@ -901,11 +1012,21 @@ class PatternPage(QWidget):
         self._emit_state_changed()
 
     def _on_browser_selection_requested(self, indices: list[int]) -> None:
-        if self._showing_preview:
-            self._on_preview_toggled(False)
-            self._preview_btn.setChecked(False)
+        # Select shapes on canvas without toggling preview mode — the user
+        # should be able to highlight shapes in the layer tree while reviewing
+        # the generated pattern.
         self._canvas_runtime.on_tree_selection_requested(indices)
-        self._refresh_canvas_panels()
+        # Update toolbar and status strip without rebuilding the tree —
+        # rebuilding would immediately clear the visual selection just made.
+        self._canvas_runtime.on_selection_change(len(indices))
+        if hasattr(self, "_canvas_status"):
+            self._canvas_status.set_selection_count(len(indices))
+
+    def _on_shape_renamed(
+        self, layer_name: str, shape_key: object, new_label: str
+    ) -> None:
+        """Persist a custom display label for an outline shape."""
+        self._canvas_runtime.rename_shape(layer_name, shape_key, new_label)
 
     def _on_send_selected_to_draft_from_canvas(
         self,
@@ -939,31 +1060,29 @@ class PatternPage(QWidget):
                 return
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
 
-    def _show_recent_menu(self) -> None:
-        recent = [r for r in self._settings.get("recent_dxf", []) if Path(r).exists()]
-        if not recent:
-            QMessageBox.information(self, "Recent Files", "No recent DXF files.")
-            return
-        menu = QMenu(self)
-        for path in recent:
-            lbl = Path(path).name + f"  ‹{Path(path).parent.name}›"
-            menu.addAction(lbl, lambda p=path: self._quick_load(p))
-        menu.addSeparator()
-        menu.addAction("Clear history", self._clear_recent)
-        menu.popup(self._recent_btn.mapToGlobal(QPoint(0, self._recent_btn.height())))
+    def _show_recent_menu(
+        self,
+    ) -> None:  # pragma: no cover - retained for API stability
+        # Recent menu is now driven by RecentFilesButton; this shim keeps any
+        # external callers working.
+        self._recent_btn._open_menu()
 
     def _quick_load(self, path: str) -> None:
         self._dxf_edit.setText(path)
         self._load_dxf(path)
 
-    def _clear_recent(self) -> None:
-        self._settings["recent_dxf"] = []
-        save_settings(self._settings)
+    def _clear_recent(self) -> None:  # pragma: no cover - kept for back-compat
+        from src.ui.util.recent_files import clear_recent
+
+        clear_recent(self._settings, KIND_DXF)
 
     def _choose_pattern_library_dir(self) -> None:
-        current = self._settings.get("pattern_library_dir", "")
-        path = QFileDialog.getExistingDirectory(
-            self, "Select pattern library folder", current
+        path = pick_directory(
+            self,
+            self._settings,
+            "pattern_library",
+            "Select pattern library folder",
+            fallback_dir=self._settings.get("pattern_library_dir", ""),
         )
         if not path:
             return
@@ -1036,11 +1155,13 @@ class PatternPage(QWidget):
             self._tile_name_lbl.setText("Choose a tile pattern from the list")
 
     def _browse_halftone_image(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path = pick_open_file(
             self,
+            self._settings,
+            "halftone_image",
             "Select image for halftone",
-            "",
             "Image files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff);;All files (*)",
+            recent_kind=KIND_IMAGE,
         )
         if path:
             self._htone_img_edit.setText(path)
@@ -1109,16 +1230,35 @@ class PatternPage(QWidget):
         self._preset_combo.blockSignals(False)
 
     def _save_preset(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save Pattern Preset", "Preset name")
+        # Pre-fill with the currently selected preset name (if any) to make
+        # "update" the natural fast path.
+        prefill = self._preset_combo.currentText().strip()
+        if prefill == "Presets":
+            prefill = ""
+        name, ok = QInputDialog.getText(
+            self, "Save Pattern Preset", "Preset name:", text=prefill
+        )
         name = name.strip()
         if not ok or not name:
             return
+        is_update = name in self._presets
+        if is_update:
+            reply = QMessageBox.question(
+                self,
+                "Overwrite preset",
+                f"A preset called {name!r} already exists.\nReplace it with the current parameters?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         self._presets[name] = collect_form_state(self)
-        self._settings["pattern_presets"] = dict(self._presets)
+        self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
         save_settings(self._settings)
         self._refresh_preset_combo()
         self._preset_combo.setCurrentText(name)
-        self._set_status(f"Saved preset: {name}", "#3fb950")
+        verb = "Updated" if is_update else "Saved"
+        self._set_status(f"{verb} preset: {name}", "#3fb950")
         self._emit_state_changed()
 
     def _apply_selected_preset(self) -> None:
@@ -1140,10 +1280,33 @@ class PatternPage(QWidget):
         if not name or name == "Presets" or name not in self._presets:
             return
         self._presets.pop(name, None)
-        self._settings["pattern_presets"] = dict(self._presets)
+        self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
         save_settings(self._settings)
         self._refresh_preset_combo()
         self._set_status(f"Deleted preset: {name}")
+        self._emit_state_changed()
+
+    def _open_preset_manager(self) -> None:
+        current = self._preset_combo.currentText().strip()
+        if current == "Presets":
+            current = ""
+        dlg = PresetManagerDialog(
+            self._presets,
+            self._settings,
+            current_preset=current or None,
+            parent=self,
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        if not dlg.is_dirty:
+            return
+        self._presets = dlg.result_presets
+        self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
+        save_settings(self._settings)
+        self._refresh_preset_combo()
+        if current and current in self._presets:
+            self._preset_combo.setCurrentText(current)
+        self._set_status(f"Pattern presets updated ({len(self._presets)} total)")
         self._emit_state_changed()
 
     def get_preset_state(self) -> dict[str, dict]:
@@ -1201,11 +1364,14 @@ class PatternPage(QWidget):
             QMessageBox.critical(self, "Error", "No polylines available for outline.")
             return
 
-        out_path, _ = QFileDialog.getSaveFileName(
+        out_path = pick_save_file(
             self,
+            self._settings,
+            "pattern_output",
             "Save pattern DXF",
-            str(Path(self._settings.get("pattern_output_dir", "")) / "pattern.dxf"),
+            "pattern.dxf",
             "DXF files (*.dxf);;All files (*)",
+            fallback_dir=self._settings.get("pattern_output_dir", ""),
         )
         if not out_path:
             return
@@ -1221,6 +1387,7 @@ class PatternPage(QWidget):
         except ValueError:
             border_fade = 0.0
         excl_polys = self._resolve_exclusion_polys() or None
+        gen_fill_options = self._collect_fill_options()
 
         self._gen_btn.setEnabled(False)
         self._progress.setRange(0, 0)  # indeterminate
@@ -1259,19 +1426,25 @@ class PatternPage(QWidget):
                     "orig_h": self._orig_h,
                     "on_done": self._gen_done.emit,
                     "on_error": self._gen_error.emit,
+                    "fill_options": gen_fill_options,
                 },
                 daemon=True,
             ).start()
         else:
+            polys_snap = list(self._edit_polys)
             try:
                 scale = self._collect_scale()
-                params = self._collect_pattern_params(pattern)
-                self._validate_outline_inputs(self._edit_polys)
+                params = (
+                    self._collect_pattern_params(pattern)
+                    if pattern != "— None —"
+                    else {}
+                )
             except ValueError:
+                self._generate_task.finish_run()
                 self._gen_btn.setEnabled(True)
                 self._progress.setRange(0, 100)
+                self._progress.setValue(0)
                 return
-            polys_snap = list(self._edit_polys)
             border_polys = (
                 self._apply_scale(polys_snap, *scale) if include_border else None
             )
@@ -1300,6 +1473,7 @@ class PatternPage(QWidget):
                     "orig_h": self._orig_h,
                     "on_done": self._gen_done.emit,
                     "on_error": self._gen_error.emit,
+                    "fill_options": gen_fill_options,
                 },
                 daemon=True,
             ).start()
@@ -1338,12 +1512,47 @@ class PatternPage(QWidget):
 
     # ── Live preview ─────────────────────────────────────────────────────────
 
+    def _on_fill_mode_changed(self, *_) -> None:
+        """Enable/disable infill spacing/angle widgets and refresh preview."""
+        mode = self._fill_mode_combo.currentData()
+        active = mode and mode != "none"
+        self._fill_spacing.setEnabled(bool(active))
+        self._fill_angle.setEnabled(bool(active))
+        self._fill_keep_outline_cb.setEnabled(bool(active))
+        self._schedule_preview()
+
+    def _collect_fill_options(self) -> dict | None:
+        """Read the laser-fill widget state into a plain dict for the worker."""
+        mode = self._fill_mode_combo.currentData()
+        if not mode or mode == "none":
+            return None
+        try:
+            spacing = max(0.05, float(self._fill_spacing.text() or "0.5"))
+        except ValueError:
+            spacing = 0.5
+        try:
+            angle = float(self._fill_angle.text() or "0")
+        except ValueError:
+            angle = 0.0
+        return {
+            "mode": str(mode),
+            "spacing": spacing,
+            "angle_deg": angle,
+            "keep_pattern": self._fill_keep_outline_cb.isChecked(),
+        }
+
     def _schedule_preview(self, *_) -> None:
         if self._suspend_state_changes:
             return
-        # Allow preview if zones exist (even if current pattern is "— None —" or
-        # no manual selection is targeted), otherwise require normal preconditions.
-        if not self._zones and self._pattern_combo.currentText() == "— None —":
+        # Allow preview if zones exist OR a fill is configured (outline + fill
+        # mode), even when pattern is "— None —". Otherwise require normal
+        # preconditions.
+        fill_active = bool(self._collect_fill_options())
+        if (
+            not self._zones
+            and not fill_active
+            and self._pattern_combo.currentText() == "— None —"
+        ):
             return
         if not self._zones and not self._edit_polys:
             return
@@ -1383,6 +1592,7 @@ class PatternPage(QWidget):
         except ValueError:
             border_fade = 0.0
         excl_polys = self._resolve_exclusion_polys() or None
+        fill_options = self._collect_fill_options()
         self._set_preview_status("Previewing…")
         if self._zones:
             # Zone mode: snapshot zone data + all polys for context
@@ -1413,6 +1623,7 @@ class PatternPage(QWidget):
                     "orig_h": self._orig_h,
                     "on_done": self._preview_done.emit,
                     "on_error": self._preview_error.emit,
+                    "fill_options": fill_options,
                 },
                 daemon=True,
             ).start()
@@ -1444,18 +1655,30 @@ class PatternPage(QWidget):
                     "orig_h": self._orig_h,
                     "on_done": self._preview_done.emit,
                     "on_error": self._preview_error.emit,
+                    "fill_options": fill_options,
                 },
                 daemon=True,
             ).start()
 
     def _handle_preview_done(self, payload: tuple) -> None:
-        preview_token, display_polys, count = payload
+        # Workers emit either (token, display, count) for legacy callers or
+        # (token, display, count, categories) for the new three-layer split.
+        if len(payload) == 4:
+            preview_token, display_polys, count, categories = payload
+        else:
+            preview_token, display_polys, count = payload
+            categories = None
         restart = self._preview_task.finish_run()
         if preview_token != self._preview_revision:
             if restart and (self._edit_polys or self._zones):
                 self._preview_timer.start(0)
             return
         self._preview_polys_cache = list(display_polys)
+        self._preview_categories = categories or {
+            "outline": [],
+            "pattern": list(display_polys),
+            "fill": [],
+        }
         # Update canvas if preview is already showing; otherwise just cache
         if self._showing_preview:
             self._canvas.load(display_polys)
@@ -1516,6 +1739,7 @@ class PatternPage(QWidget):
         had_cache = bool(self._preview_polys_cache)
         was_showing = self._showing_preview
         self._preview_polys_cache = []
+        self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         if was_showing:
             # Keep preview mode active while parameters/settings refresh.
             # The canvas continues to display the last preview until the new
@@ -1642,11 +1866,8 @@ class PatternPage(QWidget):
             )
             return
         pattern = self._pattern_combo.currentText()
-        if pattern == "— None —":
-            QMessageBox.information(
-                self, "No Pattern", "Choose a pattern before assigning."
-            )
-            return
+        # NOTE: "— None —" is now allowed — it means outline-only / fill-only
+        # zone (e.g. a region you want filled but not patterned).
         try:
             scale = self._collect_scale()
             params = self._collect_pattern_params(pattern)
@@ -1654,12 +1875,17 @@ class PatternPage(QWidget):
         except ValueError:
             return
         interlace = self._interlace_cb.isChecked()
+        # Capture the current fill settings as the per-zone fill override
+        # so each zone carries its own fill snapshot. Stored as a dict to
+        # match the worker's serialization contract.
+        fill_snapshot = self._collect_fill_options()
         if any(
             zone.get("outline_ids", []) == sel_ids
             and zone["pattern"] == pattern
             and zone["params"] == params
             and zone["interlace"] == interlace
             and zone["scale"] == scale
+            and zone.get("fill") == fill_snapshot
             for zone in self._zones
         ):
             self._set_status("Matching zone already exists.", "#e3b341")
@@ -1671,6 +1897,7 @@ class PatternPage(QWidget):
             "params": params,
             "interlace": interlace,
             "scale": scale,
+            "fill": fill_snapshot,
             "label": label,
         })
         self._refresh_zone_list()
@@ -1782,6 +2009,7 @@ class PatternPage(QWidget):
 
     def _reset_preview(self) -> None:
         self._preview_polys_cache = []
+        self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         if self._showing_preview:
             self._preview_btn.setChecked(False)
             self._on_preview_toggled(False)

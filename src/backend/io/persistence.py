@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,65 @@ def write_json_file_atomic(path: str | Path, payload: Any) -> None:
     except (OSError, TypeError, ValueError):
         try:
             os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_bytes(path: str | Path, data: bytes) -> None:
+    """Write bytes atomically (temp file + os.replace)."""
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=file_path.name, dir=file_path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp_path, file_path)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Write text atomically (temp file + os.replace)."""
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=file_path.name, dir=file_path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as handle:
+            handle.write(text)
+        os.replace(tmp_path, file_path)
+    except OSError:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_via(path: str | Path, writer: Callable[[Path], None]) -> None:
+    """Run ``writer`` against a temp path next to ``path`` then atomically swap.
+
+    Use this for libraries (ezdxf, PIL) that take a path and write to it
+    directly. ``writer`` receives a Path within the same directory so
+    ``os.replace`` is atomic on every supported platform.
+    """
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f".{file_path.name}.", suffix=".tmp", dir=file_path.parent
+    )
+    os.close(fd)
+    tmp_path_p = Path(tmp_path)
+    try:
+        writer(tmp_path_p)
+        os.replace(tmp_path_p, file_path)
+    except Exception:
+        try:
+            tmp_path_p.unlink()
         except OSError:
             pass
         raise

@@ -45,6 +45,13 @@ class CanvasLayerSidebarController:
         self._layers_tree.shapeVisibilityChanged.connect(
             self.on_shape_visibility_changed
         )
+        # New optional signals — guarded with hasattr so older trees still work.
+        if hasattr(self._layers_tree, "bulkVisibilityRequested"):
+            self._layers_tree.bulkVisibilityRequested.connect(
+                self.on_bulk_visibility_requested
+            )
+        if hasattr(self._layers_tree, "layerSoloRequested"):
+            self._layers_tree.layerSoloRequested.connect(self.on_solo_requested)
 
     @property
     def state(self) -> LayerTreeState:
@@ -88,4 +95,26 @@ class CanvasLayerSidebarController:
         hidden = self.hidden_for(layer)
         apply_shape_visibility(hidden, shape_key, visible)
         self.apply_current_visibility()
+        self._on_visibility_changed()
+
+    def on_bulk_visibility_requested(self, visible: bool) -> None:
+        """Toggle every known layer's visibility at once."""
+        if not self._shape_counts:
+            return
+        for layer_name, count in self._shape_counts.items():
+            hidden = self.hidden_for(layer_name)
+            apply_layer_visibility(hidden, count, visible)
+        self.apply_current_visibility()
+        self.refresh_tree()
+        self._on_visibility_changed()
+
+    def on_solo_requested(self, target_layer: str) -> None:
+        """Show only *target_layer*; hide every other known layer."""
+        if not self._shape_counts:
+            return
+        for layer_name, count in self._shape_counts.items():
+            hidden = self.hidden_for(layer_name)
+            apply_layer_visibility(hidden, count, layer_name == target_layer)
+        self.apply_current_visibility()
+        self.refresh_tree()
         self._on_visibility_changed()

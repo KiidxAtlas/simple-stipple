@@ -39,6 +39,10 @@ class CanvasRuntime:
         self.layer_view_state: dict[str, dict[str, set[int]]] = {}
         self._hidden_indices: set[int] = set()
         self._locked_indices: set[int] = set()
+        # Maps ghost overlay poly index → (layer_name, local_poly_index_in_layer).
+        self._ghost_layer_map: list[tuple[str, int]] = []
+        # Custom shape labels: layer_name → {poly_index: label}
+        self._shape_labels: dict[str, dict[int, str]] = {}
         self.set_current_layer_view(self.default_layer)
 
     def current_layer_name(self) -> str:
@@ -97,6 +101,38 @@ class CanvasRuntime:
         self._canvas.deselect_all()
         self.set_current_layer_view(active)
         self.sync_browser_interaction_state()
+        self._update_ghost_layers()
+
+    def _update_ghost_layers(self) -> None:
+        """Render all visible non-active layers as ghost overlays."""
+        if not hasattr(self._canvas, "set_ghost_polylines"):
+            return
+        active = self.current_layer_name()
+        ghost_polys: list[list[tuple[float, float]]] = []
+        ghost_map: list[tuple[str, int]] = []
+        for name, layer in self.doc_graph.iter_layers():
+            if name == "geometry" or name == active:
+                continue
+            layer_polys = list(layer.polylines)
+            if not layer_polys:
+                continue
+            hidden = hidden_bucket(self.layer_view_state, name)
+            n = len(layer_polys)
+            # Skip entirely hidden layers.
+            if n > 0 and len(hidden) >= n:
+                continue
+            for idx, poly in enumerate(layer_polys):
+                if idx not in hidden:
+                    ghost_map.append((name, idx))
+                    ghost_polys.append(poly)
+        self._ghost_layer_map = ghost_map
+        self._canvas.set_ghost_polylines(ghost_polys if ghost_polys else None)
+
+    def layer_for_ghost_index(self, ghost_idx: int) -> tuple[str, int] | None:
+        """Return (layer_name, local_poly_index) for a ghost overlay poly index."""
+        if 0 <= ghost_idx < len(self._ghost_layer_map):
+            return self._ghost_layer_map[ghost_idx]
+        return None
 
     def switch_active_layer(self, layer: str, *, fit: bool = False) -> bool:
         current = self.current_layer_name()
@@ -122,17 +158,36 @@ class CanvasRuntime:
     ) -> bool:
         if not isinstance(shape_key, int):
             return False
-        shape_index = shape_key
+        return self.shapes_move_requested(source_layer, [shape_key], target_layer)
+
+    def shapes_move_requested(
+        self,
+        source_layer: str,
+        shape_keys: list,
+        target_layer: str,
+    ) -> bool:
+        """Move multiple shapes from *source_layer* to *target_layer* atomically.
+
+        Captures the current canvas state once, performs every move in a single
+        graph operation, then reloads the source layer. The active layer is
+        intentionally left alone — moving a shape *out* of the layer the user
+        is editing should not yank them away from it.
+        """
         if source_layer == target_layer:
+            return False
+        indices = sorted({int(k) for k in shape_keys if isinstance(k, int)})
+        if not indices:
             return False
         self.graph_adapter.capture_from_canvas(self._canvas)
         move_entities_to_layer(
             self.doc_graph,
-            [("layer-polyline", shape_index)],
+            [("layer-polyline", idx) for idx in indices],
             source_layer=source_layer,
             target_layer=target_layer,
         )
-        set_active_layer(self.doc_graph, target_layer)
+        # Stay on the source layer so the canvas keeps the user's context.
+        # The tree refresh below will show the source list shrunken and the
+        # target row's badge incremented.
         self.reload_active_layer(fit=False)
         return True
 
@@ -172,7 +227,8 @@ class CanvasRuntime:
             source_layer=source_layer,
             target_layer=target_layer,
         )
-        set_active_layer(self.doc_graph, target_layer)
+        # Keep the user on the source layer; the moved shapes vanish from
+        # the canvas and reappear under the target layer's tree row.
         self.reload_active_layer(fit=False)
         return True
 
@@ -187,6 +243,32 @@ class CanvasRuntime:
     def on_canvas_edit(self) -> None:
         self.graph_adapter.capture_from_canvas(self._canvas)
         self.sync_browser_interaction_state()
+        self._update_ghost_layers()
+
+    def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
+        """Persist a custom display label for a shape."""
+        if not isinstance(shape_key, int):
+            return
+        self._shape_labels.setdefault(layer_name, {})[int(shape_key)] = new_label
+
+    def _shape_label_builder(
+        self, layer_name: str
+    ):  # returns a Callable[[int, list], str]
+        labels = self._shape_labels.get(layer_name, {})
+
+        def _label(idx: int, poly: list[tuple[float, float]]) -> str:
+            custom = labels.get(idx)
+            geo = describe_polyline(idx, poly)
+            if not custom:
+                return geo
+            # Append the geometry description so topology info is preserved.
+            # geo = "01  Closed  ·  4 pts  ·  10.7 × 6.1 mm"
+            # Strip the "01  " index prefix before appending as suffix.
+            parts = geo.split("  ", 1)
+            geo_suffix = parts[1] if len(parts) > 1 else geo
+            return f"{custom}  ·  {geo_suffix}"
+
+        return _label
 
     def build_layer_shape_rows(
         self,
@@ -197,7 +279,7 @@ class CanvasRuntime:
         return build_shape_rows(
             polylines,
             hidden,
-            describe_polyline,
+            self._shape_label_builder(layer_name),
             editable=True,
             draggable=True,
         )
@@ -214,12 +296,16 @@ class CanvasRuntime:
             layer_polys = list(layer.polylines)
             if name == active:
                 layer_polys = self._canvas.get_polylines_state()
+            # A layer is considered hidden if all its shapes are in the hidden set.
+            hidden = hidden_bucket(layer_view_state, name)
+            n = len(layer_polys)
+            visible = n == 0 or len(hidden) < n
             rows.append(
                 build_layer_row(
                     name=name,
                     display_name=name,
                     active=name == active,
-                    visible=True,
+                    visible=visible,
                     editable=True,
                     shapes=self.build_layer_shape_rows(name, layer_polys),
                 )
@@ -255,6 +341,47 @@ class CanvasRuntime:
         self.normalize_graph_for_ui()
         set_active_layer(self.doc_graph, self.default_layer)
         self.set_current_layer_view(self.default_layer)
+
+    def load_polys_by_layer(
+        self,
+        by_layer: dict[str, list[list[tuple[float, float]]]],
+        *,
+        fit: bool,
+    ) -> None:
+        """Load polylines into separate document-graph layers.
+
+        The first non-empty layer becomes the active layer; its polylines are
+        also pushed onto the canvas. Remaining layers are stored on the graph
+        and surface in the layer tree / ghost overlays.
+        """
+        if not by_layer:
+            self.load_polys([], fit=fit)
+            return
+        first_name = next(iter(by_layer))
+        first_polys = by_layer[first_name]
+        # Seed canvas + graph using the first layer as the active one so we
+        # reuse the existing setup pipeline (graph_adapter, view state, etc.).
+        self._canvas.set_polylines_state(first_polys, fit=fit)
+        self._canvas.set_mode("select")
+        self.doc_graph = graph_from_polylines(
+            first_polys,
+            layer=first_name,
+            as_segments=False,
+        )
+        # Drop into all remaining layers verbatim.
+        for name, polys in by_layer.items():
+            if name == first_name:
+                continue
+            self.doc_graph.set_layer_polylines(name, polys)
+        self.graph_adapter = CanvasGraphAdapter(
+            self.doc_graph,
+            display_layer=first_name,
+        )
+        self.layer_view_state = {}
+        self.normalize_graph_for_ui()
+        set_active_layer(self.doc_graph, first_name)
+        self.set_current_layer_view(first_name)
+        self._update_ghost_layers()
 
     def restore_graph_state(self, graph_state: dict) -> None:
         self.doc_graph.restore(graph_state)

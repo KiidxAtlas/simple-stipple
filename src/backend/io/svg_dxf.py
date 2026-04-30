@@ -234,10 +234,30 @@ def svg_to_dxf(
                     polylines.append([(x, yf(y)) for x, y in p])
 
     for pts in polylines:
-        if len(pts) >= 2:
-            msp.add_lwpolyline(pts)
+        from ..dxf.io import _normalize_polyline_for_dxf
 
-    doc.saveas(str(output_path))
+        coords, is_closed = _normalize_polyline_for_dxf(pts)
+        if len(coords) >= 2:
+            msp.add_lwpolyline(coords, close=is_closed)
+
+    # Best-effort audit so a malformed SVG does not silently produce a
+    # broken DXF.
+    try:
+        auditor = doc.audit()
+        if auditor.has_errors:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "svg_to_dxf: %d audit error(s) writing %s",
+                len(auditor.errors),
+                output_path,
+            )
+    except (AttributeError, RuntimeError, ValueError):
+        pass
+
+    from .persistence import atomic_write_via
+
+    atomic_write_via(output_path, lambda p: doc.saveas(str(p)))
 
     all_pts = [pt for poly in polylines for pt in poly]
     if all_pts:

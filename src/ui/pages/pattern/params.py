@@ -467,6 +467,10 @@ def collect_form_state(page: Any) -> dict:
         "border_fade": page._border_fade.text(),
         "mirror_v": page._mirror_v_cb.isChecked(),
         "mirror_h": page._mirror_h_cb.isChecked(),
+        "fill_mode": page._fill_mode_combo.currentData() or "none",
+        "fill_spacing": page._fill_spacing.text(),
+        "fill_angle": page._fill_angle.text(),
+        "fill_keep_outline": page._fill_keep_outline_cb.isChecked(),
         # Tile library (set by build_tile_library_widget)
         "tile_pattern_path": page._library_patterns.get(
             page._pattern_combo.currentText(), ""
@@ -531,12 +535,19 @@ def restore_form_state(page: Any, payload: dict) -> None:
     page._scale_w.setText(str(values.get("scale_w", "")))
     page._scale_h.setText(str(values.get("scale_h", "")))
     page._ar_cb.setChecked(bool(values.get("ar_locked", True)))
-    page._include_border_cb.setChecked(bool(values.get("include_border", False)))
+    page._include_border_cb.setChecked(bool(values.get("include_border", True)))
     page._interlace_cb.setChecked(bool(values.get("interlace", False)))
     page._invert_fill_cb.setChecked(bool(values.get("invert_fill", False)))
     page._border_fade.setText(str(values.get("border_fade", "0")))
     page._mirror_v_cb.setChecked(bool(values.get("mirror_v", False)))
     page._mirror_h_cb.setChecked(bool(values.get("mirror_h", False)))
+    fill_mode_value = str(values.get("fill_mode", "none") or "none")
+    fill_idx = page._fill_mode_combo.findData(fill_mode_value)
+    page._fill_mode_combo.setCurrentIndex(max(fill_idx, 0))
+    page._fill_spacing.setText(str(values.get("fill_spacing", "0.5")))
+    page._fill_angle.setText(str(values.get("fill_angle", "0")))
+    page._fill_keep_outline_cb.setChecked(bool(values.get("fill_keep_outline", True)))
+    page._on_fill_mode_changed()
 
     # All PARAM_SPECS pattern fields
     for specs in PARAM_SPECS.values():

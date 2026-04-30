@@ -24,16 +24,10 @@ def gen_braid(
 ) -> list[list[tuple[float, float]]]:
     """Interlocking diagonal weave pattern at ±45° angles.
 
-    Creates alternating diagonal strips offset by spacing, with each strip
-    having a width of strip_width. Pattern creates visual interlocking effect.
-
-    Args:
-        outline_poly: Shapely Polygon boundary
-        strip_width: Width of each diagonal strip (mm)
-        spacing: Gap between parallel diagonal strips (mm)
-
-    Returns:
-        List of polylines clipped to the outline
+    Two families of diagonal strips (slope +1 and slope -1) cross over each
+    other to form a tessellating braid. ``strip_width`` is the on-screen width
+    of each strip; ``spacing`` is the perpendicular gap between adjacent
+    strips. The output is a set of polylines clipped to ``outline_poly``.
     """
     if strip_width <= 0 or spacing <= 0:
         return []
@@ -44,72 +38,35 @@ def gen_braid(
     if w <= 0 or h <= 0:
         return []
 
-    # Spacing between diagonal strip centers (width + gap)
-    step = strip_width + spacing
-    pad = step * 3.0
+    sqrt2 = math.sqrt(2.0)
+    # Perpendicular distance between adjacent strip centres.
+    pitch = strip_width + spacing
+    # Half-length of each diagonal segment so it always overshoots the bounds.
+    half_len = (math.hypot(w, h) + pitch * 4.0) / 2.0
+    # Centre of the bounding box — every diagonal is built around this point.
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+    # Range of perpendicular offsets needed to cover every corner.
+    span = (math.hypot(w, h) / 2.0) + pitch * 2.0
 
-    prep = prepared.prep(outline_poly)
     result: list[list[tuple[float, float]]] = []
 
-    # Create diagonal strips at +45° and -45° alternating
-    # For +45° lines: y = x + c, so perpendicular is y = -x + c2
-    # Strip is bounded by two parallel lines at ±45°
+    def _emit(slope_sign: int) -> None:
+        # Unit direction along the diagonal and its perpendicular.
+        dx, dy = 1.0 / sqrt2, slope_sign * 1.0 / sqrt2
+        nx, ny = -dy, dx  # 90° rotation
+        offset = -span
+        while offset <= span:
+            for sub in (-strip_width / 2.0, strip_width / 2.0):
+                ox = cx + (offset + sub) * nx
+                oy = cy + (offset + sub) * ny
+                p1 = (ox - dx * half_len, oy - dy * half_len)
+                p2 = (ox + dx * half_len, oy + dy * half_len)
+                _collect_lines(outline_poly.intersection(LineString([p1, p2])), result)
+            offset += pitch
 
-    # Diagonal distance across bounds
-    diag = math.hypot(w, h) + pad
-
-    # +45° direction strips (slope = 1)
-    # Perpendicular normal for spacing: (1/√2, -1/√2)
-    normal_pos = 1.0 / math.sqrt(2.0)
-
-    # Sample lines perpendicular to +45° direction
-    # Start and end projections
-    corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
-    projs_pos = [x * normal_pos - y * normal_pos for x, y in corners]
-    proj_min_pos = min(projs_pos) - pad
-    proj_max_pos = max(projs_pos) + pad
-
-    # Create +45° strips
-    offset = proj_min_pos
-    strip_idx = 0
-    while offset <= proj_max_pos:
-        # Two parallel perpendicular lines bounding the strip
-        # Line perpendicular to +45° at offset p: x - y = p
-        # Points on the line: (p + y, y) for any y
-
-        # Create line segment spanning the outline
-        p1 = (offset, 0)
-        p2 = (offset + diag, diag)
-
-        # Draw thick diagonal by parallel lines
-        for sub_offset in [offset, offset + strip_width]:
-            p1_sub = (sub_offset, -diag)
-            p2_sub = (sub_offset + diag, diag)
-            ln = LineString([p1_sub, p2_sub])
-            _collect_lines(outline_poly.intersection(ln), result)
-
-        offset += step
-        strip_idx += 1
-
-    # -45° direction strips (slope = -1)
-    # Normal for spacing: (1/√2, 1/√2)
-    projs_neg = [x * normal_pos + y * normal_pos for x, y in corners]
-    proj_min_neg = min(projs_neg) - pad
-    proj_max_neg = max(projs_neg) + pad
-
-    offset = proj_min_neg
-    strip_idx = 0
-    while offset <= proj_max_neg:
-        # -45° line: x + y = p
-        for sub_offset in [offset, offset + strip_width]:
-            p1_sub = (-diag, sub_offset + diag)
-            p2_sub = (diag, sub_offset - diag)
-            ln = LineString([p1_sub, p2_sub])
-            _collect_lines(outline_poly.intersection(ln), result)
-
-        offset += step
-        strip_idx += 1
-
+    _emit(+1)
+    _emit(-1)
     return result
 
 

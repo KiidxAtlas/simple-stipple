@@ -25,6 +25,7 @@ from src.backend.document.state import (
     normalize_workspace_path,
 )
 from src.backend.io import read_json_file, write_json_file_atomic
+from src.error_reporting import report_error
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
 from src.ui.components.common.command_palette import CommandPaletteDialog
 from src.ui.components.common.factories import _info_chip, _surface_frame
@@ -56,6 +57,15 @@ class App(QMainWindow):
 
         self._settings = load_settings()
         self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
+        # Drop missing entries from recent-files MRU lists on startup so menus
+        # never offer dead links. Done lazily after settings load so a stale
+        # settings file never blocks startup.
+        try:
+            from src.ui.util.recent_files import prune_missing
+
+            prune_missing(self._settings)
+        except Exception:  # never block startup on a stale list
+            logging.getLogger(__name__).exception("Failed to prune recent-files MRU")
         self._workspace_path: Path | None = None
         self._workspace_dirty: bool = False
         self._last_saved_document: dict | None = None
@@ -365,10 +375,20 @@ class App(QMainWindow):
             self._recent_workspaces_menu.addAction(action)
             return
         for path in recent:
-            self._recent_workspaces_menu.addAction(
-                path.name,
-                lambda checked=False, p=path: self._load_workspace_file(p),
-            )
+            action = QAction(path.name, self._recent_workspaces_menu)
+            action.setData(str(path))
+            action.setToolTip(str(path))
+            action.triggered.connect(self._load_recent_workspace_action)
+            self._recent_workspaces_menu.addAction(action)
+
+    def _load_recent_workspace_action(self) -> None:
+        action = self.sender()
+        if not isinstance(action, QAction):
+            return
+        path_str = action.data()
+        if not path_str:
+            return
+        self._load_workspace_file(Path(str(path_str)))
 
     def _confirm_discard_if_dirty(self) -> bool:
         self._update_workspace_dirty()
@@ -460,10 +480,34 @@ class App(QMainWindow):
         return self._save_workspace()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._confirm_discard_if_dirty():
-            event.accept()
+        if not self._confirm_discard_if_dirty():
+            event.ignore()
             return
-        event.ignore()
+        # Stop timers before children destroyed to avoid late callbacks.
+        for timer in (
+            getattr(self, "_workspace_timer", None),
+            getattr(self, "_auto_fetch_timer", None),
+            getattr(self, "_autosave_timer", None),
+        ):
+            if timer is not None:
+                try:
+                    timer.stop()
+                except RuntimeError:
+                    pass
+        # Persist settings on exit so any in-memory changes survive.
+        try:
+            save_settings(self._settings)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to persist settings on close: %s", exc)
+        # Cancel/clean up tracked workers if pages expose a hook.
+        for page in self._page_runtime.iter_workspace_pages():
+            shutdown = getattr(page, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception as exc:  # noqa: BLE001
+                    report_error("Page shutdown failed", exc)
+        event.accept()
 
     def showEvent(self, event) -> None:
         """Handle window show event — perform startup tasks like auto-fetch and update check."""

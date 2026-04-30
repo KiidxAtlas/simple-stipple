@@ -149,6 +149,13 @@ class PolylineView(QGraphicsView, CanvasRenderer):
         self._draw_construction_mode: bool = False
         self._draw_split_enabled: bool = True
 
+        # Ghost polylines: a non-interactive secondary set rendered beneath the
+        # main polys (faded, dashed). Used for showing context layers — e.g.
+        # the source outline beneath a generated pattern preview — without
+        # putting them into the editable poly list.
+        self._ghost_polys: list[list[tuple[float, float]]] = []
+        self._ghost_visible: bool = True
+
         self._scale = 1.0
         self._ox = 0.0
         self._oy = 0.0
@@ -858,6 +865,40 @@ class PolylineView(QGraphicsView, CanvasRenderer):
 
     def get_locked_indices(self) -> list[int]:
         return sorted(self._locked_polys)
+
+    def set_ghost_polylines(
+        self,
+        polys: list[list[tuple[float, float]]] | None,
+        *,
+        visible: bool | None = None,
+    ) -> None:
+        """Install (or clear) the ghost-overlay polylines.
+
+        Pass ``None`` or an empty list to clear the overlay. ``visible`` may be
+        used to control overlay visibility independently of the data; if
+        omitted the current visibility flag is preserved.
+        """
+        new_ghosts: list[list[tuple[float, float]]]
+        if not polys:
+            new_ghosts = []
+        else:
+            new_ghosts = [list(p) for p in polys]
+        changed = new_ghosts != self._ghost_polys
+        self._ghost_polys = new_ghosts
+        if visible is not None and bool(visible) != self._ghost_visible:
+            self._ghost_visible = bool(visible)
+            changed = True
+        if changed:
+            self._redraw()
+
+    def set_ghost_visible(self, visible: bool) -> None:
+        if bool(visible) == self._ghost_visible:
+            return
+        self._ghost_visible = bool(visible)
+        self._redraw()
+
+    def has_ghost_polylines(self) -> bool:
+        return bool(self._ghost_polys)
 
     def get_status_summary(self) -> dict[str, object]:
         precision = []
@@ -2375,8 +2416,18 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                 for meta in self._entity_meta
             ],
         ))
+        # Hard cap on entry count.
         if len(self._undo_stack) > 30:
             self._undo_stack.pop(0)
+        # Soft cap on total vertices retained across the stack so a few
+        # huge snapshots do not balloon process memory. A scene with
+        # ~200k vertices roughly equals ~3 MB of float pairs; we keep
+        # the budget generous but bounded.
+        _UNDO_VERTEX_BUDGET = 200_000
+        total = sum(sum(len(p) for p in entry[0]) for entry in self._undo_stack)
+        while total > _UNDO_VERTEX_BUDGET and len(self._undo_stack) > 1:
+            dropped = self._undo_stack.pop(0)
+            total -= sum(len(p) for p in dropped[0])
         self._redo_stack.clear()
 
     def _toggle_selected_construction(self) -> None:
@@ -3025,6 +3076,44 @@ class PolylineView(QGraphicsView, CanvasRenderer):
                     best = pi
         return best
 
+    def _find_ghost_poly_at(self, cx: float, cy: float) -> int | None:
+        """Hit-test the ghost overlay polys; returns ghost-list index or None."""
+        if not self._ghost_polys or not self._ghost_visible:
+            return None
+        best_dist = 8.0
+        best = None
+        wx, wy = self._c2w(cx, cy)
+        for pi, poly in enumerate(self._ghost_polys):
+            n = len(poly)
+            is_closed = (
+                n >= 3
+                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
+                < 0.01
+            )
+            seg_count = n if is_closed else n - 1
+            for vi in range(seg_count):
+                ax, ay = poly[vi]
+                bx, by = poly[(vi + 1) % n]
+                dx, dy = bx - ax, by - ay
+                seg_len_sq = dx * dx + dy * dy
+                if seg_len_sq < 1e-12:
+                    d = math.hypot(cx - self._w2c(ax, ay)[0], cy - self._w2c(ax, ay)[1])
+                else:
+                    t = max(
+                        0.0,
+                        min(
+                            1.0,
+                            ((wx - ax) * dx + (wy - ay) * dy) / seg_len_sq,
+                        ),
+                    )
+                    px, py_ = ax + t * dx, ay + t * dy
+                    scx, scy = self._w2c(px, py_)
+                    d = math.hypot(cx - scx, cy - scy)
+                if d < best_dist:
+                    best_dist = d
+                    best = pi
+        return best
+
     # ── Drawing ───────────────────────────────────────────────────────────────
 
     def _redraw(self) -> None:
@@ -3083,6 +3172,34 @@ class PolylineView(QGraphicsView, CanvasRenderer):
             QPointF(min(_tl_wx, _br_wx), min(_tl_wy, _br_wy)),
             QPointF(max(_tl_wx, _br_wx), max(_tl_wy, _br_wy)),
         )
+
+        # Ghost polylines (context-only overlay, drawn beneath the main polys).
+        if self._ghost_polys and self._ghost_visible:
+            ghost_color = QColor(POLY)
+            ghost_color.setAlpha(90)
+            ghost_pen = QPen(ghost_color, 1.0)
+            ghost_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(ghost_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for poly in self._ghost_polys:
+                if len(poly) < 2:
+                    continue
+                _gp_rect = self._poly_rect_for_culling(poly)
+                if not _visible_world.intersects(_gp_rect):
+                    continue
+                gpath = QPainterPath()
+                gx, gy = self._w2c(*poly[0])
+                gpath.moveTo(gx, gy)
+                for pt in poly[1:]:
+                    px, py_ = self._w2c(*pt)
+                    gpath.lineTo(px, py_)
+                if (
+                    len(poly) >= 3
+                    and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1])
+                    < 0.5
+                ):
+                    gpath.closeSubpath()
+                painter.drawPath(gpath)
 
         # Polylines
         for idx, poly in enumerate(self._polys):
