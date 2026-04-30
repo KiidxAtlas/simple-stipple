@@ -362,7 +362,144 @@ class PatternProcessingService:
             polys = apply_mirror(polys, outline_poly, mirror_v, mirror_h)
         if border_fade > 0:
             polys = apply_border_fade(polys, outline_poly, border_fade)
+        # Close any open pattern polylines using the outline boundary as the
+        # missing arc, so callers always receive closed shapes.
+        polys = self._close_polys_with_outline(
+            polys,
+            fill_outline,
+            spacing_hint=float(params.get("spacing", 1.0) or 1.0),
+        )
         return polys
+
+    @staticmethod
+    def _close_polys_with_outline(
+        polys: list[list[tuple[float, float]]],
+        outline_geom: Any,
+        *,
+        spacing_hint: float = 1.0,
+    ) -> list[list[tuple[float, float]]]:
+        """Replace open pattern strokes with closed chamber polygons.
+
+        The outline boundary plus every pattern polyline are treated as edges
+        of a planar graph; ``polygonize`` returns the closed faces that graph
+        defines. Each face inside ``outline_geom`` is emitted as a closed
+        polyline. Already-closed pattern polys are kept as-is.
+        """
+        if not polys or outline_geom is None or outline_geom.is_empty:
+            return polys
+
+        # Fast path: every poly already closed → nothing to do.
+        def _is_closed(poly: list[tuple[float, float]]) -> bool:
+            return (
+                len(poly) >= 4
+                and abs(poly[0][0] - poly[-1][0]) < 1e-9
+                and abs(poly[0][1] - poly[-1][1]) < 1e-9
+            )
+
+        if all(_is_closed(p) for p in polys):
+            return polys
+
+        try:
+            from shapely.geometry import (  # type: ignore[import-untyped]
+                LineString as _LS,
+                MultiPolygon as _MP,
+                Point as _Pt,
+                Polygon as _Poly,
+            )
+            from shapely.ops import (  # type: ignore[import-untyped]
+                nearest_points as _nearest,
+                polygonize as _polygonize,
+                unary_union as _uu,
+            )
+        except ImportError:
+            return polys
+
+        edges: list[Any] = []
+        boundary = outline_geom.boundary
+
+        def _push_boundary(geom: Any) -> None:
+            if geom is None or geom.is_empty:
+                return
+            if isinstance(geom, _Poly):
+                ext = list(geom.exterior.coords)
+                if len(ext) >= 2:
+                    edges.append(_LS(ext))
+                for hole in geom.interiors:
+                    hc = list(hole.coords)
+                    if len(hc) >= 2:
+                        edges.append(_LS(hc))
+            elif isinstance(geom, _MP):
+                for g in geom.geoms:
+                    _push_boundary(g)
+
+        _push_boundary(outline_geom)
+
+        snap_tol = max(spacing_hint * 0.5, 1e-6)
+        closed_polys: list[list[tuple[float, float]]] = []
+        for poly in polys:
+            if len(poly) < 2:
+                continue
+            try:
+                pts = [(float(x), float(y)) for x, y in poly]
+            except (TypeError, ValueError):
+                continue
+
+            if _is_closed(pts):
+                closed_polys.append(pts)
+                try:
+                    edges.append(_LS(pts))
+                except (TypeError, ValueError):
+                    pass
+                continue
+
+            # Snap open endpoints onto the outline boundary so the stroke
+            # actually subdivides the region instead of dangling.
+            try:
+                start_pt = _Pt(pts[0])
+                end_pt = _Pt(pts[-1])
+                _, snap_start = _nearest(start_pt, boundary)
+                _, snap_end = _nearest(end_pt, boundary)
+                if start_pt.distance(snap_start) > snap_tol:
+                    pts = [(snap_start.x, snap_start.y), *pts]
+                if end_pt.distance(snap_end) > snap_tol:
+                    pts = [*pts, (snap_end.x, snap_end.y)]
+            except (ValueError, TypeError, AttributeError):
+                pass
+
+            try:
+                edges.append(_LS(pts))
+            except (TypeError, ValueError):
+                continue
+
+        try:
+            merged = _uu(edges)
+            faces = list(_polygonize(merged))
+        except (ValueError, TypeError, AttributeError):
+            return polys
+
+        if not faces:
+            return closed_polys or polys
+
+        min_area = max(spacing_hint * spacing_hint * 0.25, 1e-6)
+        result: list[list[tuple[float, float]]] = list(closed_polys)
+        seen: set[tuple[tuple[float, float], ...]] = {
+            tuple((round(x, 6), round(y, 6)) for x, y in p) for p in closed_polys
+        }
+        for face in faces:
+            if face is None or face.is_empty or face.area < min_area:
+                continue
+            try:
+                if not outline_geom.contains(face.representative_point()):
+                    continue
+            except (ValueError, TypeError, AttributeError):
+                continue
+            ring = [(float(x), float(y)) for x, y, *_ in face.exterior.coords]
+            sig = tuple((round(x, 6), round(y, 6)) for x, y in ring)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            result.append(ring)
+        return result if result else polys
 
     def build_zone_pattern_polys(
         self,
