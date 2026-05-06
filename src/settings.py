@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 from src.backend.io import read_json_file, write_json_file_atomic
+from src.paths import user_data_dir
 
-_SETTINGS_FILE = Path.home() / ".simple_stipple_settings.json"
+_SETTINGS_FILE = user_data_dir() / "settings.json"
 _LOG = logging.getLogger(__name__)
 
 
@@ -30,6 +30,16 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
     "tab.convert": "Alt+4",
     "tab.repo": "Alt+5",
 }
+
+
+# Platform-adjusted default keybindings: on macOS prefer 'Meta' (Command)
+import platform as _platform
+
+if _platform.system() == "Darwin":
+    # Copy and replace Ctrl with Meta where appropriate
+    for k, v in list(DEFAULT_KEYBINDINGS.items()):
+        if v.startswith("Ctrl"):
+            DEFAULT_KEYBINDINGS[k] = v.replace("Ctrl", "Meta", 1)
 
 
 def _migrate_settings(data: dict) -> dict:

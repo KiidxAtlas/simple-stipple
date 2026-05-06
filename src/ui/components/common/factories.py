@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import platform as _platform
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
+
+# Platform modifier for human-readable shortcut hints
+_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -21,14 +25,7 @@ from PySide6.QtWidgets import (
 def _section_label(parent_layout, text: str) -> QLabel:
     """Compact muted section header with letter-spacing."""
     lb = QLabel(text.upper())
-    lb.setStyleSheet(
-        "color: #484f58;"
-        "font-size: 10px;"
-        "font-weight: 600;"
-        "letter-spacing: 0.8px;"
-        "padding-bottom: 1px;"
-    )
-    lb.setContentsMargins(0, 8, 0, 2)
+    lb.setProperty("role", "section-label")
     parent_layout.addWidget(lb)
     return lb
 
@@ -124,7 +121,7 @@ def _canvas_toolbar(
         mode_buttons[mode] = btn
 
     sep = QLabel("│")
-    sep.setStyleSheet("color: #21262d; font-size: 12px;")
+    sep.setProperty("role", "toolbar-sep")
     shell_layout.addWidget(sep)
 
     fit_btn = QPushButton("Fit")
@@ -135,13 +132,13 @@ def _canvas_toolbar(
 
     if secondary_actions:
         sep2 = QLabel("│")
-        sep2.setStyleSheet("color: #21262d; font-size: 12px;")
+        sep2.setProperty("role", "toolbar-sep")
         shell_layout.addWidget(sep2)
         secondary_hints = {
-            "Select All": "Shortcut: Ctrl+A",
-            "Deselect": "Shortcut: Ctrl+Shift+A",
+            "Select All": f"Shortcut: {_KBD_MOD}+A",
+            "Deselect": f"Shortcut: {_KBD_MOD}+Shift+A",
             "Delete": "Shortcut: Delete",
-            "Undo": "Shortcut: Ctrl+Z",
+            "Undo": f"Shortcut: {_KBD_MOD}+Z",
             "Close": "Shortcut: Shift+C",
             "Open": "Shortcut: Shift+O",
         }

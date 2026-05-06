@@ -35,7 +35,16 @@ def _hex_verts(cx: float, cy: float, r: float) -> list[tuple[float, float]]:
 
 
 def _coords_to_polyline(coords) -> list[tuple[float, float]]:
-    return [(float(x), float(y)) for x, y, *_ in coords]
+    out: list[tuple[float, float]] = []
+    for c in coords:
+        try:
+            x = float(c[0])
+            y = float(c[1])
+        except Exception:
+            # Skip any malformed coordinate entries
+            continue
+        out.append((x, y))
+    return out
 
 
 def _extract_polys(geom, out: list[list[tuple[float, float]]]) -> None:
@@ -57,7 +66,11 @@ def _collect_lines(geom, out: list) -> None:
     if geom.geom_type == "LineString":
         c = list(geom.coords)
         if len(c) >= 2:
-            out.append(c)
+            try:
+                out.append([(float(x), float(y)) for x, y in c])
+            except Exception:
+                # Fallback: append raw coords if conversion fails
+                out.append(c)
     elif hasattr(geom, "geoms"):
         for g in geom.geoms:
             _collect_lines(g, out)
@@ -176,8 +189,23 @@ def apply_border_fade(
     for poly in polys:
         if not poly:
             continue
-        cx = sum(x for x, y in poly) / len(poly)
-        cy = sum(y for x, y in poly) / len(poly)
+        # Prefer geometric polygon centroid when possible for irregular shapes.
+        try:
+            shape = _polygon_from_polyline(poly)
+        except Exception:
+            shape = None
+        if shape is not None:
+            _c = shape.centroid
+            if not _c.is_empty:
+                cx = float(_c.x)
+                cy = float(_c.y)
+            else:
+                cx = sum(x for x, y in poly) / len(poly)
+                cy = sum(y for x, y in poly) / len(poly)
+        else:
+            # Fallback: arithmetic mean of vertices.
+            cx = sum(x for x, y in poly) / len(poly)
+            cy = sum(y for x, y in poly) / len(poly)
         dist = Point(cx, cy).distance(boundary)
         if dist >= fade_width:
             result.append(poly)
@@ -209,6 +237,8 @@ def apply_mirror(
         return polys
     if not polys:
         return polys
+
+    # Centre of the outline bounding box is the mirror axis origin.
     bounds = outline_poly.bounds
     cx = (bounds[0] + bounds[2]) / 2
     cy = (bounds[1] + bounds[3]) / 2
@@ -224,17 +254,58 @@ def apply_mirror(
             for x, y in poly
         ]
 
+    # Prepare outline for clipping mirrored pieces when an outline is provided.
+    prep_outline = None
+    try:
+        if outline_poly is not None and not outline_poly.is_empty:
+            prep_outline = prepared.prep(outline_poly)
+    except Exception:
+        prep_outline = None
+
     result: list[list[tuple[float, float]]] = []
     for poly in polys:
         if not poly:
             continue
+        # Always keep the source element.
         result.append(poly)
-        if mirror_v:
-            result.append(_reflect(poly, True, False))
-        if mirror_h:
-            result.append(_reflect(poly, False, True))
-        if mirror_v and mirror_h:
-            result.append(_reflect(poly, True, True))
+        # For each requested reflection, reflect then clip to outline.
+        for rv, rh in ((True, False), (False, True), (True, True)):
+            if (rv and not mirror_v) or (rh and not mirror_h):
+                continue
+            reflected = _reflect(poly, rv, rh)
+            if prep_outline is None:
+                result.append(reflected)
+                continue
+            # Closed polygon path handling.
+            if len(reflected) >= 3:
+                pts = list(reflected)
+                if pts[0] != pts[-1]:
+                    pts = pts + [pts[0]]
+                try:
+                    shape = Polygon(pts)
+                    if not shape.is_valid:
+                        shape = shape.buffer(0)
+                    if shape.is_empty:
+                        continue
+                    if prep_outline.contains(shape):
+                        result.append(reflected)
+                    elif prep_outline.intersects(shape):
+                        clipped = outline_poly.intersection(shape)
+                        pieces: list[list[tuple[float, float]]] = []
+                        _extract_polys(clipped, pieces)
+                        result.extend(pieces)
+                    # else: entirely outside — drop it
+                except Exception:
+                    result.append(reflected)
+            else:
+                # Open polyline path handling.
+                try:
+                    ls = LineString(reflected)
+                    if not ls.is_empty and prep_outline.intersects(ls):
+                        clipped = outline_poly.intersection(ls)
+                        _collect_lines(clipped, result)
+                except Exception:
+                    result.append(reflected)
     return result
 
 

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -28,37 +29,54 @@ from src.ui.components.common.factories import _info_chip
 
 
 class CollapsibleSection(QFrame):
-    """Expandable/collapsible content section for dense sidebars."""
+    """Expandable/collapsible content section for dense sidebars.
 
-    def __init__(self, title: str, content: QWidget, *, expanded: bool = True):
+    Optional ``subtitle`` displays a one-line state summary under the title
+    (e.g. "Honeycomb · 1.2 mm") so users can see the active config without
+    expanding the section. Update via :meth:`set_subtitle`.
+    """
+
+    def __init__(
+        self,
+        title: str,
+        content: QWidget,
+        *,
+        expanded: bool = True,
+        subtitle: str = "",
+    ):
         super().__init__()
+        self._title = title
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setProperty("surface", "panel")
         self.setProperty("role", "collapsible")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setSpacing(2)
 
         self._toggle = QToolButton()
-        self._toggle.setText(title)
+        self._toggle.setProperty("role", "collapsible-toggle")
+        self._toggle.setText(f"{'\u25be' if expanded else '\u25b8'}  {title}")
         self._toggle.setCheckable(True)
         self._toggle.setChecked(expanded)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self._toggle.setArrowType(
-            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._toggle.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
         self._toggle.clicked.connect(self._on_toggled)
         layout.addWidget(self._toggle)
+
+        self._subtitle = QLabel(subtitle)
+        self._subtitle.setProperty("role", "section-subtitle")
+        self._subtitle.setVisible(bool(subtitle))
+        layout.addWidget(self._subtitle)
 
         self._content = content
         self._content.setVisible(expanded)
         layout.addWidget(self._content)
 
     def _on_toggled(self, checked: bool) -> None:
-        self._toggle.setArrowType(
-            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
-        )
+        self._toggle.setText(f"{'\u25be' if checked else '\u25b8'}  {self._title}")
         self._content.setVisible(checked)
         self.adjustSize()
 
@@ -68,6 +86,18 @@ class CollapsibleSection(QFrame):
     def setExpanded(self, expanded: bool) -> None:
         self._toggle.setChecked(expanded)
         self._on_toggled(expanded)
+
+    def set_subtitle(self, text: str, *, dim: bool = False) -> None:
+        """Update the one-line state summary shown under the title.
+
+        Pass ``dim=True`` to render the subtitle in a more muted color
+        (used to indicate the section's feature is currently disabled).
+        """
+        self._subtitle.setText(text)
+        self._subtitle.setVisible(bool(text))
+        self._subtitle.setProperty("dim", "true" if dim else "")
+        self._subtitle.style().unpolish(self._subtitle)
+        self._subtitle.style().polish(self._subtitle)
 
 
 class CanvasPrecisionBar(QFrame):
@@ -90,23 +120,31 @@ class CanvasPrecisionBar(QFrame):
         label.setStyleSheet("color: #8b949e; font-size: 10px; font-weight: 700;")
         layout.addWidget(label)
 
-        self._grid_btn = QPushButton()
+        self._grid_btn = QPushButton("Grid")
         self._grid_btn.setMinimumHeight(24)
+        self._grid_btn.setCheckable(True)
+        self._grid_btn.setToolTip("Toggle canvas grid overlay")
         self._grid_btn.clicked.connect(self._toggle_grid)
         layout.addWidget(self._grid_btn)
 
-        self._snap_btn = QPushButton()
+        self._snap_btn = QPushButton("Snap")
         self._snap_btn.setMinimumHeight(24)
+        self._snap_btn.setCheckable(True)
+        self._snap_btn.setToolTip("Snap cursor to grid intersections")
         self._snap_btn.clicked.connect(self._toggle_snap)
         layout.addWidget(self._snap_btn)
 
-        self._construction_btn = QPushButton()
+        self._construction_btn = QPushButton("Guides")
         self._construction_btn.setMinimumHeight(24)
+        self._construction_btn.setCheckable(True)
+        self._construction_btn.setToolTip("Toggle construction guide lines")
         self._construction_btn.clicked.connect(self._toggle_construction)
         layout.addWidget(self._construction_btn)
 
-        self._measure_btn = QPushButton()
+        self._measure_btn = QPushButton("Measure")
         self._measure_btn.setMinimumHeight(24)
+        self._measure_btn.setCheckable(True)
+        self._measure_btn.setToolTip("Toggle distance measurement tool")
         self._measure_btn.clicked.connect(self._toggle_measure)
         layout.addWidget(self._measure_btn)
 
@@ -150,32 +188,12 @@ class CanvasPrecisionBar(QFrame):
         measure_on = bool(state.get("measure_mode", False))
         spacing = float(state.get("grid_spacing", 1.0))
 
-        self._grid_btn.setText("Grid: On" if grid_on else "Grid: Off")
-        self._grid_btn.setProperty("role", "primary" if grid_on else None)
-
-        self._snap_btn.setText("Snap: On" if snap_on else "Snap: Off")
-        self._snap_btn.setProperty("role", "primary" if snap_on else None)
-
-        self._construction_btn.setText(
-            "Construction: On" if construction_on else "Construction: Off"
-        )
-        self._construction_btn.setProperty(
-            "role", "primary" if construction_on else None
-        )
-
-        self._measure_btn.setText("Measure: On" if measure_on else "Measure: Off")
-        self._measure_btn.setProperty("role", "primary" if measure_on else None)
+        self._grid_btn.setChecked(grid_on)
+        self._snap_btn.setChecked(snap_on)
+        self._construction_btn.setChecked(construction_on)
+        self._measure_btn.setChecked(measure_on)
 
         self._spacing.setText(f"{spacing:g}")
-
-        for button in (
-            self._grid_btn,
-            self._snap_btn,
-            self._construction_btn,
-            self._measure_btn,
-        ):
-            button.style().unpolish(button)
-            button.style().polish(button)
 
     def _after_change(self) -> None:
         self.refresh()

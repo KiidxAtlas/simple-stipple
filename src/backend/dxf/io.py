@@ -46,9 +46,15 @@ def _normalize_polyline_for_dxf(
         return [], False
 
     # Pass 0: drop NaN / inf coordinates that would corrupt the DXF.
-    finite: list[tuple[float, float]] = [
-        (float(x), float(y)) for x, y in pts if math.isfinite(x) and math.isfinite(y)
-    ]
+    finite: list[tuple[float, float]] = []
+    for p in pts:
+        try:
+            x = float(p[0])
+            y = float(p[1])
+        except Exception:
+            continue
+        if math.isfinite(x) and math.isfinite(y):
+            finite.append((x, y))
     if not finite:
         return [], False
 

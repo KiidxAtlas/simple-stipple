@@ -11,12 +11,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QPoint, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -49,7 +51,7 @@ from src.ui.util.recent_files import KIND_DXF, record_recent
 
 def _toolbar_sep() -> QLabel:
     sep = QLabel("│")
-    sep.setStyleSheet("color: #21262d; font-size: 12px;")
+    sep.setProperty("role", "toolbar-sep")
     return sep
 
 
@@ -76,8 +78,14 @@ class DraftPage(QWidget):
         root.setSpacing(0)
 
         canvas_host = self._build_canvas()
-        root.addWidget(self._build_toolbar())
-        root.addWidget(self._build_grid())
+
+        _toolbar_panel = _surface_frame("panel")
+        _tp_layout = QVBoxLayout(_toolbar_panel)
+        _tp_layout.setContentsMargins(8, 4, 8, 4)
+        _tp_layout.setSpacing(2)
+        _tp_layout.addWidget(self._build_toolbar())
+        _tp_layout.addWidget(self._build_grid())
+        root.addWidget(_toolbar_panel)
         root.addWidget(canvas_host, stretch=1)
 
         self._canvas_status = CanvasStatusStrip(show_readiness=False)
@@ -108,30 +116,78 @@ class DraftPage(QWidget):
         self._recent_btn.setToolTip("Pick from recently opened DXF files")
         self._recent_btn.fileSelected.connect(self._load_dxf)
 
-        self._shape_mode_label = QLabel("Shape: Rectangle")
-        self._shape_mode_label.setStyleSheet("color: #8b949e; font-size: 11px;")
+        # Shape mode — interactive dropdown to switch quick-draw shape type
+        self._shape_mode_btn = QToolButton()
+        self._shape_mode_btn.setText("▸ Rectangle")
+        self._shape_mode_btn.setToolTip("Change the quick-draw shape mode")
+        self._shape_mode_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        _shape_menu = QMenu(self._shape_mode_btn)
+        for _shape in ("Rectangle", "Circle", "Slot", "Hexagon"):
+            _shape_menu.addAction(
+                _shape,
+                lambda s=_shape.lower(): self._canvas.set_quick_shape_mode(s),
+            )
+        self._shape_mode_btn.setMenu(_shape_menu)
 
-        self._actions_btn = QPushButton("Actions ▾")
-        self._actions_btn.setMinimumHeight(28)
-        self._actions_btn.setToolTip("Context actions for current selection")
-        self._actions_btn.clicked.connect(self._show_context_actions_menu)
+        # Close Poly — most common shape-editing action, surfaced directly
+        self._close_poly_btn = QPushButton("Close Poly")
+        self._close_poly_btn.setMinimumHeight(28)
+        self._close_poly_btn.setToolTip("Close selected open polylines [Shift+C]")
+        self._close_poly_btn.clicked.connect(self._close_selected_polylines)
+
+        # Select All — second most common action
+        self._select_all_btn = QPushButton("Select All")
+        self._select_all_btn.setMinimumHeight(28)
+        self._select_all_btn.setToolTip(
+            "Select all shapes on the active layer [Ctrl+A]"
+        )
+        self._select_all_btn.clicked.connect(self._select_all)
+
+        # Overflow (⋯) — remaining actions
+        overflow_btn = QToolButton()
+        overflow_btn.setText("⋯")
+        overflow_btn.setFixedWidth(32)
+        overflow_btn.setToolTip("More actions")
+        overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        overflow_menu = QMenu(overflow_btn)
+        overflow_menu.addAction(
+            "Open selected [Shift+O]", self._open_selected_polylines
+        )
+        overflow_menu.addSeparator()
+        overflow_menu.addAction("Delete selected [Delete]", self._delete_selected)
+        overflow_menu.addAction("Duplicate [Ctrl+D]", self._duplicate_selected)
+        overflow_menu.addAction("Deselect all [Ctrl+Shift+A]", self._deselect_all)
+        overflow_menu.addSeparator()
+        overflow_menu.addAction("Toggle measure [M]", self._toggle_measure_mode)
+        overflow_menu.addAction("Fit view [F]", self._fit_view)
+        overflow_menu.addAction("Fit selection", self._fit_selection)
+        overflow_btn.setMenu(overflow_menu)
 
         export_btn = QPushButton("Export DXF")
-        export_btn.setFixedHeight(28)
+        export_btn.setMinimumHeight(28)
         export_btn.setMinimumWidth(90)
         export_btn.setProperty("role", "primary")
         export_btn.clicked.connect(self._export)
+
+        _spacer = QWidget()
+        _spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
             on_mode=self._on_toolbar_mode,
             on_fit=self._fit_view,
             extra_widgets=[
+                _toolbar_sep(),
+                self._shape_mode_btn,
+                self._close_poly_btn,
+                self._select_all_btn,
+                overflow_btn,
+                _spacer,
+                _toolbar_sep(),
                 open_btn,
                 self._recent_btn,
-                _toolbar_sep(),
-                self._shape_mode_label,
-                self._actions_btn,
                 export_btn,
             ],
         )
@@ -220,11 +276,11 @@ class DraftPage(QWidget):
         self._refresh_status()
 
     def _on_quick_shape_changed(self, mode: str) -> None:
-        self._shape_mode_label.setText(f"Shape: {mode.title()}")
+        self._shape_mode_btn.setText(f"▸ {mode.title()}")
         self._refresh_status()
 
     def _on_quick_shape_enabled_changed(self, enabled: bool) -> None:
-        _ = enabled
+        self._shape_mode_btn.setEnabled(bool(enabled))
         self._refresh_status()
 
     def _on_sel_change(self, count: int) -> None:
@@ -386,21 +442,6 @@ class DraftPage(QWidget):
             self._emit_state_changed()
         else:
             self._canvas._show_flash("No closed polyline selected", 900)
-
-    def _show_context_actions_menu(self) -> None:
-        menu = QMenu(self)
-        menu.addAction("Close selected [Shift+C]", self._close_selected_polylines)
-        menu.addAction("Open selected [Shift+O]", self._open_selected_polylines)
-        menu.addSeparator()
-        menu.addAction("Delete selected [Delete]", self._delete_selected)
-        menu.addAction("Duplicate selected [Ctrl+D]", self._duplicate_selected)
-        menu.addAction("Select all [Ctrl+A]", self._select_all)
-        menu.addAction("Deselect all [Ctrl+Shift+A]", self._deselect_all)
-        menu.addSeparator()
-        menu.addAction("Toggle measure [M]", self._toggle_measure_mode)
-        menu.addAction("Fit view [F]", self._fit_view)
-        menu.addAction("Fit selection", self._fit_selection)
-        menu.popup(self._actions_btn.mapToGlobal(QPoint(0, self._actions_btn.height())))
 
     def _fit_view(self) -> None:
         self._canvas.fit()

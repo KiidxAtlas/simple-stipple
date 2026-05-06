@@ -17,15 +17,17 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -211,23 +213,35 @@ class PatternPage(QWidget):
     # ── Left panel ────────────────────────────────────────────────────────────
 
     def _build_left(self, layout: QVBoxLayout) -> None:
-        self._build_source_section(layout)
-        self._build_scale_section(layout)
-        self._build_fill_params_section(layout)
+        # New IA: Shape → Pattern → Fill → Zones → Export.
+        # Each section answers a single question. Modifiers (rotation,
+        # symmetry, invert, fade) live with the pattern they affect; the
+        # cutout panel lives with Fill (the only place cutouts matter);
+        # "Include border on separate layer" and the export summary live
+        # with Export. The legacy "Output Options" junk-drawer is gone.
+        self._build_shape_section(layout)
+        self._build_pattern_section(layout)
+        self._build_fill_section(layout)
         self._build_zones_section(layout)
-        self._build_output_options_section(layout)
         self._build_export_section(layout)
         layout.addStretch()
+        # Subtitles + ⌘K palette + ⌘E/⌘R shortcuts. Installed last so all
+        # widgets they reference exist.
+        self._install_pattern_shortcuts()
+        self._refresh_section_subtitles()
 
-    def _build_source_section(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Source")
+    def _build_shape_section(self, layout: QVBoxLayout) -> None:
+        """SHAPE: source DXF + size (width/height/lock-aspect)."""
+        shape_content = QWidget()
+        shape_layout = QVBoxLayout(shape_content)
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+        shape_layout.setSpacing(8)
 
+        # Source row: [path] [Recent] [Browse] [↺]
         file_row = QHBoxLayout()
         self._dxf_edit = QLineEdit()
         self._dxf_edit.setPlaceholderText("Select .dxf…")
-        self._dxf_edit.setToolTip(
-            "Path to a DXF outline file (drag-and-drop supported)"
-        )
+        self._dxf_edit.setToolTip("Path to a DXF outline file (drag-and-drop)")
         file_row.addWidget(self._dxf_edit, stretch=1)
         self._recent_btn = RecentFilesButton(
             self._settings,
@@ -242,130 +256,122 @@ class PatternPage(QWidget):
         browse_btn.setToolTip("Browse for a DXF outline file on disk")
         browse_btn.clicked.connect(self._browse_dxf)
         file_row.addWidget(browse_btn)
-        layout.addLayout(file_row)
+        _reload_btn = QToolButton()
+        _reload_btn.setText("↺")
+        _reload_btn.setFixedWidth(28)
+        _reload_btn.setToolTip("Re-read the current DXF file from disk  (⌘R)")
+        _reload_btn.clicked.connect(self._reload_dxf)
+        file_row.addWidget(_reload_btn)
+        shape_layout.addLayout(file_row)
 
-        reload_btn = QPushButton("↺  Reload")
-        reload_btn.setMinimumHeight(28)
-        reload_btn.setToolTip("Re-read the current DXF file from disk")
-        reload_btn.clicked.connect(self._reload_dxf)
-        layout.addWidget(reload_btn)
-
-    def _build_scale_section(self, layout: QVBoxLayout) -> None:
-        scale_content = QWidget()
-        scale_layout = QVBoxLayout(scale_content)
-        scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.setSpacing(8)
-
+        # Original-size readout.
         orig_row = QHBoxLayout()
         orig_row.addWidget(QLabel("Original:"))
         self._orig_dims_label = QLabel("—")
-        self._orig_dims_label.setStyleSheet(f"color: {DIM};")
+        self._orig_dims_label.setProperty("role", "dim")
         orig_row.addWidget(self._orig_dims_label)
         orig_row.addStretch()
-        scale_layout.addLayout(orig_row)
+        shape_layout.addLayout(orig_row)
 
-        dims_g = QGridLayout()
-        dims_g.addWidget(QLabel("Width (mm)"), 0, 0)
+        # Dimensions row: [W label] [W field] [⛓] [H label] [H field]
+        dims_row = QHBoxLayout()
+        dims_row.setSpacing(6)
+        dims_row.addWidget(QLabel("W (mm)"))
         self._scale_w = QLineEdit()
-        self._scale_w.setFixedWidth(80)
+        self._scale_w.setFixedWidth(72)
         self._scale_w.setPlaceholderText("auto")
         self._scale_w.setToolTip("Target width of the outline in millimetres")
         self._scale_w.textChanged.connect(self._on_scale_w_changed)
         self._scale_w.textChanged.connect(self._schedule_preview)
-        dims_g.addWidget(self._scale_w, 0, 1)
-        dims_g.addWidget(QLabel("Height (mm)"), 1, 0)
+        dims_row.addWidget(self._scale_w)
+        self._ar_lock_btn = QToolButton()
+        self._ar_lock_btn.setText("⛓")
+        self._ar_lock_btn.setFixedWidth(28)
+        self._ar_lock_btn.setCheckable(True)
+        self._ar_lock_btn.setChecked(True)
+        self._ar_lock_btn.setToolTip("Lock aspect ratio — keep W and H proportional")
+        self._ar_lock_btn.toggled.connect(self._on_ar_toggle)
+        dims_row.addWidget(self._ar_lock_btn)
+        dims_row.addWidget(QLabel("H (mm)"))
         self._scale_h = QLineEdit()
-        self._scale_h.setFixedWidth(80)
+        self._scale_h.setFixedWidth(72)
         self._scale_h.setPlaceholderText("auto")
         self._scale_h.setToolTip("Target height of the outline in millimetres")
         self._scale_h.textChanged.connect(self._on_scale_h_changed)
         self._scale_h.textChanged.connect(self._schedule_preview)
-        dims_g.addWidget(self._scale_h, 1, 1)
-        scale_layout.addLayout(dims_g)
+        dims_row.addWidget(self._scale_h)
+        dims_row.addStretch()
+        shape_layout.addLayout(dims_row)
 
-        self._ar_cb = QCheckBox("Lock aspect ratio")
-        self._ar_cb.setChecked(True)
-        self._ar_cb.setToolTip("Keep width and height proportional when resizing")
-        self._ar_cb.stateChanged.connect(self._on_ar_toggle)
-        scale_layout.addWidget(self._ar_cb)
-        layout.addWidget(
-            CollapsibleSection("Scale & Outline", scale_content, expanded=True)
+        self._shape_section = CollapsibleSection(
+            "Shape", shape_content, expanded=True, subtitle="No file loaded"
         )
+        layout.addWidget(self._shape_section)
 
-    def _build_fill_params_section(self, layout: QVBoxLayout) -> None:
-        fill_content = QWidget()
-        fill_layout = QVBoxLayout(fill_content)
-        fill_layout.setContentsMargins(0, 0, 0, 0)
-        fill_layout.setSpacing(8)
+    # Legacy entry-points kept for any external callers / tests. They now
+    # delegate to the new SHAPE section so signatures still type-check.
+    def _build_source_section(self, layout: QVBoxLayout) -> None:  # pragma: no cover
+        self._build_shape_section(layout)
+
+    def _build_scale_section(self, layout: QVBoxLayout) -> None:  # pragma: no cover
+        # Folded into SHAPE — no-op so old callers don't double-build.
+        return
+
+    def _build_pattern_section(self, layout: QVBoxLayout) -> None:
+        """PATTERN: combo + presets + per-pattern params + modifiers."""
+        pattern_content = QWidget()
+        pattern_layout = QVBoxLayout(pattern_content)
+        pattern_layout.setContentsMargins(0, 0, 0, 0)
+        pattern_layout.setSpacing(8)
+
         self._pattern_combo = QComboBox()
-        self._pattern_combo.setToolTip(
-            "Choose the fill pattern to apply inside the outline"
-        )
+        self._pattern_combo.setToolTip("Choose the fill pattern")
         self._refresh_pattern_choices()
         self._pattern_combo.currentTextChanged.connect(self._switch_pattern)
-        fill_layout.addWidget(self._pattern_combo)
+        pattern_layout.addWidget(self._pattern_combo)
 
-        preset_row = QGridLayout()
-        preset_row.setContentsMargins(0, 0, 0, 0)
-        preset_row.setHorizontalSpacing(4)
-        preset_row.setVerticalSpacing(4)
+        # Presets: combo full-width, then Apply (primary) + Save + ⋯ overflow.
+        _section_label(pattern_layout, "Presets")
         self._preset_combo = QComboBox()
-        self._preset_combo.setToolTip("Saved parameter presets for the current pattern")
+        self._preset_combo.setEditable(True)
+        self._preset_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._preset_combo.setToolTip("Saved parameter presets for this pattern")
         self._preset_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self._preset_combo.setMinimumContentsLength(10)
-        # Combo spans the full row so long preset names stay readable.
-        preset_row.addWidget(self._preset_combo, 0, 0, 1, 4)
-        # Action buttons share row 2 equally — no fixed widths so the row
-        # always fits inside the sidebar's minimum width (~320 px).
-        load_preset_btn = QPushButton("Load")
-        load_preset_btn.setToolTip("Apply the selected preset to the parameter fields")
+        self._preset_combo.lineEdit().setPlaceholderText("Name or select preset…")
+        pattern_layout.addWidget(self._preset_combo)
+
+        preset_actions = QHBoxLayout()
+        preset_actions.setSpacing(4)
+        load_preset_btn = QPushButton("Apply Preset")
+        load_preset_btn.setToolTip(
+            "Apply the selected preset to current parameters  (⌘P)"
+        )
         load_preset_btn.clicked.connect(self._apply_selected_preset)
-        preset_row.addWidget(load_preset_btn, 1, 0)
+        preset_actions.addWidget(load_preset_btn, stretch=1)
         save_preset_btn = QPushButton("Save")
-        save_preset_btn.setToolTip(
-            "Save the current parameters; reuses the selected name to update"
-        )
+        save_preset_btn.setFixedWidth(60)
+        save_preset_btn.setToolTip("Save current parameters as a new preset")
         save_preset_btn.clicked.connect(self._save_preset)
-        preset_row.addWidget(save_preset_btn, 1, 1)
-        delete_preset_btn = QPushButton("Delete")
-        delete_preset_btn.setToolTip("Remove the selected preset permanently")
-        delete_preset_btn.clicked.connect(self._delete_selected_preset)
-        preset_row.addWidget(delete_preset_btn, 1, 2)
-        manage_preset_btn = QPushButton("Manage…")
-        manage_preset_btn.setToolTip(
-            "Rename, duplicate, import or export pattern presets"
-        )
-        manage_preset_btn.clicked.connect(self._open_preset_manager)
-        preset_row.addWidget(manage_preset_btn, 1, 3)
-        for col in range(4):
-            preset_row.setColumnStretch(col, 1)
-        fill_layout.addLayout(preset_row)
+        preset_actions.addWidget(save_preset_btn)
+        overflow_btn = QToolButton()
+        overflow_btn.setText("⋯")
+        overflow_btn.setFixedWidth(32)
+        overflow_btn.setToolTip("More preset actions")
+        overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        overflow_menu = QMenu(overflow_btn)
+        overflow_menu.addAction("Delete preset", self._delete_selected_preset)
+        overflow_menu.addSeparator()
+        overflow_menu.addAction("Manage presets…", self._open_preset_manager)
+        overflow_btn.setMenu(overflow_menu)
+        preset_actions.addWidget(overflow_btn)
+        pattern_layout.addLayout(preset_actions)
         self._refresh_preset_combo()
 
-        # Global pattern modifiers
-        self._interlace_cb = QCheckBox("Interlace pattern")
-        self._interlace_cb.setChecked(False)
-        self._interlace_cb.setToolTip(
-            "Apply offset grid interlacing to any pattern for tessellating effect"
-        )
-        self._interlace_cb.stateChanged.connect(self._schedule_preview)
-        fill_layout.addWidget(self._interlace_cb)
-
-        rot_row = QGridLayout()
-        rot_row.setContentsMargins(0, 0, 0, 0)
-        rot_row.addWidget(QLabel("Pattern rotation (°)"), 0, 0)
-        self._pattern_rotation = QLineEdit("0")
-        self._pattern_rotation.setFixedWidth(80)
-        self._pattern_rotation.setToolTip(
-            "Rotate generated pattern geometry around outline center"
-        )
-        self._pattern_rotation.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._pattern_rotation, 0, 1)
-        fill_layout.addLayout(rot_row)
-
-        # Pattern param panels keyed by pattern name — show/hide on selection
+        # Per-pattern dynamic widgets (pattern_widgets[name] is shown/hidden
+        # by _switch_pattern). Tile library + halftone hidden by default.
         _sp = self._schedule_preview
         _named_patterns = [
             "Honeycomb",
@@ -395,27 +401,73 @@ class PatternPage(QWidget):
         for name in _named_patterns:
             w = build_param_widget(self, name, _sp)
             self._pattern_widgets[name] = w
-            fill_layout.addWidget(w)
+            pattern_layout.addWidget(w)
             w.hide()
         self._tile_library_w = build_tile_library_widget(self, _sp)
-        fill_layout.addWidget(self._tile_library_w)
+        pattern_layout.addWidget(self._tile_library_w)
         self._tile_library_w.hide()
         halftone_w = build_halftone_widget(self, _sp)
         self._pattern_widgets["Image Halftone"] = halftone_w
-        fill_layout.addWidget(halftone_w)
+        pattern_layout.addWidget(halftone_w)
         halftone_w.hide()
 
-        self._include_border_cb = QCheckBox("Include border on separate layer")
-        self._include_border_cb.setToolTip(
-            "Writes pattern fill to 'background' and each outline geometry\n"
-            "to 'outline', 'outline_1', 'outline_2', ... layers."
+        # ── Modifiers (folded in from old "Output Options"): rotation,
+        # interlace, mirror, invert, fade. These are all "make the pattern
+        # look different" knobs and belong with the pattern.
+        _section_label(pattern_layout, "Modifiers")
+
+        rot_row = QGridLayout()
+        rot_row.setContentsMargins(0, 0, 0, 0)
+        rot_row.addWidget(QLabel("Rotation (°)"), 0, 0)
+        self._pattern_rotation = QLineEdit("0")
+        self._pattern_rotation.setFixedWidth(80)
+        self._pattern_rotation.setToolTip(
+            "Rotate generated pattern around the outline center"
         )
-        self._include_border_cb.setChecked(True)
-        self._include_border_cb.stateChanged.connect(self._schedule_preview)
-        fill_layout.addWidget(self._include_border_cb)
-        layout.addWidget(
-            CollapsibleSection("Fill Parameters", fill_content, expanded=False)
+        self._pattern_rotation.textChanged.connect(self._schedule_preview)
+        rot_row.addWidget(self._pattern_rotation, 0, 1)
+        rot_row.addWidget(QLabel("Fade (mm)"), 1, 0)
+        self._border_fade = QLineEdit("0")
+        self._border_fade.setFixedWidth(80)
+        self._border_fade.setToolTip("Thin the pattern near the outline edge. 0 = off.")
+        self._border_fade.textChanged.connect(self._schedule_preview)
+        rot_row.addWidget(self._border_fade, 1, 1)
+        pattern_layout.addLayout(rot_row)
+
+        toggles_row = QHBoxLayout()
+        toggles_row.setSpacing(8)
+        self._interlace_cb = QCheckBox("Interlace")
+        self._interlace_cb.setToolTip("Offset-grid interlacing for tessellation")
+        self._interlace_cb.stateChanged.connect(self._schedule_preview)
+        toggles_row.addWidget(self._interlace_cb)
+        self._invert_fill_cb = QCheckBox("Invert (outside)")
+        self._invert_fill_cb.setToolTip(
+            "Generate the pattern in the region OUTSIDE the outline (background fill)"
         )
+        self._invert_fill_cb.stateChanged.connect(self._schedule_preview)
+        toggles_row.addWidget(self._invert_fill_cb)
+        toggles_row.addStretch()
+        toggles_row.addWidget(QLabel("Mirror"))
+        self._mirror_v_cb = QCheckBox("\u2194")
+        self._mirror_v_cb.setToolTip("Mirror left ↔ right")
+        self._mirror_v_cb.stateChanged.connect(self._schedule_preview)
+        toggles_row.addWidget(self._mirror_v_cb)
+        self._mirror_h_cb = QCheckBox("\u2195")
+        self._mirror_h_cb.setToolTip("Mirror top ↔ bottom")
+        self._mirror_h_cb.stateChanged.connect(self._schedule_preview)
+        toggles_row.addWidget(self._mirror_h_cb)
+        pattern_layout.addLayout(toggles_row)
+
+        self._pattern_section = CollapsibleSection(
+            "Pattern", pattern_content, expanded=True, subtitle=""
+        )
+        layout.addWidget(self._pattern_section)
+
+    # Legacy alias.
+    def _build_fill_params_section(  # pragma: no cover
+        self, layout: QVBoxLayout
+    ) -> None:
+        self._build_pattern_section(layout)
 
     def _build_zones_section(self, layout: QVBoxLayout) -> None:
         zones_content = QWidget()
@@ -467,126 +519,164 @@ class PatternPage(QWidget):
             "Select outlines → configure pattern → 'Assign'. Repeat for each region."
         )
         zones_hint.setWordWrap(True)
-        zones_hint.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+        zones_hint.setProperty("role", "hint")
         zones_layout.addWidget(zones_hint)
 
-        layout.addWidget(
-            CollapsibleSection("Pattern Zones", zones_content, expanded=False)
+        self._zones_section = CollapsibleSection(
+            "Zones", zones_content, expanded=False, subtitle="No zones assigned"
         )
+        layout.addWidget(self._zones_section)
 
-    def _build_output_options_section(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Output Options")
+    def _build_fill_section(self, layout: QVBoxLayout) -> None:
+        """FILL: laser-engrave infill mode + cutouts panel."""
+        fill_content = QWidget()
+        fill_layout = QVBoxLayout(fill_content)
+        fill_layout.setContentsMargins(0, 0, 0, 0)
+        fill_layout.setSpacing(8)
 
-        opt_row1 = QHBoxLayout()
-        self._invert_fill_cb = QCheckBox("Invert fill")
-        self._invert_fill_cb.setToolTip(
-            "Fill the area OUTSIDE the outline instead of inside.\n"
-            "Generates the pattern in a frame around the outline — useful\n"
-            "for backgrounds and engraved borders around a clean design."
-        )
-        self._invert_fill_cb.stateChanged.connect(self._schedule_preview)
-        opt_row1.addWidget(self._invert_fill_cb)
-        opt_row1.addStretch()
-        opt_row1.addWidget(QLabel("Fade (mm):"))
-        self._border_fade = QLineEdit("0")
-        self._border_fade.setFixedWidth(52)
-        self._border_fade.setToolTip(
-            "Thin the pattern near the outline edge.\n"
-            "0 = off. Higher values = wider fade zone."
-        )
-        self._border_fade.textChanged.connect(self._schedule_preview)
-        opt_row1.addWidget(self._border_fade)
-        layout.addLayout(opt_row1)
-
-        opt_row2 = QHBoxLayout()
-        opt_row2.setSpacing(6)
-        opt_row2.addWidget(QLabel("Symmetry:"))
-        self._mirror_v_cb = QCheckBox("\u2190 \u2192")
-        self._mirror_v_cb.setToolTip("Mirror pattern left \u2194 right")
-        self._mirror_v_cb.stateChanged.connect(self._schedule_preview)
-        opt_row2.addWidget(self._mirror_v_cb)
-        self._mirror_h_cb = QCheckBox("\u2191 \u2193")
-        self._mirror_h_cb.setToolTip("Mirror pattern top \u2194 bottom")
-        self._mirror_h_cb.stateChanged.connect(self._schedule_preview)
-        opt_row2.addWidget(self._mirror_h_cb)
-        opt_row2.addStretch()
-        layout.addLayout(opt_row2)
-
-        # Cutouts get their own labelled row so the action verb is clearly
-        # separated from the symmetry toggles above it.
-        cutout_row = QHBoxLayout()
-        cutout_row.setSpacing(6)
-        cutout_row.addWidget(QLabel("Cutouts:"))
-        cutout_row.addStretch()
-        cutout_clear_btn = QPushButton("Clear all")
-        cutout_clear_btn.setToolTip("Remove all cutout assignments")
-        cutout_clear_btn.clicked.connect(self._clear_exclusions)
-        cutout_row.addWidget(cutout_clear_btn)
-        layout.addLayout(cutout_row)
-
-        self._cutout_status_label = QLabel(
-            "No cutouts \u2014 right-click a shape on canvas to mark it"
-        )
-        self._cutout_status_label.setWordWrap(True)
-        self._cutout_status_label.setStyleSheet(f"color: {DIM}; font-size: 10px;")
-        layout.addWidget(self._cutout_status_label)
-
-        # ── Laser fill (infill) ──────────────────────────────────────────
-        # Fills the input outline (minus exclusions) with parallel infill
-        # polylines. The pattern strokes are an independent overlay — they
-        # do NOT subdivide the fill region. Use the per-zone "Assign zone"
-        # control to give each shape its own fill snapshot.
-        fill_label_row = QHBoxLayout()
-        fill_label_row.setContentsMargins(0, 6, 0, 0)
-        fill_label_row.addWidget(QLabel("Laser fill:"))
+        # Mode selector spans the row (the question this section answers).
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode"))
         self._fill_mode_combo = QComboBox()
         self._fill_mode_combo.addItem("None", "none")
         self._fill_mode_combo.addItem("Lines", "lines")
         self._fill_mode_combo.setToolTip(
             "Fill the shape with parallel laser-engrave lines.\n"
-            "Combine with pattern '— None —' to get an outline-only or\n"
-            "fill-only result without any pattern strokes."
+            "None = pattern strokes only."
         )
         self._fill_mode_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
-        fill_label_row.addWidget(self._fill_mode_combo, stretch=1)
-        layout.addLayout(fill_label_row)
+        mode_row.addWidget(self._fill_mode_combo, stretch=1)
+        fill_layout.addLayout(mode_row)
 
-        fill_params_row = QHBoxLayout()
-        fill_params_row.setContentsMargins(0, 0, 0, 0)
-        fill_params_row.setSpacing(6)
-        fill_params_row.addWidget(QLabel("Spacing (mm)"))
+        params_row = QGridLayout()
+        params_row.addWidget(QLabel("Spacing (mm)"), 0, 0)
         self._fill_spacing = QLineEdit("0.5")
-        self._fill_spacing.setFixedWidth(56)
+        self._fill_spacing.setFixedWidth(80)
         self._fill_spacing.setToolTip("Distance between adjacent infill lines")
         self._fill_spacing.textChanged.connect(self._schedule_preview)
-        fill_params_row.addWidget(self._fill_spacing)
-        fill_params_row.addWidget(QLabel("Angle (°)"))
+        params_row.addWidget(self._fill_spacing, 0, 1)
+        params_row.addWidget(QLabel("Angle (°)"), 1, 0)
         self._fill_angle = QLineEdit("0")
-        self._fill_angle.setFixedWidth(56)
-        self._fill_angle.setToolTip("Angle of the infill line direction")
+        self._fill_angle.setFixedWidth(80)
+        self._fill_angle.setToolTip("Angle of the infill direction")
         self._fill_angle.textChanged.connect(self._schedule_preview)
-        fill_params_row.addWidget(self._fill_angle)
-        fill_params_row.addStretch()
-        layout.addLayout(fill_params_row)
+        params_row.addWidget(self._fill_angle, 1, 1)
+
+        target_row = QHBoxLayout()
+        target_row.setSpacing(8)
+        target_row.addWidget(QLabel("Targets"))
+        self._fill_target_outline_cb = QCheckBox("Outline")
+        self._fill_target_outline_cb.setToolTip(
+            "Fill the input outline region (minus exclusions)"
+        )
+        self._fill_target_outline_cb.setChecked(True)
+        self._fill_target_outline_cb.stateChanged.connect(self._schedule_preview)
+        target_row.addWidget(self._fill_target_outline_cb)
+        self._fill_target_pattern_cb = QCheckBox("Pattern cells")
+        self._fill_target_pattern_cb.setToolTip(
+            "Hatch each closed pattern stroke (tiles, tessellation, …)"
+        )
+        self._fill_target_pattern_cb.setChecked(False)
+        self._fill_target_pattern_cb.stateChanged.connect(self._schedule_preview)
+        target_row.addWidget(self._fill_target_pattern_cb)
+        target_row.addStretch()
 
         self._fill_keep_outline_cb = QCheckBox("Keep pattern strokes alongside fill")
         self._fill_keep_outline_cb.setToolTip(
-            "Output both the pattern strokes and the laser-fill lines.\n"
-            "Uncheck for fill-only output (the pattern is suppressed)."
+            "Output both pattern strokes and laser-fill lines.\n"
+            "Uncheck for fill-only output."
         )
         self._fill_keep_outline_cb.setChecked(True)
         self._fill_keep_outline_cb.stateChanged.connect(self._schedule_preview)
-        layout.addWidget(self._fill_keep_outline_cb)
+
+        # Pack params/targets/keep-outline into a collapsible container so
+        # they can be hidden when mode == "none".
+        self._fill_params_container = QWidget()
+        _fpc_layout = QVBoxLayout(self._fill_params_container)
+        _fpc_layout.setContentsMargins(0, 0, 0, 0)
+        _fpc_layout.setSpacing(8)
+        _fpc_layout.addLayout(params_row)
+        _fpc_layout.addLayout(target_row)
+        _fpc_layout.addWidget(self._fill_keep_outline_cb)
+        self._fill_params_container.setVisible(False)
+        fill_layout.addWidget(self._fill_params_container)
+
+        # Cutouts callout — styled card that doubles as status + action.
+        _section_label(fill_layout, "Cutouts")
+
+        self._cutout_callout = QFrame()
+        self._cutout_callout.setObjectName("cutoutCallout")
+        cutout_callout_layout = QHBoxLayout(self._cutout_callout)
+        cutout_callout_layout.setContentsMargins(8, 6, 8, 6)
+        cutout_callout_layout.setSpacing(6)
+        self._cutout_icon = QLabel("ℹ")
+        self._cutout_icon.setFixedWidth(14)
+        self._cutout_icon.setProperty("role", "cutout-icon")
+        cutout_callout_layout.addWidget(self._cutout_icon)
+        self._cutout_status_label = QLabel(
+            "Right-click a shape on canvas to mark as cutout"
+        )
+        self._cutout_status_label.setWordWrap(True)
+        self._cutout_status_label.setProperty("role", "cutout-desc")
+        cutout_callout_layout.addWidget(self._cutout_status_label, stretch=1)
+        self._cutout_clear_btn = QPushButton("Clear")
+        self._cutout_clear_btn.setFixedWidth(52)
+        self._cutout_clear_btn.setToolTip("Remove all cutout assignments")
+        self._cutout_clear_btn.setVisible(False)
+        self._cutout_clear_btn.clicked.connect(self._clear_exclusions)
+        cutout_callout_layout.addWidget(self._cutout_clear_btn)
+        self._apply_cutout_callout_style(active=False)
+        fill_layout.addWidget(self._cutout_callout)
+
+        self._mark_cutout_btn = QPushButton("Mark Selected as Cutout")
+        self._mark_cutout_btn.setMinimumHeight(28)
+        self._mark_cutout_btn.setToolTip(
+            "Mark the selected canvas shapes as cutout regions.\n"
+            "Cutouts exclude areas from laser fill.  Right-click a shape to toggle individually."
+        )
+        self._mark_cutout_btn.clicked.connect(self._mark_selection_as_cutout)
+        fill_layout.addWidget(self._mark_cutout_btn)
+
+        self._fill_section = CollapsibleSection(
+            "Fill", fill_content, expanded=False, subtitle="None"
+        )
+        layout.addWidget(self._fill_section)
 
         # Initial enable state — fill controls disabled while mode == None.
         self._on_fill_mode_changed()
 
+    # Legacy alias so any external callers keep working.
+    def _build_output_options_section(  # pragma: no cover
+        self, layout: QVBoxLayout
+    ) -> None:
+        self._build_fill_section(layout)
+
     def _build_export_section(self, layout: QVBoxLayout) -> None:
+        """EXPORT: per-export options + action + status."""
         _section_label(layout, "Export")
+
+        # Layer-naming option lives here (not Pattern) — it changes the
+        # output file structure, nothing else.
+        self._include_border_cb = QCheckBox("Border on separate layer")
+        self._include_border_cb.setToolTip(
+            "Writes pattern fill to 'background' and each outline to\n"
+            "'outline', 'outline_1', … layers (CAM-friendly)."
+        )
+        self._include_border_cb.setChecked(True)
+        self._include_border_cb.stateChanged.connect(self._schedule_preview)
+        layout.addWidget(self._include_border_cb)
+
+        # Summary chip — one-line readout of what will be written.
+        self._summary_chip = QLabel("")
+        self._summary_chip.setProperty("role", "chip")
+        self._summary_chip.setProperty("tone", "neutral")
+        self._summary_chip.setWordWrap(True)
+        self._summary_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._summary_chip)
 
         self._gen_btn = QPushButton("Export DXF")
         self._gen_btn.setMinimumHeight(38)
-        self._gen_btn.setToolTip("Generate the pattern fill and save as a DXF file")
+        self._gen_btn.setToolTip("Generate the pattern fill and save as a DXF  (⌘E)")
         self._gen_btn.setProperty("role", "primary")
         self._gen_btn.clicked.connect(self._generate)
         layout.addWidget(self._gen_btn)
@@ -596,8 +686,9 @@ class PatternPage(QWidget):
         self._progress.setValue(0)
         layout.addWidget(self._progress)
 
+        # Status as a chip — _set_status() still drives it via the same
+        # QLabel attribute name, so callers keep working unchanged.
         self._status = QLabel("")
-        self._status.setStyleSheet(f"color: {DIM};")
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
 
@@ -621,11 +712,252 @@ class PatternPage(QWidget):
         elif value in self._pattern_widgets:
             self._pattern_widgets[value].show()
             self._schedule_preview()
+        self._refresh_section_subtitles()
+
+    # ── Section subtitles + shortcuts + ⌘K command palette ─────────────────
+
+    def _refresh_section_subtitles(self) -> None:
+        """Update collapsed-section subtitles and the export summary chip.
+
+        Cheap to call — only touches QLabel text. Invoked from selection,
+        pattern-switch, fill-mode, and preview-scheduling callbacks so each
+        section header reflects the current configuration at a glance.
+        """
+        # All sections are built lazily; bail out until _build_left has run.
+        if not getattr(self, "_pattern_section", None):
+            return
+
+        # SHAPE: filename + dimensions
+        path = self._dxf_edit.text().strip() if hasattr(self, "_dxf_edit") else ""
+        if path:
+            try:
+                w = float(self._scale_w.text() or "0")
+                h = float(self._scale_h.text() or "0")
+            except ValueError:
+                w = h = 0.0
+            dims = f"{w:.1f} × {h:.1f} mm" if w and h else "—"
+            self._shape_section.set_subtitle(f"{Path(path).name} · {dims}")
+        else:
+            self._shape_section.set_subtitle("No file loaded", dim=True)
+
+        # PATTERN: name + key dimension where available.
+        # _PATTERN_KEY_DIMS maps pattern display name → (widget_attr, unit)
+        _PATTERN_KEY_DIMS: dict[str, tuple[str, str]] = {
+            "Honeycomb": ("_hex_r", "mm"),
+            "Gradient Honeycomb": ("_grad_r_max", "mm"),
+            "Square Grid": ("_sq_spacing", "mm"),
+            "Diagonal Lines": ("_diag_spacing", "mm"),
+            "Concentric Rings": ("_conc_spacing", "mm"),
+            "Wave Fill": ("_wave_wavelength", "mm"),
+            "Sunburst": ("_sunburst_spacing", "mm"),
+            "Stipple Dots": ("_stip_spacing", "mm"),
+            "Brick": ("_brick_w", "mm"),
+            "Mesh": ("_mesh_spacing", "mm"),
+            "Basketweave": ("_basket_gap", "mm"),
+            "Braid": ("_braid_spacing", "mm"),
+            "Fish Scale": ("_fish_w", "mm"),
+            "Voronoi": ("_vor_cells", "cells"),
+            "Penrose Tiling": ("_penrose_scale", "mm"),
+            "Topographic": ("_topo_spacing", "mm"),
+            "Hilbert Curve": ("_hilbert_order", ""),
+            "Celtic Knot": ("_celtic_cell", "mm"),
+            "Lissajous": ("_liss_spacing", "mm"),
+            "Golden Spiral": ("_golden_spacing", "mm"),
+            "Rose Curve": ("_rose_petals", ""),
+        }
+        pname = (
+            self._pattern_combo.currentText() if hasattr(self, "_pattern_combo") else ""
+        )
+        if pname and pname != "— None —":
+            key_dim = ""
+            if pname in _PATTERN_KEY_DIMS:
+                attr, unit = _PATTERN_KEY_DIMS[pname]
+                widget = getattr(self, attr, None)
+                if widget is not None and hasattr(widget, "text"):
+                    val = widget.text().strip()
+                    if val:
+                        key_dim = f" · {val} {unit}".rstrip()
+            # Active modifier flags appended to pattern subtitle
+            mod_parts: list[str] = []
+            if getattr(self, "_interlace_cb", None) and self._interlace_cb.isChecked():
+                mod_parts.append("Interlaced")
+            if (
+                getattr(self, "_invert_fill_cb", None)
+                and self._invert_fill_cb.isChecked()
+            ):
+                mod_parts.append("Inverted")
+            if getattr(self, "_mirror_v_cb", None) and self._mirror_v_cb.isChecked():
+                mod_parts.append("↔")
+            if getattr(self, "_mirror_h_cb", None) and self._mirror_h_cb.isChecked():
+                mod_parts.append("↕")
+            try:
+                fade = (
+                    float(self._border_fade.text() or "0")
+                    if hasattr(self, "_border_fade")
+                    else 0.0
+                )
+                if fade > 0:
+                    mod_parts.append(f"Fade {fade:.1f}mm")
+            except ValueError:
+                pass
+            mod_str = " · " + " · ".join(mod_parts) if mod_parts else ""
+            self._pattern_section.set_subtitle(f"{pname}{key_dim}{mod_str}")
+        else:
+            self._pattern_section.set_subtitle("None", dim=True)
+
+        # FILL: mode + spacing + targets + fill line count from last preview
+        if hasattr(self, "_fill_mode_combo"):
+            mode = self._fill_mode_combo.currentData() or "none"
+            if mode == "none":
+                self._fill_section.set_subtitle("None", dim=True)
+            else:
+                spacing = self._fill_spacing.text().strip() or "?"
+                fill_targets: list[str] = []
+                if (
+                    getattr(self, "_fill_target_outline_cb", None)
+                    and self._fill_target_outline_cb.isChecked()
+                ):
+                    fill_targets.append("Outline")
+                if (
+                    getattr(self, "_fill_target_pattern_cb", None)
+                    and self._fill_target_pattern_cb.isChecked()
+                ):
+                    fill_targets.append("Pattern")
+                target_str = " + ".join(fill_targets) if fill_targets else "No target"
+                fill_line_count = len(
+                    (
+                        self._preview_categories
+                        if hasattr(self, "_preview_categories")
+                        else {}
+                    ).get("fill", [])
+                )
+                count_str = f" · {fill_line_count} lines" if fill_line_count else ""
+                self._fill_section.set_subtitle(
+                    f"{self._fill_mode_combo.currentText()} · {spacing} mm · {target_str}{count_str}"
+                )
+
+        # ZONES: count
+        if hasattr(self, "_zones_section") and isinstance(
+            self._zones_section, CollapsibleSection
+        ):
+            n = len(self._zones) if hasattr(self, "_zones") else 0
+            if n == 0:
+                self._zones_section.set_subtitle("No zones assigned", dim=True)
+            else:
+                self._zones_section.set_subtitle(
+                    f"{n} zone{'s' if n != 1 else ''} assigned"
+                )
+
+        # EXPORT summary chip — one-line "what will be written"
+        if hasattr(self, "_summary_chip"):
+            parts: list[str] = []
+            if pname and pname != "— None —":
+                parts.append(pname)
+            if (
+                hasattr(self, "_fill_mode_combo")
+                and (self._fill_mode_combo.currentData() or "none") != "none"
+            ):
+                parts.append(f"fill {self._fill_spacing.text().strip()} mm")
+            if (
+                hasattr(self, "_include_border_cb")
+                and self._include_border_cb.isChecked()
+            ):
+                parts.append("border layer")
+            self._summary_chip.setText(" · ".join(parts) if parts else "Empty output")
+
+    def _install_pattern_shortcuts(self) -> None:
+        """Install ⌘E / ⌘R / ⌘K shortcuts on the Pattern tab."""
+        from PySide6.QtGui import QKeySequence, QShortcut
+        import platform
+
+        # Use the platform-appropriate modifier: Meta (⌘) on macOS, Ctrl elsewhere.
+        modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
+
+        QShortcut(QKeySequence(f"{modifier}+E"), self, self._generate)
+        QShortcut(QKeySequence(f"{modifier}+R"), self, self._reload_dxf)
+        QShortcut(QKeySequence(f"{modifier}+K"), self, self._open_command_palette)
+        QShortcut(QKeySequence(f"{modifier}+P"), self, self._apply_selected_preset)
+
+    def _open_command_palette(self) -> None:
+        """Show a ⌘K palette of common Pattern-tab actions."""
+        from src.ui.components.common.command_palette import CommandPaletteDialog
+
+        commands: list[dict] = [
+            {
+                "title": "Export DXF",
+                "shortcut": "⌘E",
+                "subtitle": "Generate & save the current pattern + fill",
+                "run": self._generate,
+            },
+            {
+                "title": "Reload source DXF",
+                "shortcut": "⌘R",
+                "subtitle": "Re-read the outline file from disk",
+                "run": self._reload_dxf,
+            },
+            {
+                "title": "Browse for DXF…",
+                "subtitle": "Pick a different outline file",
+                "run": self._browse_dxf,
+            },
+            {
+                "title": "Save preset…",
+                "subtitle": "Capture current pattern parameters",
+                "run": self._save_preset,
+            },
+            {
+                "title": "Apply selected preset",
+                "shortcut": "⌘P",
+                "subtitle": "Load the highlighted preset parameters",
+                "run": self._apply_selected_preset,
+            },
+            {
+                "title": "Mark selected shapes as cutout",
+                "subtitle": "Exclude selected outlines from laser fill",
+                "run": self._mark_selection_as_cutout,
+            },
+            {
+                "title": "Manage presets…",
+                "subtitle": "Rename, duplicate, import, export",
+                "run": self._open_preset_manager,
+            },
+            {
+                "title": "Assign zone to selection",
+                "subtitle": "Save current pattern as a named zone",
+                "run": self._assign_zone,
+            },
+            {
+                "title": "Clear all zones",
+                "run": self._clear_zones,
+            },
+            {
+                "title": "Clear all cutouts",
+                "run": self._clear_exclusions,
+            },
+            {
+                "title": "Toggle invert fill",
+                "run": lambda: self._invert_fill_cb.setChecked(
+                    not self._invert_fill_cb.isChecked()
+                ),
+            },
+            {
+                "title": "Toggle border on separate layer",
+                "run": lambda: self._include_border_cb.setChecked(
+                    not self._include_border_cb.isChecked()
+                ),
+            },
+        ]
+        dlg = CommandPaletteDialog(commands, parent=self)
+        dlg.exec()
 
     # ── Dimension callbacks ───────────────────────────────────────────────────
 
     def _on_scale_w_changed(self, *_) -> None:
-        if self._updating_dims or not self._ar_cb.isChecked() or self._orig_w <= 0:
+        if (
+            self._updating_dims
+            or not self._ar_lock_btn.isChecked()
+            or self._orig_w <= 0
+        ):
             return
         try:
             w = float(self._scale_w.text())
@@ -638,7 +970,11 @@ class PatternPage(QWidget):
             self._updating_dims = False
 
     def _on_scale_h_changed(self, *_) -> None:
-        if self._updating_dims or not self._ar_cb.isChecked() or self._orig_h <= 0:
+        if (
+            self._updating_dims
+            or not self._ar_lock_btn.isChecked()
+            or self._orig_h <= 0
+        ):
             return
         try:
             h = float(self._scale_h.text())
@@ -1210,7 +1546,17 @@ class PatternPage(QWidget):
 
     def _set_status(self, text: str, color: str = DIM) -> None:
         self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color};")
+        if not text:
+            role = ""
+        elif color == "#3fb950":
+            role = "status-ok"
+        elif color == "#f85149":
+            role = "status-err"
+        else:
+            role = "status-chip"
+        self._status.setProperty("role", role)
+        self._status.style().unpolish(self._status)
+        self._status.style().polish(self._status)
 
     def _emit_state_changed(self) -> None:
         if not self._suspend_state_changes:
@@ -1222,24 +1568,19 @@ class PatternPage(QWidget):
         )
         self._preset_combo.blockSignals(True)
         self._preset_combo.clear()
-        self._preset_combo.addItem("Presets")
         for name in sorted(self._presets):
             self._preset_combo.addItem(name)
-        idx = self._preset_combo.findText(current)
-        self._preset_combo.setCurrentIndex(max(idx, 0))
+        if current and self._preset_combo.findText(current) >= 0:
+            self._preset_combo.setCurrentText(current)
+        else:
+            self._preset_combo.setCurrentIndex(-1)
+            self._preset_combo.lineEdit().clear()
         self._preset_combo.blockSignals(False)
 
     def _save_preset(self) -> None:
-        # Pre-fill with the currently selected preset name (if any) to make
-        # "update" the natural fast path.
-        prefill = self._preset_combo.currentText().strip()
-        if prefill == "Presets":
-            prefill = ""
-        name, ok = QInputDialog.getText(
-            self, "Save Pattern Preset", "Preset name:", text=prefill
-        )
-        name = name.strip()
-        if not ok or not name:
+        name = self._preset_combo.currentText().strip()
+        if not name:
+            self._set_status("Enter a preset name in the combo box.", "#f85149")
             return
         is_update = name in self._presets
         if is_update:
@@ -1263,7 +1604,7 @@ class PatternPage(QWidget):
 
     def _apply_selected_preset(self) -> None:
         name = self._preset_combo.currentText().strip()
-        if not name or name == "Presets":
+        if not name or name not in self._presets:
             return
         payload = self._presets.get(name)
         if not payload:
@@ -1277,7 +1618,7 @@ class PatternPage(QWidget):
 
     def _delete_selected_preset(self) -> None:
         name = self._preset_combo.currentText().strip()
-        if not name or name == "Presets" or name not in self._presets:
+        if not name or name not in self._presets:
             return
         self._presets.pop(name, None)
         self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
@@ -1495,6 +1836,14 @@ class PatternPage(QWidget):
             self._canvas.load(polys)
         self._set_preview_status(f"{count} shapes exported", "success")
         self._update_preview_controls()
+        # Update export summary chip to show the actual export result
+        if hasattr(self, "_summary_chip"):
+            fname = Path(out_path).name
+            self._summary_chip.setText(f"✓ {count} shapes exported → {fname}")
+            self._summary_chip.setStyleSheet(
+                "background: #0f2a17; color: #3fb950; border: 1px solid #1f6f3a;"
+                "border-radius: 4px; padding: 4px 6px; font-size: 10px;"
+            )
         self._refresh_canvas_panels()
 
     def _handle_gen_error(self, payload: tuple) -> None:
@@ -1516,15 +1865,23 @@ class PatternPage(QWidget):
         """Enable/disable infill spacing/angle widgets and refresh preview."""
         mode = self._fill_mode_combo.currentData()
         active = mode and mode != "none"
+        self._fill_params_container.setVisible(bool(active))
         self._fill_spacing.setEnabled(bool(active))
         self._fill_angle.setEnabled(bool(active))
         self._fill_keep_outline_cb.setEnabled(bool(active))
+        self._fill_target_outline_cb.setEnabled(bool(active))
+        self._fill_target_pattern_cb.setEnabled(bool(active))
+        self._refresh_section_subtitles()
         self._schedule_preview()
 
     def _collect_fill_options(self) -> dict | None:
         """Read the laser-fill widget state into a plain dict for the worker."""
         mode = self._fill_mode_combo.currentData()
         if not mode or mode == "none":
+            return None
+        target_outline = self._fill_target_outline_cb.isChecked()
+        target_pattern = self._fill_target_pattern_cb.isChecked()
+        if not target_outline and not target_pattern:
             return None
         try:
             spacing = max(0.05, float(self._fill_spacing.text() or "0.5"))
@@ -1539,9 +1896,13 @@ class PatternPage(QWidget):
             "spacing": spacing,
             "angle_deg": angle,
             "keep_pattern": self._fill_keep_outline_cb.isChecked(),
+            "target_outline": target_outline,
+            "target_pattern": target_pattern,
         }
 
     def _schedule_preview(self, *_) -> None:
+        # Subtitles are cheap and reflect what the next preview will use.
+        self._refresh_section_subtitles()
         if self._suspend_state_changes:
             return
         # Allow preview if zones exist OR a fill is configured (outline + fill
@@ -1570,6 +1931,7 @@ class PatternPage(QWidget):
         if not self._zones and not self._edit_polys:
             self._preview_task.finish_run()
             return
+        self._update_preview_controls()  # show "Previewing…" on the button
         preview_token = self._preview_revision
         pattern = self._pattern_combo.currentText()
         include_border = self._include_border_cb.isChecked()
@@ -1673,18 +2035,40 @@ class PatternPage(QWidget):
             if restart and (self._edit_polys or self._zones):
                 self._preview_timer.start(0)
             return
+        was_empty = not bool(self._preview_polys_cache)
         self._preview_polys_cache = list(display_polys)
         self._preview_categories = categories or {
             "outline": [],
             "pattern": list(display_polys),
             "fill": [],
         }
-        # Update canvas if preview is already showing; otherwise just cache
-        if self._showing_preview:
+        # Build per-category detail for the status line
+        p_count = len(self._preview_categories.get("pattern", []))
+        f_count = len(self._preview_categories.get("fill", []))
+        detail_parts: list[str] = []
+        if p_count:
+            detail_parts.append(f"{p_count} pattern")
+        if f_count:
+            detail_parts.append(f"{f_count} fill")
+        detail_str = " + ".join(detail_parts) if detail_parts else str(count)
+        status_text = f"{count} shapes ({detail_str})"
+        if was_empty and not self._showing_preview and display_polys:
+            # First successful preview — auto-show it to spare the user a click.
+            self._showing_preview = True
+            self._preview_btn.setChecked(True)
+            self._preview_btn.setProperty("active", True)
+            self._preview_btn.style().unpolish(self._preview_btn)
+            self._preview_btn.style().polish(self._preview_btn)
+            if self._edit_polys:
+                self._canvas.set_ghost_polylines(self._edit_polys)
             self._canvas.load(display_polys)
-            self._set_preview_status(f"{count} shapes — preview", "success")
+            self._set_preview_status(f"{status_text} — preview", "success")
+        elif self._showing_preview:
+            self._canvas.load(display_polys)
+            self._set_preview_status(f"{status_text} — preview", "success")
         else:
-            self._set_preview_status(f"{count} shapes ready — click Preview", "success")
+            self._set_preview_status(f"{status_text} ready — click Preview", "success")
+        self._refresh_section_subtitles()  # update fill line count in subtitle
         self._update_preview_controls()
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
@@ -1728,12 +2112,14 @@ class PatternPage(QWidget):
     def _set_preview_status(self, text: str, tone: str = "dim") -> None:
         self._preview_status.setText(text)
         if tone == "success":
-            self._preview_status.setStyleSheet("color: #3fb950; font-size: 11px;")
-            return
-        if tone == "error":
-            self._preview_status.setStyleSheet("color: #f85149; font-size: 11px;")
-            return
-        self._preview_status.setStyleSheet(f"color: {DIM}; font-size: 11px;")
+            role = "preview-ok"
+        elif tone == "error":
+            role = "preview-err"
+        else:
+            role = "preview-dim"
+        self._preview_status.setProperty("role", role)
+        self._preview_status.style().unpolish(self._preview_status)
+        self._preview_status.style().polish(self._preview_status)
 
     def _invalidate_preview_cache(self) -> None:
         had_cache = bool(self._preview_polys_cache)
@@ -1766,17 +2152,24 @@ class PatternPage(QWidget):
 
     def _update_preview_controls(self) -> None:
         has_preview = bool(self._preview_polys_cache)
-        self._preview_btn.setEnabled(has_preview or self._showing_preview)
-        self._preview_btn.setText("Outline" if self._showing_preview else "Preview")
+        is_computing = self._preview_task.running
         if self._showing_preview:
+            self._preview_btn.setText("← Outline")
+            self._preview_btn.setEnabled(True)
             self._preview_btn.setToolTip("Return to outline editing")
+        elif is_computing:
+            self._preview_btn.setText("Previewing…")
+            self._preview_btn.setEnabled(False)
+            self._preview_btn.setToolTip("Generating preview in background…")
         elif has_preview:
-            self._preview_btn.setToolTip(
-                "Toggle between outline editing and pattern preview"
-            )
+            self._preview_btn.setText("Preview ▶")
+            self._preview_btn.setEnabled(True)
+            self._preview_btn.setToolTip("Show the generated pattern preview")
         else:
+            self._preview_btn.setText("Preview")
+            self._preview_btn.setEnabled(False)
             self._preview_btn.setToolTip(
-                "Preview becomes available after the current outline and parameters produce a valid preview"
+                "Preview becomes available after the current outline and parameters produce a valid result"
             )
 
     def _update_zone_actions(self) -> None:
@@ -1794,6 +2187,8 @@ class PatternPage(QWidget):
         self._clear_zones_btn.setEnabled(
             (not self._showing_preview) and bool(self._zones)
         )
+        if hasattr(self, "_mark_cutout_btn"):
+            self._mark_cutout_btn.setEnabled(not self._showing_preview)
 
     # ── Pure helpers (safe from any thread) ──────────────────────────────────
 
@@ -1946,6 +2341,7 @@ class PatternPage(QWidget):
             if item is not None:
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
         self._update_zone_actions()
+        self._refresh_section_subtitles()
 
     # ── Exclusion Cutout management ───────────────────────────────────────────
 
@@ -1966,6 +2362,17 @@ class PatternPage(QWidget):
         self._schedule_preview()
         self._emit_state_changed()
 
+    def _mark_selection_as_cutout(self) -> None:
+        """Mark all currently selected canvas shapes as cutout regions."""
+        if self._showing_preview:
+            return
+        indices = list(self._canvas.get_selection_indices())
+        if not indices:
+            self._set_status("Select one or more shapes on canvas first.", "#e3b341")
+            return
+        for idx in indices:
+            self._on_canvas_cutout_toggle(idx)
+
     def _clear_exclusions(self) -> None:
         if not self._exclusion_ids:
             return
@@ -1985,21 +2392,38 @@ class PatternPage(QWidget):
         }
         self._canvas.set_cutout_indices(cutout_idxs)
 
+    def _apply_cutout_callout_style(self, *, active: bool) -> None:
+        """Apply dim or active styling to the cutout callout frame via QSS property."""
+        active_val = "true" if active else ""
+        self._cutout_callout.setProperty("active", active_val)
+        self._cutout_callout.style().unpolish(self._cutout_callout)
+        self._cutout_callout.style().polish(self._cutout_callout)
+        self._cutout_icon.setProperty("active", active_val)
+        self._cutout_icon.style().unpolish(self._cutout_icon)
+        self._cutout_icon.style().polish(self._cutout_icon)
+        self._cutout_status_label.setProperty("active", active_val)
+        self._cutout_status_label.style().unpolish(self._cutout_status_label)
+        self._cutout_status_label.style().polish(self._cutout_status_label)
+
     def _refresh_cutout_status(self) -> None:
-        """Update the always-visible cutout status label."""
+        """Update the cutout callout card to reflect current assignments."""
         if not hasattr(self, "_cutout_status_label"):
             return
         n = len(self._exclusion_ids)
         if n == 0:
+            self._cutout_icon.setText("\u2139")
             self._cutout_status_label.setText(
-                "No cutouts \u2014 right-click a shape on canvas to mark it"
+                "Right-click a shape on canvas to mark as cutout"
             )
-            self._cutout_status_label.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+            self._cutout_clear_btn.setVisible(False)
+            self._apply_cutout_callout_style(active=False)
         else:
+            self._cutout_icon.setText("\u2713")
             self._cutout_status_label.setText(
                 f"{n} cutout{'s' if n != 1 else ''} active \u2014 shown orange on canvas"
             )
-            self._cutout_status_label.setStyleSheet("color: #f0883e; font-size: 10px;")
+            self._cutout_clear_btn.setVisible(True)
+            self._apply_cutout_callout_style(active=True)
 
     def _resolve_exclusion_polys(self) -> list[list[tuple[float, float]]]:
         """Return polylines for all current exclusion IDs."""

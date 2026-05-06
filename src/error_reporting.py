@@ -42,8 +42,20 @@ def error_bus() -> _ErrorBus:
 def report_error(title: str, exc: BaseException) -> None:
     """Log and emit an error to the toast bus (safe from any thread)."""
     detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-    _LOG.error("%s: %s", title, exc, exc_info=exc)
-    _BUS.error_raised.emit(title, str(exc) or detail.splitlines()[-1])
+    # Log full traceback and include exception info for better diagnostic output.
+    try:
+        _LOG.error("%s: %s", title, detail)
+    except Exception:
+        # Fallback to a simpler log if formatting fails.
+        _LOG.error("%s: %s", title, str(exc))
+    _LOG.debug("Emitting error toast: %s", title)
+    # Emit a concise single-line message to the toast bus (avoid huge payloads).
+    snippet = (str(exc) or "").splitlines()[0] if exc else ""
+    if not snippet:
+        # Fall back to the last non-empty line from the full detail.
+        lines = [ln for ln in detail.splitlines() if ln.strip()]
+        snippet = lines[-1] if lines else "Unexpected error"
+    _BUS.error_raised.emit(title, snippet)
 
 
 def _python_excepthook(exc_type, exc_value, exc_tb) -> None:

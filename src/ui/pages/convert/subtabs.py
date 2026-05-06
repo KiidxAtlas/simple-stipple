@@ -22,7 +22,6 @@ from src.backend.dxf.fix import fix_dxf
 from src.backend.dxf.fvi import convert_fvi_to_dxf
 from src.backend.dxf.svg import dxf_to_svg
 from src.backend.io import svg_to_dxf
-from src.ui.components.common.factories import _section_label
 
 
 def _append_ignored_entities_note(msg: str, stats: dict) -> str:
@@ -41,15 +40,28 @@ class _StatusMixin:
     _status: QLabel
 
     def _set_status(self, text: str, color: str = "#8b949e") -> None:
+        if not text:
+            self._status.setVisible(False)
+            return
+        self._status.setVisible(True)
         self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color};")
+        if color == "#3fb950":
+            role = "status-ok"
+        elif color == "#f85149":
+            role = "status-err"
+        else:
+            role = "status-neutral"
+        self._status.setProperty("role", role)
+        self._status.style().unpolish(self._status)
+        self._status.style().polish(self._status)
 
 
-class FviSubTab(QWidget):
+class FviSubTab(_StatusMixin, QWidget):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
     _out_dir_sig = Signal(str)
+    _status_sig = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -63,7 +75,6 @@ class FviSubTab(QWidget):
         self._build(layout)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Mode")
         mode_row = QHBoxLayout()
         self._mode_single = QPushButton("Single file")
         self._mode_single.setToolTip("Convert one FVI file at a time")
@@ -77,7 +88,9 @@ class FviSubTab(QWidget):
         mode_row.addWidget(self._mode_batch)
         layout.addLayout(mode_row)
 
-        _section_label(layout, "Source")
+        _in_lbl = QLabel("INPUT")
+        _in_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_in_lbl)
         src_row = QHBoxLayout()
         self._src_edit = QLineEdit()
         self._src_edit.setPlaceholderText("Select a .fvi file or folder…")
@@ -90,7 +103,9 @@ class FviSubTab(QWidget):
         src_row.addWidget(src_btn)
         layout.addLayout(src_row)
 
-        _section_label(layout, "Output folder")
+        _out_lbl = QLabel("OUTPUT")
+        _out_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_out_lbl)
         out_row = QHBoxLayout()
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Optional (blank = same as source)…")
@@ -105,24 +120,24 @@ class FviSubTab(QWidget):
         out_row.addWidget(out_btn)
         layout.addLayout(out_row)
 
+        layout.addStretch()
+
+        # CTA and status live in the page-level sticky footer (ConvertPage)
         self._btn = QPushButton("Convert")
-        self._btn.setMinimumHeight(38)
-        self._btn.setToolTip("Run the FVI to DXF conversion")
         self._btn.setProperty("role", "primary")
         self._btn.clicked.connect(self._run)
-        layout.addWidget(self._btn)
 
-        self._open_folder_btn = QPushButton("Open Output Folder")
-        self._open_folder_btn.setMinimumHeight(28)
-        self._open_folder_btn.setToolTip("Open the output folder in Finder")
-        self._open_folder_btn.setEnabled(False)
-        self._open_folder_btn.clicked.connect(self._open_output_folder)
-        layout.addWidget(self._open_folder_btn)
-
-        layout.addStretch()
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setVisible(False)
 
         self._btn_state.connect(self._btn.setEnabled)
         self._out_dir_sig.connect(self._set_output_dir)
+        self._status_sig.connect(self._set_status)
+
+    def run(self) -> None:
+        """Public entry point called by the page-level footer CTA."""
+        self._run()
 
     def _set_mode(self, mode: str) -> None:
         for b, active in [
@@ -160,7 +175,6 @@ class FviSubTab(QWidget):
 
     def _set_output_dir(self, d: str) -> None:
         self._last_out_dir = d
-        self._open_folder_btn.setEnabled(True)
 
     def _open_output_folder(self) -> None:
         if self._last_out_dir:
@@ -235,6 +249,10 @@ class FviSubTab(QWidget):
         if files:
             final_dir = out_dir or str(files[0].parent)
             self._out_dir_sig.emit(final_dir)
+        if err == 0 and ok > 0:
+            self._status_sig.emit(f"Done — {ok} file(s) converted", "#3fb950")
+        elif err > 0:
+            self._status_sig.emit(f"{err} error(s)", "#f85149")
         if last_dxf:
             self.preview_path.emit(last_dxf)
 
@@ -256,7 +274,9 @@ class FixerSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Input DXF")
+        _in_lbl = QLabel("INPUT")
+        _in_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_in_lbl)
         src_row = QHBoxLayout()
         self._src_edit = QLineEdit()
         self._src_edit.setPlaceholderText("Select a .dxf file…")
@@ -269,7 +289,9 @@ class FixerSubTab(_StatusMixin, QWidget):
         src_row.addWidget(src_btn)
         layout.addLayout(src_row)
 
-        _section_label(layout, "Output DXF")
+        _out_lbl = QLabel("OUTPUT")
+        _out_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_out_lbl)
         out_row = QHBoxLayout()
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Leave blank to overwrite input…")
@@ -284,6 +306,9 @@ class FixerSubTab(_StatusMixin, QWidget):
         out_row.addWidget(out_btn)
         layout.addLayout(out_row)
 
+        layout.addStretch()
+
+        # CTA and status live in the page-level sticky footer (ConvertPage)
         self._btn = QPushButton("Fix DXF")
         self._btn.setMinimumHeight(38)
         self._btn.setToolTip(
@@ -291,22 +316,17 @@ class FixerSubTab(_StatusMixin, QWidget):
         )
         self._btn.setProperty("role", "primary")
         self._btn.clicked.connect(self._run)
-        layout.addWidget(self._btn)
-
-        self._reveal_btn = QPushButton("Show in Finder")
-        self._reveal_btn.setMinimumHeight(26)
-        self._reveal_btn.setToolTip("Open the repaired file location in Finder")
-        self._reveal_btn.setEnabled(False)
-        self._reveal_btn.clicked.connect(self._reveal)
-        layout.addWidget(self._reveal_btn)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
-        layout.addWidget(self._status)
+        self._status.setVisible(False)
 
         self._btn_state.connect(self._btn.setEnabled)
-        self._reveal_state.connect(self._reveal_btn.setEnabled)
         self._status_sig.connect(self._set_status)
+
+    def run(self) -> None:
+        """Public entry point called by the page-level footer CTA."""
+        self._run()
 
     def _browse_src(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -407,7 +427,9 @@ class SvgSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Input DXF")
+        _in_lbl = QLabel("INPUT")
+        _in_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_in_lbl)
         src_row = QHBoxLayout()
         self._src_edit = QLineEdit()
         self._src_edit.setPlaceholderText("Select a .dxf file…")
@@ -420,7 +442,9 @@ class SvgSubTab(_StatusMixin, QWidget):
         src_row.addWidget(src_btn)
         layout.addLayout(src_row)
 
-        _section_label(layout, "Output SVG")
+        _out_lbl = QLabel("OUTPUT")
+        _out_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_out_lbl)
         out_row = QHBoxLayout()
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Leave blank to auto-name…")
@@ -435,29 +459,25 @@ class SvgSubTab(_StatusMixin, QWidget):
         out_row.addWidget(out_btn)
         layout.addLayout(out_row)
 
+        layout.addStretch()
+
+        # CTA and status live in the page-level sticky footer (ConvertPage)
         self._btn = QPushButton("Convert to SVG")
         self._btn.setMinimumHeight(38)
         self._btn.setToolTip("Convert the DXF polylines to an SVG vector graphic")
         self._btn.setProperty("role", "primary")
         self._btn.clicked.connect(self._run)
-        layout.addWidget(self._btn)
-
-        self._reveal_btn = QPushButton("Show in Finder")
-        self._reveal_btn.setMinimumHeight(26)
-        self._reveal_btn.setToolTip("Open the converted SVG file location in Finder")
-        self._reveal_btn.setEnabled(False)
-        self._reveal_btn.clicked.connect(self._reveal)
-        layout.addWidget(self._reveal_btn)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
-        layout.addWidget(self._status)
-
-        layout.addStretch()
+        self._status.setVisible(False)
 
         self._btn_state.connect(self._btn.setEnabled)
-        self._reveal_state.connect(self._reveal_btn.setEnabled)
         self._status_sig.connect(self._set_status)
+
+    def run(self) -> None:
+        """Public entry point called by the page-level footer CTA."""
+        self._run()
 
     def _browse_src(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -543,7 +563,9 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Input SVG")
+        _in_lbl = QLabel("INPUT")
+        _in_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_in_lbl)
         src_row = QHBoxLayout()
         self._src_edit = QLineEdit()
         self._src_edit.setPlaceholderText("Select a .svg file…")
@@ -555,7 +577,9 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
         src_row.addWidget(src_btn)
         layout.addLayout(src_row)
 
-        _section_label(layout, "Output DXF")
+        _out_lbl = QLabel("OUTPUT")
+        _out_lbl.setProperty("role", "eyebrow")
+        layout.addWidget(_out_lbl)
         out_row = QHBoxLayout()
         self._out_edit = QLineEdit()
         self._out_edit.setPlaceholderText("Leave blank to auto-name…")
@@ -569,27 +593,24 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
         out_row.addWidget(out_btn)
         layout.addLayout(out_row)
 
+        layout.addStretch()
+
+        # CTA and status live in the page-level sticky footer (ConvertPage)
         self._btn = QPushButton("Convert to DXF")
         self._btn.setMinimumHeight(38)
         self._btn.setProperty("role", "primary")
         self._btn.clicked.connect(self._run)
-        layout.addWidget(self._btn)
-
-        self._reveal_btn = QPushButton("Show in Finder")
-        self._reveal_btn.setMinimumHeight(26)
-        self._reveal_btn.setEnabled(False)
-        self._reveal_btn.clicked.connect(self._reveal)
-        layout.addWidget(self._reveal_btn)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
-        layout.addWidget(self._status)
-
-        layout.addStretch()
+        self._status.setVisible(False)
 
         self._btn_state.connect(self._btn.setEnabled)
-        self._reveal_state.connect(self._reveal_btn.setEnabled)
         self._status_sig.connect(self._set_status)
+
+    def run(self) -> None:
+        """Public entry point called by the page-level footer CTA."""
+        self._run()
 
     def _browse_src(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

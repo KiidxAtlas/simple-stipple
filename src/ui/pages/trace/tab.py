@@ -8,23 +8,24 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.io import image_to_outlines
-from src.constants import DIM
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components.canvas.modules import (
     CanvasGridModule,
@@ -32,10 +33,9 @@ from src.ui.components.canvas.modules import (
     CanvasToolbarModule,
 )
 from src.ui.components.canvas.page_runtimes import TraceCanvasPageRuntime
-from src.ui.components.canvas.widgets import CanvasStatusStrip
+from src.ui.components.canvas.widgets import CanvasStatusStrip, CollapsibleSection
 from src.ui.components.common.factories import (
     _content_splitter,
-    _section_label,
     _sidebar_panel,
     _surface_frame,
     parse_float_field_with_feedback,
@@ -164,7 +164,11 @@ class TracePage(QWidget):
     def _build_left(self, layout: QVBoxLayout) -> None:
         self._init_trace_form_fields()
 
-        _section_label(layout, "Source")
+        # ── Source section ────────────────────────────────────────────────────
+        source_content = QWidget()
+        source_layout = QVBoxLayout(source_content)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        source_layout.setSpacing(6)
         self._source_field = PathField(
             "Select image…",
             "Browse",
@@ -184,29 +188,35 @@ class TracePage(QWidget):
         source_row.setSpacing(6)
         source_row.addWidget(self._source_field, stretch=1)
         source_row.addWidget(self._recent_btn)
-        layout.addLayout(source_row)
-
+        source_layout.addLayout(source_row)
+        self._thumb_lbl = QLabel()
+        self._thumb_lbl.setMaximumHeight(120)
+        self._thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._thumb_lbl.setVisible(False)
+        source_layout.addWidget(self._thumb_lbl)
         self._img_info_lbl = QLabel("")
-        self._img_info_lbl.setStyleSheet(f"color: {DIM}; font-size: 10px;")
-        layout.addWidget(self._img_info_lbl)
+        self._img_info_lbl.setProperty("role", "hint")
+        source_layout.addWidget(self._img_info_lbl)
+        self._bg_visible_cb = QCheckBox("Show image in background")
+        self._bg_visible_cb.setChecked(True)
+        self._bg_visible_cb.setToolTip(
+            "Display the source image behind the traced outlines"
+        )
+        self._bg_visible_cb.stateChanged.connect(self._on_bg_visible_changed)
+        source_layout.addWidget(self._bg_visible_cb)
+        layout.addWidget(CollapsibleSection("Source", source_content, expanded=True))
 
-        essentials = build_lazy_section(
-            "Essential Fields",
+        # ── Trace Settings section ────────────────────────────────────────────
+        self._trace_settings_section = build_lazy_section(
+            "Trace Settings",
             self._build_essential_fields,
             expanded=True,
         )
-        layout.addWidget(essentials)
+        layout.addWidget(self._trace_settings_section)
 
-        advanced = build_lazy_section(
-            "Advanced Fields",
-            self._build_advanced_fields,
-            expanded=False,
-        )
-        layout.addWidget(advanced)
-
-        self._status = QLabel("No image loaded.")
-        self._status.setStyleSheet(f"color: {DIM};")
+        self._status = QLabel("")
         self._status.setWordWrap(True)
+        self._status.setVisible(False)
         layout.addWidget(self._status)
 
         self._progress = QProgressBar()
@@ -214,42 +224,57 @@ class TracePage(QWidget):
         self._progress.setValue(0)
         layout.addWidget(self._progress)
 
-        self._bg_visible_cb = QCheckBox("Show image in background")
-        self._bg_visible_cb.setChecked(True)
-        self._bg_visible_cb.setToolTip(
-            "Display the source image behind the traced outlines"
+        # ── Advanced section ──────────────────────────────────────────────────
+        advanced = build_lazy_section(
+            "Advanced",
+            self._build_advanced_fields,
+            expanded=False,
         )
-        self._bg_visible_cb.stateChanged.connect(self._on_bg_visible_changed)
-        layout.addWidget(self._bg_visible_cb)
+        layout.addWidget(advanced)
 
-        _section_label(layout, "Export")
+        # ── Export section ────────────────────────────────────────────────────
+        export_content = QWidget()
+        export_layout = QVBoxLayout(export_content)
+        export_layout.setContentsMargins(0, 0, 0, 0)
+        export_layout.setSpacing(4)
         self._export_all_btn = QPushButton("Export All as DXF…")
         self._export_all_btn.setMinimumHeight(36)
         self._export_all_btn.setProperty("role", "primary")
         self._export_all_btn.setToolTip("Save all traced outlines as a DXF file")
         self._export_all_btn.setEnabled(False)
         self._export_all_btn.clicked.connect(self._export_all)
-        layout.addWidget(self._export_all_btn)
-
-        self._export_sel_btn = QPushButton("Export Selected as DXF…")
-        self._export_sel_btn.setMinimumHeight(36)
-        self._export_sel_btn.setToolTip("Save only the selected outlines as a DXF file")
-        self._export_sel_btn.setEnabled(False)
-        self._export_sel_btn.clicked.connect(self._export_selected)
-        layout.addWidget(self._export_sel_btn)
-
-        self._reveal_btn = QPushButton("Show in Finder")
-        self._reveal_btn.setMinimumHeight(26)
-        self._reveal_btn.setToolTip("Open the exported file location in Finder")
-        self._reveal_btn.setEnabled(False)
-        self._reveal_btn.clicked.connect(self._reveal_in_finder)
-        layout.addWidget(self._reveal_btn)
+        _export_overflow_btn = QToolButton()
+        _export_overflow_btn.setText("⋯")
+        _export_overflow_btn.setFixedWidth(32)
+        _export_overflow_btn.setFixedHeight(36)
+        _export_overflow_btn.setToolTip("More export options")
+        _export_overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        _overflow_menu = QMenu(_export_overflow_btn)
+        self._export_sel_action = _overflow_menu.addAction(
+            "Export Selected as DXF…", self._export_selected
+        )
+        self._export_sel_action.setEnabled(False)
+        _overflow_menu.addSeparator()
+        self._reveal_action = _overflow_menu.addAction(
+            "Show in Finder", self._reveal_in_finder
+        )
+        self._reveal_action.setEnabled(False)
+        _export_overflow_btn.setMenu(_overflow_menu)
+        export_row = QHBoxLayout()
+        export_row.setContentsMargins(0, 0, 0, 0)
+        export_row.setSpacing(4)
+        export_row.addWidget(self._export_all_btn, stretch=1)
+        export_row.addWidget(_export_overflow_btn)
+        export_layout.addLayout(export_row)
+        layout.addWidget(CollapsibleSection("Export", export_content, expanded=True))
 
         layout.addStretch()
 
     def _init_trace_form_fields(self) -> None:
         self._blur = self._mk_entry(
-            "1.5", "Gaussian blur radius applied before thresholding / edge detection"
+            "1.5",
+            "Gaussian blur radius applied before thresholding / edge detection",
+            on_change=self._on_blur_text,
         )
         self._thresh_entry = self._mk_entry(
             "128",
@@ -326,11 +351,34 @@ class TracePage(QWidget):
         self._lock_cb.setToolTip("Keep width and height proportional when resizing")
         self._lock_cb.stateChanged.connect(self._on_aspect_lock_changed)
 
+        self._blur_slider = QSlider(Qt.Orientation.Horizontal)
+        self._blur_slider.setRange(0, 50)
+        self._blur_slider.setValue(15)  # 1.5 * 10
+        self._blur_slider.setToolTip("Drag to adjust the blur radius (0.0 – 5.0)")
+        self._blur_slider.valueChanged.connect(self._on_blur_slider)
+
         self._thresh_slider = QSlider(Qt.Orientation.Horizontal)
         self._thresh_slider.setRange(0, 255)
         self._thresh_slider.setValue(128)
         self._thresh_slider.setToolTip("Drag to adjust the brightness threshold")
         self._thresh_slider.valueChanged.connect(self._on_thresh_slider)
+
+    def _on_blur_text(self, text: str) -> None:
+        try:
+            val = float(text)
+            if 0.0 <= val <= 5.0:
+                self._blur_slider.blockSignals(True)
+                self._blur_slider.setValue(int(val * 10))
+                self._blur_slider.blockSignals(False)
+        except ValueError:
+            pass
+        self._schedule_trace()
+
+    def _on_blur_slider(self, value: int) -> None:
+        self._blur.blockSignals(True)
+        self._blur.setText(f"{value / 10:.1f}")
+        self._blur.blockSignals(False)
+        self._schedule_trace()
 
     def _mk_entry(
         self,
@@ -350,7 +398,6 @@ class TracePage(QWidget):
         return entry
 
     def _build_essential_fields(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Trace")
         layout.addWidget(
             TextField(
                 "Blur radius",
@@ -358,6 +405,7 @@ class TracePage(QWidget):
                 tooltip=self._blur.toolTip(),
             )
         )
+        layout.addWidget(self._blur_slider)
         layout.addWidget(self._edge_mode_cb)
 
         self._thresh_widget = QWidget()
@@ -395,7 +443,6 @@ class TracePage(QWidget):
         )
         layout.addWidget(self._canny_widget)
 
-        _section_label(layout, "Scale")
         layout.addWidget(
             TextField(
                 "Width (mm)", entry=self._width_mm, tooltip=self._width_mm.toolTip()
@@ -411,12 +458,11 @@ class TracePage(QWidget):
         )
         layout.addWidget(self._lock_cb)
         self._size_info_lbl = QLabel("")
-        self._size_info_lbl.setStyleSheet(f"color: {DIM}; font-size: 9px;")
+        self._size_info_lbl.setProperty("role", "hint-sm")
         layout.addWidget(self._size_info_lbl)
         self._update_thresh_controls()
 
     def _build_advanced_fields(self, layout: QVBoxLayout) -> None:
-        _section_label(layout, "Refine")
         layout.addWidget(
             TextField(
                 "Simplify (px)", entry=self._simplify, tooltip=self._simplify.toolTip()
@@ -442,7 +488,6 @@ class TracePage(QWidget):
             )
         )
         layout.addWidget(self._outer_only_cb)
-        _section_label(layout, "Performance")
         layout.addWidget(
             TextField(
                 "Max resolution", entry=self._max_res, tooltip=self._max_res.toolTip()
@@ -524,9 +569,21 @@ class TracePage(QWidget):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _set_status(self, text: str, color: str = DIM) -> None:
+    def _set_status(self, text: str, color: str = "#8b949e") -> None:
+        if not text:
+            self._status.setVisible(False)
+            return
+        self._status.setVisible(True)
         self._status.setText(text)
-        self._status.setStyleSheet(f"color: {color};")
+        if color == "#3fb950":
+            role = "status-ok"
+        elif color == "#f85149":
+            role = "status-err"
+        else:
+            role = "status-neutral"
+        self._status.setProperty("role", role)
+        self._status.style().unpolish(self._status)
+        self._status.style().polish(self._status)
 
     def _reset_trace_runtime_state(self) -> None:
         self._running = False
@@ -542,6 +599,8 @@ class TracePage(QWidget):
         self._img_aspect = 1.0
         if hasattr(self, "_img_info_lbl"):
             self._img_info_lbl.setText("")
+        if hasattr(self, "_thumb_lbl"):
+            self._thumb_lbl.setVisible(False)
         if hasattr(self, "_size_info_lbl"):
             self._size_info_lbl.setText("")
         if hasattr(self, "_progress"):
@@ -556,8 +615,8 @@ class TracePage(QWidget):
         )
         self._bg_visible_cb.setEnabled(has_image)
         self._export_all_btn.setEnabled(has_polys)
-        self._export_sel_btn.setEnabled(has_selection)
-        self._reveal_btn.setEnabled(bool(self._last_out))
+        self._export_sel_action.setEnabled(has_selection)
+        self._reveal_action.setEnabled(bool(self._last_out))
 
     def _emit_state_changed(self) -> None:
         if not self._suspend_state_changes:
@@ -610,6 +669,25 @@ class TracePage(QWidget):
                 self._img_w_px = src.width
                 self._img_h_px = src.height
                 self._img_aspect = src.width / max(src.height, 1)
+                thumb = src.copy()
+                thumb.thumbnail((280, 120), Image.Resampling.LANCZOS)
+                if thumb.mode != "RGB":
+                    thumb = thumb.convert("RGB")
+            data = thumb.tobytes("raw", "RGB")
+            qimg = QImage(
+                data,
+                thumb.width,
+                thumb.height,
+                thumb.width * 3,
+                QImage.Format.Format_RGB888,
+            )
+            self._thumb_lbl.setPixmap(
+                QPixmap.fromImage(qimg).scaledToHeight(
+                    min(120, thumb.height),
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+            self._thumb_lbl.setVisible(True)
             self._img_info_lbl.setText(
                 f"{Path(path).name}  ·  {self._img_w_px}×{self._img_h_px} px"
             )
@@ -760,6 +838,10 @@ class TracePage(QWidget):
         self._last_display_img = _display_img
         self._last_width_mm = width_mm_val
         self._last_height_mm = height_mm_val
+        if hasattr(self, "_trace_settings_section"):
+            self._trace_settings_section.set_subtitle(
+                f"{count} contour(s) · {width_mm_val:.0f}×{height_mm_val:.0f} mm"
+            )
         if _display_img is not None and self._bg_visible_cb.isChecked():
             try:
                 bg_layer = Image.new("RGB", _display_img.size, TRACE_BG_COLOR)

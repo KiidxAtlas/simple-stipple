@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.constants import DIM
 from src.ui.components.canvas.widgets import CollapsibleSection
 
 
@@ -37,9 +36,8 @@ class TextField(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        meta = "required" if required else "optional"
-        marker = QLabel(f"{label}  ·  {meta}")
-        marker.setStyleSheet(f"color: {DIM}; font-size: 10px;")
+        marker = QLabel(label)
+        marker.setProperty("role", "hint")
         self.entry = entry or QLineEdit(default)
         if entry is None:
             self.entry.setText(default)

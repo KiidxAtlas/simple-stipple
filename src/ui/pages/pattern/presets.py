@@ -54,7 +54,10 @@ _DEFAULTS_COMMON: dict[str, str | bool] = {
     "fill_mode": "none",
     "fill_spacing": "0.5",
     "fill_angle": "0",
-    "fill_keep_outline": False,
+    # UI default is to keep pattern strokes by default; presets should match.
+    "fill_keep_outline": True,
+    "fill_target_outline": True,
+    "fill_target_pattern": False,
 }
 
 

@@ -4,17 +4,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-
-from src.app import App
-from src.error_reporting import install_excepthook, install_toast
-from src.logging_config import configure_logging
-from src.single_instance import SingleInstanceGuard
-from src.ui.style.theme import apply_dark_theme
 
 _LOG = logging.getLogger(__name__)
 
@@ -51,6 +46,22 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(list(argv) if argv is not None else sys.argv[1:])
 
+    # Ensure third-party libraries write cache files into the app-controlled
+    # cache directory rather than the user's generic ~/.cache which may be
+    # restricted by OS privacy settings. Set `XDG_CACHE_HOME` early so libs
+    # like ezdxf pick it up during import.
+    from src.paths import user_cache_dir
+
+    os.environ.setdefault("XDG_CACHE_HOME", str(user_cache_dir()))
+
+    # Defer importing app modules until after cache env is configured so any
+    # library initialisation uses the new cache path.
+    from src.app import App
+    from src.error_reporting import install_excepthook, install_toast
+    from src.logging_config import configure_logging
+    from src.single_instance import SingleInstanceGuard
+    from src.ui.style.theme import apply_dark_theme
+
     log_path = configure_logging(args.log_level)
     install_excepthook()
     _LOG.info("Starting Simple Stipple (log file: %s)", log_path)
@@ -64,8 +75,12 @@ def main(argv: list[str] | None = None) -> int:
         guard = SingleInstanceGuard("simple-stipple")
         if not guard.acquire():
             _LOG.info("Another instance is running — signalling activation.")
-            guard.signal_existing()
-            return 0
+            # Try to signal the running instance; if that fails (stale lock or
+            # socket issues), continue startup rather than aborting so the user
+            # can still run the app.
+            if guard.signal_existing():
+                return 0
+            _LOG.warning("Failed to contact existing instance; continuing startup")
 
     icon_path = _resolve_icon_path()
     if icon_path is not None:

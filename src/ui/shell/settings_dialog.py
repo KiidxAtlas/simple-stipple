@@ -84,13 +84,13 @@ class SettingsDialog(QDialog):
         layout.setSpacing(10)
 
         title = QLabel("Settings")
-        title.setStyleSheet("color: #f0f6fc; font-size: 16px; font-weight: 700;")
+        title.setProperty("role", "page-title")
         layout.addWidget(title)
 
         subtitle = QLabel(
             "Configure workspace paths, folder locations, and application behavior."
         )
-        subtitle.setStyleSheet("color: #8b949e; font-size: 12px;")
+        subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
@@ -156,7 +156,7 @@ class SettingsDialog(QDialog):
         interval_hint = QLabel(
             "Used only when periodic auto-fetch is enabled. Minimum 1 minute."
         )
-        interval_hint.setStyleSheet("color: #8b949e; font-size: 11px;")
+        interval_hint.setProperty("role", "hint")
         behavior_layout.addWidget(interval_hint)
         content_layout.addWidget(behavior_card)
 
@@ -165,8 +165,11 @@ class SettingsDialog(QDialog):
         keybinding_layout.setContentsMargins(12, 12, 12, 12)
         keybinding_layout.setSpacing(6)
         _section_label(keybinding_layout, "Keyboard Shortcuts")
-        kb_help = QLabel("Use Qt shortcut syntax (e.g. Ctrl+K, Shift+R, F).")
-        kb_help.setStyleSheet("color: #8b949e; font-size: 11px;")
+        import platform as _platform
+
+        _kbd_mod = "Meta" if _platform.system() == "Darwin" else "Ctrl"
+        kb_help = QLabel(f"Use Qt shortcut syntax (e.g. {_kbd_mod}+K, Shift+R, F).")
+        kb_help.setProperty("role", "hint")
         keybinding_layout.addWidget(kb_help)
         kb_actions = QHBoxLayout()
         kb_actions.addStretch()
@@ -203,12 +206,15 @@ class SettingsDialog(QDialog):
         row, e = self._add_text_row(layout, label, self._settings.get(key, ""))
         self._entries[key] = e
         if browse:
-            btn = QPushButton("…")
-            btn.setFixedSize(28, 28)
+            btn = QPushButton("Browse")
+            btn.setFixedSize(64, 28)
+            btn.setProperty("role", "browse-btn")
+            btn.setToolTip("Choose a folder")
             btn.clicked.connect(lambda checked, k=key: self._browse_dir(k))
             row.addWidget(btn)
-            clear_btn = QPushButton("×")
+            clear_btn = QPushButton("✕")
             clear_btn.setFixedSize(28, 28)
+            clear_btn.setProperty("role", "browse-btn")
             clear_btn.setToolTip("Clear this saved folder path")
             clear_btn.clicked.connect(e.clear)
             row.addWidget(clear_btn)
@@ -249,7 +255,6 @@ class SettingsDialog(QDialog):
     ) -> tuple[QHBoxLayout, QLineEdit]:
         row = QHBoxLayout()
         lbl = QLabel(label)
-        lbl.setFixedWidth(200)
         row.addWidget(lbl)
         entry = QLineEdit()
         if placeholder:

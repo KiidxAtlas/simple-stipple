@@ -1,16 +1,11 @@
 /* ── Global font ─────────────────────────────────────── */
 * {
-    font-family: "Helvetica Neue", "Arial", "Helvetica";
+    font-family: "SF Pro Text", "Helvetica Neue", "Arial", "Apple Color Emoji", "Segoe UI Emoji";
     font-size: 13px;
 }
 
 QMainWindow {
-    background: qlineargradient(
-        x1: 0, y1: 0, x2: 1, y2: 1,
-        stop: 0 #0d1117,
-        stop: 0.45 #121922,
-        stop: 1 #161b22
-    );
+    background: #0d1117;
 }
 
 /* ── Tab bar ─────────────────────────────────────────── */
@@ -108,6 +103,23 @@ QLabel[role="chip"][tone="danger"] {
     background: rgba(248, 81, 73, 0.12);
     border-color: rgba(248, 81, 73, 0.45);
     color: #ffb4ab;
+}
+
+/* ── Section labels & subtitles ──────────────────────── */
+QLabel[role="section-label"] {
+    color: #484f58;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    padding: 8px 0 2px 0;
+}
+QLabel[role="section-subtitle"] {
+    color: #8b949e;
+    font-size: 10px;
+    padding-left: 18px;
+}
+QLabel[role="section-subtitle"][dim="true"] {
+    color: #6e7681;
 }
 
 /* ── Tooltip ─────────────────────────────────────────── */
@@ -267,16 +279,39 @@ QFrame[role="collapsible"], QFrame[role="status-strip"], QFrame[role="object-bro
 }
 
 QToolButton {
-    padding: 4px 2px;
+    padding: 4px 6px;
     color: #e6edf3;
     font-size: 12px;
     font-weight: 700;
     border: none;
     background: transparent;
-    text-align: left;
+    text-align: center;
 }
 QToolButton:hover {
     color: #79c0ff;
+}
+
+/* Collapsible section toggle — left-aligned header */
+QToolButton[role="collapsible-toggle"] {
+    text-align: left;
+    padding: 5px 2px;
+    color: #c9d1d9;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    border-radius: 4px;
+    background: transparent;
+    border: none;
+}
+QToolButton[role="collapsible-toggle"]:hover {
+    background: rgba(88, 166, 255, 0.07);
+    color: #e6edf3;
+}
+
+/* Browse / clear buttons in settings rows */
+QPushButton[role="browse-btn"] {
+    padding: 3px 6px;
+    font-size: 11px;
 }
 
 QListWidget {
@@ -377,7 +412,122 @@ QPlainTextEdit {
     border-radius: 6px;
     background: #0f141b;
 }
+/* ── Cutout callout card ────────────────────── */
+#cutoutCallout {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+}
+#cutoutCallout[active="true"] {
+    background: #2a1e0a;
+    border-color: #7d4f00;
+}
 
+/* ── Status label roles (ok / err / neutral) ─ */
+QLabel[role="status-ok"] {
+    color: #3fb950;
+    background: #0f2a17;
+    border: 1px solid #1f6f3a;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+}
+QLabel[role="status-err"] {
+    color: #f85149;
+    background: #2a0f0f;
+    border: 1px solid #6f1f1f;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+}
+QLabel[role="status-neutral"] {
+    color: #8b949e;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+}
+
+/* ── Toolbar separator ───────────────────────── */
+QLabel[role="toolbar-sep"] {
+    color: #21262d;
+    font-size: 12px;
+}
+
+/* ── Muted / hint text labels ──────────────────── */
+QLabel[role="hint"] {
+    color: #8b949e;
+    background: transparent;
+    font-size: 11px;
+}
+QLabel[role="hint-sm"] {
+    color: #8b949e;
+    background: transparent;
+    font-size: 9px;
+}
+QLabel[role="dim"] {
+    color: #8b949e;
+    background: transparent;
+}
+
+/* ── Preview status (text-only, no background) ─── */
+QLabel[role="preview-ok"] {
+    color: #3fb950;
+    background: transparent;
+    font-size: 11px;
+}
+QLabel[role="preview-err"] {
+    color: #f85149;
+    background: transparent;
+    font-size: 11px;
+}
+QLabel[role="preview-dim"] {
+    color: #8b949e;
+    background: transparent;
+    font-size: 11px;
+}
+
+/* ── Cutout callout icon + description ─────────── */
+QLabel[role="cutout-icon"] {
+    color: #8b949e;
+    background: transparent;
+    font-size: 12px;
+}
+QLabel[role="cutout-desc"] {
+    color: #8b949e;
+    background: transparent;
+    font-size: 10px;
+}
+QLabel[role="cutout-icon"][active="true"] {
+    color: #f0883e;
+}
+QLabel[role="cutout-desc"][active="true"] {
+    color: #f0883e;
+}
+
+/* ── Neutral status chip (non-empty, non-ok/err) ── */
+QLabel[role="status-chip"] {
+    color: #8b949e;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+}
+
+/* ── Log text pane ─────────────────────────────── */
+QPlainTextEdit[role="log"] {
+    font-family: Menlo, Courier;
+    font-size: 11px;
+}
+
+/* ── Horizontal rule separator ─────────────────── */
+QFrame[role="hsep"] {
+    background: #21262d;
+    max-height: 1px;
+    border: none;
+}
 /* ── Scroll bars ─────────────────────────────────────── */
 QScrollBar:vertical {
     width: 5px;
@@ -442,4 +592,46 @@ QMessageBox {
 /* ── Dialog ──────────────────────────────────────────── */
 QDialog {
     background: #161b22;
+}
+
+/* ── Tool-item selector buttons (vertical left rail) ─── */
+QPushButton[role="tool-item"] {
+    text-align: left;
+    padding-left: 14px;
+    border-radius: 6px;
+}
+QPushButton[role="tool-item"][active="true"] {
+    background: rgba(47, 129, 247, 0.15);
+    border-left: 3px solid #2f81f7;
+    border-color: #2f81f7;
+    color: #79c0ff;
+}
+QPushButton[role="tool-item"][active="true"]:hover {
+    background: rgba(47, 129, 247, 0.22);
+}
+
+/* ── Empty-state labels ──────────────────────────────── */
+QLabel[role="empty-icon"] {
+    color: #30363d;
+    font-size: 36px;
+}
+QLabel[role="empty-title"] {
+    color: #484f58;
+    font-size: 15px;
+    font-weight: 600;
+}
+QLabel[role="empty-hint"] {
+    color: #30363d;
+    font-size: 11px;
+}
+
+/* ── QTextEdit (git log) ─────────────────────────────── */
+QTextEdit {
+    border: 1px solid #2b3440;
+    border-radius: 6px;
+    background: #0f141b;
+    color: #c9d1d9;
+    font-family: Menlo, Courier, monospace;
+    font-size: 11px;
+    selection-background-color: #264f78;
 }

@@ -14,8 +14,13 @@ def read_json_file(path: str | Path, default: Any | None = None) -> Any:
     """Read a UTF-8 JSON file or return a default value when missing."""
     file_path = Path(path)
     if not file_path.exists():
-        return {} if default is None else default
-    return json.loads(file_path.read_text(encoding="utf-8"))
+        return default
+    try:
+        return json.loads(file_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # Return the provided default on read/parse errors so callers can
+        # handle missing/invalid files robustly.
+        return default
 
 
 def write_json_file_atomic(path: str | Path, payload: Any) -> None:

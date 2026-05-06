@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.constants import DIM
 from src.ui.pages.pattern._spec import PARAM_SPECS
 
 # ── Internal widget helpers ───────────────────────────────────────────────────
@@ -43,7 +42,7 @@ def _param_entry(
 
 def _hint_label(text: str) -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet(f"color: {DIM}; font-size: 9px;")
+    lbl.setProperty("role", "hint-sm")
     return lbl
 
 
@@ -111,11 +110,11 @@ def build_tile_library_widget(tab: Any, schedule_fn) -> QWidget:
     vl = QVBoxLayout(w)
     vl.setContentsMargins(0, 0, 0, 0)
     folder_lbl = QLabel("Pattern library")
-    folder_lbl.setStyleSheet(f"color: {DIM}; font-size: 11px;")
+    folder_lbl.setProperty("role", "hint")
     vl.addWidget(folder_lbl)
     tab._tile_library_folder_lbl = QLabel("No pattern folder selected")
     tab._tile_library_folder_lbl.setWordWrap(True)
-    tab._tile_library_folder_lbl.setStyleSheet(f"color: {DIM};")
+    tab._tile_library_folder_lbl.setProperty("role", "dim")
     vl.addWidget(tab._tile_library_folder_lbl)
     btn_row = QHBoxLayout()
     choose_btn = QPushButton("Choose Folder")
@@ -128,7 +127,7 @@ def build_tile_library_widget(tab: Any, schedule_fn) -> QWidget:
     btn_row.addWidget(refresh_btn)
     vl.addLayout(btn_row)
     tile_lbl = QLabel("Selected tile")
-    tile_lbl.setStyleSheet(f"color: {DIM}; font-size: 11px;")
+    tile_lbl.setProperty("role", "hint")
     vl.addWidget(tile_lbl)
     tab._tile_name_lbl = QLabel("Choose a tile pattern from the list")
     tab._tile_name_lbl.setWordWrap(True)
@@ -148,7 +147,7 @@ def build_tile_library_widget(tab: Any, schedule_fn) -> QWidget:
     vl.addLayout(g)
     vl.addWidget(tab._tile_interlock_cb)
     hint = QLabel("DXF files in the folder appear in the pattern list as Tile: Name")
-    hint.setStyleSheet(f"color: {DIM}; font-size: 9px;")
+    hint.setProperty("role", "hint-sm")
     vl.addWidget(hint)
     tab._update_tile_library_panel()
     return w
@@ -460,7 +459,7 @@ def collect_form_state(page: Any) -> dict:
         "rotation": page._pattern_rotation.text(),
         "scale_w": page._scale_w.text(),
         "scale_h": page._scale_h.text(),
-        "ar_locked": page._ar_cb.isChecked(),
+        "ar_locked": page._ar_lock_btn.isChecked(),
         "include_border": page._include_border_cb.isChecked(),
         "interlace": page._interlace_cb.isChecked(),
         "invert_fill": page._invert_fill_cb.isChecked(),
@@ -470,7 +469,9 @@ def collect_form_state(page: Any) -> dict:
         "fill_mode": page._fill_mode_combo.currentData() or "none",
         "fill_spacing": page._fill_spacing.text(),
         "fill_angle": page._fill_angle.text(),
-        "fill_keep_outline": page._fill_keep_outline_cb.isChecked(),
+                "fill_keep_outline": page._fill_keep_outline_cb.isChecked(),
+                "fill_target_outline": page._fill_target_outline_cb.isChecked(),
+        "fill_target_pattern": page._fill_target_pattern_cb.isChecked(),
         # Tile library (set by build_tile_library_widget)
         "tile_pattern_path": page._library_patterns.get(
             page._pattern_combo.currentText(), ""
@@ -534,7 +535,7 @@ def restore_form_state(page: Any, payload: dict) -> None:
     page._pattern_rotation.setText(str(values.get("rotation", "0")))
     page._scale_w.setText(str(values.get("scale_w", "")))
     page._scale_h.setText(str(values.get("scale_h", "")))
-    page._ar_cb.setChecked(bool(values.get("ar_locked", True)))
+    page._ar_lock_btn.setChecked(bool(values.get("ar_locked", True)))
     page._include_border_cb.setChecked(bool(values.get("include_border", True)))
     page._interlace_cb.setChecked(bool(values.get("interlace", False)))
     page._invert_fill_cb.setChecked(bool(values.get("invert_fill", False)))
@@ -547,6 +548,12 @@ def restore_form_state(page: Any, payload: dict) -> None:
     page._fill_spacing.setText(str(values.get("fill_spacing", "0.5")))
     page._fill_angle.setText(str(values.get("fill_angle", "0")))
     page._fill_keep_outline_cb.setChecked(bool(values.get("fill_keep_outline", True)))
+    page._fill_target_outline_cb.setChecked(
+        bool(values.get("fill_target_outline", True))
+    )
+    page._fill_target_pattern_cb.setChecked(
+        bool(values.get("fill_target_pattern", False))
+    )
     page._on_fill_mode_changed()
 
     # All PARAM_SPECS pattern fields

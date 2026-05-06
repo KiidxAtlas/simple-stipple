@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, cast
 from uuid import uuid4
+
+LOGGER = logging.getLogger(__name__)
 
 from shapely import prepared as _shp_prepared  # type: ignore[import-untyped]
 
@@ -16,11 +19,15 @@ from src.backend.dxf.io import (
 from src.backend.generators import (
     apply_border_fade,
     apply_interlace,
+    apply_invert_fill,
     apply_mirror,
     get_generator,
 )
 from src.backend.generators._shared import _collect_lines as _collect_lines_shared
 from src.backend.generators._shared import _extract_polys as _extract_polys_shared
+from src.backend.generators._shared import (
+    _polygon_from_polyline as _polygon_from_polyline_shared,
+)
 from src.ui.pages.pattern.fill import (
     NULL_PATTERN,
     FillSpec,
@@ -151,8 +158,20 @@ class PatternProcessingService:
         old_polys: list[list[tuple[float, float]]],
         old_ids: list[str],
     ) -> list[str]:
+        # Fast-path: identical length and matching signatures in the same
+        # order — reuse the existing ids unchanged.
         if len(new_polys) == len(old_ids):
-            return list(old_ids)
+            same_order = True
+            for npoly, opoly in zip(new_polys, old_polys):
+                if PatternProcessingService._poly_signature(
+                    npoly
+                ) != PatternProcessingService._poly_signature(opoly):
+                    same_order = False
+                    break
+            if same_order:
+                return list(old_ids)
+
+        # Otherwise reconcile by signature so moved/renamed outlines keep IDs
         sig_to_ids: dict[tuple[tuple[float, float], ...], list[str]] = {}
         for poly, oid in zip(old_polys, old_ids):
             sig = PatternProcessingService._poly_signature(poly)
@@ -174,7 +193,12 @@ class PatternProcessingService:
         edit_polys: list[list[tuple[float, float]]],
     ) -> list[list[tuple[float, float]]]:
         id_map = {oid: poly for oid, poly in zip(outline_ids, edit_polys)}
-        return [list(id_map[oid]) for oid in ids if oid in id_map]
+        resolved: list[list[tuple[float, float]]] = []
+        for oid in ids:
+            if oid in id_map:
+                poly = id_map[oid]
+                resolved.append([(float(x), float(y)) for x, y in poly])
+        return resolved
 
     @staticmethod
     def validate_outline_inputs(polys: list[list[tuple[float, float]]]) -> str | None:
@@ -407,25 +431,27 @@ class PatternProcessingService:
             excl_outline = polylines_to_outline(excl_scaled)
             fill_outline = fill_outline.difference(excl_outline)
 
-        # invert_fill: generate the pattern in the area OUTSIDE the outline so
-        # the result looks like a background / frame around the shape.
-        # The outer region is the bounding box (+ 50 % padding) minus the outline.
-        # Normal fill (invert_fill=False) generates inside the outline as usual.
-        if invert_fill:
-            from shapely.geometry import box as _shp_box  # type: ignore[import-untyped]
-
-            minx, miny, maxx, maxy = fill_outline.bounds
-            pad = max(maxx - minx, maxy - miny) * 0.5
-            outer_box = _shp_box(minx - pad, miny - pad, maxx + pad, maxy + pad)
-            active_region: Any = outer_box.difference(fill_outline)
-        else:
-            active_region = fill_outline
+        # Always generate pattern elements inside the fill region (never
+        # outside the outline). When ``invert_fill`` is requested we compute
+        # the inverted shapes from the generated pattern (negative space of
+        # the pattern union inside the outline) rather than generating in
+        # an outer bounding-frame which would produce geometry outside the
+        # outline.
+        active_region = fill_outline
 
         # Rotation: rotate active_region inversely around the original outline's
         # centroid, generate in that frame, rotate output forward and clip back.
         rot_deg = float(params.get("rotation", 0.0) or 0.0)
-        cx: float = fill_outline.centroid.x  # always pivot around original outline
-        cy: float = fill_outline.centroid.y
+        # Guard: centroid of an empty geometry is itself empty — fall back to
+        # the bounding-box centre so we never call .x/.y on an empty Point.
+        _centroid = fill_outline.centroid
+        if _centroid.is_empty:
+            _b = fill_outline.bounds  # (minx, miny, maxx, maxy)
+            cx: float = (_b[0] + _b[2]) / 2 if _b else 0.0
+            cy: float = (_b[1] + _b[3]) / 2 if _b else 0.0
+        else:
+            cx = float(_centroid.x)
+            cy = float(_centroid.y)
         if abs(rot_deg) > 1e-9:
             from shapely.affinity import (
                 rotate as _shp_rot,  # type: ignore[import-untyped]
@@ -459,9 +485,9 @@ class PatternProcessingService:
                 _clip_rotated_element(poly, active_region, prep_ar, clipped)
             polys = clipped
 
-        # NOTE: apply_invert_fill is intentionally NOT called here — the
-        # inversion is achieved above by generating in the outer region when
-        # invert_fill=True.
+        # If invert_fill is True, compute the negative-space shapes inside the
+        # outline from the generated pattern union so no geometry is produced
+        # outside the outline.
         if interlace and pattern in self._INTERLACE_PATTERNS:
             polys = apply_interlace(
                 polys, active_region, spacing=params.get("spacing", 1.0)
@@ -471,6 +497,15 @@ class PatternProcessingService:
         if border_fade > 0:
             polys = apply_border_fade(polys, outline_poly, border_fade)
 
+        if invert_fill:
+            try:
+                polys = apply_invert_fill(polys, fill_outline)
+            except Exception:
+                # Fail safe: if inversion fails, fall back to the original
+                # generated polys (but they will still be clipped to the
+                # active region from rotation/clip steps above).
+                pass
+
         # ── Fill (laser infill) ────────────────────────────────────────────
         # The fill region is the input outline minus exclusions — pattern
         # strokes are a pure overlay and do NOT subdivide the fill region.
@@ -478,7 +513,65 @@ class PatternProcessingService:
         # cutting algorithm: simpler, predictable, always covers the shape.
         spec = FillSpec.from_dict(fill_options) if fill_options else FillSpec.disabled()
         if spec.enabled:
-            fill_strokes = apply_fill(fill_outline, spec)
+            fill_strokes: list[list[tuple[float, float]]] = []
+            # Target the outline region when requested.
+            if spec.target_outline:
+                try:
+                    fill_strokes.extend(apply_fill(fill_outline, spec))
+                except Exception:
+                    # Fail safe: skip outline fill on errors.
+                    LOGGER.exception("Outline fill failed")
+
+            # Target closed pattern polygons when requested. Use the final
+            # generated `polys` (which may already reflect invert_fill) as the
+            # source geometry for pattern-targeted fills.
+            if spec.target_pattern and polys:
+                try:
+                    # Try filling closed pattern polygons first. For
+                    # non-polygonizable linework, fall back to a best-effort
+                    # polygonize of the combined linework so tile-like
+                    # patterns that emit lines can still be hatched.
+                    pending_lines: list[list[tuple[float, float]]] = []
+                    for poly in polys:
+                        shp = _polygon_from_polyline_shared(poly)
+                        if shp is not None:
+                            fill_strokes.extend(apply_fill(shp, spec))
+                        else:
+                            if len(poly) >= 2:
+                                pending_lines.append(poly)
+
+                    # Polygonize any remaining linework and fill resulting polygons.
+                    if pending_lines:
+                        try:
+                            from shapely.geometry import (
+                                LineString as _LS,  # type: ignore[import-untyped]
+                            )
+                            from shapely.ops import (  # type: ignore[import-untyped]
+                                linemerge,
+                                polygonize,
+                                unary_union,
+                            )
+
+                            lines = [_LS(p) for p in pending_lines if len(p) >= 2]
+                            merged = linemerge(unary_union(lines))
+                            polys_from_lines = list(polygonize(merged))
+                            for shp in polys_from_lines:
+                                try:
+                                    # Ensure resulting polygons do not escape the
+                                    # configured fill outline.
+                                    if fill_outline is not None:
+                                        shp = shp.intersection(fill_outline)
+                                    if shp is None or shp.is_empty:
+                                        continue
+                                except Exception:
+                                    pass
+                                fill_strokes.extend(apply_fill(shp, spec))
+                        except Exception:
+                            # Best-effort fallback: ignore polygonize failure.
+                            pass
+                except Exception:
+                    LOGGER.exception("Pattern-targeted fill failed")
+
             if fill_polys_out is not None:
                 fill_polys_out.extend(fill_strokes)
                 if not spec.keep_pattern:
@@ -595,8 +688,13 @@ class PatternProcessingService:
         # Always supply a scaled outline so the layer tree has something to
         # show in its Outline row even when the user did not enable the
         # "include border" export option.
+        # Always return a scaled outline representation. If `border_polys`
+        # were supplied by the caller assume they should be scaled to match
+        # the requested preview scale; otherwise scale the source outline.
         outline_scaled = (
-            border_polys
+            self.apply_scale(
+                border_polys, scale[0], scale[1], orig_w=orig_w, orig_h=orig_h
+            )
             if border_polys is not None
             else self.apply_scale(
                 outline_polys, scale[0], scale[1], orig_w=orig_w, orig_h=orig_h
@@ -604,7 +702,7 @@ class PatternProcessingService:
         )
         # Display layering matches what the user expects to see:
         # outline (background) → pattern → fill (on top).
-        display_polys = (border_polys or []) + pattern_polys + fill_buf
+        display_polys = (outline_scaled or []) + pattern_polys + fill_buf
         return {
             "outline": outline_scaled,
             "pattern": pattern_polys,
@@ -652,10 +750,19 @@ class PatternProcessingService:
             )
             zone_pattern_polys.extend(zone_generated)
             zone_fill_polys.extend(fill_buf)
+            # Match zone polys to the global all_polys list using
+            # rounded signatures to tolerate minor numeric differences
+            # introduced by transforms. We pop indices as they are used to
+            # support duplicated polygons.
+            sig_to_indices: dict[tuple[tuple[float, float], ...], list[int]] = {}
+            for idx, cp in enumerate(all_polys):
+                sig = self._poly_signature(cp)
+                sig_to_indices.setdefault(sig, []).append(idx)
             for zp in zone["polys"]:
-                for idx, cp in enumerate(all_polys):
-                    if cp == zp:
-                        zone_poly_ids.add(idx)
+                sig = self._poly_signature(zp)
+                indices = sig_to_indices.get(sig)
+                if indices:
+                    zone_poly_ids.add(indices.pop(0))
 
         context_polys = [p for i, p in enumerate(all_polys) if i not in zone_poly_ids]
         display_polys = context_polys + zone_pattern_polys + zone_fill_polys

@@ -49,18 +49,62 @@ class SingleInstanceGuard(QObject):
         """Return True if this is the only running instance."""
         if self._lockfile is None:
             return True
-        if not self._lockfile.tryLock(50):
+        # Try to acquire the lock. If it fails, the lockfile may be stale
+        # (previous crash) or a real running instance may exist. Try to
+        # contact an existing server; if none responds, remove the stale
+        # artefacts and retry acquiring the lock so we can become the
+        # primary instance.
+        if self._lockfile.tryLock(50):
+            # Start a local server so existing instance can be signalled.
+            QLocalServer.removeServer(self._socket_name)
+            self._server = QLocalServer(self)
+            self._server.newConnection.connect(self._handle_new_connection)
+            if not self._server.listen(self._socket_name):
+                _LOG.warning(
+                    "Could not start single-instance server: %s",
+                    self._server.errorString(),
+                )
+            return True
+
+        # Could not lock: check whether a server is actually listening.
+        sock = QLocalSocket()
+        sock.connectToServer(self._socket_name)
+        if sock.waitForConnected(250):
+            # An instance is up and responding.
+            try:
+                sock.disconnectFromServer()
+            except Exception:
+                pass
             return False
-        # Start a local server so existing instance can be signalled.
-        QLocalServer.removeServer(self._socket_name)
-        self._server = QLocalServer(self)
-        self._server.newConnection.connect(self._handle_new_connection)
-        if not self._server.listen(self._socket_name):
-            _LOG.warning(
-                "Could not start single-instance server: %s",
-                self._server.errorString(),
-            )
-        return True
+
+        # No server responded. Treat the lock as stale: remove any
+        # leftover server socket and stale lock file, then retry.
+        _LOG.info(
+            "Single-instance lock present but no server responded; removing stale lock"
+        )
+        try:
+            QLocalServer.removeServer(self._socket_name)
+        except Exception:
+            pass
+        try:
+            if self._lock_path.exists():
+                self._lock_path.unlink()
+        except Exception:
+            pass
+
+        # Retry acquiring the lock once more.
+        if self._lockfile.tryLock(50):
+            QLocalServer.removeServer(self._socket_name)
+            self._server = QLocalServer(self)
+            self._server.newConnection.connect(self._handle_new_connection)
+            if not self._server.listen(self._socket_name):
+                _LOG.warning(
+                    "Could not start single-instance server after removing stale lock: %s",
+                    self._server.errorString(),
+                )
+            return True
+
+        return False
 
     def signal_existing(self, timeout_ms: int = 500) -> bool:
         """Send an activation message to the running instance."""

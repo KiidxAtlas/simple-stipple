@@ -115,7 +115,7 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
     elif not page._bg_visible_cb.isChecked():
         page._canvas.clear_background_image()
     page._export_all_btn.setEnabled(bool(polys))
-    page._export_sel_btn.setEnabled(False)
+    page._export_sel_action.setEnabled(False)
     page._suspend_state_changes = False
     page._update_trace_action_states()
     page._refresh_canvas_panels()

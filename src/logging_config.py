@@ -56,7 +56,7 @@ def configure_logging(level: str | int = "INFO") -> Path:
     root.addHandler(console)
 
     # Quiet noisy third-party libs by default.
-    for noisy in ("PIL", "matplotlib", "urllib3"):
+    for noisy in ("PIL", "matplotlib", "urllib3", "ezdxf"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     logging.getLogger(__name__).info("Logging initialized → %s", log_path)

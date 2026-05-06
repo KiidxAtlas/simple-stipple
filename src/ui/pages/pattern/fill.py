@@ -40,6 +40,8 @@ class FillSpec:
     spacing: float = 1.0
     angle_deg: float = 0.0
     keep_pattern: bool = True  # if False, drop pattern strokes from output
+    target_outline: bool = True  # fill the input outline region
+    target_pattern: bool = False  # fill the closed pattern strokes
     inset: float = 0.0  # shrink fill region by this many mm before hatching
 
     # Allow consumers to stash extra hints without tripping validation.
@@ -70,6 +72,8 @@ class FillSpec:
             "spacing": float(self.spacing),
             "angle_deg": float(self.angle_deg),
             "keep_pattern": bool(self.keep_pattern),
+            "target_outline": bool(self.target_outline),
+            "target_pattern": bool(self.target_pattern),
             "inset": float(self.inset),
         }
 
@@ -95,6 +99,9 @@ class FillSpec:
             spacing = 1.0
         angle_deg = float(data.get("angle_deg", data.get("angle", 0.0)) or 0.0)
         keep_pattern = bool(data.get("keep_pattern", data.get("keep_outline", True)))
+        # Default targets preserve historical behavior: fill the outline only.
+        target_outline = bool(data.get("target_outline", True))
+        target_pattern = bool(data.get("target_pattern", False))
         inset = float(data.get("inset", 0.0) or 0.0)
         if inset < 0:
             inset = 0.0
@@ -103,6 +110,8 @@ class FillSpec:
             spacing=spacing,
             angle_deg=angle_deg,
             keep_pattern=keep_pattern,
+            target_outline=target_outline,
+            target_pattern=target_pattern,
             inset=inset,
         )
 
