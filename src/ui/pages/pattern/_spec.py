@@ -14,6 +14,9 @@ class ParamField:
     kind: str = "float"  # "float" | "int" | "checkbox" | "combobox"
     items: list[str] = field(default_factory=list)  # choices for "combobox"
     hint: str | None = None  # optional hint label appended after this field
+    param_key: str = ""  # key in the generator params dict; defaults to attr[1:]
+    minimum: float | None = None  # lower bound for numeric fields
+    maximum: float | None = None  # upper bound for numeric fields
 
 
 # ── Parameter specs for each named pattern ────────────────────────────────────
@@ -22,144 +25,72 @@ class ParamField:
 
 PARAM_SPECS: dict[str, list[ParamField]] = {
     "Honeycomb": [
-        ParamField("_hex_r", "Hex size (mm)", "1.75", "Radius of each hexagonal cell"),
-        ParamField("_hex_gap", "Gap (mm)", "0.5", "Spacing between adjacent hexagons"),
+        ParamField("_hex_r", "Hex size (mm)", "1.75", "Radius of each hexagonal cell", param_key="r", minimum=0.001, maximum=1000),
+        ParamField("_hex_gap", "Gap (mm)", "0.5", "Spacing between adjacent hexagons", param_key="gap", minimum=0.0, maximum=1000),
     ],
     "Gradient Honeycomb": [
-        ParamField(
-            "_grad_r_min",
-            "Min size (mm)",
-            "0.8",
-            "Smallest hex cell size at one end of the gradient",
-        ),
-        ParamField(
-            "_grad_r_max",
-            "Max size (mm)",
-            "2.5",
-            "Largest hex cell size at the other end",
-        ),
-        ParamField("_grad_gap", "Gap (mm)", "0.5", "Spacing between hexagons"),
+        ParamField("_grad_r_min", "Min size (mm)", "0.8", "Smallest hex cell size at one end of the gradient", param_key="r_min", minimum=0.0, maximum=1000),
+        ParamField("_grad_r_max", "Max size (mm)", "2.5", "Largest hex cell size at the other end", param_key="r_max", minimum=0.001, maximum=1000),
+        ParamField("_grad_gap", "Gap (mm)", "0.5", "Spacing between hexagons", param_key="gap", minimum=0.0, maximum=1000),
         ParamField(
             "_grad_angle",
             "Direction (°)",
             "0",
             "Gradient direction in degrees (0 = left to right)",
             hint="0° = left→right  ·  90° = vertical",
+            param_key="angle",
         ),
     ],
     "Basketweave": [
-        ParamField(
-            "_basket_strip_w", "Strip width (mm)", "2.0", "Width of each woven strip"
-        ),
-        ParamField(
-            "_basket_strip_l", "Strip length (mm)", "8.0", "Length of each woven strip"
-        ),
-        ParamField("_basket_gap", "Gap (mm)", "0.2", "Gap between woven strips"),
+        ParamField("_basket_strip_w", "Strip width (mm)", "2.0", "Width of each woven strip", param_key="strip_w", minimum=0.001, maximum=1000),
+        ParamField("_basket_strip_l", "Strip length (mm)", "8.0", "Length of each woven strip", param_key="strip_l", minimum=0.001, maximum=1000),
+        ParamField("_basket_gap", "Gap (mm)", "0.2", "Gap between woven strips", param_key="gap", minimum=0.0, maximum=1000),
     ],
     "Braid": [
-        ParamField(
-            "_braid_strip_w",
-            "Strip width (mm)",
-            "2.0",
-            "Width of each diagonal braid strip",
-        ),
+        ParamField("_braid_strip_w", "Strip width (mm)", "2.0", "Width of each diagonal braid strip", param_key="strip_width", minimum=0.001, maximum=1000),
         ParamField(
             "_braid_spacing",
             "Spacing (mm)",
             "3.0",
             "Gap between parallel diagonal strips",
             hint="Creates interlocking ±45° weave effect",
+            param_key="spacing",
+            minimum=0.001,
+            maximum=1000,
         ),
     ],
     "Fish Scale": [
-        ParamField(
-            "_fish_w",
-            "Scale width (mm)",
-            "3.0",
-            "Horizontal span of each fish-scale arc",
-        ),
-        ParamField(
-            "_fish_h",
-            "Scale height (mm)",
-            "2.0",
-            "Vertical height of each fish-scale arc",
-        ),
+        ParamField("_fish_w", "Scale width (mm)", "3.0", "Horizontal span of each fish-scale arc", param_key="sw", minimum=0.001, maximum=1000),
+        ParamField("_fish_h", "Scale height (mm)", "2.0", "Vertical height of each fish-scale arc", param_key="sh", minimum=0.001, maximum=1000),
     ],
     "Stipple Dots": [
-        ParamField("_stip_r", "Dot radius (mm)", "0.4", "Radius of each stipple dot"),
-        ParamField(
-            "_stip_spacing",
-            "Spacing (mm)",
-            "1.2",
-            "Centre-to-centre distance between dots",
-        ),
-        ParamField(
-            "_stip_layout",
-            "Interlaced (offset grid)",
-            "",
-            "Use interlaced offset grid instead of Poisson-disk distribution",
-            kind="checkbox",
-        ),
+        ParamField("_stip_r", "Dot radius (mm)", "0.4", "Radius of each stipple dot", param_key="r", minimum=0.001, maximum=100),
+        ParamField("_stip_spacing", "Spacing (mm)", "1.2", "Centre-to-centre distance between dots", param_key="spacing", minimum=0.001, maximum=1000),
+        ParamField("_stip_layout", "Interlaced (offset grid)", "", "Use interlaced offset grid instead of Poisson-disk distribution", kind="checkbox", param_key="interlaced"),
     ],
     "Brick": [
-        ParamField("_brick_w", "Brick width (mm)", "4.0", "Width of each brick"),
-        ParamField("_brick_h", "Brick height (mm)", "2.0", "Height of each brick"),
-        ParamField("_brick_gap", "Gap (mm)", "0.5", "Mortar gap between bricks"),
+        ParamField("_brick_w", "Brick width (mm)", "4.0", "Width of each brick", param_key="brick_w", minimum=0.001, maximum=1000),
+        ParamField("_brick_h", "Brick height (mm)", "2.0", "Height of each brick", param_key="brick_h", minimum=0.001, maximum=1000),
+        ParamField("_brick_gap", "Gap (mm)", "0.5", "Mortar gap between bricks", param_key="gap", minimum=0.0, maximum=1000),
     ],
     "Diagonal Lines": [
-        ParamField(
-            "_diag_spacing",
-            "Line spacing (mm)",
-            "1.0",
-            "Distance between parallel diagonal lines",
-        ),
-        ParamField(
-            "_diag_angle", "Angle (°)", "45", "Angle of the diagonal lines in degrees"
-        ),
+        ParamField("_diag_spacing", "Line spacing (mm)", "1.0", "Distance between parallel diagonal lines", param_key="spacing", minimum=0.001, maximum=1000),
+        ParamField("_diag_angle", "Angle (°)", "45", "Angle of the diagonal lines in degrees", param_key="angle"),
     ],
     "Square Grid": [
-        ParamField(
-            "_sq_spacing", "Grid spacing (mm)", "1.0", "Distance between grid lines"
-        ),
+        ParamField("_sq_spacing", "Grid spacing (mm)", "1.0", "Distance between grid lines", param_key="spacing", minimum=0.001, maximum=1000),
     ],
     "Mesh": [
-        ParamField(
-            "_mesh_r", "Circle radius (mm)", "0.35", "Radius of each mesh circle"
-        ),
-        ParamField(
-            "_mesh_spacing",
-            "Grid spacing (mm)",
-            "1.2",
-            "Centre-to-centre distance between mesh circles",
-        ),
+        ParamField("_mesh_r", "Circle radius (mm)", "0.35", "Radius of each mesh circle", param_key="r", minimum=0.001, maximum=100),
+        ParamField("_mesh_spacing", "Grid spacing (mm)", "1.2", "Centre-to-centre distance between mesh circles", param_key="spacing", minimum=0.001, maximum=1000),
     ],
     "Concentric Rings": [
-        ParamField(
-            "_conc_spacing",
-            "Ring spacing (mm)",
-            "1.5",
-            "Distance between concentric rings",
-        ),
+        ParamField("_conc_spacing", "Ring spacing (mm)", "1.5", "Distance between concentric rings", param_key="spacing", minimum=0.1, maximum=500),
     ],
     "Wave Fill": [
-        ParamField(
-            "_wave_spacing",
-            "Row spacing (mm)",
-            "1.5",
-            "Vertical distance between wave rows",
-        ),
-        ParamField(
-            "_wave_amplitude",
-            "Amplitude (mm)",
-            "0.5",
-            "Peak-to-centre height of each wave",
-        ),
-        ParamField(
-            "_wave_wavelength",
-            "Wavelength (mm)",
-            "3.0",
-            "Horizontal length of one full wave cycle",
-        ),
+        ParamField("_wave_spacing", "Row spacing (mm)", "1.5", "Vertical distance between wave rows", param_key="spacing", minimum=0.001, maximum=1000),
+        ParamField("_wave_amplitude", "Amplitude (mm)", "0.5", "Peak-to-centre height of each wave", param_key="amplitude", maximum=500),
+        ParamField("_wave_wavelength", "Wavelength (mm)", "3.0", "Horizontal length of one full wave cycle", param_key="wavelength", minimum=0.1, maximum=1000),
     ],
     "Sunburst": [
         ParamField(
@@ -168,40 +99,27 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "5.0",
             "Angular spacing between spokes (smaller = more spokes)",
             hint="5° → 36 spokes  ·  10° → 18 spokes",
+            param_key="spacing_deg",
+            minimum=0.5,
+            maximum=180,
         ),
     ],
     "Voronoi": [
-        ParamField(
-            "_vor_cells",
-            "Cell count",
-            "60",
-            "Number of random Voronoi cells to generate",
-            kind="int",
-        ),
-        ParamField(
-            "_vor_gap", "Gap (mm)", "0.15", "Inset distance between Voronoi cells"
-        ),
-        ParamField(
-            "_vor_seed",
-            "Seed",
-            "42",
-            "Random seed for reproducible cell placement",
-            kind="int",
-        ),
+        ParamField("_vor_cells", "Cell count", "60", "Number of random Voronoi cells to generate", kind="int", param_key="n_cells", minimum=2, maximum=10000),
+        ParamField("_vor_gap", "Gap (mm)", "0.15", "Inset distance between Voronoi cells", param_key="gap", minimum=0.0, maximum=1000),
+        ParamField("_vor_seed", "Seed", "42", "Random seed for reproducible cell placement", kind="int", param_key="seed"),
     ],
     "Penrose Tiling": [
-        ParamField(
-            "_penrose_scale",
-            "Tile size (mm)",
-            "3.0",
-            "Approximate size of each Penrose tile",
-        ),
+        ParamField("_penrose_scale", "Tile size (mm)", "3.0", "Approximate size of each Penrose tile", param_key="scale", minimum=0.1, maximum=1000),
         ParamField(
             "_penrose_gap",
             "Gap (mm)",
             "0.1",
             "Spacing between adjacent tiles",
             hint="Aperiodic kite-and-dart tiling (P2)",
+            param_key="gap",
+            minimum=0.0,
+            maximum=1000,
         ),
     ],
     "Topographic": [
@@ -211,105 +129,50 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "1.5",
             "Distance between successive contour lines",
             hint="Inward offset contours from the outline edge",
+            param_key="spacing",
+            minimum=0.1,
+            maximum=500,
         ),
     ],
     "Hilbert Curve": [
-        ParamField(
-            "_hilbert_order", "Order", "5", "Curve recursion depth (1-8)", kind="int"
-        ),
+        ParamField("_hilbert_order", "Order", "5", "Curve recursion depth (1-8)", kind="int", param_key="order", minimum=1, maximum=8),
         ParamField(
             "_hilbert_margin",
             "Margin (mm)",
             "1.0",
             "Inset from outline bounds",
             hint="Higher order = denser path",
+            param_key="margin",
+            minimum=0.0,
+            maximum=1000,
         ),
     ],
     "Reaction Diffuse": [
-        ParamField(
-            "_rd_pattern",
-            "Preset",
-            "labyrinth",
-            "Named Gray-Scott reaction-diffusion preset",
-            kind="combobox",
-            items=["labyrinth", "spots", "stripes", "maze"],
-        ),
-        ParamField("_rd_cell", "Cell (mm)", "0.8", "Simulation grid cell size"),
-        ParamField("_rd_iters", "Iterations", "1200", "Simulation steps", kind="int"),
-        ParamField(
-            "_rd_threshold", "Threshold", "0.22", "Contour extraction threshold (0-1)"
-        ),
-        ParamField(
-            "_rd_seed", "Seed", "42", "Random seed for deterministic output", kind="int"
-        ),
+        ParamField("_rd_pattern", "Preset", "labyrinth", "Named Gray-Scott reaction-diffusion preset", kind="combobox", items=["labyrinth", "spots", "stripes", "maze"], param_key="pattern"),
+        ParamField("_rd_cell", "Cell (mm)", "0.8", "Simulation grid cell size", param_key="cell", minimum=0.1, maximum=10000),
+        ParamField("_rd_iters", "Iterations", "1200", "Simulation steps", kind="int", param_key="iters", minimum=10, maximum=8000),
+        ParamField("_rd_threshold", "Threshold", "0.22", "Contour extraction threshold (0-1)", param_key="threshold", minimum=0.01, maximum=0.99),
+        ParamField("_rd_seed", "Seed", "42", "Random seed for deterministic output", kind="int", param_key="seed"),
     ],
     "Celtic Knot": [
-        ParamField("_celtic_cell", "Cell size (mm)", "5.0", "Grid cell size"),
-        ParamField(
-            "_celtic_line_w", "Line width (mm)", "1.0", "Width of the knot band"
-        ),
-        ParamField(
-            "_celtic_gap",
-            "Gap (mm)",
-            "0.2",
-            "Gap at crossings for the over-under illusion",
-        ),
+        ParamField("_celtic_cell", "Cell size (mm)", "5.0", "Grid cell size", param_key="cell_size", minimum=0.5, maximum=1000),
+        ParamField("_celtic_line_w", "Line width (mm)", "1.0", "Width of the knot band", param_key="line_width", minimum=0.1, maximum=100),
+        ParamField("_celtic_gap", "Gap (mm)", "0.2", "Gap at crossings for the over-under illusion", param_key="gap", minimum=0.0, maximum=100),
     ],
     "Lissajous": [
-        ParamField("_liss_freq_x", "Freq X", "3", "Horizontal frequency", kind="int"),
-        ParamField("_liss_freq_y", "Freq Y", "2", "Vertical frequency", kind="int"),
-        ParamField(
-            "_liss_spacing",
-            "Row spacing (mm)",
-            "2.0",
-            "Vertical offset between repeated curves",
-        ),
-        ParamField(
-            "_liss_amplitude", "Amplitude (mm)", "5.0", "Peak amplitude of each figure"
-        ),
+        ParamField("_liss_freq_x", "Freq X", "3", "Horizontal frequency", kind="int", param_key="freq_x", minimum=1, maximum=20),
+        ParamField("_liss_freq_y", "Freq Y", "2", "Vertical frequency", kind="int", param_key="freq_y", minimum=1, maximum=20),
+        ParamField("_liss_spacing", "Row spacing (mm)", "2.0", "Vertical offset between repeated curves", param_key="spacing", minimum=0.1, maximum=1000),
+        ParamField("_liss_amplitude", "Amplitude (mm)", "5.0", "Peak amplitude of each figure", param_key="amplitude", minimum=0.1, maximum=1000),
     ],
     "Golden Spiral": [
-        ParamField(
-            "_golden_turns",
-            "Turns",
-            "4.5",
-            "How many spiral turns to draw",
-        ),
-        ParamField(
-            "_golden_spacing",
-            "Spacing hint (mm)",
-            "1.5",
-            "Controls point density / visual smoothness",
-        ),
-        ParamField(
-            "_golden_dir",
-            "Direction",
-            "ccw",
-            "Spiral winding direction",
-            kind="combobox",
-            items=["ccw", "cw"],
-        ),
+        ParamField("_golden_turns", "Turns", "4.5", "How many spiral turns to draw", param_key="turns", minimum=1.0, maximum=30.0),
+        ParamField("_golden_spacing", "Spacing hint (mm)", "1.5", "Controls point density / visual smoothness", param_key="spacing_mm", minimum=0.1, maximum=100.0),
+        ParamField("_golden_dir", "Direction", "ccw", "Spiral winding direction", kind="combobox", items=["ccw", "cw"], param_key="direction"),
     ],
     "Rose Curve": [
-        ParamField(
-            "_rose_petals",
-            "Petals",
-            "7",
-            "Number of rose petals",
-            kind="int",
-        ),
-        ParamField(
-            "_rose_copies",
-            "Copies",
-            "2",
-            "Overlay count with phase offsets",
-            kind="int",
-        ),
-        ParamField(
-            "_rose_margin",
-            "Margin (mm)",
-            "1.0",
-            "Inset margin from outline bounds",
-        ),
+        ParamField("_rose_petals", "Petals", "7", "Number of rose petals", kind="int", param_key="petals", minimum=2, maximum=24),
+        ParamField("_rose_copies", "Copies", "2", "Overlay count with phase offsets", kind="int", param_key="copies", minimum=1, maximum=8),
+        ParamField("_rose_margin", "Margin (mm)", "1.0", "Inset margin from outline bounds", param_key="margin_mm", minimum=0.0, maximum=1000.0),
     ],
 }

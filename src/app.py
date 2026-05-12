@@ -27,9 +27,9 @@ from src.backend.document.state import (
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
-from src.ui.components.common.command_palette import CommandPaletteDialog
-from src.ui.components.common.factories import _info_chip, _surface_frame
-from src.ui.components.common.update_dialog import UpdateDialog
+from src.ui.widgets.command_palette import CommandPaletteDialog
+from src.ui.core.factories import info_chip, surface_frame
+from src.ui.widgets.update_dialog import UpdateDialog
 from src.ui.shell.registry import PageSpec, default_page_specs
 from src.ui.shell.runtime import PageRuntime
 from src.ui.shell.settings_dialog import SettingsDialog
@@ -162,7 +162,7 @@ class App(QMainWindow):
         return self._page_runtime.has_workspace_content()
 
     def _build_shell_header(self) -> QWidget:
-        shell = _surface_frame("panel")
+        shell = surface_frame("panel")
         shell.setProperty("role", "hero")
         layout = QHBoxLayout(shell)
         layout.setContentsMargins(16, 10, 16, 10)
@@ -184,7 +184,7 @@ class App(QMainWindow):
         layout.addWidget(self._workspace_title_label)
 
         # Status chip
-        self._workspace_state_chip = _info_chip("Saved", "success")
+        self._workspace_state_chip = info_chip("Saved", "success")
         layout.addWidget(self._workspace_state_chip)
 
         layout.addStretch()

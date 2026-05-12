@@ -7,18 +7,18 @@ from typing import Any
 
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
-from src.ui.components.canvas.widgets import CanvasPrecisionBar, DxfLayersTree
-from src.ui.components.common.factories import _canvas_toolbar
-from src.ui.components.layer_tree.controller import CanvasLayerSidebarController
-from src.ui.components.layer_tree.helpers import (
+from src.ui.core.factories import canvas_toolbar
+from src.ui.widgets.layer_tree import (
+    CanvasLayerSidebarController,
+    DxfLayersTree,
+    LayerRowsBuilder,
+    LayerTreeState,
     build_layer_row,
     build_shape_rows,
     describe_polyline,
     hidden_bucket,
 )
-
-LayerTreeState = dict[str, dict[str, set[int]]]
-LayerRowsBuilder = Callable[[LayerTreeState], list[dict[str, Any]]]
+from src.ui.widgets.precision_bar import CanvasPrecisionBar
 
 
 class CanvasToolbarModule(QWidget):
@@ -42,7 +42,7 @@ class CanvasToolbarModule(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        toolbar, mode_buttons, selection_label = _canvas_toolbar(
+        toolbar, mode_buttons, selection_label = canvas_toolbar(
             self._handle_mode,
             self._handle_fit,
             modes=modes,

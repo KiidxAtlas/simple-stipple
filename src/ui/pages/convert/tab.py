@@ -20,16 +20,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.core.base_page import BasePage
+
 from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.backend.dxf.io import load_dxf_polylines
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.components.canvas.modules import CanvasGridModule
-from src.ui.components.canvas.widgets import CanvasStatusStrip
-from src.ui.components.common.factories import (
-    _content_splitter,
-    _surface_frame,
-)
+from src.ui.canvas.modules import CanvasGridModule
+from src.ui.core.factories import content_splitter, surface_frame
+from src.ui.widgets.status_strip import CanvasStatusStrip
 from src.ui.pages.convert.subtabs import (
     FixerSubTab,
     FviSubTab,
@@ -40,7 +39,7 @@ from src.ui.pages.convert.subtabs import (
 LOGGER = logging.getLogger(__name__)
 
 
-class ConvertPage(QWidget):
+class ConvertPage(BasePage):
     """Convert page — conversion and repair helpers for vector workflows."""
 
     _TOOL_DESCS = (
@@ -112,7 +111,7 @@ class ConvertPage(QWidget):
         left.addWidget(self._tool_stack, stretch=1)
 
         # ── Manual sidebar: scroll area + sticky footer ───────────────────────
-        sidebar_frame = _surface_frame("sidebar")
+        sidebar_frame = surface_frame("sidebar")
         sidebar_frame.setMinimumWidth(320)
         sidebar_frame.setMaximumWidth(400)
         sidebar_outer = QVBoxLayout(sidebar_frame)
@@ -167,7 +166,7 @@ class ConvertPage(QWidget):
         self._left_panel = sidebar_frame
 
         # ── Right panel: empty state → canvas preview ─────────────────────────
-        right_w = _surface_frame("canvas")
+        right_w = surface_frame("canvas")
         right = QVBoxLayout(right_w)
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
@@ -236,7 +235,7 @@ class ConvertPage(QWidget):
         self._right_stack.setCurrentIndex(0)
 
         # ── Splitter ──────────────────────────────────────────────────────────
-        self._splitter = _content_splitter(self._left_panel, right_w, sizes=(320, 920))
+        self._splitter = content_splitter(self._left_panel, right_w, sizes=(320, 920))
         root.addWidget(self._splitter)
 
         # ── Connect signals ───────────────────────────────────────────────────

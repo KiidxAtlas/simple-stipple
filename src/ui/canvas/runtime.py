@@ -15,7 +15,7 @@ from src.backend.document.actions import (
 from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines
 from src.ui.canvas.graph_adapter import CanvasGraphAdapter
-from src.ui.components.layer_tree.helpers import (
+from src.ui.widgets.layer_tree import (
     build_layer_row,
     build_shape_rows,
     describe_polyline,

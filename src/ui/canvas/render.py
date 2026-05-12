@@ -92,6 +92,15 @@ from src.ui.canvas._constants import (
 )
 
 
+_FONT_HEL_9 = QFont("Helvetica", 9)
+_FONT_HEL_9_DEMIBOLD = QFont("Helvetica", 9, QFont.Weight.DemiBold)
+_FONT_HEL_10 = QFont("Helvetica", 10)
+_FONT_HEL_10_BOLD = QFont("Helvetica", 10, QFont.Weight.Bold)
+_FONT_HEL_11_BOLD = QFont("Helvetica", 11, QFont.Weight.Bold)
+_FONT_HEL_14_BOLD = QFont("Helvetica", 14, QFont.Weight.Bold)
+_FONT_MENLO_9 = QFont("Menlo", 9)
+
+
 def _pil_to_qpixmap(pil_img: PILImage.Image) -> QPixmap:
     """Convert a PIL Image to QPixmap."""
     if pil_img.mode != "RGBA":
@@ -292,7 +301,7 @@ class CanvasRenderer:
 
             # "Close" label
             painter.setPen(_SNAP_CLOSE)
-            painter.setFont(QFont("Helvetica", 11, QFont.Weight.Bold))
+            painter.setFont(_FONT_HEL_11_BOLD)
             painter.drawText(QPointF(start_cx + 16, start_cy + 5), "Close")
 
         # ── Vertex dots (larger, with outline ring) ──
@@ -339,7 +348,7 @@ class CanvasRenderer:
                     mid_cx = (last[0] + cur_c[0]) / 2
                     mid_cy = (last[1] + cur_c[1]) / 2
                     painter.setPen(QColor("#4a9eff"))
-                    painter.setFont(QFont("Helvetica", 11, QFont.Weight.Bold))
+                    painter.setFont(_FONT_HEL_11_BOLD)
                     painter.drawText(
                         QPointF(mid_cx + 8, mid_cy - 6), self._draw_constraint
                     )
@@ -362,17 +371,7 @@ class CanvasRenderer:
                 mid_x = (last_c[0] + cur_c2[0]) / 2
                 mid_y = (last_c[1] + cur_c2[1]) / 2
                 seg_text = f"{seg_len:.2f}"
-                painter.setFont(QFont("Helvetica", 9))
-                fm = QFontMetrics(painter.font())
-                tw = fm.horizontalAdvance(seg_text)
-                # Background pill
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QBrush(_BADGE_BG))
-                painter.drawRoundedRect(
-                    QRectF(mid_x - tw / 2 - 4, mid_y - 8 - 12, tw + 8, 16), 3, 3
-                )
-                painter.setPen(QColor("#ffffff"))
-                painter.drawText(QPointF(mid_x - tw / 2, mid_y - 8 - 1), seg_text)
+                self._draw_badge(painter, mid_x, mid_y - 12, seg_text, 10)
 
         # ── Cumulative polyline length and point count (top-right badge) ──
         if self._draw_pts:
@@ -394,11 +393,20 @@ class CanvasRenderer:
             self._draw_badge(painter, vw - 100, 50, summary_text, 10)
 
     def _paint_draw_shape_preview(self, painter: QPainter) -> None:
-        if (
-            not self._draw_shape_preview_active
-            or self._draw_shape_anchor_w is None
-            or self._draw_shape_cursor_w is None
-        ):
+        if not self._draw_shape_preview_active or self._draw_shape_anchor_w is None:
+            return
+
+        # Always draw anchor dot (visible even before the second click)
+        ax, ay = self._draw_shape_anchor_w
+        acx, acy = self._w2c(ax, ay)
+        painter.setPen(QPen(QColor(245, 166, 35, 140), 1.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QPointF(acx, acy), _DRAW_VERT_R + 2, _DRAW_VERT_R + 2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(_DRAW_COLOR))
+        painter.drawEllipse(QPointF(acx, acy), _DRAW_VERT_R, _DRAW_VERT_R)
+
+        if self._draw_shape_cursor_w is None:
             return
         sx, sy = self._draw_shape_anchor_w
         ex, ey = self._draw_shape_cursor_w
@@ -412,7 +420,9 @@ class CanvasRenderer:
         if self._draw_primitive == "rectangle":
             poly = build_rect_poly(cx, cy, w, h)
         elif self._draw_primitive == "circle":
-            poly = build_circle_poly(cx, cy, min(w, h) / 2.0)
+            # Center-first: anchor = center, cursor = rim point
+            radius = math.hypot(ex - sx, ey - sy)
+            poly = build_circle_poly(sx, sy, radius)
         elif self._draw_primitive == "ellipse":
             poly = build_ellipse_poly(cx, cy, w / 2.0, h / 2.0)
         elif self._draw_primitive == "polygon":
@@ -429,6 +439,8 @@ class CanvasRenderer:
 
         if len(poly) < 2:
             return
+
+        # Draw shape outline
         pen = QPen(QColor("#f5a623"), 1.5, Qt.PenStyle.DashLine)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -439,6 +451,74 @@ class CanvasRenderer:
             px, py = self._w2c(*pt)
             path.lineTo(px, py)
         painter.drawPath(path)
+
+        # Dimension annotations — circle gets radius line + R badge;
+        # other shapes get W/H badges at bounding box edges.
+        has_hud = getattr(self, "_shape_w_edit", None) is not None
+        if self._draw_primitive == "circle":
+            # Draw a dashed radius line from center to cursor
+            radius = math.hypot(ex - sx, ey - sy)
+            scx, scy = self._w2c(sx, sy)
+            ecx, ecy = self._w2c(ex, ey)
+            painter.setPen(QPen(QColor(245, 166, 35, 100), 1.0, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(scx, scy), QPointF(ecx, ecy))
+            # Draw small tick marks at the four quadrant intersections
+            for angle_deg in (0, 90, 180, 270):
+                angle_rad = math.radians(angle_deg)
+                qx = sx + radius * math.cos(angle_rad)
+                qy = sy + radius * math.sin(angle_rad)
+                qcx, qcy = self._w2c(qx, qy)
+                dx_t = math.cos(angle_rad + math.pi / 2) * 4
+                dy_t = math.sin(angle_rad + math.pi / 2) * 4
+                painter.setPen(QPen(QColor(245, 166, 35, 160), 1.2))
+                painter.drawLine(
+                    QPointF(qcx - dx_t, qcy - dy_t),
+                    QPointF(qcx + dx_t, qcy + dy_t),
+                )
+            # "R: X.XX" badge near cursor (not near anchor), skip if HUD showing
+            if not has_hud:
+                r_text = f"R  {radius:.2f}"
+                painter.setFont(_FONT_HEL_9)
+                fm = QFontMetrics(painter.font())
+                tw = fm.horizontalAdvance(r_text)
+                badge_x = ecx + 10
+                badge_y = ecy - 8
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(_BADGE_BG))
+                painter.drawRoundedRect(
+                    QRectF(badge_x - 4, badge_y - 12, tw + 8, 16), 3, 3
+                )
+                painter.setPen(QColor("#f5a623"))
+                painter.drawText(QPointF(badge_x, badge_y), r_text)
+        elif not has_hud:
+            bx0c, by0c = self._w2c(min(sx, ex), max(sy, ey))
+            bx1c, by1c = self._w2c(max(sx, ex), min(sy, ey))
+            mid_btm_x = (bx0c + bx1c) / 2
+            mid_rgt_y = (by0c + by1c) / 2
+            painter.setFont(_FONT_HEL_9)
+            fm = QFontMetrics(painter.font())
+            w_text = f"{w:.2f}"
+            h_text = f"{h:.2f}"
+            tw_w = fm.horizontalAdvance(w_text)
+            tw_h = fm.horizontalAdvance(h_text)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(_BADGE_BG))
+            painter.drawRoundedRect(
+                QRectF(mid_btm_x - tw_w / 2 - 4, max(by0c, by1c) + 6, tw_w + 8, 16),
+                3,
+                3,
+            )
+            painter.setPen(QColor("#f5a623"))
+            painter.drawText(
+                QPointF(mid_btm_x - tw_w / 2, max(by0c, by1c) + 19), w_text
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(_BADGE_BG))
+            painter.drawRoundedRect(
+                QRectF(max(bx0c, bx1c) + 6, mid_rgt_y - 8, tw_h + 8, 16), 3, 3
+            )
+            painter.setPen(QColor("#f5a623"))
+            painter.drawText(QPointF(max(bx0c, bx1c) + 10, mid_rgt_y + 5), h_text)
 
     def _paint_arc_preview(self, painter: QPainter) -> None:
         if self._draw_primitive != "arc":
@@ -584,6 +664,12 @@ class CanvasRenderer:
             painter.setPen(QPen(_SNAP_CLOSE, 1.5))
             painter.drawLine(QPointF(_dsx - 4, _dsy - 4), QPointF(_dsx + 4, _dsy + 4))
             painter.drawLine(QPointF(_dsx - 4, _dsy + 4), QPointF(_dsx + 4, _dsy - 4))
+        elif snap_t == "circle_rim":
+            # Diamond with an inner dot — signals radius lock
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(_dsx, _dsy), 4, 4)
+            painter.setBrush(QBrush(_SNAP_CLOSE))
+            painter.drawEllipse(QPointF(_dsx, _dsy), 2, 2)
 
         # Snap label pill — above the snap point
         mode = getattr(self, "_mode", "")
@@ -593,6 +679,8 @@ class CanvasRenderer:
             _label = "Midpoint"
         elif snap_t == "edge":
             _label = "On Edge"
+        elif snap_t == "circle_rim":
+            _label = "Through Point"
         else:
             _label = ""
         if _label:
@@ -603,7 +691,7 @@ class CanvasRenderer:
 
             badge = cache.get(_label)
             if badge is None:
-                font = QFont("Helvetica", 9, QFont.Weight.DemiBold)
+                font = _FONT_HEL_9_DEMIBOLD
                 fm = QFontMetrics(font)
                 tw = fm.horizontalAdvance(_label)
                 badge_w = int(math.ceil(tw + 8))
@@ -770,7 +858,7 @@ class CanvasRenderer:
         painter.setPen(QPen(color, 1))
         painter.setBrush(QBrush(bg))
         painter.drawRect(QRectF(x1, y1, bw, bh))
-        painter.setFont(QFont("Helvetica", 10))
+        painter.setFont(_FONT_HEL_10)
         painter.setPen(color)
         painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
         self._mbtn_rect = (x1, y1, x2, y2)
@@ -825,14 +913,14 @@ class CanvasRenderer:
             painter.setBrush(QBrush(QColor("#001522")))
             painter.drawRect(QRectF(mx - 100, badge_y - 14, 200, 32))
             painter.setPen(QColor("#ffffff"))
-            painter.setFont(QFont("Helvetica", 11, QFont.Weight.Bold))
+            painter.setFont(_FONT_HEL_11_BOLD)
             painter.drawText(
                 QRectF(mx - 100, badge_y - 14, 200, 18),
                 Qt.AlignmentFlag.AlignCenter,
                 f"{dist:.2f} mm  {angle_deg:.1f}\u00b0",
             )
             painter.setPen(_MEASURE_COLOR)
-            painter.setFont(QFont("Helvetica", 9))
+            painter.setFont(_FONT_HEL_9)
             painter.drawText(
                 QRectF(mx - 100, badge_y, 200, 18),
                 Qt.AlignmentFlag.AlignCenter,
@@ -844,9 +932,127 @@ class CanvasRenderer:
             painter.setBrush(QBrush(QColor("#001522")))
             painter.drawRect(QRectF(mx - 120, badge_y + 8, 240, 18))
             painter.setPen(_MEASURE_COLOR)
-            painter.setFont(QFont("Helvetica", 9))
+            painter.setFont(_FONT_HEL_9)
             painter.drawText(
                 QRectF(mx - 120, badge_y + 8, 240, 18),
                 Qt.AlignmentFlag.AlignCenter,
                 f"\u0394x {dx:.2f}  \u0394y {dy:.2f}  {angle_deg:.1f}\u00b0  \u00b7  click to reset",
             )
+
+    def _paint_help_overlay(self, painter: QPainter) -> None:
+        """Draw a centered shortcut reference overlay when _help_visible is True."""
+        vp = self.viewport()
+        vw, vh = vp.width(), vp.height()
+
+        panel_w, panel_h = 560, 400
+        px = (vw - panel_w) // 2
+        py = (vh - panel_h) // 2
+
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Background panel
+        painter.setPen(QPen(QColor(80, 100, 140, 180), 1))
+        painter.setBrush(QBrush(QColor(14, 18, 30, 230)))
+        painter.drawRoundedRect(QRectF(px, py, panel_w, panel_h), 10, 10)
+
+        # Header
+        painter.setPen(QColor("#ffffff"))
+        painter.setFont(_FONT_HEL_14_BOLD)
+        painter.drawText(
+            QRectF(px, py + 14, panel_w, 28),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            "Keyboard Shortcuts  ·  press ? to close",
+        )
+
+        # Divider
+        painter.setPen(QPen(QColor(80, 100, 140, 100), 1))
+        painter.drawLine(QPointF(px + 20, py + 50), QPointF(px + panel_w - 20, py + 50))
+
+        # Two-column shortcut definitions
+        col_groups = [
+            # Left column
+            [
+                (
+                    "Navigation",
+                    [
+                        ("Space / MMB drag", "Pan"),
+                        ("Scroll", "Zoom"),
+                        ("+ / -", "Zoom in / out"),
+                        ("F", "Fit to view"),
+                        ("G", "Toggle grid"),
+                        ("S", "Toggle snap"),
+                        ("[ / ]", "Decrease / increase grid"),
+                    ],
+                ),
+                (
+                    "Select mode",
+                    [
+                        ("D", "Enter draw mode"),
+                        ("E", "Enter edit mode"),
+                        ("Cmd/Ctrl+Z", "Undo"),
+                        ("Cmd/Ctrl+Y", "Redo"),
+                        ("Cmd/Ctrl+A", "Select all"),
+                        ("Del / Bksp", "Delete selected"),
+                        ("Arrow keys", "Nudge (Shift=large)"),
+                    ],
+                ),
+            ],
+            # Right column
+            [
+                (
+                    "Draw mode",
+                    [
+                        ("Click", "Place anchor"),
+                        ("Move + click", "Size and commit shape"),
+                        ("Enter", "Finish / commit"),
+                        ("Esc", "Cancel"),
+                        ("Tab", "Cycle W \u2194 H input"),
+                        ("Type digits", "Enter exact W or H"),
+                        ("X", "Toggle construction"),
+                    ],
+                ),
+                (
+                    "Shapes & tools",
+                    [
+                        ("Rectangle", "R key in Draw toolbar"),
+                        ("Circle / Ellipse", "C / E in toolbar"),
+                        ("Polygon", "P in toolbar"),
+                        ("Arc", "A in toolbar"),
+                        ("M", "Toggle measure tool"),
+                        ("Shift+C", "Close polyline"),
+                    ],
+                ),
+            ],
+        ]
+
+        dim_color = QColor("#aabbcc")
+        header_color = QColor("#4a9eff")
+        col_x = [px + 24, px + panel_w // 2 + 12]
+        start_y = py + 62
+        row_h = 17
+        group_gap = 10
+
+        for col_idx, groups in enumerate(col_groups):
+            cy = start_y
+            for group_title, rows in groups:
+                # Group header
+                painter.setPen(header_color)
+                painter.setFont(_FONT_HEL_10_BOLD)
+                painter.drawText(QPointF(col_x[col_idx], cy + 11), group_title)
+                cy += row_h + 2
+                painter.setFont(_FONT_MENLO_9)
+                for key_label, description in rows:
+                    # Key
+                    painter.setPen(QColor("#e0e8f0"))
+                    painter.drawText(QPointF(col_x[col_idx] + 4, cy + 10), key_label)
+                    # Description (right-aligned within column half)
+                    painter.setPen(dim_color)
+                    painter.setFont(_FONT_HEL_9)
+                    painter.drawText(
+                        QRectF(col_x[col_idx] + 160, cy, panel_w // 2 - 40, row_h),
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                        description,
+                    )
+                    painter.setFont(_FONT_MENLO_9)
+                    cy += row_h
+                cy += group_gap

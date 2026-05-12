@@ -1,8 +1,9 @@
-"""Composite panel and browser widgets for PySide6 UIs."""
+"""DxfLayersTree widget — hierarchical layer and shape tree for canvas sidebars."""
 
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -16,365 +17,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
-    QPushButton,
-    QSizePolicy,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
-    QWidget,
 )
-
-from src.ui.components.common.factories import _info_chip
-
-
-class CollapsibleSection(QFrame):
-    """Expandable/collapsible content section for dense sidebars.
-
-    Optional ``subtitle`` displays a one-line state summary under the title
-    (e.g. "Honeycomb · 1.2 mm") so users can see the active config without
-    expanding the section. Update via :meth:`set_subtitle`.
-    """
-
-    def __init__(
-        self,
-        title: str,
-        content: QWidget,
-        *,
-        expanded: bool = True,
-        subtitle: str = "",
-    ):
-        super().__init__()
-        self._title = title
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("surface", "panel")
-        self.setProperty("role", "collapsible")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 8)
-        layout.setSpacing(2)
-
-        self._toggle = QToolButton()
-        self._toggle.setProperty("role", "collapsible-toggle")
-        self._toggle.setText(f"{'\u25be' if expanded else '\u25b8'}  {title}")
-        self._toggle.setCheckable(True)
-        self._toggle.setChecked(expanded)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self._toggle.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self._toggle.clicked.connect(self._on_toggled)
-        layout.addWidget(self._toggle)
-
-        self._subtitle = QLabel(subtitle)
-        self._subtitle.setProperty("role", "section-subtitle")
-        self._subtitle.setVisible(bool(subtitle))
-        layout.addWidget(self._subtitle)
-
-        self._content = content
-        self._content.setVisible(expanded)
-        layout.addWidget(self._content)
-
-    def _on_toggled(self, checked: bool) -> None:
-        self._toggle.setText(f"{'\u25be' if checked else '\u25b8'}  {self._title}")
-        self._content.setVisible(checked)
-        self.adjustSize()
-
-    def isExpanded(self) -> bool:
-        return self._toggle.isChecked()
-
-    def setExpanded(self, expanded: bool) -> None:
-        self._toggle.setChecked(expanded)
-        self._on_toggled(expanded)
-
-    def set_subtitle(self, text: str, *, dim: bool = False) -> None:
-        """Update the one-line state summary shown under the title.
-
-        Pass ``dim=True`` to render the subtitle in a more muted color
-        (used to indicate the section's feature is currently disabled).
-        """
-        self._subtitle.setText(text)
-        self._subtitle.setVisible(bool(text))
-        self._subtitle.setProperty("dim", "true" if dim else "")
-        self._subtitle.style().unpolish(self._subtitle)
-        self._subtitle.style().polish(self._subtitle)
-
-
-class CanvasPrecisionBar(QFrame):
-    """Persistent precision controls for canvas-heavy workflows."""
-
-    def __init__(self, canvas: Any | None, *, on_changed=None) -> None:
-        super().__init__()
-        self._canvas = canvas
-        self._on_changed = on_changed
-
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("surface", "panel")
-        self.setProperty("role", "precision-bar")
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(4)
-
-        label = QLabel("Precision")
-        label.setStyleSheet("color: #8b949e; font-size: 10px; font-weight: 700;")
-        layout.addWidget(label)
-
-        self._grid_btn = QPushButton("Grid")
-        self._grid_btn.setMinimumHeight(24)
-        self._grid_btn.setCheckable(True)
-        self._grid_btn.setToolTip("Toggle canvas grid overlay")
-        self._grid_btn.clicked.connect(self._toggle_grid)
-        layout.addWidget(self._grid_btn)
-
-        self._snap_btn = QPushButton("Snap")
-        self._snap_btn.setMinimumHeight(24)
-        self._snap_btn.setCheckable(True)
-        self._snap_btn.setToolTip("Snap cursor to grid intersections")
-        self._snap_btn.clicked.connect(self._toggle_snap)
-        layout.addWidget(self._snap_btn)
-
-        self._construction_btn = QPushButton("Guides")
-        self._construction_btn.setMinimumHeight(24)
-        self._construction_btn.setCheckable(True)
-        self._construction_btn.setToolTip("Toggle construction guide lines")
-        self._construction_btn.clicked.connect(self._toggle_construction)
-        layout.addWidget(self._construction_btn)
-
-        self._measure_btn = QPushButton("Measure")
-        self._measure_btn.setMinimumHeight(24)
-        self._measure_btn.setCheckable(True)
-        self._measure_btn.setToolTip("Toggle distance measurement tool")
-        self._measure_btn.clicked.connect(self._toggle_measure)
-        layout.addWidget(self._measure_btn)
-
-        layout.addWidget(QLabel("Grid mm"))
-        self._spacing = QLineEdit()
-        self._spacing.setFixedWidth(64)
-        self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._spacing.returnPressed.connect(self._apply_spacing)
-        layout.addWidget(self._spacing)
-
-        self._spacing_dec = QPushButton("−")
-        self._spacing_dec.setFixedSize(24, 24)
-        self._spacing_dec.clicked.connect(lambda: self._scale_spacing(0.5))
-        layout.addWidget(self._spacing_dec)
-
-        self._spacing_inc = QPushButton("+")
-        self._spacing_inc.setFixedSize(24, 24)
-        self._spacing_inc.clicked.connect(lambda: self._scale_spacing(2.0))
-        layout.addWidget(self._spacing_inc)
-
-        layout.addStretch()
-        self.refresh()
-
-    def bind_canvas(self, canvas: Any | None) -> None:
-        self._canvas = canvas
-        self.refresh()
-
-    def refresh(self) -> None:
-        if self._canvas is None:
-            self.setVisible(False)
-            return
-        if not hasattr(self._canvas, "get_precision_state"):
-            self.setVisible(False)
-            return
-
-        self.setVisible(True)
-        state = self._canvas.get_precision_state()
-        grid_on = bool(state.get("grid_visible", False))
-        snap_on = bool(state.get("grid_snap", False))
-        construction_on = bool(state.get("construction_mode", False))
-        measure_on = bool(state.get("measure_mode", False))
-        spacing = float(state.get("grid_spacing", 1.0))
-
-        self._grid_btn.setChecked(grid_on)
-        self._snap_btn.setChecked(snap_on)
-        self._construction_btn.setChecked(construction_on)
-        self._measure_btn.setChecked(measure_on)
-
-        self._spacing.setText(f"{spacing:g}")
-
-    def _after_change(self) -> None:
-        self.refresh()
-        if callable(self._on_changed):
-            self._on_changed()
-
-    def _toggle_grid(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "set_grid_visible") and hasattr(
-            canvas, "get_precision_state"
-        ):
-            state = canvas.get_precision_state()
-            canvas.set_grid_visible(not bool(state.get("grid_visible", False)))
-            self._after_change()
-
-    def _toggle_snap(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "set_grid_snap") and hasattr(canvas, "get_precision_state"):
-            state = canvas.get_precision_state()
-            canvas.set_grid_snap(not bool(state.get("grid_snap", False)))
-            self._after_change()
-
-    def _toggle_construction(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "set_construction_mode") and hasattr(
-            canvas, "get_precision_state"
-        ):
-            state = canvas.get_precision_state()
-            canvas.set_construction_mode(
-                not bool(state.get("construction_mode", False))
-            )
-            self._after_change()
-
-    def _toggle_measure(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "toggle_measure"):
-            canvas.toggle_measure()
-            self._after_change()
-
-    def _scale_spacing(self, factor: float) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if not hasattr(canvas, "get_precision_state") or not hasattr(
-            canvas, "set_grid_spacing"
-        ):
-            return
-        current = float(canvas.get_precision_state().get("grid_spacing", 1.0))
-        canvas.set_grid_spacing(max(0.1, min(100.0, current * factor)))
-        self._after_change()
-
-    def _apply_spacing(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if not hasattr(canvas, "set_grid_spacing"):
-            return
-        try:
-            value = float(self._spacing.text().strip())
-        except ValueError:
-            self.refresh()
-            return
-        canvas.set_grid_spacing(max(0.1, min(100.0, value)))
-        self._after_change()
-
-
-class CanvasStatusStrip(QFrame):
-    """Compact status bar — mode, selection, zoom, coordinates, and readiness."""
-
-    def __init__(self, *, show_readiness: bool = True) -> None:
-        super().__init__()
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("surface", "panel")
-        self.setProperty("role", "status-strip")
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
-        layout.setSpacing(6)
-
-        self._mode_label = QLabel("Select")
-        self._mode_label.setStyleSheet(
-            "color: #79c0ff; font-size: 11px; font-weight: 600;"
-        )
-        layout.addWidget(self._mode_label)
-
-        self._readiness_dot = self._dot()
-        layout.addWidget(self._readiness_dot)
-
-        self._objects_label = QLabel("0 obj")
-        self._objects_label.setStyleSheet("color: #8b949e; font-size: 11px;")
-        layout.addWidget(self._objects_label)
-
-        layout.addWidget(self._dot())
-
-        self._selection_label = QLabel("0 sel")
-        self._selection_label.setStyleSheet("color: #8b949e; font-size: 11px;")
-        layout.addWidget(self._selection_label)
-
-        layout.addWidget(self._dot())
-
-        self._precision_label = QLabel("Free move")
-        self._precision_label.setStyleSheet("color: #6e7681; font-size: 10px;")
-        layout.addWidget(self._precision_label)
-
-        layout.addStretch()
-
-        self._cursor_label = QLabel("")
-        self._cursor_label.setStyleSheet(
-            "color: #6e7681; font-size: 10px; font-family: 'Menlo', 'Courier New';"
-        )
-        layout.addWidget(self._cursor_label)
-
-        layout.addWidget(self._dot())
-
-        self._zoom_label = QLabel("100%")
-        self._zoom_label.setStyleSheet("color: #8b949e; font-size: 10px;")
-        self._zoom_label.setToolTip("Zoom level (scroll to zoom)")
-        layout.addWidget(self._zoom_label)
-
-        layout.addWidget(self._dot())
-
-        self._readiness_chip = _info_chip("No geometry", "warn")
-        layout.addWidget(self._readiness_chip)
-        self.set_readiness_visible(show_readiness)
-
-    def set_readiness_visible(self, visible: bool) -> None:
-        self._readiness_dot.setVisible(visible)
-        self._readiness_chip.setVisible(visible)
-
-    @staticmethod
-    def _dot() -> QLabel:
-        d = QLabel("·")
-        d.setStyleSheet("color: #30363d; font-size: 11px;")
-        return d
-
-    def set_snapshot(
-        self,
-        *,
-        mode: str,
-        selected_count: int,
-        object_count: int,
-        precision_text: str,
-        topology_text: str = "",
-        readiness_text: str,
-        readiness_tone: str = "neutral",
-        zoom_percent: int = 100,
-        cursor_pos: tuple[float, float] | None = None,
-    ) -> None:
-        self._mode_label.setText(mode.title())
-        self._objects_label.setText(f"{object_count} obj")
-        self._selection_label.setText(f"{selected_count} sel")
-        self._selection_label.setStyleSheet(
-            f"color: {'#79c0ff' if selected_count else '#8b949e'}; font-size: 11px;"
-        )
-        combined_precision = precision_text
-        if topology_text:
-            combined_precision = f"{precision_text} · {topology_text}"
-        self._precision_label.setText(combined_precision)
-        self._zoom_label.setText(f"{zoom_percent}%")
-        if cursor_pos:
-            self._cursor_label.setText(f"X {cursor_pos[0]:.2f}  Y {cursor_pos[1]:.2f}")
-        else:
-            self._cursor_label.setText("")
-        self._readiness_chip.setText(readiness_text)
-        self._readiness_chip.setProperty("tone", readiness_tone)
-        self._readiness_chip.style().unpolish(self._readiness_chip)
-        self._readiness_chip.style().polish(self._readiness_chip)
-
-    def set_selection_count(self, count: int) -> None:
-        """Lightweight update — change only the selection label without a full snapshot."""
-        self._selection_label.setText(f"{count} sel")
-        self._selection_label.setStyleSheet(
-            f"color: {'#79c0ff' if count else '#8b949e'}; font-size: 11px;"
-        )
 
 
 class DxfLayersTree(QFrame):
@@ -539,10 +186,7 @@ class DxfLayersTree(QFrame):
                 return
 
             # Emit a single batched signal so listeners can move every
-            # dropped shape in one graph operation. (We deliberately do NOT
-            # also emit per-key shapeMoveRequested here — that would cause
-            # double-moves when both are connected. Per-key emissions remain
-            # available for callers that need them, e.g. tests.)
+            # dropped shape in one graph operation.
             self._owner.shapesMoveRequested.emit(
                 source_layer, list(shape_keys), target_layer
             )
@@ -583,13 +227,13 @@ class DxfLayersTree(QFrame):
             )
             header.addWidget(self._add_button)
             self._show_all_button = self._make_tool_button(
-                "\u25c9",
+                "◉",
                 "Show all layers",
                 lambda: self.bulkVisibilityRequested.emit(True),
             )
             header.addWidget(self._show_all_button)
             self._hide_all_button = self._make_tool_button(
-                "\u25cb",
+                "○",
                 "Hide all layers",
                 lambda: self.bulkVisibilityRequested.emit(False),
             )
@@ -722,8 +366,7 @@ class DxfLayersTree(QFrame):
             self._layer_order.append(internal_name)
             self._shape_keys_by_layer[internal_name] = []
 
-            # Compose a label with an inline shape-count badge so the user can
-            # see relative weight at a glance without expanding the layer.
+            # Compose a label with an inline shape-count badge.
             shape_count = len(shapes)
             badge = f"  ·  {shape_count}" if shape_count else ""
             layer_item = QTreeWidgetItem([f"{display_name}{badge}"])
@@ -892,8 +535,7 @@ class DxfLayersTree(QFrame):
         if kind == "layer":
             editable = bool(item.data(0, self._ROLE_EDITABLE))
             old_display = str(item.data(0, self._ROLE_DISPLAY_NAME) or "")
-            # Strip the inline " · N" badge that set_layers appends so the
-            # user's edit is interpreted as a pure name.
+            # Strip the inline " · N" badge that set_layers appends.
             raw_text = item.text(0).strip()
             if "  ·  " in raw_text:
                 raw_text = raw_text.split("  ·  ", 1)[0].strip()
@@ -932,7 +574,6 @@ class DxfLayersTree(QFrame):
             self.layerVisibilityChanged.emit(self._item_internal_name(item), visible)
             return
         if kind == "shape":
-            # Check for a rename first — text changed while checkbox unchanged.
             old_display = str(item.data(0, self._ROLE_DISPLAY_NAME) or "")
             new_text = item.text(0).strip()
             if (
@@ -1056,11 +697,3 @@ class DxfLayersTree(QFrame):
             )
 
         menu.popup(self._tree.viewport().mapToGlobal(pos))
-
-
-__all__ = [
-    "CanvasPrecisionBar",
-    "CanvasStatusStrip",
-    "CollapsibleSection",
-    "DxfLayersTree",
-]

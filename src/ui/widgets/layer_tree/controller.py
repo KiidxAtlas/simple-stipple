@@ -5,14 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from src.ui.components.layer_tree.helpers import (
+from .model import (
+    LayerRowsBuilder,
+    LayerTreeState,
     apply_layer_visibility,
     apply_shape_visibility,
     hidden_bucket,
 )
-
-LayerTreeState = dict[str, dict[str, set[int]]]
-LayerRowsBuilder = Callable[[LayerTreeState], list[dict[str, Any]]]
 
 
 class CanvasLayerSidebarController:

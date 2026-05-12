@@ -24,23 +24,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.core.base_page import BasePage
+
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.io import image_to_outlines
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.components.canvas.modules import (
+from src.ui.canvas.modules import (
     CanvasGridModule,
     CanvasLayerTreeModule,
     CanvasToolbarModule,
 )
-from src.ui.components.canvas.page_runtimes import TraceCanvasPageRuntime
-from src.ui.components.canvas.widgets import CanvasStatusStrip, CollapsibleSection
-from src.ui.components.common.factories import (
-    _content_splitter,
-    _sidebar_panel,
-    _surface_frame,
+from src.ui.canvas.page_runtimes import TraceCanvasPageRuntime
+from src.ui.core.factories import (
+    content_splitter,
+    sidebar_panel,
+    surface_frame,
     parse_float_field_with_feedback,
 )
-from src.ui.components.common.recent_files_button import RecentFilesButton
+from src.ui.widgets.collapsible import CollapsibleSection
+from src.ui.widgets.recent_files_button import RecentFilesButton
+from src.ui.widgets.status_strip import CanvasStatusStrip
 from src.ui.pages.trace.form import (
     PathField,
     TextField,
@@ -62,24 +65,21 @@ TRACE_BG_BLEND_ALPHA = 0.7
 LOGGER = logging.getLogger(__name__)
 
 
-class TracePage(QWidget):
+class TracePage(BasePage):
     """Image → outline tracing page."""
 
     _trace_done = Signal(object)  # (display_img, polys, img_w_px, img_h_px, width_mm)
     _trace_error = Signal(object)
     _trace_progress = Signal(int, str)  # (percent, label)
-    stateChanged = Signal()
     sendSelectedToDraftRequested = Signal(object)
     sendSelectedToPatternRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
-        super().__init__(parent)
-        self._settings: dict = settings or {}
+        super().__init__(parent, settings)
         self._img_path: str | None = None
         self._running: bool = False
         self._trace_pending: bool = False
         self._cancel_event = threading.Event()
-        self._suspend_state_changes: bool = False
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -107,13 +107,13 @@ class TracePage(QWidget):
         left.setContentsMargins(12, 10, 12, 10)
         left.setSpacing(6)
 
-        right_w = _surface_frame("canvas")
+        right_w = surface_frame("canvas")
         right = QVBoxLayout(right_w)
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
 
-        self._left_panel = _sidebar_panel(left_w, min_width=320, max_width=360)
-        self._splitter = _content_splitter(
+        self._left_panel = sidebar_panel(left_w, min_width=320, max_width=360)
+        self._splitter = content_splitter(
             self._left_panel,
             right_w,
             sizes=(320, 950),
@@ -562,7 +562,7 @@ class TracePage(QWidget):
             has_image=lambda: bool(self._img_path),
         )
 
-        splitter = _content_splitter(canvas_shell, side_panel, sizes=(860, 260))
+        splitter = content_splitter(canvas_shell, side_panel, sizes=(860, 260))
         layout.addWidget(splitter, stretch=1)
 
         self._refresh_canvas_panels()
@@ -617,10 +617,6 @@ class TracePage(QWidget):
         self._export_all_btn.setEnabled(has_polys)
         self._export_sel_action.setEnabled(has_selection)
         self._reveal_action.setEnabled(bool(self._last_out))
-
-    def _emit_state_changed(self) -> None:
-        if not self._suspend_state_changes:
-            self.stateChanged.emit()
 
     def _parse_float_field(
         self,
@@ -743,7 +739,7 @@ class TracePage(QWidget):
     # ── Tracing ───────────────────────────────────────────────────────────────
 
     def _schedule_trace(self, *_) -> None:
-        if self._suspend_state_changes:
+        if self._suspend_state:
             return
         if not self._img_path:
             return

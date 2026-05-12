@@ -9,7 +9,7 @@ Design goals:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Sized
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -23,23 +23,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.core.base_page import BasePage
+
 from src.backend.dxf.io import (
     load_dxf_polylines_by_layer_with_report,
     summarize_dxf_import_report,
     write_polylines_dxf,
 )
 from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.components.canvas.modules import (
+from src.ui.canvas.modules import (
     CanvasGridModule,
     CanvasLayerTreeModule,
     CanvasToolbarModule,
 )
-from src.ui.components.canvas.runtime import CanvasRuntime
-from src.ui.components.canvas.widgets import (
-    CanvasStatusStrip,
-)
-from src.ui.components.common.factories import _content_splitter, _surface_frame
-from src.ui.components.common.recent_files_button import RecentFilesButton
+from src.ui.canvas.runtime import CanvasRuntime
+from src.ui.core.factories import content_splitter, surface_frame
+from src.ui.widgets.recent_files_button import RecentFilesButton
+from src.ui.widgets.status_strip import CanvasStatusStrip
 from src.ui.pages.draft.session import (
     apply_draft_workspace_state,
     clear_draft_workspace_state,
@@ -55,19 +55,16 @@ def _toolbar_sep() -> QLabel:
     return sep
 
 
-class DraftPage(QWidget):
+class DraftPage(BasePage):
     """Canvas-first drafting page optimized for interaction speed."""
 
     DEFAULT_LAYER = "Layer 1"
 
-    stateChanged = Signal()
     sendSelectedToPatternRequested = Signal(object)
     useSelectedAsFillPatternRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
-        super().__init__(parent)
-        self._settings: dict = settings or {}
-        self._suspend_state: bool = False
+        super().__init__(parent, settings)
         self._last_out_path: str | None = None
         self._last_in_path: str | None = None
         self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
@@ -79,7 +76,7 @@ class DraftPage(QWidget):
 
         canvas_host = self._build_canvas()
 
-        _toolbar_panel = _surface_frame("panel")
+        _toolbar_panel = surface_frame("panel")
         _tp_layout = QVBoxLayout(_toolbar_panel)
         _tp_layout.setContentsMargins(8, 4, 8, 4)
         _tp_layout.setSpacing(2)
@@ -204,7 +201,7 @@ class DraftPage(QWidget):
     # ── Canvas ────────────────────────────────────────────────────────────
 
     def _build_canvas(self) -> QWidget:
-        w = _surface_frame("canvas")
+        w = surface_frame("canvas")
         layout = QVBoxLayout(w)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -259,7 +256,7 @@ class DraftPage(QWidget):
         self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
         side_layout.addWidget(self._layer_module, stretch=1)
 
-        splitter = _content_splitter(self._canvas, side_panel, sizes=(860, 280))
+        splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
         layout.addWidget(splitter, stretch=1)
         return w
 
@@ -669,10 +666,6 @@ class DraftPage(QWidget):
     ) -> list[dict[str, Any]]:
         return self._rt().build_layer_tree_rows(layer_view_state)
 
-    def _emit_state_changed(self) -> None:
-        if not self._suspend_state:
-            self.stateChanged.emit()
-
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
@@ -763,5 +756,5 @@ class DraftPage(QWidget):
     def get_preset_state(self) -> dict[str, dict]:
         return {}
 
-    def apply_preset_state(self, presets: dict[str, dict]) -> None:
-        _ = presets
+    def apply_preset_state(self, state: dict | None) -> None:
+        pass

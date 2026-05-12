@@ -46,7 +46,7 @@ def get_trace_workspace_state(page: Any) -> dict:
 
 
 def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
-    page._suspend_state_changes = True
+    page._suspend_state = True
     if not isinstance(state, dict):
         state = {}
     page._reset_trace_runtime_state()
@@ -116,7 +116,7 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
         page._canvas.clear_background_image()
     page._export_all_btn.setEnabled(bool(polys))
     page._export_sel_action.setEnabled(False)
-    page._suspend_state_changes = False
+    page._suspend_state = False
     page._update_trace_action_states()
     page._refresh_canvas_panels()
 

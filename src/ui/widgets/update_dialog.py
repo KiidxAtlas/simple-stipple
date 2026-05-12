@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.components.common.factories import _section_label, _sep, _surface_frame
+from src.ui.core.factories import section_label, sep, surface_frame
 from src.updates import (
     UpdateInfo,
     check_for_updates,
@@ -98,7 +98,7 @@ class UpdateDialog(QDialog):
         subtitle.setStyleSheet("color: #8b949e; font-size: 12px;")
         layout.addWidget(subtitle)
 
-        _sep(layout)
+        sep(layout)
 
         # Build content based on state
         if update_info is None:
@@ -108,7 +108,7 @@ class UpdateDialog(QDialog):
         else:
             self._build_up_to_date_ui(layout, update_info)
 
-        _sep(layout)
+        sep(layout)
 
         # Close button
         btn_row = QHBoxLayout()
@@ -162,12 +162,12 @@ class UpdateDialog(QDialog):
 
     def _build_up_to_date_ui(self, layout: QVBoxLayout, info: UpdateInfo) -> None:
         """Show up-to-date message."""
-        card = _surface_frame("panel")
+        card = surface_frame("panel")
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(12, 12, 12, 12)
         card_layout.setSpacing(8)
 
-        _section_label(card_layout, "✓ You're Up to Date")
+        section_label(card_layout, "✓ You're Up to Date")
 
         msg = QLabel(f"Version {info.version} is the latest available.")
         msg.setStyleSheet("color: #8b949e; font-size: 13px;")
@@ -178,12 +178,12 @@ class UpdateDialog(QDialog):
 
     def _build_update_available_ui(self, layout: QVBoxLayout, info: UpdateInfo) -> None:
         """Show update available message with download option."""
-        card = _surface_frame("panel")
+        card = surface_frame("panel")
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(12, 12, 12, 12)
         card_layout.setSpacing(8)
 
-        _section_label(card_layout, f"↓ Update Available: v{info.version}")
+        section_label(card_layout, f"↓ Update Available: v{info.version}")
 
         msg = QLabel("A new version is available for download.")
         msg.setStyleSheet("color: #8b949e; font-size: 13px;")

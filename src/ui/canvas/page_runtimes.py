@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from src.ui.components.layer_tree.helpers import (
+from src.ui.widgets.layer_tree import (
     build_layer_row,
     build_shape_rows,
     describe_polyline,

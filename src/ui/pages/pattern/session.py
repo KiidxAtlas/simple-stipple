@@ -39,7 +39,7 @@ def get_pattern_workspace_state(page: Any) -> dict:
 
 
 def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
-    page._suspend_state_changes = True
+    page._suspend_state = True
     if not isinstance(state, dict):
         state = {}
     page._imported_dxf_layers = []
@@ -88,7 +88,7 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._preview_btn.style().polish(page._preview_btn)
     if state.get("canvas_view"):
         page._canvas.set_view_state(state["canvas_view"])
-    page._suspend_state_changes = False
+    page._suspend_state = False
     page._refresh_canvas_panels()
     page._zones = list(state.get("zones", []))
     page._refresh_zone_list()

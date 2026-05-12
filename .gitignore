@@ -1,3 +1,9 @@
+# Claude Code / AI agent artifacts
+.claude/
+.claire/
+memory/
+MEMORY.md
+
 # Python
 __pycache__/
 *.py[cod]
@@ -264,3 +270,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+tauri-nuxt/

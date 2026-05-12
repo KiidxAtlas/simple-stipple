@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import DEFAULT_KEYBINDINGS, save_settings
-from src.ui.components.common.factories import _section_label, _sep, _surface_frame
+from src.ui.core.factories import section_label, sep, surface_frame
 
 
 class SettingsDialog(QDialog):
@@ -106,41 +106,41 @@ class SettingsDialog(QDialog):
         scroll.setWidget(content)
 
         # ── Workspace & Source ────────────────────────────────────
-        workspace_card = _surface_frame("panel")
+        workspace_card = surface_frame("panel")
         workspace_layout = QVBoxLayout(workspace_card)
         workspace_layout.setContentsMargins(12, 12, 12, 12)
         workspace_layout.setSpacing(6)
-        _section_label(workspace_layout, "Workspace & Source")
+        section_label(workspace_layout, "Workspace & Source")
         for key, label in self._FOLDER_FIELDS[:2]:
             self._add_row(workspace_layout, key, label, browse=True)
         content_layout.addWidget(workspace_card)
 
         # ── Outputs & Conversion ──────────────────────────────────
-        output_card = _surface_frame("panel")
+        output_card = surface_frame("panel")
         output_layout = QVBoxLayout(output_card)
         output_layout.setContentsMargins(12, 12, 12, 12)
         output_layout.setSpacing(6)
-        _section_label(output_layout, "Outputs & Conversion")
+        section_label(output_layout, "Outputs & Conversion")
         for key, label in self._FOLDER_FIELDS[2:]:
             self._add_row(output_layout, key, label, browse=True)
         content_layout.addWidget(output_card)
 
         # ── Repository ────────────────────────────────────────────
-        repo_card = _surface_frame("panel")
+        repo_card = surface_frame("panel")
         repo_layout = QVBoxLayout(repo_card)
         repo_layout.setContentsMargins(12, 12, 12, 12)
         repo_layout.setSpacing(6)
-        _section_label(repo_layout, "Repository")
+        section_label(repo_layout, "Repository")
         for key, label in self._REPO_FIELDS:
             self._add_row(repo_layout, key, label, browse=True)
         content_layout.addWidget(repo_card)
 
         # ── Behavior ──────────────────────────────────────────────
-        behavior_card = _surface_frame("panel")
+        behavior_card = surface_frame("panel")
         behavior_layout = QVBoxLayout(behavior_card)
         behavior_layout.setContentsMargins(12, 12, 12, 12)
         behavior_layout.setSpacing(8)
-        _section_label(behavior_layout, "Application Behavior")
+        section_label(behavior_layout, "Application Behavior")
         for key, label, default in self._TOGGLE_FIELDS:
             self._add_toggle(behavior_layout, key, label, default)
 
@@ -160,11 +160,11 @@ class SettingsDialog(QDialog):
         behavior_layout.addWidget(interval_hint)
         content_layout.addWidget(behavior_card)
 
-        keybinding_card = _surface_frame("panel")
+        keybinding_card = surface_frame("panel")
         keybinding_layout = QVBoxLayout(keybinding_card)
         keybinding_layout.setContentsMargins(12, 12, 12, 12)
         keybinding_layout.setSpacing(6)
-        _section_label(keybinding_layout, "Keyboard Shortcuts")
+        section_label(keybinding_layout, "Keyboard Shortcuts")
         import platform as _platform
 
         _kbd_mod = "Meta" if _platform.system() == "Darwin" else "Ctrl"
@@ -183,7 +183,7 @@ class SettingsDialog(QDialog):
         content_layout.addWidget(keybinding_card)
 
         content_layout.addStretch()
-        _sep(layout)
+        sep(layout)
 
         # ── Save / Cancel ─────────────────────────────────────────
         btn_row = QHBoxLayout()

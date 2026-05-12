@@ -6,7 +6,7 @@ import subprocess
 from html import escape
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -21,15 +21,11 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import save_settings
-from src.ui.components.common.factories import (
-    _content_splitter,
-    _sidebar_panel,
-    _surface_frame,
-)
+from src.ui.core.base_page import BasePage
+from src.ui.core.factories import content_splitter, sidebar_panel, surface_frame
 
 
-class RepoPage(QWidget):
-    stateChanged = Signal()
+class RepoPage(BasePage):
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -66,7 +62,7 @@ class RepoPage(QWidget):
         cards_row.setSpacing(8)
 
         # Pull card
-        pull_card = _surface_frame("panel")
+        pull_card = surface_frame("panel")
         pull_card_layout = QVBoxLayout(pull_card)
         pull_card_layout.setContentsMargins(8, 8, 8, 8)
         pull_card_layout.setSpacing(6)
@@ -84,7 +80,7 @@ class RepoPage(QWidget):
         cards_row.addWidget(pull_card, stretch=1)
 
         # Commit card
-        commit_card = _surface_frame("panel")
+        commit_card = surface_frame("panel")
         commit_card_layout = QVBoxLayout(commit_card)
         commit_card_layout.setContentsMargins(8, 8, 8, 8)
         commit_card_layout.setSpacing(6)
@@ -108,7 +104,7 @@ class RepoPage(QWidget):
         cards_row.addWidget(commit_card, stretch=1)
 
         # Push card
-        push_card = _surface_frame("panel")
+        push_card = surface_frame("panel")
         push_card_layout = QVBoxLayout(push_card)
         push_card_layout.setContentsMargins(8, 8, 8, 8)
         push_card_layout.setSpacing(6)
@@ -143,10 +139,10 @@ class RepoPage(QWidget):
         left.addLayout(secondary)
         left.addStretch()
 
-        self._left_panel = _sidebar_panel(left_w, min_width=300, max_width=380)
+        self._left_panel = sidebar_panel(left_w, min_width=300, max_width=380)
 
         # ── Right: git log ────────────────────────────────────────────────────
-        right_w = _surface_frame("canvas")
+        right_w = surface_frame("canvas")
         right = QVBoxLayout(right_w)
         right.setContentsMargins(12, 12, 12, 12)
         right.setSpacing(6)
@@ -167,12 +163,9 @@ class RepoPage(QWidget):
         _clear_btn.clicked.connect(self._log.clear)
         right.addWidget(self._log, stretch=1)
 
-        self._splitter = _content_splitter(self._left_panel, right_w, sizes=(320, 720))
+        self._splitter = content_splitter(self._left_panel, right_w, sizes=(320, 720))
         root.addWidget(self._splitter, stretch=1)
         self._refresh_repo_state()
-
-    def _emit_state_changed(self) -> None:
-        self.stateChanged.emit()
 
     def _browse_repo_dir(self) -> None:
         start = self._dir_edit.text().strip() or str(Path.home())
@@ -353,8 +346,8 @@ class RepoPage(QWidget):
     def get_preset_state(self) -> dict[str, dict]:
         return {}
 
-    def apply_preset_state(self, presets: dict[str, dict]) -> None:
-        _ = presets
+    def apply_preset_state(self, state: dict | None) -> None:
+        pass
 
     def auto_fetch(self) -> bool:
         """Silently fetch from remote repository (for auto-fetch on startup).

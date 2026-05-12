@@ -1,4 +1,4 @@
-"""Shared helpers for building and managing sidebar layer trees."""
+"""Layer tree shared type aliases and helper functions."""
 
 from __future__ import annotations
 
@@ -6,8 +6,13 @@ import math
 from collections.abc import Callable
 from typing import Any
 
+# ── Type aliases ──────────────────────────────────────────────────────────────
+
 LayerTreeState = dict[str, dict[str, set[int]]]
 LayerTreeRow = dict[str, Any]
+LayerRowsBuilder = Callable[[LayerTreeState], list[dict[str, Any]]]
+
+# ── Layer tree helper functions ───────────────────────────────────────────────
 
 
 def hidden_bucket(state: LayerTreeState, layer_name: str) -> set[int]:

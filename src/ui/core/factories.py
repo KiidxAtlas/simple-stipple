@@ -1,4 +1,4 @@
-"""Layout helper functions and utility tools for building PySide6 panels."""
+"""Layout helpers and widget factories for PySide6 panels."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 
-def _section_label(parent_layout, text: str) -> QLabel:
+def section_label(parent_layout, text: str) -> QLabel:
     """Compact muted section header with letter-spacing."""
     lb = QLabel(text.upper())
     lb.setProperty("role", "section-label")
@@ -30,7 +30,7 @@ def _section_label(parent_layout, text: str) -> QLabel:
     return lb
 
 
-def _sep(parent_layout) -> QFrame:
+def sep(parent_layout) -> QFrame:
     """Hairline horizontal separator."""
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
@@ -40,7 +40,7 @@ def _sep(parent_layout) -> QFrame:
     return line
 
 
-def _info_chip(text: str, tone: str = "neutral") -> QLabel:
+def info_chip(text: str, tone: str = "neutral") -> QLabel:
     """Small capsule label used for capabilities, state, and shortcuts."""
     chip = QLabel(text)
     chip.setProperty("role", "chip")
@@ -49,7 +49,7 @@ def _info_chip(text: str, tone: str = "neutral") -> QLabel:
     return chip
 
 
-def _surface_frame(surface: str = "panel") -> QFrame:
+def surface_frame(surface: str = "panel") -> QFrame:
     """Create a styled surface frame for sidebar or content panels."""
     frame = QFrame()
     frame.setFrameShape(QFrame.Shape.NoFrame)
@@ -57,11 +57,11 @@ def _surface_frame(surface: str = "panel") -> QFrame:
     return frame
 
 
-def _sidebar_panel(
+def sidebar_panel(
     content: QWidget, *, min_width: int = 340, max_width: int = 430
 ) -> QFrame:
     """Wrap sidebar content in a styled scrollable panel."""
-    frame = _surface_frame("sidebar")
+    frame = surface_frame("sidebar")
     frame.setMinimumWidth(min_width)
     frame.setMaximumWidth(max_width)
     layout = QVBoxLayout(frame)
@@ -77,7 +77,7 @@ def _sidebar_panel(
     return frame
 
 
-def _content_splitter(
+def content_splitter(
     left: QWidget, right: QWidget, *, sizes: tuple[int, int]
 ) -> QSplitter:
     """Create a collapsible horizontal splitter with sensible defaults."""
@@ -91,7 +91,7 @@ def _content_splitter(
     return splitter
 
 
-def _canvas_toolbar(
+def canvas_toolbar(
     on_mode,
     on_fit,
     *,
@@ -226,13 +226,13 @@ def clear_line_edit_error(widget) -> None:
 
 
 __all__ = [
-    "_canvas_toolbar",
-    "_content_splitter",
-    "_info_chip",
-    "_section_label",
-    "_sep",
-    "_sidebar_panel",
-    "_surface_frame",
+    "canvas_toolbar",
+    "content_splitter",
+    "info_chip",
+    "section_label",
+    "sep",
+    "sidebar_panel",
+    "surface_frame",
     "clear_line_edit_error",
     "parse_float_field",
     "parse_float_field_with_feedback",

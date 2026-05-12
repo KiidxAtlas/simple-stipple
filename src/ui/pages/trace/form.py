@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.components.canvas.widgets import CollapsibleSection
+from src.ui.widgets.collapsible import CollapsibleSection
 
 
 class TextField(QWidget):
