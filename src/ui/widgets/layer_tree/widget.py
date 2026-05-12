@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -22,6 +21,8 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
 )
+
+from src.ui.core.focus_policy import blur_focused_line_edit
 
 
 class DxfLayersTree(QFrame):
@@ -276,7 +277,15 @@ class DxfLayersTree(QFrame):
                 Qt.ShortcutContext.WidgetWithChildrenShortcut
             )
             self._delete_shortcut.activated.connect(self._delete_current_layer)
+
+        # Esc should always leave focused layer-tree inputs (search/rename editors).
+        self._esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._esc_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._esc_shortcut.activated.connect(self._escape_focused_input)
         layout.addWidget(self._tree, stretch=1)
+
+    def _escape_focused_input(self) -> None:
+        blur_focused_line_edit(self._tree, within=self)
 
     @staticmethod
     def _make_tool_button(text: str, tooltip: str, slot) -> QToolButton:

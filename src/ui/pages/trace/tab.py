@@ -24,8 +24,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.core.base_page import BasePage
-
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.io import image_to_outlines
 from src.ui.canvas.dxf_canvas import DxfCanvas
@@ -35,15 +33,13 @@ from src.ui.canvas.modules import (
     CanvasToolbarModule,
 )
 from src.ui.canvas.page_runtimes import TraceCanvasPageRuntime
+from src.ui.core.base_page import BasePage
 from src.ui.core.factories import (
     content_splitter,
+    parse_float_field_with_feedback,
     sidebar_panel,
     surface_frame,
-    parse_float_field_with_feedback,
 )
-from src.ui.widgets.collapsible import CollapsibleSection
-from src.ui.widgets.recent_files_button import RecentFilesButton
-from src.ui.widgets.status_strip import CanvasStatusStrip
 from src.ui.pages.trace.form import (
     PathField,
     TextField,
@@ -58,6 +54,9 @@ from src.ui.pages.trace.session import (
 )
 from src.ui.util.dialog_paths import pick_open_file, pick_save_file
 from src.ui.util.recent_files import KIND_IMAGE, record_recent
+from src.ui.widgets.collapsible import CollapsibleSection
+from src.ui.widgets.recent_files_button import RecentFilesButton
+from src.ui.widgets.status_strip import CanvasStatusStrip
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
 TRACE_BG_BLEND_ALPHA = 0.7
@@ -524,7 +523,7 @@ class TracePage(BasePage):
         layout.addWidget(self._grid_module)
         self._precision_bar = self._grid_module
 
-        self._canvas_status = CanvasStatusStrip(show_readiness=False)
+        self._canvas_status = CanvasStatusStrip()
         layout.addWidget(self._canvas_status)
 
         canvas_shell = QWidget()
@@ -883,14 +882,6 @@ class TracePage(BasePage):
 
     # ── Canvas actions ────────────────────────────────────────────────────────
 
-    def _delete_selected(self) -> None:
-        n = self._canvas.delete_selected()
-        if n:
-            self._set_status(f"Deleted {n} polyline(s). Use ↩ Undo to restore.")
-            self._refresh_canvas_panels()
-            self._emit_state_changed()
-        self._update_trace_action_states()
-
     def _undo_delete(self) -> None:
         if self._canvas.undo_delete():
             self._set_status("Undo: polylines restored.")
@@ -1034,7 +1025,7 @@ class TracePage(BasePage):
                 entity_meta=[r.get("meta") for r in records],
             )
             self._last_out = out
-            self._reveal_btn.setEnabled(True)
+            self._reveal_action.setEnabled(True)
             self._set_status(
                 f"Exported {len(records)} shapes → {Path(out).name}", "#3fb950"
             )
@@ -1063,7 +1054,7 @@ class TracePage(BasePage):
                 entity_meta=[r.get("meta") for r in records],
             )
             self._last_out = out
-            self._reveal_btn.setEnabled(True)
+            self._reveal_action.setEnabled(True)
             self._set_status(
                 f"Exported {len(records)} selected shapes → {Path(out).name}",
                 "#3fb950",

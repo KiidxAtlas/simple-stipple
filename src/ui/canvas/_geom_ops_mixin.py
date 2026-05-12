@@ -19,7 +19,10 @@ from shapely.geometry import (
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
-from src.backend.geometry.primitives import build_rect_poly
+from src.backend.geometry.primitives import (
+    build_circle_poly,
+    build_ellipse_poly,
+)
 
 
 class _GeomOpsMixin:
@@ -67,6 +70,42 @@ class _GeomOpsMixin:
         if axis == "vertical":
             return (px, 2 * cy - py)
         return point
+
+    def _rebuild_curved_entity_poly(
+        self,
+        idx: int,
+        kind: str,
+        meta: dict[str, Any] | None,
+    ) -> None:
+        if meta is None or not (0 <= idx < len(self._polys)):
+            return
+        if kind == "circle":
+            center = meta.get("center")
+            radius = float(meta.get("radius", 0.0))
+            if isinstance(center, tuple) and radius > 0:
+                self._polys[idx] = build_circle_poly(
+                    float(center[0]),
+                    float(center[1]),
+                    radius,
+                    segments=max(24, len(self._polys[idx]) or 64),
+                )
+        elif kind == "ellipse":
+            center = meta.get("center")
+            rx = float(meta.get("rx", 0.0))
+            ry = float(meta.get("ry", 0.0))
+            if isinstance(center, tuple) and rx > 0 and ry > 0:
+                poly = build_ellipse_poly(
+                    float(center[0]),
+                    float(center[1]),
+                    rx,
+                    ry,
+                    segments=max(24, len(self._polys[idx]) or 64),
+                )
+                rot = float(meta.get("rotation", 0.0))
+                if abs(rot) > 1e-9 and poly:
+                    cpt = (float(center[0]), float(center[1]))
+                    poly = [self._rotate_point(pt, cpt, rot) for pt in poly]
+                self._polys[idx] = poly
 
     def _transform_entity_meta(
         self,
@@ -162,6 +201,8 @@ class _GeomOpsMixin:
 
         if idx < len(self._entity_meta):
             self._entity_meta[idx] = updated
+        if kind in {"circle", "ellipse"}:
+            self._rebuild_curved_entity_poly(idx, kind, updated)
 
     @staticmethod
     def _translated_entity_meta(

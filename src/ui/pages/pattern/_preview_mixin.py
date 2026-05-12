@@ -201,18 +201,7 @@ class _PreviewMixin:
             detail_parts.append(f"{f_count} fill")
         detail_str = " + ".join(detail_parts) if detail_parts else str(count)
         status_text = f"{count} shapes ({detail_str})"
-        if was_empty and not self._showing_preview and display_polys:
-            # First successful preview — auto-show it to spare the user a click.
-            self._showing_preview = True
-            self._preview_btn.setChecked(True)
-            self._preview_btn.setProperty("active", True)
-            self._preview_btn.style().unpolish(self._preview_btn)
-            self._preview_btn.style().polish(self._preview_btn)
-            if self._edit_polys:
-                self._canvas.set_ghost_polylines(self._edit_polys)
-            self._canvas.load(display_polys)
-            self._set_preview_status(f"{status_text} — preview", "success")
-        elif self._showing_preview:
+        if self._showing_preview:
             self._canvas.load(display_polys)
             self._set_preview_status(f"{status_text} — preview", "success")
         else:

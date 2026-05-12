@@ -96,6 +96,7 @@ def canvas_toolbar(
     on_fit,
     *,
     modes: tuple[str, ...] = ("Select", "Draw", "Edit"),
+    show_fit: bool = True,
     secondary_actions=None,
 ):
     """Compact canvas toolbar with mode toggles and optional actions."""
@@ -120,15 +121,16 @@ def canvas_toolbar(
         shell_layout.addWidget(btn)
         mode_buttons[mode] = btn
 
-    sep = QLabel("│")
-    sep.setProperty("role", "toolbar-sep")
-    shell_layout.addWidget(sep)
+    if show_fit:
+        sep = QLabel("│")
+        sep.setProperty("role", "toolbar-sep")
+        shell_layout.addWidget(sep)
 
-    fit_btn = QPushButton("Fit")
-    fit_btn.setMinimumHeight(28)
-    fit_btn.setToolTip("Fit view to content (Shortcut: F)")
-    fit_btn.clicked.connect(on_fit)
-    shell_layout.addWidget(fit_btn)
+        fit_btn = QPushButton("Fit")
+        fit_btn.setMinimumHeight(28)
+        fit_btn.setToolTip("Fit view to content (Shortcut: F)")
+        fit_btn.clicked.connect(on_fit)
+        shell_layout.addWidget(fit_btn)
 
     if secondary_actions:
         sep2 = QLabel("│")
@@ -227,14 +229,14 @@ def clear_line_edit_error(widget) -> None:
 
 __all__ = [
     "canvas_toolbar",
+    "clear_line_edit_error",
     "content_splitter",
     "info_chip",
-    "section_label",
-    "sep",
-    "sidebar_panel",
-    "surface_frame",
-    "clear_line_edit_error",
     "parse_float_field",
     "parse_float_field_with_feedback",
+    "section_label",
+    "sep",
     "set_line_edit_error",
+    "sidebar_panel",
+    "surface_frame",
 ]

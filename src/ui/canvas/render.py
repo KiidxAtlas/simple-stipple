@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 
 from PIL import Image as PILImage
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
 )
+from PySide6.QtWidgets import QLineEdit
 
 from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
 from src.backend.geometry.primitives import (
@@ -32,7 +33,7 @@ from src.backend.geometry.primitives import (
     build_rect_poly,
 )
 from src.backend.geometry.spline import build_spline_poly
-from src.constants import DIM
+from src.constants import DIM, POLY, SEL
 from src.ui.canvas._constants import (
     BADGE_BG as _BADGE_BG,
 )
@@ -79,6 +80,9 @@ from src.ui.canvas._constants import (
     MEASURE_COLOR as _MEASURE_COLOR,
 )
 from src.ui.canvas._constants import (
+    ORTHO_COLOR as _ORTHO_COLOR,
+)
+from src.ui.canvas._constants import (
     RUBBER_W as _RUBBER_W,
 )
 from src.ui.canvas._constants import (
@@ -90,7 +94,6 @@ from src.ui.canvas._constants import (
 from src.ui.canvas._constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
-
 
 _FONT_HEL_9 = QFont("Helvetica", 9)
 _FONT_HEL_9_DEMIBOLD = QFont("Helvetica", 9, QFont.Weight.DemiBold)
@@ -760,7 +763,7 @@ class CanvasRenderer:
         mid_x = (bx0 + bx1) / 2.0
 
         scale_center = QPointF(right + 12.0, bottom + 12.0)
-        rotate_center = QPointF(mid_x, top - 18.0)
+        rotate_center = QPointF(mid_x, top - 34.0)
 
         self._gizmo_scale_rect = QRectF(
             scale_center.x() - 6,
@@ -769,10 +772,10 @@ class CanvasRenderer:
             12,
         )
         self._gizmo_rotate_rect = QRectF(
-            rotate_center.x() - 6,
-            rotate_center.y() - 6,
-            12,
-            12,
+            rotate_center.x() - 8,
+            rotate_center.y() - 8,
+            16,
+            16,
         )
 
         painter.setPen(QPen(QColor("#79c0ff"), 1.2))
@@ -938,6 +941,657 @@ class CanvasRenderer:
                 Qt.AlignmentFlag.AlignCenter,
                 f"\u0394x {dx:.2f}  \u0394y {dy:.2f}  {angle_deg:.1f}\u00b0  \u00b7  click to reset",
             )
+
+    def paintEvent(self, event, /):
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        vp = self.viewport()
+        w = max(vp.width(), 100)
+        h = max(vp.height(), 100)
+
+        if self._grid_visible:
+            self._paint_grid(painter, w, h)
+            # H. Origin crosshair at world (0,0)
+            ox_cx, ox_cy = self._w2c(0.0, 0.0)
+            o_pen = QPen(_GRID_AXIS, 1)
+            painter.setPen(o_pen)
+            painter.drawLine(QPointF(ox_cx - 10, ox_cy), QPointF(ox_cx + 10, ox_cy))
+            painter.drawLine(QPointF(ox_cx, ox_cy - 10), QPointF(ox_cx, ox_cy + 10))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(ox_cx, ox_cy), 3, 3)
+
+        # A. Full-viewport cursor crosshair (draw/measure mode)
+        if (
+            (self._mode == "draw" or self._measure_mode)
+            and self._cursor_wx is not None
+            and self._cursor_wy is not None
+        ):
+            _ch_cx, _ch_cy = self._w2c(self._cursor_wx, self._cursor_wy)
+            _ch_pen = QPen(QColor("#2a3a4a"), 0.5)
+            painter.setPen(_ch_pen)
+            painter.drawLine(QPointF(_ch_cx, 0.0), QPointF(_ch_cx, float(h)))
+            painter.drawLine(QPointF(0.0, _ch_cy), QPointF(float(w), _ch_cy))
+
+        # Background image overlay
+        if self._bg_pil and self._bg_w_mm > 0 and self._bg_h_mm > 0:
+            self._paint_bg_image(painter)
+
+        # Image bounds reference rectangle
+        if self._img_bounds:
+            bw, bh = self._img_bounds
+            cx0, cy0 = self._w2c(0.0, 0.0)
+            cx1, cy1 = self._w2c(bw, bh)
+            pen = QPen(QColor("#334466"), 1, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(QPointF(cx0, cy0), QPointF(cx1, cy1)))
+
+        # Compute visible world-space rectangle for frustum culling
+        _tl_wx, _tl_wy = self._c2w(0.0, 0.0)
+        _br_wx, _br_wy = self._c2w(float(w), float(h))
+        _visible_world = QRectF(
+            QPointF(min(_tl_wx, _br_wx), min(_tl_wy, _br_wy)),
+            QPointF(max(_tl_wx, _br_wx), max(_tl_wy, _br_wy)),
+        )
+
+        # Ghost polylines (context-only overlay, drawn beneath the main polys).
+        if self._ghost_polys and self._ghost_visible:
+            ghost_color = QColor(POLY)
+            ghost_color.setAlpha(90)
+            ghost_pen = QPen(ghost_color, 1.0)
+            ghost_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(ghost_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for poly in self._ghost_polys:
+                if len(poly) < 2:
+                    continue
+                _gp_rect = self._poly_rect_for_culling(poly)
+                if not _visible_world.intersects(_gp_rect):
+                    continue
+                gpath = QPainterPath()
+                gx, gy = self._w2c(*poly[0])
+                gpath.moveTo(gx, gy)
+                for pt in poly[1:]:
+                    px, py_ = self._w2c(*pt)
+                    gpath.lineTo(px, py_)
+                if (
+                    len(poly) >= 3
+                    and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1])
+                    < 0.5
+                ):
+                    gpath.closeSubpath()
+                painter.drawPath(gpath)
+
+        # Polylines
+        for idx, poly in enumerate(self._polys):
+            if idx in self._hidden_polys:
+                continue
+            if len(poly) < 2:
+                continue
+            # Frustum culling: skip polylines entirely outside the viewport
+            _poly_rect = self._poly_rect_for_culling(poly)
+            if not _visible_world.intersects(_poly_rect):
+                continue
+            sel = idx in self._sel
+            is_construction = idx in self._construction_polys
+            is_locked = idx in self._locked_polys
+            if sel:
+                color = QColor(SEL)
+            elif idx in self._accent_polys:
+                color = QColor(self._accent_polys[idx])
+            elif is_construction:
+                color = QColor(_GUIDE_COLOR)
+            else:
+                color = QColor(POLY)
+            if is_locked:
+                color = QColor("#8b949e")
+            lw = 2.0 if sel else (1.2 if is_construction else 1.5)
+            pen = QPen(color, lw)
+            if is_construction or is_locked:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            render_poly = poly
+            if (
+                idx < len(self._entity_kinds)
+                and self._entity_kinds[idx] == "spline"
+                and len(poly) >= 2
+            ):
+                meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+                render_poly = build_spline_poly(
+                    poly,
+                    segments=int(meta.get("segments", 24)) if meta else 24,
+                    closed=bool(meta.get("closed", False)) if meta else False,
+                )
+                if len(render_poly) < 2:
+                    continue
+            path = QPainterPath()
+            sx, sy = self._w2c(*render_poly[0])
+            path.moveTo(sx, sy)
+            for pt in render_poly[1:]:
+                px, py_ = self._w2c(*pt)
+                path.lineTo(px, py_)
+            if (
+                len(poly) >= 3
+                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
+            ):
+                path.closeSubpath()
+            painter.drawPath(path)
+
+        # Selection bounding box + transform gizmo
+        if self._sel and self._mode == "select":
+            sel_pts = [
+                pt for i in self._sel if i < len(self._polys) for pt in self._polys[i]
+            ]
+            if sel_pts:
+                xs, ys = zip(*sel_pts)
+                bx0, by0 = self._w2c(min(xs), max(ys))
+                bx1, by1 = self._w2c(max(xs), min(ys))
+                if self._show_selection_bbox:
+                    pad = 4
+                    pen = QPen(QColor(SEL), 1.0, Qt.PenStyle.DashLine)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRect(
+                        QRectF(
+                            bx0 - pad,
+                            by0 - pad,
+                            bx1 - bx0 + 2 * pad,
+                            by1 - by0 + 2 * pad,
+                        )
+                    )
+                self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
+            else:
+                self._gizmo_scale_rect = None
+                self._gizmo_rotate_rect = None
+        else:
+            self._gizmo_scale_rect = None
+            self._gizmo_rotate_rect = None
+
+        # Select-mode dimensions (Fusion-like quick readout)
+        if self._mode == "select" and self._sel:
+            sel_bounds = self._selection_bounds()
+            if sel_bounds is not None:
+                x0, y0, x1, y1 = sel_bounds
+                width = x1 - x0
+                height = y1 - y0
+                cx0, cy0 = self._w2c(x0, y0)
+                cx1, cy1 = self._w2c(x1, y1)
+                mx = (cx0 + cx1) / 2.0
+                my = (cy0 + cy1) / 2.0
+                self._sel_badge_w_rect = self._draw_badge(
+                    painter, mx, min(cy0, cy1) - 14, f"W {width:.2f}", 9
+                )
+                self._sel_badge_h_rect = self._draw_badge(
+                    painter, max(cx0, cx1) + 26, my, f"H {height:.2f}", 9
+                )
+                if len(self._sel) == 1:
+                    idx = next(iter(self._sel))
+                    if 0 <= idx < len(self._polys):
+                        poly = self._polys[idx]
+                        if len(poly) == 2:
+                            (ax, ay), (bx, by) = poly
+                            llen = math.hypot(bx - ax, by - ay)
+                            ang = math.degrees(math.atan2(by - ay, bx - ax))
+                            self._draw_badge(
+                                painter,
+                                mx,
+                                max(cy0, cy1) + 16,
+                                f"L {llen:.2f}  ∠ {ang:.1f}°",
+                                9,
+                            )
+            else:
+                self._sel_badge_w_rect = None
+                self._sel_badge_h_rect = None
+        else:
+            self._sel_badge_w_rect = None
+            self._sel_badge_h_rect = None
+
+        # Edit mode: vertex handles
+        if self._mode == "edit":
+            self._paint_edit_handles(painter)
+        elif self._mode == "select" and self._sel:
+            self._paint_select_handles(painter)
+
+        # Construction lines (Feature 15)
+        # Guide/measure lines (non-exported)
+        # Ortho constraint line (Feature 6)
+        if self._mode == "draw" and self._angle_snap_active and self._draw_pts:
+            ortho_pen = QPen(_ORTHO_COLOR, 0.5, Qt.PenStyle.DashLine)
+            painter.setPen(ortho_pen)
+            anchor_cx, anchor_cy = self._w2c(*self._draw_pts[-1])
+            if self._cursor_wx is not None and self._cursor_wy is not None:
+                dx_o = self._cursor_wx - self._draw_pts[-1][0]
+                dy_o = self._cursor_wy - self._draw_pts[-1][1]
+                d_o = math.hypot(dx_o, dy_o)
+                if d_o > 1e-9:
+                    # Extend construction line across viewport
+                    ext = max(w, h) * 2.0
+                    # Actually use canvas coords directly
+                    cur_cx, cur_cy = self._w2c(self._cursor_wx, self._cursor_wy)
+                    cdx = cur_cx - anchor_cx
+                    cdy = cur_cy - anchor_cy
+                    cd = math.hypot(cdx, cdy)
+                    if cd > 1e-9:
+                        cnx, cny = cdx / cd, cdy / cd
+                        painter.drawLine(
+                            QPointF(anchor_cx - cnx * ext, anchor_cy - cny * ext),
+                            QPointF(anchor_cx + cnx * ext, anchor_cy + cny * ext),
+                        )
+
+        # Draw mode: dim vertex guides + endpoint highlights
+        if self._mode == "draw":
+            _dim_dot = QColor("#4a5a6a")
+            _helper_count = 0
+            _helper_cap = 1800
+            for _dpoly in self._polys:
+                if not _visible_world.intersects(self._poly_rect_for_culling(_dpoly)):
+                    continue
+                for _dpt in _dpoly:
+                    if _helper_count >= _helper_cap:
+                        break
+                    _dcx, _dcy = self._w2c(*_dpt)
+                    painter.setPen(QPen(QColor("#3a5a6a"), 1.0))
+                    painter.setBrush(QBrush(_dim_dot))
+                    painter.drawEllipse(QPointF(_dcx, _dcy), 3, 3)
+                    _helper_count += 1
+                if _helper_count >= _helper_cap:
+                    break
+            # Highlight endpoints of existing polylines (connection targets)
+            _ep_color = QColor("#5a8aaa")
+            for _dpoly in self._polys:
+                if not _visible_world.intersects(self._poly_rect_for_culling(_dpoly)):
+                    continue
+                if len(_dpoly) >= 2:
+                    for _ept in (_dpoly[0], _dpoly[-1]):
+                        _ecx, _ecy = self._w2c(*_ept)
+                        painter.setPen(QPen(_ep_color, 1.5))
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        painter.drawEllipse(QPointF(_ecx, _ecy), 5, 5)
+
+        # C. Inference / alignment lines
+        if self._mode == "draw" and self._draw_pts and self._cursor_wx is not None:
+            self._paint_inference_lines(painter, w, h)
+
+        if self._mode == "draw":
+            self._paint_draw_shape_preview(painter)
+            self._paint_arc_preview(painter)
+            self._paint_spline_preview(painter)
+            self._paint_draw_preview_badges(painter)
+
+        # In-progress draw polygon (BEFORE snap indicators so snaps render on top)
+        if self._draw_pts:
+            self._paint_in_progress_poly(painter)
+
+        # Snap indicator — drawn LAST so it's always visible on top
+        if self._mode == "draw" and self._draw_snap is not None:
+            self._paint_snap_overlay(painter)
+        elif self._hover_snap is not None and self._hover_snap_type is not None:
+            self._paint_snap_overlay(
+                painter,
+                snap_point=self._hover_snap,
+                snap_type=self._hover_snap_type,
+            )
+
+        # Rubber-band
+        if self._shift_drag and self._band_start and self._lmb_prev:
+            pen = QPen(QColor("#ff8800"), 1, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            bx, by = self._band_start.x(), self._band_start.y()
+            painter.drawRect(
+                QRectF(
+                    QPointF(bx, by),
+                    QPointF(self._lmb_prev.x(), self._lmb_prev.y()),
+                )
+            )
+
+        # Measure overlay
+        if self._measure_mode and self._measure_anchor and self._measure_hover:
+            self._paint_measure_overlay(painter)
+
+        # Pre-anchor measure snap indicator
+        if (
+            self._measure_mode
+            and self._measure_anchor is None
+            and self._measure_hover_pre is not None
+        ):
+            _mpx, _mpy = self._w2c(*self._measure_hover_pre)
+            painter.setPen(QPen(_SNAP_CLOSE, 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(_mpx, _mpy), 6, 6)
+
+        # Info overlay
+        n, s = len(self._polys), len(self._sel)
+        info = f"{n} polylines" + (f"  ·  {s} selected" if s else "")
+        if self._mode == "draw":
+            pts_hint = f"  {len(self._draw_pts)} pt(s)" if self._draw_pts else ""
+            info += f"  ·  DRAW{pts_hint}"
+        elif self._mode == "edit":
+            info += "  ·  EDIT"
+
+        painter.setPen(QColor(DIM))
+        painter.setFont(QFont("Helvetica", 10))
+        painter.drawText(8, 18, info)
+
+        zoom_pct = round(self._scale / max(self._fit_scale, 1e-9) * 100)
+        if self._mode == "draw":
+            hint = f"[{self._draw_primitive}: click points, Enter=finish, dbl-click=close, Esc=cancel]"
+        elif self._mode == "edit":
+            hint = "[drag vertex, dbl-click edge=insert, right-click vertex=delete, E=exit]"
+        else:
+            hint = "[Pan: Space/MMB · F=fit · Cmd/Ctrl+Z=undo · D/E mode · use Precision bar for snap/grid]"
+        precision = []
+        if self._grid_visible:
+            precision.append(f"grid {self._grid_spacing:g}mm")
+        if self._grid_snap:
+            precision.append("snap")
+        if precision:
+            hint += "  ·  " + " / ".join(precision)
+        painter.setFont(QFont("Helvetica", 9))
+        painter.drawText(8, h - 8, f"{zoom_pct}%  {hint}")
+
+        if not self._polys and not self._draw_pts:
+            painter.setPen(QColor("#3b4a6a"))
+            painter.setFont(QFont("Helvetica", 12))
+            painter.drawText(
+                QRectF(0, 0, w, h),
+                Qt.AlignmentFlag.AlignCenter,
+                "No polylines loaded",
+            )
+
+        # Cursor position
+        if self._cursor_wx is not None:
+            painter.setPen(QColor(DIM))
+            painter.setFont(QFont("Helvetica", 10))
+            text = f"{self._cursor_wx:.2f}, {self._cursor_wy:.2f} mm"
+            fm = QFontMetrics(painter.font())
+            tw = fm.horizontalAdvance(text)
+            painter.drawText(w - tw - 8, h - 8, text)
+
+        # Flash indicator
+        if self._flash_text:
+            painter.setFont(QFont("Helvetica", 12, QFont.Weight.Bold))
+            fm = QFontMetrics(painter.font())
+            ftw = fm.horizontalAdvance(self._flash_text)
+            fth = fm.height()
+            fpad = 8
+            frx = w / 2 - ftw / 2 - fpad
+            fry = 40
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(20, 24, 36, 220)))
+            painter.drawRoundedRect(QRectF(frx, fry, ftw + 2 * fpad, fth + fpad), 4, 4)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(
+                QRectF(frx, fry, ftw + 2 * fpad, fth + fpad),
+                Qt.AlignmentFlag.AlignCenter,
+                self._flash_text,
+            )
+
+        # Measure button
+        self._paint_measure_button(painter, w)
+
+        painter.end()
+
+    def _show_flash(self, text: str, duration_ms: int = 1200) -> None:
+        """Show a brief flash indicator on the canvas."""
+        self._flash_text = text
+        if self._flash_timer is not None:
+            self._flash_timer.stop()
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setSingleShot(True)
+        self._flash_timer.timeout.connect(self._clear_flash)
+        self._flash_timer.start(duration_ms)
+        self._redraw()
+
+    def _clear_flash(self) -> None:
+        self._flash_text = None
+        self._flash_timer = None
+        self._redraw()
+
+    # ── Auto-dimension HUD (Fusion 360 style) ──────────────────────────────
+
+    _DIM_STYLE = (
+        "background: #1a1f2e; color: #ffffff; border: 1px solid #4a9eff;"
+        "border-radius: 2px; font-size: 11px; font-family: 'Menlo';"
+        "padding: 2px 4px;"
+    )
+
+    def _show_dim_inputs(self) -> None:
+        """Create both distance and angle QLineEdits that float near the cursor."""
+        self._dismiss_dim_inputs()
+        if not self._draw_pts:
+            return
+
+        dist_edit = QLineEdit(self.viewport())
+        dist_edit.setFixedWidth(70)
+        dist_edit.setFixedHeight(20)
+        dist_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        dist_edit.setStyleSheet(self._DIM_STYLE)
+        dist_edit.setPlaceholderText("d:")
+        dist_edit.show()
+        dist_edit.returnPressed.connect(self._apply_dim_input)
+        dist_edit.installEventFilter(self)
+        self._dim_distance_edit = dist_edit
+        self._dim_distance_dirty = False
+
+        angle_edit = QLineEdit(self.viewport())
+        angle_edit.setFixedWidth(55)
+        angle_edit.setFixedHeight(20)
+        angle_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+        angle_edit.setStyleSheet(self._DIM_STYLE)
+        angle_edit.setPlaceholderText("\u2220:")
+        angle_edit.show()
+        angle_edit.returnPressed.connect(self._apply_dim_input)
+        angle_edit.installEventFilter(self)
+        self._dim_angle_edit = angle_edit
+        self._dim_angle_dirty = False
+
+    def _dismiss_dim_inputs(self) -> None:
+        """Remove the auto-dimension HUD widgets."""
+        if self._dim_distance_edit is not None:
+            self._dim_distance_edit.hide()
+            self._dim_distance_edit.deleteLater()
+            self._dim_distance_edit = None
+        if self._dim_angle_edit is not None:
+            self._dim_angle_edit.hide()
+            self._dim_angle_edit.deleteLater()
+            self._dim_angle_edit = None
+        self._dim_distance_dirty = False
+        self._dim_angle_dirty = False
+
+    # ── Inline selection-badge dimension editor ───────────────────────────────
+
+    def _show_sel_dim_editor(self, axis: str, rect: QRectF) -> None:
+        """Show a floating QLineEdit over the W or H badge for direct editing."""
+        self._dismiss_sel_dim_editor()
+        bounds = self._selection_bounds()
+        if bounds is None:
+            return
+        x0, y0, x1, y1 = bounds
+        cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
+
+        edit = QLineEdit(self.viewport())
+        edit.setFixedWidth(max(int(rect.width()) + 10, 70))
+        edit.setFixedHeight(22)
+        edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        edit.setStyleSheet(self._DIM_STYLE)
+        edit.setText(f"{cur_val:.3f}")
+        edit.selectAll()
+        edit.move(int(rect.x()), int(rect.y()))
+        edit.show()
+        edit.setFocus()
+        edit.returnPressed.connect(lambda: self._apply_sel_dim_editor())
+        edit.editingFinished.connect(lambda: self._apply_sel_dim_editor())
+        self._sel_dim_edit = edit
+        self._sel_dim_axis = axis
+
+    def _apply_sel_dim_editor(self) -> None:
+        if self._sel_dim_edit is None or self._sel_dim_axis is None:
+            return
+        text = self._sel_dim_edit.text().strip()
+        axis = self._sel_dim_axis
+        # Disconnect editingFinished before dismissing to avoid double-trigger
+        try:
+            self._sel_dim_edit.editingFinished.disconnect()
+        except RuntimeError:
+            pass
+        self._dismiss_sel_dim_editor()
+        try:
+            val = float(text)
+        except ValueError:
+            return
+        if val <= 0:
+            return
+        if axis == "w":
+            self._set_selected_width(val)
+        else:
+            self._set_selected_height(val)
+        self._show_flash("Dimension updated", 900)
+
+    def _dismiss_sel_dim_editor(self) -> None:
+        if self._sel_dim_edit is not None:
+            self._sel_dim_edit.hide()
+            self._sel_dim_edit.deleteLater()
+            self._sel_dim_edit = None
+        self._sel_dim_axis = None
+
+    def _update_dim_positions(self, cx: float, cy: float) -> None:
+        """Move the dim input widgets near cursor, avoiding snap label overlap.
+
+        Positions the fields below-right of cursor with enough clearance so
+        snap indicator icons and labels (drawn at +18, +4 from snap point)
+        never get covered.
+        """
+        vp = self.viewport()
+        vw = max(vp.width(), 100)
+        vh = max(vp.height(), 100)
+        # Default: below-right of cursor
+        dx, dy = 28, 22
+        # If near right edge, flip to left side
+        if cx + dx + 80 > vw:
+            dx = -100
+        # If near bottom edge, flip above
+        if cy + dy + 50 > vh:
+            dy = -50
+        if self._dim_distance_edit is not None:
+            self._dim_distance_edit.move(int(cx + dx), int(cy + dy))
+        if self._dim_angle_edit is not None:
+            self._dim_angle_edit.move(int(cx + dx), int(cy + dy + 24))
+
+    def _update_dim_values(self, distance: float, angle: float) -> None:
+        """Update displayed values in the dim inputs, unless user has typed."""
+        if self._dim_distance_edit is not None and not self._dim_distance_dirty:
+            self._dim_distance_edit.setText(f"{distance:.2f}")
+        if self._dim_angle_edit is not None and not self._dim_angle_dirty:
+            self._dim_angle_edit.setText(f"{angle:.1f}")
+
+    def _apply_dim_input(self) -> None:
+        """Read distance/angle from the HUD fields and place a point."""
+        if not self._draw_pts:
+            return
+        last_wx, last_wy = self._draw_pts[-1]
+        try:
+            dist_text = (
+                self._dim_distance_edit.text().strip()
+                if self._dim_distance_edit
+                else ""
+            )
+            angle_text = (
+                self._dim_angle_edit.text().strip() if self._dim_angle_edit else ""
+            )
+            if not dist_text:
+                return
+            dist = float(dist_text)
+            if angle_text:
+                angle_deg = float(angle_text)
+            elif self._cursor_wx is not None and self._cursor_wy is not None:
+                angle_deg = math.degrees(
+                    math.atan2(
+                        self._cursor_wy - last_wy,
+                        self._cursor_wx - last_wx,
+                    )
+                )
+            else:
+                angle_deg = 0.0
+            angle_rad = math.radians(angle_deg)
+            new_x = last_wx + dist * math.cos(angle_rad)
+            new_y = last_wy + dist * math.sin(angle_rad)
+            self._draw_pts.append((new_x, new_y))
+            # Reset dirty flags so fields resume auto-updating
+            self._dim_distance_dirty = False
+            self._dim_angle_dirty = False
+            self._refresh_draw_sidebar_state()
+            self._redraw()
+        except ValueError:
+            pass
+
+    # ── Inference / alignment lines ──────────────────────────────────────────
+
+    def _show_measure_edit(self) -> None:
+        """Show a QLineEdit overlay for editing the measured distance."""
+        self._dismiss_measure_edit()
+        if not self._measure_anchor or not self._measure_end:
+            return
+        ax, ay = self._measure_anchor
+        hx, hy = self._measure_end
+        dist = math.hypot(hx - ax, hy - ay)
+        cax, cay = self._w2c(ax, ay)
+        chx, chy = self._w2c(hx, hy)
+        mx, my = (cax + chx) / 2, (cay + chy) / 2
+
+        le = QLineEdit(self.viewport())
+        le.setText(f"{dist:.2f}")
+        le.setFixedWidth(100)
+        le.setFixedHeight(24)
+        le.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        le.setStyleSheet(
+            "background: #001522; color: #ffffff; border: 1px solid #00d8ff;"
+            "border-radius: 3px; font-size: 12px; font-weight: bold;"
+        )
+        le.move(int(mx - 50), int(my - 40))
+        le.show()
+        le.setFocus()
+        le.selectAll()
+        le.returnPressed.connect(self._apply_measure_scale)
+        self._measure_edit = le
+
+    def _dismiss_measure_edit(self) -> None:
+        """Remove the measure distance QLineEdit overlay."""
+        if self._measure_edit is not None:
+            self._measure_edit.hide()
+            self._measure_edit.deleteLater()
+            self._measure_edit = None
+
+    def _apply_measure_scale(self) -> None:
+        """Read new distance from the edit overlay and scale all polylines."""
+        if not self._measure_edit or not self._measure_anchor or not self._measure_end:
+            self._dismiss_measure_edit()
+            return
+        try:
+            new_dist = float(self._measure_edit.text())
+        except ValueError:
+            self._dismiss_measure_edit()
+            return
+        ax, ay = self._measure_anchor
+        hx, hy = self._measure_end
+        old_dist = math.hypot(hx - ax, hy - ay)
+        if old_dist < 1e-9 or new_dist <= 0:
+            self._dismiss_measure_edit()
+            return
+        factor = new_dist / old_dist
+        self._scale_all(factor)
+        self._dismiss_measure_edit()
+        self._measure_locked = False
+        self._measure_anchor = None
+        self._measure_hover = None
+        self._measure_end = None
+        self._measure_snapped_a = False
+        self._measure_snapped_b = False
+        self._redraw()
+
+    # ── Clipboard & nudge helpers ─────────────────────────────────────────────
 
     def _paint_help_overlay(self, painter: QPainter) -> None:
         """Draw a centered shortcut reference overlay when _help_visible is True."""

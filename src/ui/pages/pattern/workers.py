@@ -26,6 +26,7 @@ def run_generate(
     params: dict,
     scale: tuple[float, float],
     border_polys: list[list[tuple[float, float]]] | None,
+    open_paths: bool = False,
     interlace: bool = False,
     invert_fill: bool = False,
     mirror_v: bool = False,
@@ -81,9 +82,11 @@ def run_generate(
             polys,
             out_path,
             close=close,
+            open_paths=open_paths,
             border_polys=effective_border,
             pattern_layer="pattern",
             border_layer_prefix="outline",
+            entity_names=[f"pattern_{i + 1:04d}" for i in range(len(polys))],
             extra_layers=extra or None,
         )
         count = len(polys) + len(fill_polys)
@@ -100,6 +103,7 @@ def run_generate_zones(
     zones: list[dict],
     out_path: str,
     include_border: bool,
+    open_paths: bool = False,
     invert_fill: bool = False,
     mirror_v: bool = False,
     mirror_h: bool = False,
@@ -140,9 +144,11 @@ def run_generate_zones(
             all_polys,
             out_path,
             close=True,
+            open_paths=open_paths,
             border_polys=border_polys if border_polys else None,
             pattern_layer="pattern",
             border_layer_prefix="outline",
+            entity_names=[f"pattern_{i + 1:04d}" for i in range(len(all_polys))],
             extra_layers=extra or None,
         )
         count = len(all_polys)

@@ -10,7 +10,7 @@ from src.ui.core.factories import info_chip
 class CanvasStatusStrip(QFrame):
     """Compact status bar — mode, selection, zoom, coordinates, and readiness."""
 
-    def __init__(self, *, show_readiness: bool = True) -> None:
+    def __init__(self) -> None:
         super().__init__()
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setProperty("surface", "panel")
@@ -63,11 +63,8 @@ class CanvasStatusStrip(QFrame):
 
         self._readiness_chip = info_chip("No geometry", "warn")
         layout.addWidget(self._readiness_chip)
-        self.set_readiness_visible(show_readiness)
-
-    def set_readiness_visible(self, visible: bool) -> None:
-        self._readiness_dot.setVisible(visible)
-        self._readiness_chip.setVisible(visible)
+        self._readiness_dot.hide()
+        self._readiness_chip.hide()
 
     @staticmethod
     def _dot() -> QLabel:

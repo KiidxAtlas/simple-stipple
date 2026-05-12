@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,16 +18,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.constants import PATTERNS
 from src.ui.core.factories import section_label
-from src.ui.widgets.collapsible import CollapsibleSection
-from src.ui.widgets.recent_files_button import RecentFilesButton
-from src.ui.util.recent_files import KIND_DXF
 from src.ui.pages.pattern.params import (
+    build_halftone_widget,
     build_param_widget,
     build_tile_library_widget,
-    build_halftone_widget,
 )
+from src.ui.util.recent_files import KIND_DXF
+from src.ui.widgets.collapsible import CollapsibleSection
+from src.ui.widgets.recent_files_button import RecentFilesButton
 
 
 class _BuildMixin:
@@ -489,6 +486,13 @@ class _BuildMixin:
         self._include_border_cb.setChecked(True)
         self._include_border_cb.stateChanged.connect(self._schedule_preview)
         layout.addWidget(self._include_border_cb)
+
+        self._export_open_paths_cb = QCheckBox("Export as Open Paths")
+        self._export_open_paths_cb.setToolTip(
+            "Write pattern strokes as open polylines (no forced closure)."
+        )
+        self._export_open_paths_cb.setChecked(False)
+        layout.addWidget(self._export_open_paths_cb)
 
         # Summary chip — one-line readout of what will be written.
         self._summary_chip = QLabel("")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections import Counter
 from typing import Any, NamedTuple, cast
 
@@ -445,13 +446,24 @@ def write_polylines_dxf(
     polylines: list[list[tuple[float, float]]],
     out_path: str,
     close: bool = False,
+    open_paths: bool = False,
     border_polys: list[list[tuple[float, float]]] | None = None,
     pattern_layer: str | None = None,
     border_layer_prefix: str = "BORDER",
     entity_kinds: list[str] | None = None,
     entity_meta: list[dict[str, Any] | None] | None = None,
+    entity_names: list[str] | None = None,
     extra_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
 ) -> None:
+    def _layer_from_meta_name(name: str | None) -> str | None:
+        if not name:
+            return None
+        label = re.sub(r"[^A-Za-z0-9_\-]", "_", str(name).strip())
+        label = re.sub(r"_+", "_", label).strip("_")
+        if not label:
+            return None
+        return label[:255]
+
     doc = _ezdxf_new("R2010")
     doc.header["$INSUNITS"] = 4
     msp = doc.modelspace()
@@ -471,20 +483,31 @@ def write_polylines_dxf(
     kinds = entity_kinds if entity_kinds is not None else ["polyline"] * len(polylines)
     metas = entity_meta if entity_meta is not None else [None] * len(polylines)
 
-    for c, kind, meta in zip(polylines, kinds, metas):
+    for i, (c, kind, meta) in enumerate(zip(polylines, kinds, metas)):
         if len(c) >= 2:
+            entity_attrs = dict(dxfattrs)
+            layer_from_name = None
+            if isinstance(meta, dict):
+                layer_from_name = _layer_from_meta_name(meta.get("name"))
+            if not layer_from_name and entity_names and i < len(entity_names):
+                layer_from_name = _layer_from_meta_name(entity_names[i])
+            if layer_from_name:
+                if layer_from_name not in doc.layers:
+                    doc.layers.add(layer_from_name, color=2)
+                entity_attrs["layer"] = layer_from_name
+
             if kind == "line" and meta and "start" in meta and "end" in meta:
                 msp.add_line(
                     tuple(meta["start"]),
                     tuple(meta["end"]),
-                    dxfattribs=dxfattrs or None,
+                    dxfattribs=entity_attrs or None,
                 )
                 continue
             if kind == "circle" and meta and "center" in meta and "radius" in meta:
                 msp.add_circle(
                     tuple(meta["center"]),
                     float(meta["radius"]),
-                    dxfattribs=dxfattrs or None,
+                    dxfattribs=entity_attrs or None,
                 )
                 continue
             if (
@@ -505,7 +528,7 @@ def write_polylines_dxf(
                         tuple(meta["center"]),
                         major_axis,
                         ratio=ry / rx,
-                        dxfattribs=dxfattrs or None,
+                        dxfattribs=entity_attrs or None,
                     )
                     continue
             if kind == "arc" and meta and "center" in meta and "radius" in meta:
@@ -514,14 +537,22 @@ def write_polylines_dxf(
                     float(meta["radius"]),
                     float(meta.get("start_angle", 0.0)),
                     float(meta.get("end_angle", 360.0)),
-                    dxfattribs=dxfattrs or None,
+                    dxfattribs=entity_attrs or None,
                 )
                 continue
 
-            coords, is_closed = _normalize_polyline_for_dxf(c, force_close=bool(close))
+            force_close = bool(close) and not bool(open_paths)
+            coords, is_closed = _normalize_polyline_for_dxf(
+                c,
+                force_close=force_close,
+            )
             if len(coords) < 2:
                 continue
-            msp.add_lwpolyline(coords, close=is_closed, dxfattribs=dxfattrs or None)
+            msp.add_lwpolyline(
+                coords,
+                close=(False if open_paths else is_closed),
+                dxfattribs=entity_attrs or None,
+            )
 
     if border_polys:
         # Pre-normalize so layer suffixes (_1, _2…) reflect the *valid*
@@ -529,8 +560,11 @@ def write_polylines_dxf(
         # named "outline_2" with no "outline_1" anywhere in the file.
         valid_borders: list[list[tuple[float, float]]] = []
         for c in border_polys:
-            coords, _ = _normalize_polyline_for_dxf(c, force_close=True)
-            if len(coords) >= 3:
+            coords, is_closed = _normalize_polyline_for_dxf(
+                c,
+                force_close=not bool(open_paths),
+            )
+            if len(coords) >= 3 and (open_paths or is_closed):
                 valid_borders.append(coords)
         count = len(valid_borders)
         for idx, coords in enumerate(valid_borders):
@@ -539,7 +573,11 @@ def write_polylines_dxf(
                 layer_name = f"{border_layer_prefix}_{idx + 1}"
             if layer_name not in doc.layers:
                 doc.layers.add(layer_name, color=3)
-            msp.add_lwpolyline(coords, close=True, dxfattribs={"layer": layer_name})
+            msp.add_lwpolyline(
+                coords,
+                close=(False if open_paths else True),
+                dxfattribs={"layer": layer_name},
+            )
 
     if extra_layers:
         # Each entry produces its own DXF layer. Polylines are written as

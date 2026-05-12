@@ -31,6 +31,7 @@ class CanvasToolbarModule(QWidget):
         on_mode: Callable[[str], None] | None = None,
         on_fit: Callable[[], None] | None = None,
         modes: tuple[str, ...] = ("Select", "Draw", "Edit"),
+        show_fit: bool = True,
         extra_widgets: Sequence[QWidget] | None = None,
     ) -> None:
         super().__init__()
@@ -46,6 +47,7 @@ class CanvasToolbarModule(QWidget):
             self._handle_mode,
             self._handle_fit,
             modes=modes,
+            show_fit=show_fit,
         )
         toolbar_layout = toolbar.layout()
         if isinstance(toolbar_layout, QHBoxLayout) and extra_widgets:

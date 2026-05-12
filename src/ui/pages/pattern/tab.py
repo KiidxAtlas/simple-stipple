@@ -8,10 +8,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -40,6 +40,7 @@ from src.ui.core.factories import (
     parse_float_field_with_feedback,
     set_line_edit_error,
 )
+from src.ui.core.focus_policy import EscapeBlurFilter
 from src.ui.pages.pattern.params import (
     collect_pattern_params,
 )
@@ -162,6 +163,9 @@ class PatternPage(
 
         self._build_left(left)
         self._build_right(right)
+        self._left_esc_filter = EscapeBlurFilter(self._canvas, within=left_w)
+        for edit in left_w.findChildren(QLineEdit):
+            edit.installEventFilter(self._left_esc_filter)
         self._update_preview_controls()
 
         self.setAcceptDrops(True)
@@ -231,7 +235,7 @@ class PatternPage(
         layout.addWidget(self._grid_module)
         self._precision_bar = self._grid_module
 
-        self._canvas_status = CanvasStatusStrip(show_readiness=False)
+        self._canvas_status = CanvasStatusStrip()
         layout.addWidget(self._canvas_status)
 
         canvas_shell = QWidget()
@@ -399,7 +403,8 @@ class PatternPage(
     def get_preset_state(self) -> dict[str, dict]:
         return {name: dict(payload) for name, payload in self._presets.items()}
 
-    def apply_preset_state(self, presets: dict[str, dict]) -> None:
+    def apply_preset_state(self, state: dict[str, dict] | None) -> None:
+        presets = state or {}
         self._presets = {name: dict(payload) for name, payload in presets.items()}
         self._refresh_preset_combo()
 

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import math
-from typing import Any
-
 from src.backend.behaviors import snapping as snap_behaviors
 
 

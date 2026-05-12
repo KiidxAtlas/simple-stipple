@@ -12,8 +12,8 @@ class _GenerateMixin:
     """Mixin providing DXF generation methods for PatternPage."""
 
     def _generate(self) -> None:
-        from src.ui.util.dialog_paths import pick_save_file
         from src.ui.pages.pattern.workers import run_generate, run_generate_zones
+        from src.ui.util.dialog_paths import pick_save_file
 
         if not self._edit_polys and not self._zones:
             QMessageBox.critical(self, "Error", "No polylines available for outline.")
@@ -34,6 +34,7 @@ class _GenerateMixin:
         # Read widget values on the GUI thread (thread-safe)
         pattern = self._pattern_combo.currentText()
         include_border = self._include_border_cb.isChecked()
+        open_paths = self._export_open_paths_cb.isChecked()
         invert_fill = self._invert_fill_cb.isChecked()
         mirror_v = self._mirror_v_cb.isChecked()
         mirror_h = self._mirror_h_cb.isChecked()
@@ -67,6 +68,7 @@ class _GenerateMixin:
                     zones_snap,
                     out_path,
                     include_border,
+                    open_paths,
                     invert_fill,
                     mirror_v,
                     mirror_h,
@@ -113,6 +115,7 @@ class _GenerateMixin:
                     params,
                     scale,
                     border_polys,
+                    open_paths,
                     interlace,
                     invert_fill,
                     mirror_v,

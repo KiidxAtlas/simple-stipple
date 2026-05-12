@@ -12,27 +12,12 @@ from src.ui.widgets.layer_tree import (
 )
 
 
-class TraceCanvasPageRuntime:
-    """Encapsulate Trace page canvas/layer/status behavior."""
+class CanvasPageRuntimeBase:
+    """Shared toolbar / selection sync helpers for canvas-backed pages."""
 
-    def __init__(
-        self,
-        *,
-        canvas: Any,
-        toolbar_module: Any,
-        layer_sidebar: Any,
-        canvas_status: Any,
-        precision_bar: Any,
-        is_running: Callable[[], bool],
-        has_image: Callable[[], bool],
-    ) -> None:
+    def __init__(self, *, canvas: Any, toolbar_module: Any) -> None:
         self._canvas = canvas
         self._toolbar_module = toolbar_module
-        self._layer_sidebar = layer_sidebar
-        self._canvas_status = canvas_status
-        self._precision_bar = precision_bar
-        self._is_running = is_running
-        self._has_image = has_image
 
     def on_toolbar_mode(self, value: str) -> None:
         self._toolbar_module.set_active_mode(value)
@@ -49,6 +34,28 @@ class TraceCanvasPageRuntime:
 
     def fit_selection(self) -> bool:
         return bool(self._canvas.fit_selection())
+
+
+class TraceCanvasPageRuntime(CanvasPageRuntimeBase):
+    """Encapsulate Trace page canvas/layer/status behavior."""
+
+    def __init__(
+        self,
+        *,
+        canvas: Any,
+        toolbar_module: Any,
+        layer_sidebar: Any,
+        canvas_status: Any,
+        precision_bar: Any,
+        is_running: Callable[[], bool],
+        has_image: Callable[[], bool],
+    ) -> None:
+        super().__init__(canvas=canvas, toolbar_module=toolbar_module)
+        self._layer_sidebar = layer_sidebar
+        self._canvas_status = canvas_status
+        self._precision_bar = precision_bar
+        self._is_running = is_running
+        self._has_image = has_image
 
     def build_layer_tree_rows(
         self,
@@ -116,7 +123,7 @@ class TraceCanvasPageRuntime:
         self._layer_sidebar.refresh_tree()
 
 
-class PatternCanvasPageRuntime:
+class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
     """Encapsulate Pattern page canvas/layer/status behavior."""
 
     def __init__(
@@ -135,8 +142,7 @@ class PatternCanvasPageRuntime:
         get_preview_categories: Callable[[], dict[str, list[list[tuple[float, float]]]]]
         | None = None,
     ) -> None:
-        self._canvas = canvas
-        self._toolbar_module = toolbar_module
+        super().__init__(canvas=canvas, toolbar_module=toolbar_module)
         self._layer_sidebar = layer_sidebar
         self._canvas_status = canvas_status
         self._precision_bar = precision_bar
@@ -148,22 +154,6 @@ class PatternCanvasPageRuntime:
         self._get_preview_categories = get_preview_categories
         # Custom shape labels for outline mode: layer_name → {poly_index: label}
         self._shape_labels: dict[str, dict[int, str]] = {}
-
-    def on_toolbar_mode(self, value: str) -> None:
-        self._toolbar_module.set_active_mode(value)
-        self._canvas.set_mode(value.lower())
-
-    def on_canvas_mode_change(self, mode: str) -> None:
-        self._toolbar_module.set_active_mode(mode)
-
-    def on_selection_change(self, count: int) -> None:
-        self._toolbar_module.set_selection_count(count)
-
-    def on_tree_selection_requested(self, indices: list[int]) -> None:
-        self._canvas.set_selection(indices)
-
-    def fit_selection(self) -> bool:
-        return bool(self._canvas.fit_selection())
 
     def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
         """Persist a custom display label for an outline shape."""

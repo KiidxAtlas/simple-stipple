@@ -9,21 +9,16 @@ Design goals:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Sized
+from typing import Any
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QLabel,
-    QMenu,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
-
-from src.ui.core.base_page import BasePage
 
 from src.backend.dxf.io import (
     load_dxf_polylines_by_layer_with_report,
@@ -37,9 +32,8 @@ from src.ui.canvas.modules import (
     CanvasToolbarModule,
 )
 from src.ui.canvas.runtime import CanvasRuntime
+from src.ui.core.base_page import BasePage
 from src.ui.core.factories import content_splitter, surface_frame
-from src.ui.widgets.recent_files_button import RecentFilesButton
-from src.ui.widgets.status_strip import CanvasStatusStrip
 from src.ui.pages.draft.session import (
     apply_draft_workspace_state,
     clear_draft_workspace_state,
@@ -47,6 +41,8 @@ from src.ui.pages.draft.session import (
 )
 from src.ui.util.dialog_paths import pick_open_file, pick_save_file
 from src.ui.util.recent_files import KIND_DXF, record_recent
+from src.ui.widgets.recent_files_button import RecentFilesButton
+from src.ui.widgets.status_strip import CanvasStatusStrip
 
 
 def _toolbar_sep() -> QLabel:
@@ -85,7 +81,7 @@ class DraftPage(BasePage):
         root.addWidget(_toolbar_panel)
         root.addWidget(canvas_host, stretch=1)
 
-        self._canvas_status = CanvasStatusStrip(show_readiness=False)
+        self._canvas_status = CanvasStatusStrip()
         root.addWidget(self._canvas_status)
 
         self.setAcceptDrops(True)
@@ -113,52 +109,15 @@ class DraftPage(BasePage):
         self._recent_btn.setToolTip("Pick from recently opened DXF files")
         self._recent_btn.fileSelected.connect(self._load_dxf)
 
-        # Shape mode — interactive dropdown to switch quick-draw shape type
-        self._shape_mode_btn = QToolButton()
-        self._shape_mode_btn.setText("▸ Rectangle")
-        self._shape_mode_btn.setToolTip("Change the quick-draw shape mode")
-        self._shape_mode_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        _shape_menu = QMenu(self._shape_mode_btn)
-        for _shape in ("Rectangle", "Circle", "Slot", "Hexagon"):
-            _shape_menu.addAction(
-                _shape,
-                lambda s=_shape.lower(): self._canvas.set_quick_shape_mode(s),
-            )
-        self._shape_mode_btn.setMenu(_shape_menu)
+        explode_btn = QPushButton("Explode")
+        explode_btn.setMinimumHeight(28)
+        explode_btn.setToolTip("Explode selected shapes into segments")
+        explode_btn.clicked.connect(self._explode_selected)
 
-        # Close Poly — most common shape-editing action, surfaced directly
-        self._close_poly_btn = QPushButton("Close Poly")
-        self._close_poly_btn.setMinimumHeight(28)
-        self._close_poly_btn.setToolTip("Close selected open polylines [Shift+C]")
-        self._close_poly_btn.clicked.connect(self._close_selected_polylines)
-
-        # Select All — second most common action
-        self._select_all_btn = QPushButton("Select All")
-        self._select_all_btn.setMinimumHeight(28)
-        self._select_all_btn.setToolTip(
-            "Select all shapes on the active layer [Ctrl+A]"
-        )
-        self._select_all_btn.clicked.connect(self._select_all)
-
-        # Overflow (⋯) — remaining actions
-        overflow_btn = QToolButton()
-        overflow_btn.setText("⋯")
-        overflow_btn.setFixedWidth(32)
-        overflow_btn.setToolTip("More actions")
-        overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        overflow_menu = QMenu(overflow_btn)
-        overflow_menu.addAction(
-            "Open selected [Shift+O]", self._open_selected_polylines
-        )
-        overflow_menu.addSeparator()
-        overflow_menu.addAction("Delete selected [Delete]", self._delete_selected)
-        overflow_menu.addAction("Duplicate [Ctrl+D]", self._duplicate_selected)
-        overflow_menu.addAction("Deselect all [Ctrl+Shift+A]", self._deselect_all)
-        overflow_menu.addSeparator()
-        overflow_menu.addAction("Toggle measure [M]", self._toggle_measure_mode)
-        overflow_menu.addAction("Fit view [F]", self._fit_view)
-        overflow_menu.addAction("Fit selection", self._fit_selection)
-        overflow_btn.setMenu(overflow_menu)
+        merge_btn = QPushButton("Merge")
+        merge_btn.setMinimumHeight(28)
+        merge_btn.setToolTip("Merge selected segments into connected objects")
+        merge_btn.clicked.connect(self._merge_selected)
 
         export_btn = QPushButton("Export DXF")
         export_btn.setMinimumHeight(28)
@@ -166,29 +125,31 @@ class DraftPage(BasePage):
         export_btn.setProperty("role", "primary")
         export_btn.clicked.connect(self._export)
 
-        _spacer = QWidget()
-        _spacer.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
             on_mode=self._on_toolbar_mode,
-            on_fit=self._fit_view,
+            on_fit=self._canvas.fit,
+            show_fit=False,
             extra_widgets=[
                 _toolbar_sep(),
-                self._shape_mode_btn,
-                self._close_poly_btn,
-                self._select_all_btn,
-                overflow_btn,
-                _spacer,
-                _toolbar_sep(),
+                explode_btn,
+                merge_btn,
                 open_btn,
                 self._recent_btn,
                 export_btn,
             ],
         )
         return self._toolbar_module
+
+    def _explode_selected(self) -> None:
+        count = self._canvas.explode_selected_to_segments()
+        if count:
+            self._refresh_status()
+
+    def _merge_selected(self) -> None:
+        count = self._canvas.merge_selected_segments_to_objects()
+        if count:
+            self._refresh_status()
 
     def _build_grid(self) -> QWidget:
         self._grid_module = CanvasGridModule(
@@ -273,11 +234,9 @@ class DraftPage(BasePage):
         self._refresh_status()
 
     def _on_quick_shape_changed(self, mode: str) -> None:
-        self._shape_mode_btn.setText(f"▸ {mode.title()}")
         self._refresh_status()
 
     def _on_quick_shape_enabled_changed(self, enabled: bool) -> None:
-        self._shape_mode_btn.setEnabled(bool(enabled))
         self._refresh_status()
 
     def _on_sel_change(self, count: int) -> None:
@@ -419,55 +378,6 @@ class DraftPage(BasePage):
         self._rt().on_canvas_edit()
         self._refresh_status()
         self._emit_state_changed()
-
-    def _close_selected_polylines(self) -> None:
-        changed = self._canvas.close_selected_polylines()
-        if changed:
-            self._rt().graph_adapter.capture_from_canvas(self._canvas)
-            self._canvas._show_flash(f"Closed {changed} polyline(s)", 900)
-            self._refresh_status()
-            self._emit_state_changed()
-        else:
-            self._canvas._show_flash("No open polyline selected", 900)
-
-    def _open_selected_polylines(self) -> None:
-        changed = self._canvas.open_selected_polylines()
-        if changed:
-            self._rt().graph_adapter.capture_from_canvas(self._canvas)
-            self._canvas._show_flash(f"Opened {changed} polyline(s)", 900)
-            self._refresh_status()
-            self._emit_state_changed()
-        else:
-            self._canvas._show_flash("No closed polyline selected", 900)
-
-    def _fit_view(self) -> None:
-        self._canvas.fit()
-        self._refresh_status()
-
-    def _toggle_measure_mode(self) -> None:
-        self._canvas.toggle_measure()
-        self._refresh_status()
-
-    def _delete_selected(self) -> None:
-        deleted = self._canvas.delete_selected()
-        if deleted:
-            self._rt().graph_adapter.capture_from_canvas(self._canvas)
-            self._refresh_status()
-            self._emit_state_changed()
-
-    def _duplicate_selected(self) -> None:
-        if self._canvas.duplicate_selected():
-            self._rt().graph_adapter.capture_from_canvas(self._canvas)
-            self._refresh_status()
-            self._emit_state_changed()
-
-    def _select_all(self) -> None:
-        self._canvas.select_all()
-        self._refresh_status()
-
-    def _deselect_all(self) -> None:
-        self._canvas.deselect_all()
-        self._refresh_status()
 
     def _on_canvas_action(self, action_type: str, payload: dict | None = None) -> None:
         active = self._rt().current_layer_name()

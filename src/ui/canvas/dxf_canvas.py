@@ -483,6 +483,7 @@ class DxfCanvas(PolylineView):
         self._size_w_edit.setStyleSheet(style)
         self._size_w_edit.move(int(cx - 98), int(cy - 30))
         self._size_w_edit.returnPressed.connect(self._apply_size_hud)
+        self._size_w_edit.editingFinished.connect(self._apply_size_hud)
         self._size_w_edit.show()
 
         self._size_h_edit = QLineEdit(self.viewport())
@@ -494,6 +495,7 @@ class DxfCanvas(PolylineView):
         self._size_h_edit.setStyleSheet(style)
         self._size_h_edit.move(int(cx + 8), int(cy - 30))
         self._size_h_edit.returnPressed.connect(self._apply_size_hud)
+        self._size_h_edit.editingFinished.connect(self._apply_size_hud)
         self._size_h_edit.show()
         self._size_w_edit.setFocus()
         self._size_w_edit.selectAll()
@@ -533,7 +535,9 @@ class DxfCanvas(PolylineView):
             self._set_selected_height(new_h)
         if changed_w or changed_h:
             self._show_flash("Dimensions updated", 900)
-        self._dismiss_size_hud()
+            # Keep HUD open with committed values for iterative edits.
+            self._size_w_edit.setText(f"{new_w:.3f}")
+            self._size_h_edit.setText(f"{new_h:.3f}")
 
     def _toggle_radial_menu(self) -> None:
         if self._radial_active:

@@ -20,21 +20,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.core.base_page import BasePage
-
 from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines, polylines_from_graph
 from src.backend.dxf.io import load_dxf_polylines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.modules import CanvasGridModule
+from src.ui.core.base_page import BasePage
 from src.ui.core.factories import content_splitter, surface_frame
-from src.ui.widgets.status_strip import CanvasStatusStrip
 from src.ui.pages.convert.subtabs import (
     FixerSubTab,
     FviSubTab,
     SvgSubTab,
     SvgToDxfSubTab,
 )
+from src.ui.widgets.status_strip import CanvasStatusStrip
 
 LOGGER = logging.getLogger(__name__)
 
@@ -208,7 +207,7 @@ class ConvertPage(BasePage):
         )
         _cl.addWidget(self._precision_bar)
 
-        self._canvas_status = CanvasStatusStrip(show_readiness=False)
+        self._canvas_status = CanvasStatusStrip()
         _cl.addWidget(self._canvas_status)
 
         self._preview_canvas = DxfCanvas(selectable=False)
