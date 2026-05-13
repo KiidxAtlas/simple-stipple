@@ -14,6 +14,7 @@ from src.backend.geometry.shapes import (
     shape_rect,
     shape_slot,
 )
+from src.ui.canvas.shape_manipulation import ShapeManipulationActions
 from src.ui.canvas.view import PolylineView
 
 
@@ -437,6 +438,26 @@ class DxfCanvas(PolylineView):
         )
         align_menu.addAction(
             "Bottom", lambda: _run_transform(lambda: self.align_selected("bottom"))
+        )
+
+        composition_menu = menu.addMenu("Composition")
+        composition_menu.addAction(
+            "Break Apart",
+            lambda: _run_transform(lambda: ShapeManipulationActions.break_apart(self)),
+        )
+        composition_menu.addAction(
+            "Combine (Union)",
+            lambda: _run_transform(lambda: ShapeManipulationActions.combine(self)),
+        )
+        composition_menu.addAction(
+            "Simplify…",
+            lambda: _run_prompted_transform(
+                "Simplify Shapes",
+                "Simplification tolerance (mm):",
+                0.1,
+                0.001,
+                lambda tol: ShapeManipulationActions.simplify(self, tol),
+            ),
         )
 
         menu.addSeparator()

@@ -25,6 +25,7 @@ from src.backend.geometry.primitives import (
 )
 from src.ui.canvas._constants import CLOSE_SNAP_DIST as _CLOSE_SNAP_DIST
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
+from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
 
 
 class _DrawModeMixin:
@@ -33,8 +34,8 @@ class _DrawModeMixin:
     def _build_draw_sidebar(self) -> None:
         panel = DrawSidebar(
             parent=self.viewport(),
-            on_tool_selected=self._set_draw_primitive,
-            on_apply_shape_size=self._apply_shape_size_inputs,
+            on_draw_clicked=self._on_draw_button_clicked,
+            on_apply_shape_size=lambda: None,
             on_finish_open=lambda: self._finish_draw(close=False),
             on_close_edit=lambda: self._finish_draw(close=True),
             on_undo_point=self._key_backspace,
@@ -48,12 +49,8 @@ class _DrawModeMixin:
         )
         panel.hide()
 
-        self._draw_shape_w_edit = panel.shape_width_edit
-        self._draw_shape_h_edit = panel.shape_height_edit
-        if self._draw_shape_w_edit is not None:
-            self._draw_shape_w_edit.installEventFilter(self)
-        if self._draw_shape_h_edit is not None:
-            self._draw_shape_h_edit.installEventFilter(self)
+        # Create tool picker dialog
+        self._tool_picker_dialog = ToolPickerDialog(parent=self.viewport())
 
         anim = QPropertyAnimation(panel, b"pos", self)
         anim.setDuration(150)
@@ -78,6 +75,17 @@ class _DrawModeMixin:
         self._draw_split_enabled = not self._draw_split_enabled
         self._refresh_draw_sidebar_state()
         self._show_flash("Split: on" if self._draw_split_enabled else "Split: off", 800)
+
+    def _on_draw_button_clicked(self) -> None:
+        """Show the tool picker modal and handle tool selection."""
+        if (
+            hasattr(self, "_tool_picker_dialog")
+            and self._tool_picker_dialog is not None
+        ):
+            if self._tool_picker_dialog.exec() == 1:  # QDialog.Accepted
+                tool = self._tool_picker_dialog.get_selected_tool()
+                if tool is not None:
+                    self._set_draw_primitive(tool)
 
     def _cancel_draw_points(self) -> None:
         if self._mode != "draw":
@@ -161,7 +169,6 @@ class _DrawModeMixin:
             can_undo=has_pts >= 1,
         )
         self._draw_sidebar.set_snap_label(self._grid_snap)
-        self._draw_sidebar.set_construction_label(self._draw_construction_mode)
         self._draw_sidebar.set_split_label(self._draw_split_enabled)
         self._draw_sidebar.set_active_tool(self._draw_primitive)
         self._draw_sidebar.set_arc_mode(self._draw_arc_mode)
@@ -239,25 +246,16 @@ class _DrawModeMixin:
         enabled = (
             self._shape_primitive_active() and self._draw_shape_anchor_w is not None
         )
-        if isinstance(self._draw_sidebar, DrawSidebar):
-            self._draw_sidebar.set_shape_size_enabled(enabled)
-        else:
-            self._draw_shape_w_edit.setEnabled(enabled)
-            self._draw_shape_h_edit.setEnabled(enabled)
+        self._draw_shape_w_edit.setEnabled(enabled)
+        self._draw_shape_h_edit.setEnabled(enabled)
         if not enabled:
             return
         if self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
             return
         sx, sy = self._draw_shape_anchor_w
         ex, ey = self._draw_shape_cursor_w
-        if isinstance(self._draw_sidebar, DrawSidebar):
-            self._draw_sidebar.set_shape_size_values(
-                f"{abs(ex - sx):.2f}",
-                f"{abs(ey - sy):.2f}",
-            )
-        else:
-            self._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
-            self._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
+        self._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
+        self._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
 
     def _apply_shape_size_inputs(self) -> None:
         if (
@@ -353,7 +351,12 @@ class _DrawModeMixin:
                 }
         elif primitive == "spline" and len(poly) >= 2:
             kind = "spline"
-            meta = {"segments": 24, "closed": close}
+            meta = {
+                "segments": 24,
+                "closed": close,
+                "control_points": [tuple(pt) for pt in poly],
+                "degree": 3,
+            }
         self._entity_kinds.append(kind)
         self._entity_meta.append(meta)
         self._polys.append(list(poly))
@@ -418,6 +421,13 @@ class _DrawModeMixin:
         meta: dict[str, Any] | None = None
         if self._draw_primitive == "rectangle":
             poly = build_rect_poly(cx, cy, w, h)
+            kind = "rectangle"
+            meta = {
+                "center": (cx, cy),
+                "width": w,
+                "height": h,
+                "rotation": 0.0,
+            }
         elif self._draw_primitive == "circle":
             # Match preview behavior: first click is center, drag to radius.
             radius = math.hypot(ex - sx, ey - sy)

@@ -53,6 +53,7 @@ from src.ui.canvas.modes._draw_mixin import _DrawModeMixin
 from src.ui.canvas.modes._edit_mixin import _EditModeMixin
 from src.ui.canvas.modes._select_mixin import _SelectModeMixin
 from src.ui.canvas.render import CanvasRenderer
+from src.ui.canvas.shape_storage import ShapeStorage
 from src.ui.core.focus_policy import blur_focused_line_edit
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 
@@ -127,6 +128,10 @@ class PolylineView(
         self._entity_kinds: list[str] = []
         self._entity_meta: list[dict[str, Any] | None] = []
         self._sel: set[int] = set()
+
+        # Phase 2: New shape storage (Phase 2+)
+        self._shape_storage = ShapeStorage()
+
         self._construction_polys: set[int] = set()
         self._hidden_polys: set[int] = set()
         self._locked_polys: set[int] = set()
@@ -307,10 +312,16 @@ class PolylineView(
         self._hidden_polys.clear()
         self._locked_polys.clear()
         self._groups.clear()
+        self._construction_polys.clear()
+
+        # Phase 2: Migrate to new shape storage
+        self._shape_storage.migrate_from_polylines(
+            self._polys, self._entity_kinds, self._entity_meta
+        )
+
         self._needs_fit = True
         self._fit()
         self._notify()
-        self._construction_polys.clear()
 
     def set_accent_polys(self, accent: dict[int, str]) -> None:
         """Override render color for specific poly indices (e.g. cutout shapes).
@@ -331,6 +342,12 @@ class PolylineView(
         self._hidden_polys &= valid
         self._locked_polys &= valid
         self._groups = {k: v for k, v in self._groups.items() if k in valid}
+
+        # Phase 2: Migrate to new shape storage
+        self._shape_storage.migrate_from_polylines(
+            self._polys, self._entity_kinds, self._entity_meta
+        )
+
         self._redraw()
 
     def get_polylines_state(self) -> list[list[tuple[float, float]]]:
@@ -347,6 +364,12 @@ class PolylineView(
         self._hidden_polys.clear()
         self._locked_polys.clear()
         self._groups.clear()
+
+        # Phase 2: Migrate to new shape storage
+        self._shape_storage.migrate_from_polylines(
+            self._polys, self._entity_kinds, self._entity_meta
+        )
+
         if fit:
             self._needs_fit = True
             self._fit()
@@ -439,6 +462,7 @@ class PolylineView(
         self._polys.append(list(poly))
         self._entity_kinds.append(kind)
         self._entity_meta.append(deepcopy(meta) if meta is not None else None)
+        self._sync_shape_storage_from_entities()
         return len(self._polys) - 1
 
     def _insert_entity(
@@ -452,6 +476,7 @@ class PolylineView(
         self._polys.insert(idx, list(poly))
         self._entity_kinds.insert(idx, kind)
         self._entity_meta.insert(idx, deepcopy(meta) if meta is not None else None)
+        self._sync_shape_storage_from_entities()
 
     def _remove_entity(self, idx: int) -> None:
         self._polys.pop(idx)
@@ -459,6 +484,7 @@ class PolylineView(
             self._entity_kinds.pop(idx)
         if idx < len(self._entity_meta):
             self._entity_meta.pop(idx)
+        self._sync_shape_storage_from_entities()
 
     def _copy_entities(self) -> tuple[list[str], list[dict[str, Any] | None]]:
         return (
@@ -487,6 +513,7 @@ class PolylineView(
         self._sel = {i for i in sel if i < len(self._polys)}
         self._construction_polys = {i for i in construction if i < len(self._polys)}
         self._set_entities_from_copy(kinds, meta)
+        self._sync_shape_storage_from_entities()
 
     def _reset_edit_interaction_state(self) -> None:
         self._edit_poly = None
@@ -510,6 +537,14 @@ class PolylineView(
     ) -> None:
         self._entity_kinds = list(kinds)
         self._entity_meta = [deepcopy(m) if m is not None else None for m in meta]
+
+    def _sync_shape_storage_from_entities(self) -> None:
+        """Keep Phase-2 shape storage synchronized with current entity arrays."""
+        self._shape_storage.migrate_from_polylines(
+            self._polys,
+            self._entity_kinds,
+            self._entity_meta,
+        )
 
     def _demote_selected_entities_to_polylines(
         self, indices: list[int] | None = None
@@ -637,6 +672,8 @@ class PolylineView(
         if n:
             self._push_undo()
         kept: list[list[tuple[float, float]]] = []
+        kept_kinds: list[str] = []
+        kept_meta: list[dict[str, Any] | None] = []
         new_construction: set[int] = set()
         new_hidden: set[int] = set()
         new_locked: set[int] = set()
@@ -646,6 +683,14 @@ class PolylineView(
                 continue
             new_idx = len(kept)
             kept.append(p)
+            kept_kinds.append(
+                self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
+            )
+            kept_meta.append(
+                deepcopy(self._entity_meta[i])
+                if i < len(self._entity_meta) and self._entity_meta[i] is not None
+                else None
+            )
             if i in self._construction_polys:
                 new_construction.add(new_idx)
             if i in self._hidden_polys:
@@ -655,6 +700,8 @@ class PolylineView(
             if i in self._groups:
                 new_groups[new_idx] = self._groups[i]
         self._polys = kept
+        self._entity_kinds = kept_kinds
+        self._entity_meta = kept_meta
         self._construction_polys = new_construction
         self._hidden_polys = new_hidden
         self._locked_polys = new_locked
@@ -707,198 +754,12 @@ class PolylineView(
         self._redraw()
         self._notify()
 
-    def explode_selected_to_segments(self) -> int:
-        """Split each selected multi-vertex polyline into individual 2-pt line segments.
-
-        Returns the number of new segments created.
-        """
-        indices = self._mutable_selected_indices()
-        if not indices:
-            return 0
-        # Only explode polylines with more than 2 points (1 segment is already atomic).
-        to_explode = [i for i in indices if len(self._polys[i]) > 2]
-        if not to_explode:
-            return 0
-        self._push_undo()
-        new_polys: list[list[tuple[float, float]]] = []
-        new_construction: set[int] = set()
-        new_kinds: list[str] = []
-        new_meta: list[dict[str, Any] | None] = []
-        new_sel: set[int] = set()
-        for i, poly in enumerate(self._polys):
-            is_construction = i in self._construction_polys
-            kind = self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
-            meta = self._entity_meta[i] if i < len(self._entity_meta) else None
-            if i in to_explode:
-                pts = list(poly)
-                is_closed = False
-                # If closed (first == last) drop the duplicate closing point first
-                if (
-                    len(pts) >= 3
-                    and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
-                    < 1e-6
-                ):
-                    pts = pts[:-1]
-                    is_closed = True
-                seg_count = len(pts) if is_closed else max(0, len(pts) - 1)
-                for j in range(seg_count):
-                    seg = [pts[j], pts[(j + 1) % len(pts)]]
-                    si = len(new_polys)
-                    new_polys.append(seg)
-                    new_kinds.append("line")
-                    new_meta.append({"start": seg[0], "end": seg[1]})
-                    if is_construction:
-                        new_construction.add(si)
-                    new_sel.add(si)
-            else:
-                ni = len(new_polys)
-                new_polys.append(poly)
-                new_kinds.append(kind)
-                new_meta.append(deepcopy(meta) if meta is not None else None)
-                if is_construction:
-                    new_construction.add(ni)
-        self._polys = new_polys
-        self._entity_kinds = new_kinds
-        self._entity_meta = new_meta
-        self._construction_polys = new_construction
-        self._sel = new_sel
+    def _invert_selection(self) -> None:
+        """Invert selection: select all unselected, deselect all selected."""
+        all_indices = set(range(len(self._polys))) - self._hidden_polys
+        self._sel = all_indices - self._sel
         self._redraw()
         self._notify()
-        self._fire_poly_change()
-        return len(new_sel)
-
-    def merge_selected_segments_to_objects(self) -> int:
-        """Merge selected geometry by segment connectivity.
-
-        Accepts a mix of atomic 2-point segments and multi-vertex polylines.
-        Selected polylines are decomposed into their constituent segments first,
-        then rebuilt into one or more connected objects.
-        """
-        indices = self._mutable_selected_indices()
-        if len(indices) < 2:
-            return 0
-
-        def _eq(a: tuple[float, float], b: tuple[float, float]) -> bool:
-            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
-
-        segs: list[tuple[tuple[float, float], tuple[float, float], bool]] = []
-        for i in indices:
-            poly = self._polys[i]
-            if len(poly) < 2:
-                continue
-            is_construction = i in self._construction_polys
-            pts = list(poly)
-            is_closed = False
-            if (
-                len(pts) >= 3
-                and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) < 1e-6
-            ):
-                pts = pts[:-1]
-                is_closed = True
-            if len(pts) < 2:
-                continue
-            seg_count = len(pts) if is_closed else max(0, len(pts) - 1)
-            for j in range(seg_count):
-                a = pts[j]
-                b = pts[(j + 1) % len(pts)]
-                if _eq(a, b):
-                    continue
-                segs.append((a, b, is_construction))
-
-        if len(segs) < 2:
-            return 0
-
-        sel_set = set(indices)
-
-        self._push_undo()
-
-        merged_polys: list[tuple[list[tuple[float, float]], bool]] = []
-        used = [False] * len(segs)
-
-        for si, seg in enumerate(segs):
-            if used[si]:
-                continue
-            used[si] = True
-            chain = [seg[0], seg[1]]
-            chain_construction = seg[2]
-
-            changed = True
-            while changed:
-                changed = False
-                for j, s in enumerate(segs):
-                    if used[j]:
-                        continue
-                    a, b = s[0], s[1]
-                    head, tail = chain[0], chain[-1]
-                    if _eq(tail, a):
-                        chain.append(b)
-                    elif _eq(tail, b):
-                        chain.append(a)
-                    elif _eq(head, b):
-                        chain.insert(0, a)
-                    elif _eq(head, a):
-                        chain.insert(0, b)
-                    else:
-                        continue
-                    used[j] = True
-                    chain_construction = chain_construction or s[2]
-                    changed = True
-                    break
-
-            if len(chain) >= 3 and _eq(chain[0], chain[-1]):
-                # normalize explicit closure point
-                chain[-1] = chain[0]
-            merged_polys.append((
-                self._normalize_merged_chain(chain),
-                chain_construction,
-            ))
-
-        kept_polys: list[list[tuple[float, float]]] = []
-        kept_construction: set[int] = set()
-        for i, poly in enumerate(self._polys):
-            if i in sel_set:
-                continue
-            ni = len(kept_polys)
-            kept_polys.append(poly)
-            if i in self._construction_polys:
-                kept_construction.add(ni)
-
-        new_sel: set[int] = set()
-        for poly, is_construction in merged_polys:
-            ni = len(kept_polys)
-            kept_polys.append(poly)
-            new_sel.add(ni)
-            if is_construction:
-                kept_construction.add(ni)
-
-        self._polys = kept_polys
-        self._construction_polys = kept_construction
-        self._sel = new_sel
-        self._redraw()
-        self._notify()
-        self._fire_poly_change()
-        return len(new_sel)
-
-    @staticmethod
-    def _normalize_merged_chain(
-        chain: list[tuple[float, float]],
-    ) -> list[tuple[float, float]]:
-        if not chain:
-            return []
-        normalized: list[tuple[float, float]] = [chain[0]]
-        for pt in chain[1:]:
-            if math.hypot(normalized[-1][0] - pt[0], normalized[-1][1] - pt[1]) >= 1e-6:
-                normalized.append(pt)
-        if (
-            len(normalized) >= 3
-            and math.hypot(
-                normalized[0][0] - normalized[-1][0],
-                normalized[0][1] - normalized[-1][1],
-            )
-            < 1e-6
-        ):
-            normalized[-1] = normalized[0]
-        return normalized
 
     def toggle_measure(self) -> None:
         self._measure_mode = not self._measure_mode
@@ -1108,6 +969,7 @@ class PolylineView(
         ]
 
     def get_export_dxf_state(self) -> list[dict[str, Any]]:
+        self._sync_shape_storage_from_entities()
         result: list[dict[str, Any]] = []
         for idx, poly in enumerate(self._polys):
             if idx in self._construction_polys:
@@ -1117,10 +979,17 @@ class PolylineView(
             )
             meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
             if meta is None:
-                export_meta = {"name": f"shape_{idx + 1}"}
+                export_meta: dict[str, Any] = {"name": f"shape_{idx + 1}"}
             else:
                 export_meta = deepcopy(meta)
                 export_meta.setdefault("name", f"shape_{idx + 1}")
+            if kind == "line" and len(poly) >= 2:
+                export_meta["start"] = tuple(poly[0])
+                export_meta["end"] = tuple(poly[-1])
+            elif kind == "spline":
+                export_meta["control_points"] = [tuple(pt) for pt in poly]
+                export_meta.setdefault("degree", 3)
+                export_meta.setdefault("closed", self._is_poly_closed(poly))
             result.append({
                 "index": idx,
                 "polyline": list(poly),
@@ -1639,29 +1508,21 @@ class PolylineView(
         h = abs(ey - sy)
         cx, cy = self._w2c((sx + ex) / 2.0, (sy + ey) / 2.0)
 
-        w_edit = QLineEdit(self.viewport())
-        w_edit.setFixedWidth(86)
-        w_edit.setFixedHeight(24)
-        w_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        w_edit.setStyleSheet(self._DIM_STYLE)
+        w_edit = self._make_hud_edit(
+            width=86, height=24, align=Qt.AlignmentFlag.AlignCenter
+        )
         w_edit.setText(f"{w:.2f}")
         w_edit.setProperty("shape_hud_temp", True)
         w_edit.move(int(cx + 16), int(cy + 12))
         w_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
-        w_edit.installEventFilter(self)
-        w_edit.show()
 
-        h_edit = QLineEdit(self.viewport())
-        h_edit.setFixedWidth(86)
-        h_edit.setFixedHeight(24)
-        h_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        h_edit.setStyleSheet(self._DIM_STYLE)
+        h_edit = self._make_hud_edit(
+            width=86, height=24, align=Qt.AlignmentFlag.AlignCenter
+        )
         h_edit.setText(f"{h:.2f}")
         h_edit.setProperty("shape_hud_temp", True)
         h_edit.move(int(cx + 16), int(cy + 40))
         h_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
-        h_edit.installEventFilter(self)
-        h_edit.show()
 
         self._draw_shape_w_edit = w_edit
         self._draw_shape_h_edit = h_edit
@@ -1736,20 +1597,25 @@ class PolylineView(
                 else:
                     self.select_all()
                 return
+            elif key == Qt.Key.Key_I:
+                # Ctrl+I: Invert selection
+                self._invert_selection()
+                return
             elif key == Qt.Key.Key_C:
                 self._copy_selected()
                 return
             elif key == Qt.Key.Key_V:
                 self._paste_clipboard()
                 return
+            elif key == Qt.Key.Key_D and shift_mod:
+                # Ctrl+Shift+D: Duplicate with offset (smarter placement)
+                self._duplicate_selected_with_offset()
+                return
             elif key == Qt.Key.Key_D:
                 self._duplicate_selected()
                 return
             elif key == Qt.Key.Key_X:
                 self._cut_selected()
-                return
-            elif key == Qt.Key.Key_D and shift_mod:
-                self._prompt_edit_dimensions()
                 return
 
         # Arrow key nudge
@@ -1844,6 +1710,10 @@ class PolylineView(
                 self._dim_distance_dirty = False
                 self._dim_angle_dirty = False
                 self.setFocus()  # return focus to canvas
+                return
+            # In select mode, Escape clears selection
+            if self._mode == "select" and self._sel:
+                self.deselect_all()
                 return
             self._escape_cb()
         elif key == Qt.Key.Key_BracketRight and not ctrl:
@@ -2374,7 +2244,10 @@ class PolylineView(
             if (
                 hit is not None
                 and hit[0] == target
-                and (was_selected_before or target_kind in {"circle", "ellipse"})
+                and (
+                    was_selected_before
+                    or target_kind in {"arc", "circle", "ellipse", "rectangle"}
+                )
                 and target not in self._locked_polys
             ):
                 pi, vi = hit
@@ -3083,5 +2956,6 @@ class PolylineView(
 
     def _fire_poly_change(self) -> None:
         """Notify the on_poly_change callback when polylines are structurally modified."""
+        self._sync_shape_storage_from_entities()
         if callable(self._on_poly_change):
             self._on_poly_change()

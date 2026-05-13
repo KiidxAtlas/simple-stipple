@@ -4,99 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
+    QLabel,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-_TOOL_ICON_COLOR = QColor("#bcd3ea")
-
-
-class DrawToolButton(QPushButton):
-    def __init__(self, label: str, tool: str, parent: QWidget | None = None):
-        super().__init__("", parent)
-        self._tool = tool
-        self.setToolTip(label)
-        self.setMinimumSize(48, 38)
-        self.setMaximumSize(48, 38)
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(_TOOL_ICON_COLOR, 1.4))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        rect = self.rect().adjusted(7, 6, -7, -6)
-        side = float(max(10, min(rect.width(), rect.height())))
-        icon_rect = QRectF(
-            rect.center().x() - side / 2.0,
-            rect.center().y() - side / 2.0,
-            side,
-            side,
-        )
-        cx = icon_rect.center().x()
-        cy = icon_rect.center().y()
-
-        if self._tool == "line":
-            painter.drawLine(
-                QPointF(icon_rect.left() + 1, icon_rect.bottom() - 1),
-                QPointF(icon_rect.right() - 1, icon_rect.top() + 1),
-            )
-        elif self._tool == "arc":
-            path = QPainterPath()
-            path.moveTo(icon_rect.left() + 1, icon_rect.bottom() - 2)
-            path.quadTo(
-                cx, icon_rect.top() - 1, icon_rect.right() - 1, icon_rect.bottom() - 2
-            )
-            painter.drawPath(path)
-        elif self._tool == "polyline":
-            path = QPainterPath()
-            path.moveTo(icon_rect.left() + 1, icon_rect.bottom() - 2)
-            path.lineTo(cx - 1, cy)
-            path.lineTo(icon_rect.right() - 1, icon_rect.top() + 2)
-            painter.drawPath(path)
-        elif self._tool == "spline":
-            path = QPainterPath()
-            path.moveTo(icon_rect.left() + 1, icon_rect.bottom() - 2)
-            path.cubicTo(
-                icon_rect.left() + 4,
-                icon_rect.top() + 1,
-                icon_rect.right() - 4,
-                icon_rect.bottom() - 1,
-                icon_rect.right() - 1,
-                icon_rect.top() + 2,
-            )
-            painter.drawPath(path)
-        elif self._tool == "rectangle":
-            painter.drawRect(icon_rect.adjusted(1, 2, -1, -2))
-        elif self._tool == "circle":
-            painter.drawEllipse(icon_rect.adjusted(1, 1, -1, -1))
-        elif self._tool == "ellipse":
-            painter.drawEllipse(icon_rect.adjusted(0, 3, 0, -3))
-        elif self._tool == "polygon":
-            path = QPainterPath()
-            path.moveTo(cx, icon_rect.top() + 1)
-            path.lineTo(icon_rect.right() - 2, cy - 2)
-            path.lineTo(icon_rect.right() - 4, icon_rect.bottom() - 1)
-            path.lineTo(icon_rect.left() + 4, icon_rect.bottom() - 1)
-            path.lineTo(icon_rect.left() + 2, cy - 2)
-            path.closeSubpath()
-            painter.drawPath(path)
-        painter.end()
-
 
 class DrawSidebar(QFrame):
+    """Simplified draw sidebar with modal tool picker."""
+
     def __init__(
         self,
         *,
         parent: QWidget | None,
-        on_tool_selected: Callable[[str], None],
+        on_draw_clicked: Callable[[], None],
         on_apply_shape_size: Callable[[], None],
         on_finish_open: Callable[[], None],
         on_close_edit: Callable[[], None],
@@ -110,9 +36,8 @@ class DrawSidebar(QFrame):
         on_back_to_select: Callable[[], None],
     ) -> None:
         super().__init__(parent)
-        self._tool_buttons: dict[str, DrawToolButton] = {}
-        self.shape_width_edit = None
-        self.shape_height_edit = None
+        self._tool_label: QLabel | None = None
+        self.draw_button: QPushButton | None = None
         self.finish_open_button: QPushButton | None = None
         self.close_edit_button: QPushButton | None = None
         self.undo_point_button: QPushButton | None = None
@@ -175,21 +100,38 @@ class DrawSidebar(QFrame):
         col.setContentsMargins(2, 2, 2, 2)
         col.setSpacing(6)
 
-        tools = [
-            ("Line", "line"),
-            ("Arc", "arc"),
-            ("Polyline", "polyline"),
-            ("Spline", "spline"),
-            ("Rectangle", "rectangle"),
-            ("Circle", "circle"),
-            ("Ellipse", "ellipse"),
-            ("Polygon", "polygon"),
-        ]
-        for label, tool in tools:
-            button = DrawToolButton(label, tool, self)
-            button.clicked.connect(lambda checked=False, t=tool: on_tool_selected(t))
-            col.addWidget(button, alignment=Qt.AlignmentFlag.AlignHCenter)
-            self._tool_buttons[tool] = button
+        title = QLabel("Draw")
+        title.setProperty("role", "title")
+        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        col.addWidget(title)
+
+        # ── Tool Selector ──────────────────────────────────────────
+
+        self.draw_button = QPushButton("➕", self)
+        self.draw_button.setToolTip("Select drawing tool")
+        self.draw_button.clicked.connect(on_draw_clicked)
+        self.draw_button.setFixedSize(48, 38)
+        col.addWidget(self.draw_button, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self._tool_label = QLabel("—")
+        self._tool_label.setProperty("role", "hint")
+        self._tool_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._tool_label.setStyleSheet(
+            "QLabel { font-size: 10px; color: #8b949e; margin-top: 2px; }"
+        )
+        col.addWidget(self._tool_label)
+
+        tool_sep = QFrame(self)
+        tool_sep.setFrameShape(QFrame.Shape.HLine)
+        tool_sep.setFrameShadow(QFrame.Shadow.Plain)
+        col.addWidget(tool_sep)
+
+        # ── Modes ──────────────────────────────────────────────────
+
+        mode_hint = QLabel("Modes")
+        mode_hint.setProperty("role", "hint")
+        mode_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        col.addWidget(mode_hint)
 
         self.arc_mode_button = QPushButton("A3", self)
         self.arc_mode_button.setToolTip("Cycle arc mode")
@@ -204,6 +146,18 @@ class DrawSidebar(QFrame):
         col.addWidget(
             self.constraint_mode_button, alignment=Qt.AlignmentFlag.AlignHCenter
         )
+
+        action_sep = QFrame(self)
+        action_sep.setFrameShape(QFrame.Shape.HLine)
+        action_sep.setFrameShadow(QFrame.Shadow.Plain)
+        col.addWidget(action_sep)
+
+        # ── Actions ────────────────────────────────────────────────
+
+        actions_hint = QLabel("Actions")
+        actions_hint.setProperty("role", "hint")
+        actions_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        col.addWidget(actions_hint)
 
         self.finish_open_button = QPushButton("✓", self)
         self.finish_open_button.setToolTip("Finish open polyline")
@@ -252,15 +206,18 @@ class DrawSidebar(QFrame):
         layout.addWidget(scroll)
 
     def set_active_tool(self, tool: str) -> None:
-        for key, button in self._tool_buttons.items():
-            button.setProperty("role", "primary" if key == tool else None)
-            button.style().unpolish(button)
-            button.style().polish(button)
+        """Update the tool label to show the currently active tool."""
+        if self._tool_label is not None:
+            # Capitalize for display
+            display_name = tool.replace("_", " ").title()
+            self._tool_label.setText(display_name)
 
     def set_shape_size_enabled(self, enabled: bool) -> None:
+        """Placeholder for shape size field control."""
         _ = enabled
 
     def set_shape_size_values(self, width_text: str, height_text: str) -> None:
+        """Placeholder for shape size field values."""
         _ = (width_text, height_text)
 
     def set_polyline_actions_enabled(

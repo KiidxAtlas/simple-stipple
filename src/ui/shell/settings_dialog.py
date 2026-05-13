@@ -17,8 +17,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.settings import DEFAULT_KEYBINDINGS, save_settings
+from src.settings import save_settings
 from src.ui.core.factories import section_label, sep, surface_frame
+from src.ui.shell.keybindings_dialog import KeybindingsDialog
 
 
 class SettingsDialog(QDialog):
@@ -39,45 +40,19 @@ class SettingsDialog(QDialog):
     ]
 
     _TOGGLE_FIELDS = [
-        ("auto_fetch_on_startup", "Fetch repository on startup", False),
-        (
-            "auto_fetch_periodic",
-            "Fetch repository periodically while app is open",
-            False,
-        ),
         ("check_updates_on_startup", "Check for app updates on startup", False),
-    ]
-
-    _KEYBINDING_FIELDS = [
-        ("workspace.new", "New workspace"),
-        ("workspace.open", "Open workspace"),
-        ("workspace.save", "Save workspace"),
-        ("workspace.save_as", "Save workspace as"),
-        ("app.settings", "Open settings"),
-        ("app.command_palette", "Open command palette"),
-        ("canvas.select_mode", "Canvas select mode"),
-        ("canvas.draw_mode", "Canvas draw mode"),
-        ("canvas.edit_mode", "Canvas edit mode"),
-        ("canvas.measure", "Canvas measure"),
-        ("canvas.fit", "Canvas fit view"),
-        ("tab.draft", "Switch to Draft page"),
-        ("tab.pattern", "Switch to Pattern page"),
-        ("tab.trace", "Switch to Trace page"),
-        ("tab.convert", "Switch to Convert page"),
-        ("tab.repo", "Switch to Repo page"),
     ]
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.resize(700, 800)
-        self.setMinimumSize(640, 600)
+        self.resize(680, 620)
+        self.setMinimumSize(560, 480)
         self.setModal(True)
 
         self._settings: dict = settings or {}
         self._entries: dict[str, QLineEdit] = {}
         self._toggles: dict[str, QCheckBox] = {}
-        self._keybinding_entries: dict[str, QLineEdit] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -144,43 +119,14 @@ class SettingsDialog(QDialog):
         for key, label, default in self._TOGGLE_FIELDS:
             self._add_toggle(behavior_layout, key, label, default)
 
-        interval_row, self._auto_fetch_interval_entry = self._add_text_row(
-            behavior_layout,
-            "Auto-fetch interval (minutes)",
-            str(self._settings.get("auto_fetch_interval_minutes", 10)),
-            placeholder="10",
-        )
-        self._auto_fetch_interval_entry.setToolTip(
-            "How often to run background repository fetch while app is open"
-        )
-        interval_hint = QLabel(
-            "Used only when periodic auto-fetch is enabled. Minimum 1 minute."
-        )
-        interval_hint.setProperty("role", "hint")
-        behavior_layout.addWidget(interval_hint)
+        kb_row = QHBoxLayout()
+        kb_row.addStretch()
+        kb_btn = QPushButton("Edit shortcuts\u2026")
+        kb_btn.setToolTip("Customize keyboard shortcuts")
+        kb_btn.clicked.connect(self._open_keybindings)
+        kb_row.addWidget(kb_btn)
+        behavior_layout.addLayout(kb_row)
         content_layout.addWidget(behavior_card)
-
-        keybinding_card = surface_frame("panel")
-        keybinding_layout = QVBoxLayout(keybinding_card)
-        keybinding_layout.setContentsMargins(12, 12, 12, 12)
-        keybinding_layout.setSpacing(6)
-        section_label(keybinding_layout, "Keyboard Shortcuts")
-        import platform as _platform
-
-        _kbd_mod = "Meta" if _platform.system() == "Darwin" else "Ctrl"
-        kb_help = QLabel(f"Use Qt shortcut syntax (e.g. {_kbd_mod}+K, Shift+R, F).")
-        kb_help.setProperty("role", "hint")
-        keybinding_layout.addWidget(kb_help)
-        kb_actions = QHBoxLayout()
-        kb_actions.addStretch()
-        reset_keys_btn = QPushButton("Reset shortcuts")
-        reset_keys_btn.setToolTip("Restore all keyboard shortcuts to their defaults")
-        reset_keys_btn.clicked.connect(self._reset_keybindings)
-        kb_actions.addWidget(reset_keys_btn)
-        keybinding_layout.addLayout(kb_actions)
-        for key, label in self._KEYBINDING_FIELDS:
-            self._add_keybinding_row(keybinding_layout, key, label)
-        content_layout.addWidget(keybinding_card)
 
         content_layout.addStretch()
         sep(layout)
@@ -199,6 +145,11 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
 
+    def _open_keybindings(self) -> None:
+        dlg = KeybindingsDialog(self, keybindings=self._settings.get("keybindings", {}))
+        if dlg.exec():
+            self._settings["keybindings"] = dlg.get_keybindings()
+
     def _add_row(
         self, layout: QVBoxLayout, key: str, label: str, browse: bool = False
     ) -> None:
@@ -212,7 +163,7 @@ class SettingsDialog(QDialog):
             btn.setToolTip("Choose a folder")
             btn.clicked.connect(lambda checked, k=key: self._browse_dir(k))
             row.addWidget(btn)
-            clear_btn = QPushButton("✕")
+            clear_btn = QPushButton("\u2715")
             clear_btn.setFixedSize(28, 28)
             clear_btn.setProperty("role", "browse-btn")
             clear_btn.setToolTip("Clear this saved folder path")
@@ -230,20 +181,6 @@ class SettingsDialog(QDialog):
         row.addStretch()
         self._toggles[key] = cb
         layout.addLayout(row)
-
-    def _add_keybinding_row(self, layout: QVBoxLayout, key: str, label: str) -> None:
-        _, entry = self._add_text_row(
-            layout,
-            label,
-            str(
-                self._settings.get("keybindings", {}).get(
-                    key, DEFAULT_KEYBINDINGS.get(key, "")
-                )
-            ),
-            placeholder=DEFAULT_KEYBINDINGS.get(key, ""),
-        )
-        entry.setToolTip(f"Shortcut id: {key}")
-        self._keybinding_entries[key] = entry
 
     def _add_text_row(
         self,
@@ -275,14 +212,8 @@ class SettingsDialog(QDialog):
         if d:
             self._entries[key].setText(d)
 
-    def _reset_keybindings(self) -> None:
-        """Restore all shortcut fields to default values."""
-        for key, entry in self._keybinding_entries.items():
-            entry.setText(DEFAULT_KEYBINDINGS.get(key, ""))
-
     def _save(self) -> None:
         """Save all settings to disk."""
-        # Save folder paths
         for key, entry in self._entries.items():
             v = entry.text().strip()
             if v:
@@ -290,27 +221,9 @@ class SettingsDialog(QDialog):
             elif key in self._settings:
                 del self._settings[key]
 
-        # Save toggles
         for key, toggle in self._toggles.items():
             self._settings[key] = toggle.isChecked()
 
-        interval_raw = self._auto_fetch_interval_entry.text().strip()
-        if interval_raw:
-            try:
-                self._settings["auto_fetch_interval_minutes"] = max(
-                    1, int(interval_raw)
-                )
-            except ValueError:
-                self._settings["auto_fetch_interval_minutes"] = 10
-        else:
-            self._settings["auto_fetch_interval_minutes"] = 10
-
-        keybindings = dict(DEFAULT_KEYBINDINGS)
-        for key, entry in self._keybinding_entries.items():
-            value = entry.text().strip()
-            if value:
-                keybindings[key] = value
-        self._settings["keybindings"] = keybindings
-
         save_settings(self._settings)
         self.accept()
+

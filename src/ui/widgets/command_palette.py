@@ -5,12 +5,10 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -26,41 +24,39 @@ class CommandPaletteDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Command Palette")
+        self.setObjectName("command-palette")
         self.setModal(True)
         self.resize(620, 420)
         self.setMinimumSize(500, 320)
         self._commands = commands
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
 
-        title = QLabel("Search actions")
-        title.setStyleSheet("font-size: 14px; font-weight: 700; color: #f0f6fc;")
+        title = QLabel("Command Palette")
+        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f0f6fc;")
         layout.addWidget(title)
 
+        subtitle = QLabel("Search by command, page, or shortcut")
+        subtitle.setStyleSheet("color: #8b949e; font-size: 11px;")
+        layout.addWidget(subtitle)
+
         self._query = QLineEdit()
-        self._query.setPlaceholderText("Type action name or shortcut…")
+        self._query.setPlaceholderText("Type command, page, or shortcut…")
+        self._query.setClearButtonEnabled(True)
         self._query.textChanged.connect(self._refresh_list)
         self._query.returnPressed.connect(self._run_selected)
         layout.addWidget(self._query)
 
         self._list = QListWidget()
+        self._list.setUniformItemSizes(True)
         self._list.itemDoubleClicked.connect(lambda _item: self._run_selected())
         layout.addWidget(self._list, stretch=1)
 
-        footer = QHBoxLayout()
         hint = QLabel("Enter = run · Esc = close")
         hint.setStyleSheet("color: #8b949e; font-size: 11px;")
-        footer.addWidget(hint)
-        footer.addStretch()
-        run_btn = QPushButton("Run")
-        run_btn.clicked.connect(self._run_selected)
-        footer.addWidget(run_btn)
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.reject)
-        footer.addWidget(close_btn)
-        layout.addLayout(footer)
+        layout.addWidget(hint)
 
         self._refresh_list()
         self._query.setFocus()
@@ -85,18 +81,16 @@ class CommandPaletteDialog(QDialog):
                 continue
             title = str(cmd.get("title", ""))
             shortcut = str(cmd.get("shortcut", "")).strip()
-            subtitle = str(cmd.get("subtitle", "")).strip()
-            label = title
-            if shortcut:
-                label = f"{title}    [{shortcut}]"
-            if subtitle:
-                label = f"{label}\n{subtitle}"
+            label = f"{title}    [{shortcut}]" if shortcut else title
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, idx)
             self._list.addItem(item)
             if prev_idx == idx:
                 first_row_for_prev = self._list.count() - 1
         if self._list.count() == 0:
+            empty = QListWidgetItem("No matching commands")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._list.addItem(empty)
             return
         if first_row_for_prev is not None:
             self._list.setCurrentRow(first_row_for_prev)

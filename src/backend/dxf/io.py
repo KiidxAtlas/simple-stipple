@@ -540,6 +540,20 @@ def write_polylines_dxf(
                     dxfattribs=entity_attrs or None,
                 )
                 continue
+            if kind == "spline" and meta and "control_points" in meta:
+                cps = [
+                    tuple(pt)
+                    for pt in cast(
+                        list[tuple[float, float]], meta.get("control_points", [])
+                    )
+                ]
+                if len(cps) >= 2:
+                    msp.add_spline(
+                        cps,
+                        degree=int(meta.get("degree", 3)),
+                        dxfattribs=entity_attrs or None,
+                    )
+                    continue
 
             force_close = bool(close) and not bool(open_paths)
             coords, is_closed = _normalize_polyline_for_dxf(

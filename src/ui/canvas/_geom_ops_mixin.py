@@ -22,7 +22,9 @@ from shapely.ops import unary_union
 from src.backend.geometry.primitives import (
     build_circle_poly,
     build_ellipse_poly,
+    build_rect_poly,
 )
+from src.backend.geometry.spline import build_spline_poly
 
 
 class _GeomOpsMixin:
@@ -106,6 +108,54 @@ class _GeomOpsMixin:
                     cpt = (float(center[0]), float(center[1]))
                     poly = [self._rotate_point(pt, cpt, rot) for pt in poly]
                 self._polys[idx] = poly
+        elif kind == "arc":
+            center = meta.get("center")
+            radius = float(meta.get("radius", 0.0))
+            start_angle = float(meta.get("start_angle", 0.0))
+            end_angle = float(meta.get("end_angle", 0.0))
+            if isinstance(center, tuple) and radius > 0:
+                seg_count = int(
+                    meta.get("segments", max(12, len(self._polys[idx]) - 1))
+                )
+                seg_count = max(6, min(seg_count, 256))
+                start = math.radians(start_angle)
+                end = math.radians(end_angle)
+                if end < start:
+                    end += 2.0 * math.pi
+                step = (end - start) / float(seg_count)
+                cx = float(center[0])
+                cy = float(center[1])
+                self._polys[idx] = [
+                    (
+                        cx + radius * math.cos(start + i * step),
+                        cy + radius * math.sin(start + i * step),
+                    )
+                    for i in range(seg_count + 1)
+                ]
+        elif kind == "rectangle":
+            center = meta.get("center")
+            width = float(meta.get("width", 0.0))
+            height = float(meta.get("height", 0.0))
+            rotation = float(meta.get("rotation", 0.0))
+            if isinstance(center, tuple) and width > 0 and height > 0:
+                cx = float(center[0])
+                cy = float(center[1])
+                poly = build_rect_poly(cx, cy, width, height)
+                if abs(rotation) > 1e-9:
+                    poly = [self._rotate_point(pt, (cx, cy), rotation) for pt in poly]
+                self._polys[idx] = poly
+        elif kind == "spline":
+            cps = meta.get("control_points")
+            if isinstance(cps, list) and len(cps) >= 2:
+                segments = int(meta.get("segments", 24))
+                closed = bool(meta.get("closed", False))
+                poly = build_spline_poly(
+                    [tuple(pt) for pt in cps],
+                    segments=max(4, segments),
+                    closed=closed,
+                )
+                if len(poly) >= 2:
+                    self._polys[idx] = poly
 
     def _transform_entity_meta(
         self,
@@ -198,10 +248,36 @@ class _GeomOpsMixin:
                     math.degrees(math.atan2(end_pt[1] - cpt[1], end_pt[0] - cpt[0]))
                     % 360.0
                 )
+        elif kind == "rectangle":
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = _xform_point(tuple(ctr))
+            if transform == "scale" and factor is not None:
+                updated["width"] = float(updated.get("width", 0.0)) * abs(factor)
+                updated["height"] = float(updated.get("height", 0.0)) * abs(factor)
+            if transform == "rotate":
+                updated["rotation"] = (
+                    float(updated.get("rotation", 0.0)) + angle_deg
+                ) % 360.0
+            elif transform == "mirror" and axis is not None:
+                rot = float(updated.get("rotation", 0.0))
+                if axis == "horizontal":
+                    updated["rotation"] = (180.0 - rot) % 360.0
+                elif axis == "vertical":
+                    updated["rotation"] = (-rot) % 360.0
+        elif kind == "spline":
+            cps = updated.get("control_points")
+            if isinstance(cps, list):
+                updated_cps: list[tuple[float, float]] = []
+                for pt in cps:
+                    if isinstance(pt, tuple):
+                        updated_cps.append(_xform_point(tuple(pt)))
+                if len(updated_cps) >= 2:
+                    updated["control_points"] = updated_cps
 
         if idx < len(self._entity_meta):
             self._entity_meta[idx] = updated
-        if kind in {"circle", "ellipse"}:
+        if kind in {"circle", "ellipse", "arc", "rectangle", "spline"}:
             self._rebuild_curved_entity_poly(idx, kind, updated)
 
     @staticmethod
@@ -221,10 +297,16 @@ class _GeomOpsMixin:
                 updated["start"] = (start[0] + dx, start[1] + dy)
             if isinstance(end, tuple):
                 updated["end"] = (end[0] + dx, end[1] + dy)
-        elif kind in {"circle", "ellipse", "arc"}:
+        elif kind in {"circle", "ellipse", "arc", "rectangle"}:
             ctr = updated.get("center")
             if isinstance(ctr, tuple):
                 updated["center"] = (ctr[0] + dx, ctr[1] + dy)
+        elif kind == "spline":
+            cps = updated.get("control_points")
+            if isinstance(cps, list):
+                updated["control_points"] = [
+                    (pt[0] + dx, pt[1] + dy) for pt in cps if isinstance(pt, tuple)
+                ]
         return updated
 
     def rotate_selected(self, angle_deg: float) -> bool:
@@ -795,3 +877,198 @@ class _GeomOpsMixin:
         if changed_h:
             self._set_selected_height(new_h)
         self._show_flash("Dimensions updated", 900)
+
+    # ── Explode / Merge ───────────────────────────────────────────────────────
+
+    def explode_selected_to_segments(self) -> int:
+        """Split each selected multi-vertex polyline into individual 2-pt line segments.
+
+        Returns the number of new segments created.
+        """
+        indices = self._mutable_selected_indices()
+        if not indices:
+            return 0
+        # Only explode polylines with more than 2 points (1 segment is already atomic).
+        to_explode = [i for i in indices if len(self._polys[i]) > 2]
+        if not to_explode:
+            return 0
+        self._push_undo()
+        new_polys: list[list[tuple[float, float]]] = []
+        new_construction: set[int] = set()
+        new_kinds: list[str] = []
+        new_meta: list[dict[str, Any] | None] = []
+        new_sel: set[int] = set()
+        for i, poly in enumerate(self._polys):
+            is_construction = i in self._construction_polys
+            kind = self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
+            meta = self._entity_meta[i] if i < len(self._entity_meta) else None
+            if i in to_explode:
+                pts = list(poly)
+                is_closed = False
+                # If closed (first == last) drop the duplicate closing point first
+                if (
+                    len(pts) >= 3
+                    and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
+                    < 1e-6
+                ):
+                    pts = pts[:-1]
+                    is_closed = True
+                seg_count = len(pts) if is_closed else max(0, len(pts) - 1)
+                for j in range(seg_count):
+                    seg = [pts[j], pts[(j + 1) % len(pts)]]
+                    si = len(new_polys)
+                    new_polys.append(seg)
+                    new_kinds.append("line")
+                    new_meta.append({"start": seg[0], "end": seg[1]})
+                    if is_construction:
+                        new_construction.add(si)
+                    new_sel.add(si)
+            else:
+                ni = len(new_polys)
+                new_polys.append(poly)
+                new_kinds.append(kind)
+                new_meta.append(deepcopy(meta) if meta is not None else None)
+                if is_construction:
+                    new_construction.add(ni)
+        self._polys = new_polys
+        self._entity_kinds = new_kinds
+        self._entity_meta = new_meta
+        self._construction_polys = new_construction
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_sel)
+
+    def merge_selected_segments_to_objects(self) -> int:
+        """Merge selected geometry by segment connectivity.
+
+        Accepts a mix of atomic 2-point segments and multi-vertex polylines.
+        Selected polylines are decomposed into their constituent segments first,
+        then rebuilt into one or more connected objects.
+        """
+        indices = self._mutable_selected_indices()
+        if len(indices) < 2:
+            return 0
+
+        def _eq(a: tuple[float, float], b: tuple[float, float]) -> bool:
+            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
+        segs: list[tuple[tuple[float, float], tuple[float, float], bool]] = []
+        for i in indices:
+            poly = self._polys[i]
+            if len(poly) < 2:
+                continue
+            is_construction = i in self._construction_polys
+            pts = list(poly)
+            is_closed = False
+            if (
+                len(pts) >= 3
+                and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) < 1e-6
+            ):
+                pts = pts[:-1]
+                is_closed = True
+            if len(pts) < 2:
+                continue
+            seg_count = len(pts) if is_closed else max(0, len(pts) - 1)
+            for j in range(seg_count):
+                a = pts[j]
+                b = pts[(j + 1) % len(pts)]
+                if _eq(a, b):
+                    continue
+                segs.append((a, b, is_construction))
+
+        if len(segs) < 2:
+            return 0
+
+        sel_set = set(indices)
+
+        self._push_undo()
+
+        merged_polys: list[tuple[list[tuple[float, float]], bool]] = []
+        used = [False] * len(segs)
+
+        for si, seg in enumerate(segs):
+            if used[si]:
+                continue
+            used[si] = True
+            chain = [seg[0], seg[1]]
+            chain_construction = seg[2]
+
+            changed = True
+            while changed:
+                changed = False
+                for j, s in enumerate(segs):
+                    if used[j]:
+                        continue
+                    a, b = s[0], s[1]
+                    head, tail = chain[0], chain[-1]
+                    if _eq(tail, a):
+                        chain.append(b)
+                    elif _eq(tail, b):
+                        chain.append(a)
+                    elif _eq(head, b):
+                        chain.insert(0, a)
+                    elif _eq(head, a):
+                        chain.insert(0, b)
+                    else:
+                        continue
+                    used[j] = True
+                    chain_construction = chain_construction or s[2]
+                    changed = True
+                    break
+
+            if len(chain) >= 3 and _eq(chain[0], chain[-1]):
+                # normalize explicit closure point
+                chain[-1] = chain[0]
+            merged_polys.append((
+                self._normalize_merged_chain(chain),
+                chain_construction,
+            ))
+
+        kept_polys: list[list[tuple[float, float]]] = []
+        kept_construction: set[int] = set()
+        for i, poly in enumerate(self._polys):
+            if i in sel_set:
+                continue
+            ni = len(kept_polys)
+            kept_polys.append(poly)
+            if i in self._construction_polys:
+                kept_construction.add(ni)
+
+        new_sel: set[int] = set()
+        for poly, is_construction in merged_polys:
+            ni = len(kept_polys)
+            kept_polys.append(poly)
+            new_sel.add(ni)
+            if is_construction:
+                kept_construction.add(ni)
+
+        self._polys = kept_polys
+        self._construction_polys = kept_construction
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_sel)
+
+    @staticmethod
+    def _normalize_merged_chain(
+        chain: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        if not chain:
+            return []
+        normalized: list[tuple[float, float]] = [chain[0]]
+        for pt in chain[1:]:
+            if math.hypot(normalized[-1][0] - pt[0], normalized[-1][1] - pt[1]) >= 1e-6:
+                normalized.append(pt)
+        if (
+            len(normalized) >= 3
+            and math.hypot(
+                normalized[0][0] - normalized[-1][0],
+                normalized[0][1] - normalized[-1][1],
+            )
+            < 1e-6
+        ):
+            normalized[-1] = normalized[0]
+        return normalized

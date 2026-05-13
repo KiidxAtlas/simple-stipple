@@ -35,7 +35,7 @@ def _append_ignored_entities_note(msg: str, stats: dict) -> str:
 
 
 class _StatusMixin:
-    """Mixin that provides _set_status() for subtabs with a self._status QLabel."""
+    """Mixin that provides _set_status() and _add_picker_row() for subtabs."""
 
     _status: QLabel
 
@@ -54,6 +54,35 @@ class _StatusMixin:
         self._status.setProperty("role", role)
         self._status.style().unpolish(self._status)
         self._status.style().polish(self._status)
+
+    def _add_picker_row(
+        self,
+        layout: QVBoxLayout,
+        heading: str,
+        placeholder: str,
+        *,
+        tooltip: str = "",
+        btn_tooltip: str = "",
+        on_browse,
+    ) -> QLineEdit:
+        """Add an eyebrow label + line-edit + Browse button row; return the edit."""
+        lbl = QLabel(heading)
+        lbl.setProperty("role", "eyebrow")
+        layout.addWidget(lbl)
+        row = QHBoxLayout()
+        edit = QLineEdit()
+        edit.setPlaceholderText(placeholder)
+        if tooltip:
+            edit.setToolTip(tooltip)
+        btn = QPushButton("Browse")
+        btn.setFixedWidth(70)
+        if btn_tooltip:
+            btn.setToolTip(btn_tooltip)
+        btn.clicked.connect(on_browse)
+        row.addWidget(edit, stretch=1)
+        row.addWidget(btn)
+        layout.addLayout(row)
+        return edit
 
 
 class FviSubTab(_StatusMixin, QWidget):
@@ -274,37 +303,22 @@ class FixerSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _in_lbl = QLabel("INPUT")
-        _in_lbl.setProperty("role", "eyebrow")
-        layout.addWidget(_in_lbl)
-        src_row = QHBoxLayout()
-        self._src_edit = QLineEdit()
-        self._src_edit.setPlaceholderText("Select a .dxf file…")
-        self._src_edit.setToolTip("Path to the DXF file that needs repair")
-        src_btn = QPushButton("Browse")
-        src_btn.setFixedWidth(70)
-        src_btn.setToolTip("Browse for a DXF file to repair")
-        src_btn.clicked.connect(self._browse_src)
-        src_row.addWidget(self._src_edit, stretch=1)
-        src_row.addWidget(src_btn)
-        layout.addLayout(src_row)
-
-        _out_lbl = QLabel("OUTPUT")
-        _out_lbl.setProperty("role", "eyebrow")
-        layout.addWidget(_out_lbl)
-        out_row = QHBoxLayout()
-        self._out_edit = QLineEdit()
-        self._out_edit.setPlaceholderText("Leave blank to overwrite input…")
-        self._out_edit.setToolTip(
-            "Save repaired DXF here (blank = overwrite the input file)"
+        self._src_edit = self._add_picker_row(
+            layout,
+            "INPUT",
+            "Select a .dxf file…",
+            tooltip="Path to the DXF file that needs repair",
+            btn_tooltip="Browse for a DXF file to repair",
+            on_browse=self._browse_src,
         )
-        out_btn = QPushButton("Browse")
-        out_btn.setFixedWidth(70)
-        out_btn.setToolTip("Choose where to save the repaired DXF file")
-        out_btn.clicked.connect(self._browse_out)
-        out_row.addWidget(self._out_edit, stretch=1)
-        out_row.addWidget(out_btn)
-        layout.addLayout(out_row)
+        self._out_edit = self._add_picker_row(
+            layout,
+            "OUTPUT",
+            "Leave blank to overwrite input…",
+            tooltip="Save repaired DXF here (blank = overwrite the input file)",
+            btn_tooltip="Choose where to save the repaired DXF file",
+            on_browse=self._browse_out,
+        )
 
         layout.addStretch()
 
@@ -427,37 +441,22 @@ class SvgSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _in_lbl = QLabel("INPUT")
-        _in_lbl.setProperty("role", "eyebrow")
-        layout.addWidget(_in_lbl)
-        src_row = QHBoxLayout()
-        self._src_edit = QLineEdit()
-        self._src_edit.setPlaceholderText("Select a .dxf file…")
-        self._src_edit.setToolTip("Path to the DXF file to convert to SVG")
-        src_btn = QPushButton("Browse")
-        src_btn.setFixedWidth(70)
-        src_btn.setToolTip("Browse for a DXF file to convert")
-        src_btn.clicked.connect(self._browse_src)
-        src_row.addWidget(self._src_edit, stretch=1)
-        src_row.addWidget(src_btn)
-        layout.addLayout(src_row)
-
-        _out_lbl = QLabel("OUTPUT")
-        _out_lbl.setProperty("role", "eyebrow")
-        layout.addWidget(_out_lbl)
-        out_row = QHBoxLayout()
-        self._out_edit = QLineEdit()
-        self._out_edit.setPlaceholderText("Leave blank to auto-name…")
-        self._out_edit.setToolTip(
-            "Destination SVG path (blank = same name as input with .svg extension)"
+        self._src_edit = self._add_picker_row(
+            layout,
+            "INPUT",
+            "Select a .dxf file…",
+            tooltip="Path to the DXF file to convert to SVG",
+            btn_tooltip="Browse for a DXF file to convert",
+            on_browse=self._browse_src,
         )
-        out_btn = QPushButton("Browse")
-        out_btn.setFixedWidth(70)
-        out_btn.setToolTip("Choose where to save the SVG file")
-        out_btn.clicked.connect(self._browse_out)
-        out_row.addWidget(self._out_edit, stretch=1)
-        out_row.addWidget(out_btn)
-        layout.addLayout(out_row)
+        self._out_edit = self._add_picker_row(
+            layout,
+            "OUTPUT",
+            "Leave blank to auto-name…",
+            tooltip="Destination SVG path (blank = same name as input with .svg extension)",
+            btn_tooltip="Choose where to save the SVG file",
+            on_browse=self._browse_out,
+        )
 
         layout.addStretch()
 
@@ -563,35 +562,20 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
-        _in_lbl = QLabel("INPUT")
-        _in_lbl.setProperty("role", "eyebrow")
-        layout.addWidget(_in_lbl)
-        src_row = QHBoxLayout()
-        self._src_edit = QLineEdit()
-        self._src_edit.setPlaceholderText("Select a .svg file…")
-        self._src_edit.setToolTip("Path to the SVG file to convert")
-        src_btn = QPushButton("Browse")
-        src_btn.setFixedWidth(70)
-        src_btn.clicked.connect(self._browse_src)
-        src_row.addWidget(self._src_edit, stretch=1)
-        src_row.addWidget(src_btn)
-        layout.addLayout(src_row)
-
-        _out_lbl = QLabel("OUTPUT")
-        _out_lbl.setProperty("role", "eyebrow")
-        layout.addWidget(_out_lbl)
-        out_row = QHBoxLayout()
-        self._out_edit = QLineEdit()
-        self._out_edit.setPlaceholderText("Leave blank to auto-name…")
-        self._out_edit.setToolTip(
-            "Destination DXF path (blank = same name as input with .dxf)"
+        self._src_edit = self._add_picker_row(
+            layout,
+            "INPUT",
+            "Select a .svg file…",
+            tooltip="Path to the SVG file to convert",
+            on_browse=self._browse_src,
         )
-        out_btn = QPushButton("Browse")
-        out_btn.setFixedWidth(70)
-        out_btn.clicked.connect(self._browse_out)
-        out_row.addWidget(self._out_edit, stretch=1)
-        out_row.addWidget(out_btn)
-        layout.addLayout(out_row)
+        self._out_edit = self._add_picker_row(
+            layout,
+            "OUTPUT",
+            "Leave blank to auto-name…",
+            tooltip="Destination DXF path (blank = same name as input with .dxf)",
+            on_browse=self._browse_out,
+        )
 
         layout.addStretch()
 

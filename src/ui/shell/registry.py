@@ -22,11 +22,19 @@ class PageSpec:
 
     page_id: str
     title: str
-    shortcut_id: str
-    command_title: str
     command_keywords: str
     factory: PageFactory
     content_canvas_attrs: tuple[str, ...] = ()
+
+    @property
+    def shortcut_id(self) -> str:
+        """Keyboard shortcut action id, derived from page_id."""
+        return f"tab.{self.page_id}"
+
+    @property
+    def command_title(self) -> str:
+        """Command palette title, derived from title."""
+        return f"Page: {self.title}"
 
 
 def _build_draft_page(settings: dict) -> QWidget:
@@ -55,8 +63,6 @@ def default_page_specs() -> tuple[PageSpec, ...]:
         PageSpec(
             page_id="draft",
             title="Draft",
-            shortcut_id="tab.draft",
-            command_title="Page: Draft",
             command_keywords="page draft",
             factory=_build_draft_page,
             content_canvas_attrs=("_canvas",),
@@ -64,8 +70,6 @@ def default_page_specs() -> tuple[PageSpec, ...]:
         PageSpec(
             page_id="pattern",
             title="Pattern Fill",
-            shortcut_id="tab.pattern",
-            command_title="Page: Pattern Fill",
             command_keywords="page pattern",
             factory=_build_pattern_page,
             content_canvas_attrs=("_canvas",),
@@ -73,8 +77,6 @@ def default_page_specs() -> tuple[PageSpec, ...]:
         PageSpec(
             page_id="trace",
             title="Trace",
-            shortcut_id="tab.trace",
-            command_title="Page: Trace",
             command_keywords="page trace",
             factory=_build_trace_page,
             content_canvas_attrs=("_canvas",),
@@ -82,8 +84,6 @@ def default_page_specs() -> tuple[PageSpec, ...]:
         PageSpec(
             page_id="convert",
             title="Convert",
-            shortcut_id="tab.convert",
-            command_title="Page: Convert",
             command_keywords="page convert utilities",
             factory=_build_convert_page,
             content_canvas_attrs=("_preview_canvas",),
@@ -91,8 +91,6 @@ def default_page_specs() -> tuple[PageSpec, ...]:
         PageSpec(
             page_id="repo",
             title="Repo",
-            shortcut_id="tab.repo",
-            command_title="Page: Repo",
             command_keywords="page repo git",
             factory=_build_repo_page,
         ),

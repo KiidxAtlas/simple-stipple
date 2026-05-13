@@ -697,7 +697,7 @@ class CanvasRenderer:
                 font = _FONT_HEL_9_DEMIBOLD
                 fm = QFontMetrics(font)
                 tw = fm.horizontalAdvance(_label)
-                badge_w = int(math.ceil(tw + 8))
+                badge_w = math.ceil(tw + 8)
                 badge_h = 16
                 badge = QPixmap(badge_w, badge_h)
                 badge.fill(Qt.GlobalColor.transparent)
@@ -717,8 +717,8 @@ class CanvasRenderer:
                 badge_painter.end()
                 cache[_label] = badge
 
-            badge_x = int(round(_dsx - badge.width() / 2.0))
-            badge_y = int(round(_dsy - 24))
+            badge_x = round(_dsx - badge.width() / 2.0)
+            badge_y = round(_dsy - 24)
             painter.drawPixmap(badge_x, badge_y, badge)
 
     def _draw_badge(
@@ -1358,33 +1358,38 @@ class CanvasRenderer:
         "padding: 2px 4px;"
     )
 
+    def _make_hud_edit(
+        self,
+        placeholder: str = "",
+        width: int = 70,
+        height: int = 20,
+        align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignRight,
+    ) -> QLineEdit:
+        """Create a styled HUD QLineEdit parented to the viewport."""
+        edit = QLineEdit(self.viewport())
+        edit.setFixedWidth(width)
+        edit.setFixedHeight(height)
+        edit.setAlignment(align)
+        edit.setStyleSheet(self._DIM_STYLE)
+        if placeholder:
+            edit.setPlaceholderText(placeholder)
+        edit.installEventFilter(self)
+        edit.show()
+        return edit
+
     def _show_dim_inputs(self) -> None:
         """Create both distance and angle QLineEdits that float near the cursor."""
         self._dismiss_dim_inputs()
         if not self._draw_pts:
             return
 
-        dist_edit = QLineEdit(self.viewport())
-        dist_edit.setFixedWidth(70)
-        dist_edit.setFixedHeight(20)
-        dist_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        dist_edit.setStyleSheet(self._DIM_STYLE)
-        dist_edit.setPlaceholderText("d:")
-        dist_edit.show()
+        dist_edit = self._make_hud_edit("d:", 70)
         dist_edit.returnPressed.connect(self._apply_dim_input)
-        dist_edit.installEventFilter(self)
         self._dim_distance_edit = dist_edit
         self._dim_distance_dirty = False
 
-        angle_edit = QLineEdit(self.viewport())
-        angle_edit.setFixedWidth(55)
-        angle_edit.setFixedHeight(20)
-        angle_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        angle_edit.setStyleSheet(self._DIM_STYLE)
-        angle_edit.setPlaceholderText("\u2220:")
-        angle_edit.show()
+        angle_edit = self._make_hud_edit("\u2220:", 55)
         angle_edit.returnPressed.connect(self._apply_dim_input)
-        angle_edit.installEventFilter(self)
         self._dim_angle_edit = angle_edit
         self._dim_angle_dirty = False
 
@@ -1412,15 +1417,14 @@ class CanvasRenderer:
         x0, y0, x1, y1 = bounds
         cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
 
-        edit = QLineEdit(self.viewport())
-        edit.setFixedWidth(max(int(rect.width()) + 10, 70))
-        edit.setFixedHeight(22)
-        edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        edit.setStyleSheet(self._DIM_STYLE)
+        edit = self._make_hud_edit(
+            width=max(int(rect.width()) + 10, 70),
+            height=22,
+            align=Qt.AlignmentFlag.AlignCenter,
+        )
         edit.setText(f"{cur_val:.3f}")
         edit.selectAll()
         edit.move(int(rect.x()), int(rect.y()))
-        edit.show()
         edit.setFocus()
         edit.returnPressed.connect(lambda: self._apply_sel_dim_editor())
         edit.editingFinished.connect(lambda: self._apply_sel_dim_editor())

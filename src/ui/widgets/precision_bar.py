@@ -41,13 +41,6 @@ class CanvasPrecisionBar(QFrame):
         self._grid_btn.clicked.connect(self._toggle_grid)
         layout.addWidget(self._grid_btn)
 
-        self._snap_btn = QPushButton("Snap")
-        self._snap_btn.setMinimumHeight(24)
-        self._snap_btn.setCheckable(True)
-        self._snap_btn.setToolTip("Snap cursor to grid intersections")
-        self._snap_btn.clicked.connect(self._toggle_snap)
-        layout.addWidget(self._snap_btn)
-
         self._construction_btn = QPushButton("Guides")
         self._construction_btn.setMinimumHeight(24)
         self._construction_btn.setCheckable(True)
@@ -97,13 +90,11 @@ class CanvasPrecisionBar(QFrame):
         self.setVisible(True)
         state = self._canvas.get_precision_state()
         grid_on = bool(state.get("grid_visible", False))
-        snap_on = bool(state.get("grid_snap", False))
         construction_on = bool(state.get("construction_mode", False))
         measure_on = bool(state.get("measure_mode", False))
         spacing = float(state.get("grid_spacing", 1.0))
 
         self._grid_btn.setChecked(grid_on)
-        self._snap_btn.setChecked(snap_on)
         self._construction_btn.setChecked(construction_on)
         self._measure_btn.setChecked(measure_on)
 
@@ -123,15 +114,6 @@ class CanvasPrecisionBar(QFrame):
         ):
             state = canvas.get_precision_state()
             canvas.set_grid_visible(not bool(state.get("grid_visible", False)))
-            self._after_change()
-
-    def _toggle_snap(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "set_grid_snap") and hasattr(canvas, "get_precision_state"):
-            state = canvas.get_precision_state()
-            canvas.set_grid_snap(not bool(state.get("grid_snap", False)))
             self._after_change()
 
     def _toggle_construction(self) -> None:

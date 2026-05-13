@@ -266,6 +266,14 @@ QFrame[role="hero"] {
     border: 1px solid #2b3440;
     border-radius: 10px;
 }
+QDialog#command-palette,
+QDialog#keybindings-dialog {
+    background: #0f141b;
+}
+QDialog#command-palette QLineEdit,
+QDialog#keybindings-dialog QLineEdit {
+    background: #0c1117;
+}
 QFrame[role="page-header"] {
     border-radius: 10px;
 }

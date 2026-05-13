@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +29,12 @@ from src.backend.document.state import (
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
-from src.ui.widgets.command_palette import CommandPaletteDialog
 from src.ui.core.factories import info_chip, surface_frame
-from src.ui.widgets.update_dialog import UpdateDialog
 from src.ui.shell.registry import PageSpec, default_page_specs
 from src.ui.shell.runtime import PageRuntime
 from src.ui.shell.settings_dialog import SettingsDialog
+from src.ui.widgets.command_palette import CommandPaletteDialog
+from src.ui.widgets.update_dialog import UpdateDialog
 from src.ui.workspace.session import (
     apply_workspace_document,
     clear_workspace_state,
@@ -44,6 +46,14 @@ from src.ui.workspace.session import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    action_id: str
+    title: str
+    keywords: str
+    run: Callable[[], Any]
 
 
 class App(QMainWindow):
@@ -577,51 +587,108 @@ class App(QMainWindow):
             return value.strip()
         return DEFAULT_KEYBINDINGS.get(action_id, "")
 
+    def _build_commands(self) -> list[CommandSpec]:
+        """Single source of truth for all user-accessible commands.
+
+        Each entry has: action_id, title, keywords, run.
+        Used by both _setup_global_shortcuts and _build_command_palette_commands.
+        """
+        cmds: list[CommandSpec] = [
+            CommandSpec(
+                "app.settings",
+                "App: Settings",
+                "settings preferences",
+                self._open_settings,
+            ),
+            CommandSpec(
+                "app.command_palette",
+                "App: Command Palette",
+                "command palette search",
+                self._open_command_palette,
+            ),
+            CommandSpec(
+                "workspace.new",
+                "Workspace: New",
+                "new workspace file",
+                self._new_workspace,
+            ),
+            CommandSpec(
+                "workspace.open",
+                "Workspace: Open",
+                "open workspace file",
+                self._open_workspace,
+            ),
+            CommandSpec(
+                "workspace.save",
+                "Workspace: Save",
+                "save workspace",
+                self._save_workspace,
+            ),
+            CommandSpec(
+                "workspace.save_as",
+                "Workspace: Save As",
+                "save as workspace",
+                self._save_workspace_as,
+            ),
+            CommandSpec(
+                "canvas.select_mode",
+                "Canvas: Mode Select",
+                "canvas select mode",
+                lambda: self._invoke_canvas_mode("select"),
+            ),
+            CommandSpec(
+                "canvas.draw_mode",
+                "Canvas: Mode Draw",
+                "canvas draw mode",
+                lambda: self._invoke_canvas_mode("draw"),
+            ),
+            CommandSpec(
+                "canvas.edit_mode",
+                "Canvas: Mode Edit",
+                "canvas edit mode",
+                lambda: self._invoke_canvas_mode("edit"),
+            ),
+            CommandSpec(
+                "canvas.measure",
+                "Canvas: Toggle Measure",
+                "canvas measure",
+                self._invoke_canvas_measure,
+            ),
+            CommandSpec(
+                "canvas.fit",
+                "Canvas: Fit View",
+                "canvas fit zoom",
+                self._invoke_canvas_fit,
+            ),
+        ]
+        for spec in self._page_specs:
+            cmds.append(
+                CommandSpec(
+                    spec.shortcut_id,
+                    spec.command_title,
+                    spec.command_keywords,
+                    lambda page_id=spec.page_id: self._switch_to_page(page_id),
+                )
+            )
+        return cmds
+
     def _setup_global_shortcuts(self) -> None:
-        self._register_action("app.settings", "Settings", self._open_settings)
-        self._register_action(
-            "app.command_palette",
-            "Command Palette",
-            self._open_command_palette,
-        )
+        # Fixed non-remappable shortcut for command palette (Cmd+K)
         self._register_fixed_shortcut(
             "Command Palette (Cmd+K)",
             "Meta+K",
             self._open_command_palette,
         )
-        self._register_action(
-            "canvas.select_mode",
-            "Canvas Mode Select",
-            lambda: self._invoke_canvas_mode("select"),
-        )
-        self._register_action(
-            "canvas.draw_mode",
-            "Canvas Mode Draw",
-            lambda: self._invoke_canvas_mode("draw"),
-        )
-        self._register_action(
-            "canvas.edit_mode",
-            "Canvas Mode Edit",
-            lambda: self._invoke_canvas_mode("edit"),
-        )
-        self._register_action(
-            "canvas.measure",
-            "Canvas Toggle Measure",
-            self._invoke_canvas_measure,
-        )
-        self._register_action(
-            "canvas.fit",
-            "Canvas Fit",
-            self._invoke_canvas_fit,
-        )
-        for spec in self._page_specs:
-            self._register_action(
-                spec.shortcut_id,
-                f"Switch to {spec.title} Page",
-                lambda checked=False, page_id=spec.page_id: self._switch_to_page(
-                    page_id
-                ),
-            )
+        # workspace.* commands are already QActions via _build_workspace_actions
+        _MENU_HANDLED = {
+            "workspace.new",
+            "workspace.open",
+            "workspace.save",
+            "workspace.save_as",
+        }
+        for cmd in self._build_commands():
+            if cmd.action_id not in _MENU_HANDLED:
+                self._register_action(cmd.action_id, cmd.title, cmd.run)
 
     def _register_action(self, action_id: str, text: str, callback) -> None:
         action = QAction(text, self)
@@ -642,97 +709,18 @@ class App(QMainWindow):
         current = self._tabs.currentWidget()
         return getattr(current, "_canvas", None)
 
-    def _command_entry(
-        self,
-        *,
-        command_id: str,
-        title: str,
-        keywords: str,
-        run,
-    ) -> dict[str, object]:
-        """Create a command-palette entry with a settings-backed shortcut."""
-        return {
-            "id": command_id,
-            "title": title,
-            "shortcut": self._shortcut(command_id),
-            "keywords": keywords,
-            "run": run,
-        }
-
     def _build_command_palette_commands(self) -> list[dict[str, object]]:
-        """Return command-palette entries exposed to users."""
-        commands = [
-            self._command_entry(
-                command_id="workspace.new",
-                title="Workspace: New",
-                keywords="new workspace file",
-                run=self._new_workspace,
-            ),
-            self._command_entry(
-                command_id="workspace.open",
-                title="Workspace: Open",
-                keywords="open workspace file",
-                run=self._open_workspace,
-            ),
-            self._command_entry(
-                command_id="workspace.save",
-                title="Workspace: Save",
-                keywords="save workspace",
-                run=self._save_workspace,
-            ),
-            self._command_entry(
-                command_id="workspace.save_as",
-                title="Workspace: Save As",
-                keywords="save as workspace",
-                run=self._save_workspace_as,
-            ),
-            self._command_entry(
-                command_id="app.settings",
-                title="App: Settings",
-                keywords="settings preferences",
-                run=self._open_settings,
-            ),
-            self._command_entry(
-                command_id="canvas.select_mode",
-                title="Canvas: Mode Select",
-                keywords="canvas select mode",
-                run=lambda: self._invoke_canvas_mode("select"),
-            ),
-            self._command_entry(
-                command_id="canvas.draw_mode",
-                title="Canvas: Mode Draw",
-                keywords="canvas draw mode",
-                run=lambda: self._invoke_canvas_mode("draw"),
-            ),
-            self._command_entry(
-                command_id="canvas.edit_mode",
-                title="Canvas: Mode Edit",
-                keywords="canvas edit mode",
-                run=lambda: self._invoke_canvas_mode("edit"),
-            ),
-            self._command_entry(
-                command_id="canvas.measure",
-                title="Canvas: Toggle Measure",
-                keywords="canvas measure",
-                run=self._invoke_canvas_measure,
-            ),
-            self._command_entry(
-                command_id="canvas.fit",
-                title="Canvas: Fit View",
-                keywords="canvas fit zoom",
-                run=self._invoke_canvas_fit,
-            ),
+        """Return command-palette entries derived from _build_commands()."""
+        return [
+            {
+                "id": spec.action_id,
+                "title": spec.title,
+                "shortcut": self._shortcut(spec.action_id),
+                "keywords": spec.keywords,
+                "run": spec.run,
+            }
+            for spec in self._build_commands()
         ]
-        for spec in self._page_specs:
-            commands.append(
-                self._command_entry(
-                    command_id=spec.shortcut_id,
-                    title=spec.command_title,
-                    keywords=spec.command_keywords,
-                    run=lambda page_id=spec.page_id: self._switch_to_page(page_id),
-                )
-            )
-        return commands
 
     def _invoke_canvas_mode(self, mode: str) -> None:
         canvas = self._active_canvas()

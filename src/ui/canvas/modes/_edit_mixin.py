@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import math
 
-from src.backend.geometry.primitives import build_circle_poly, build_ellipse_poly
-
 
 class _EditModeMixin:
     """Edit-mode vertex operations. No __init__; all state lives on the primary class."""
@@ -136,41 +134,44 @@ class _EditModeMixin:
             if self._edit_poly < len(self._entity_meta)
             else None
         )
-        if kind in {"circle", "ellipse"} and isinstance(meta, dict):
+        # NOTE: Circle/ellipse drag is now handled via normal vertex dragging (below).
+        # Transformation (resize/rotate) only happens via transform gizmo in select mode.
+        # This allows natural "drag to move" behavior for all shapes including circles/ellipses.
+
+        if kind == "arc" and isinstance(meta, dict):
             center = meta.get("center")
             if isinstance(center, tuple):
                 cx = float(center[0])
                 cy = float(center[1])
-                if kind == "circle":
-                    radius = max(1e-3, math.hypot(wx - cx, wy - cy))
-                    meta["radius"] = radius
-                    self._polys[self._edit_poly] = build_circle_poly(
-                        cx,
-                        cy,
-                        radius,
-                        segments=max(24, len(self._polys[self._edit_poly]) or 64),
+                radius = max(1e-3, math.hypot(wx - cx, wy - cy))
+                meta["radius"] = radius
+                poly_len = len(self._polys[self._edit_poly])
+                if self._edit_vert <= 1:
+                    meta["start_angle"] = (
+                        math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0
                     )
-                    return
+                elif self._edit_vert >= max(0, poly_len - 2):
+                    meta["end_angle"] = (
+                        math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0
+                    )
+                if hasattr(self, "_rebuild_curved_entity_poly"):
+                    self._rebuild_curved_entity_poly(self._edit_poly, "arc", meta)
+                return
 
+        if kind == "rectangle" and isinstance(meta, dict):
+            center = meta.get("center")
+            if isinstance(center, tuple):
+                cx = float(center[0])
+                cy = float(center[1])
                 rot = float(meta.get("rotation", 0.0))
-                if hasattr(self, "_rotate_point"):
+                if hasattr(self, "_rotate_point") and abs(rot) > 1e-9:
                     lx, ly = self._rotate_point((wx, wy), (cx, cy), -rot)
                 else:
                     lx, ly = wx, wy
-                rx = max(1e-3, abs(lx - cx))
-                ry = max(1e-3, abs(ly - cy))
-                meta["rx"] = rx
-                meta["ry"] = ry
-                poly = build_ellipse_poly(
-                    cx,
-                    cy,
-                    rx,
-                    ry,
-                    segments=max(24, len(self._polys[self._edit_poly]) or 64),
-                )
-                if abs(rot) > 1e-9 and hasattr(self, "_rotate_point"):
-                    poly = [self._rotate_point(pt, (cx, cy), rot) for pt in poly]
-                self._polys[self._edit_poly] = poly
+                meta["width"] = max(1e-3, 2.0 * abs(lx - cx))
+                meta["height"] = max(1e-3, 2.0 * abs(ly - cy))
+                if hasattr(self, "_rebuild_curved_entity_poly"):
+                    self._rebuild_curved_entity_poly(self._edit_poly, "rectangle", meta)
                 return
 
         targets = (
@@ -183,6 +184,19 @@ class _EditModeMixin:
                 continue
             if 0 <= pi < len(self._polys) and 0 <= vi < len(self._polys[pi]):
                 self._polys[pi][vi] = (wx, wy)
+
+        if self._edit_poly is not None and 0 <= self._edit_poly < len(self._polys):
+            if (
+                kind == "line"
+                and isinstance(meta, dict)
+                and len(self._polys[self._edit_poly]) >= 2
+            ):
+                meta["start"] = tuple(self._polys[self._edit_poly][0])
+                meta["end"] = tuple(self._polys[self._edit_poly][-1])
+            elif kind == "spline" and isinstance(meta, dict):
+                meta["control_points"] = [
+                    tuple(pt) for pt in self._polys[self._edit_poly]
+                ]
 
     def _select_edit_vertices_in_rect(
         self,

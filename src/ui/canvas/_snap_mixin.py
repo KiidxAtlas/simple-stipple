@@ -2,11 +2,54 @@
 
 from __future__ import annotations
 
+import math
+
 from src.backend.behaviors import snapping as snap_behaviors
+from src.ui.canvas.shape_snapping import ShapeSnapEngine
 
 
 class _SnapMixin:
     """Mixin providing snap resolution methods for PolylineView."""
+
+    def _shape_snap_candidate(
+        self,
+        cx: float,
+        cy: float,
+    ) -> tuple[float, float, str] | None:
+        """Return nearest shape-aware snap candidate in screen snap radius."""
+        best: tuple[float, float, str] | None = None
+        best_dist = float("inf")
+
+        for shape in self._shape_storage.get_all_shapes():
+            if not getattr(shape, "visible", True):
+                continue
+            for sx, sy, snap_type in ShapeSnapEngine.get_snap_candidates(shape):
+                pcx, pcy = self._w2c(sx, sy)
+                dist = math.hypot(cx - pcx, cy - pcy)
+                if dist <= ShapeSnapEngine.SNAP_RADIUS and dist < best_dist:
+                    best_dist = dist
+                    best = (sx, sy, snap_type)
+
+        return best
+
+    def _pick_better_snap(
+        self,
+        cx: float,
+        cy: float,
+        first: tuple[float, float, str] | None,
+        second: tuple[float, float, str] | None,
+    ) -> tuple[float, float, str] | None:
+        """Choose the closer snap point in canvas-pixel space."""
+        if first is None:
+            return second
+        if second is None:
+            return first
+
+        fcx, fcy = self._w2c(first[0], first[1])
+        scx, scy = self._w2c(second[0], second[1])
+        fd = math.hypot(cx - fcx, cy - fcy)
+        sd = math.hypot(cx - scx, cy - scy)
+        return second if sd < fd else first
 
     def _snap_to_grid(self, wx: float, wy: float) -> tuple[float, float]:
         return snap_behaviors.snap_to_grid(wx, wy, self._grid_spacing)
@@ -45,7 +88,7 @@ class _SnapMixin:
         allow_grid: bool = True,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
-        return snap_behaviors.resolve_snap(
+        legacy = snap_behaviors.resolve_snap(
             cx,
             cy,
             wx,
@@ -66,6 +109,8 @@ class _SnapMixin:
             reference_point=reference_point,
             draw_points=self._draw_pts,
         )
+        shape_candidate = self._shape_snap_candidate(cx, cy)
+        return self._pick_better_snap(cx, cy, legacy, shape_candidate)
 
     def _resolve_drag_snap(
         self,
@@ -81,7 +126,7 @@ class _SnapMixin:
         exclude_segments: set[tuple[int, int]] | None = None,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
-        return snap_behaviors.resolve_drag_snap(
+        legacy = snap_behaviors.resolve_drag_snap(
             cx,
             cy,
             wx,
@@ -105,6 +150,8 @@ class _SnapMixin:
             reference_point=reference_point,
             draw_points=self._draw_pts,
         )
+        shape_candidate = self._shape_snap_candidate(cx, cy)
+        return self._pick_better_snap(cx, cy, legacy, shape_candidate)
 
     def _immediate_segments_for_vertices(
         self,

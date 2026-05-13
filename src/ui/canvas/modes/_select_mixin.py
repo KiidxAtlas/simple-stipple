@@ -65,6 +65,63 @@ class _SelectModeMixin:
         self._copy_selected()
         self._paste_clipboard()
 
+    def _duplicate_selected_with_offset(self) -> None:
+        """Duplicate selected with larger offset for better visibility."""
+        if not self._sel:
+            return
+        # Calculate bounding box to determine smart offset
+        if not self._sel or not self._polys:
+            return
+
+        # Get bounding box of selection
+        min_x, max_x, min_y, max_y = (
+            float("inf"),
+            float("-inf"),
+            float("inf"),
+            float("-inf"),
+        )
+        for idx in self._sel:
+            if idx < len(self._polys):
+                for x, y in self._polys[idx]:
+                    min_x = min(min_x, x)
+                    max_x = max(max_x, x)
+                    min_y = min(min_y, y)
+                    max_y = max(max_y, y)
+
+        width = max_x - min_x if max_x > min_x else 10.0
+        height = max_y - min_y if max_y > min_y else 10.0
+
+        # Offset is 10% of bounding box, minimum 2mm
+        offset = max(2.0, min(width, height) * 0.1)
+
+        self._copy_selected()
+        self._paste_clipboard_with_offset(offset)
+
+    def _paste_clipboard_with_offset(self, offset: float) -> None:
+        """Paste clipboard items with specified offset."""
+        if not self._clipboard:
+            return
+        self._push_undo()
+        new_indices = []
+        for record in self._clipboard:
+            poly = list(record.get("polyline", []))
+            new_poly = [(x + offset, y + offset) for x, y in poly]
+            kind = str(record.get("kind", "polyline"))
+            meta = self._translated_entity_meta(
+                kind,
+                record.get("meta"),
+                offset,
+                offset,
+            )
+            new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
+            if record.get("construction"):
+                self._construction_polys.add(new_idx)
+            new_indices.append(new_idx)
+        self._sel = set(new_indices)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
     def _cut_selected(self) -> None:
         if not self._sel:
             return
@@ -205,6 +262,10 @@ class _SelectModeMixin:
     def _ctx_delete_poly(self, idx: int) -> None:
         self._push_undo()
         self._polys.pop(idx)
+        if idx < len(self._entity_kinds):
+            self._entity_kinds.pop(idx)
+        if idx < len(self._entity_meta):
+            self._entity_meta.pop(idx)
         remapped: set[int] = set()
         for pi in self._construction_polys:
             if pi == idx:
