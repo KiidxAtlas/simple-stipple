@@ -115,9 +115,8 @@ class PolylineView(
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._selectable = selectable
+        self._empty_message = "No polylines loaded"
         self._show_selection_bbox: bool = False
-        self._on_change = on_change
-        self._on_mode_change = on_mode_change
         self._on_poly_change = on_poly_change
         if on_change:
             self.selectionChanged.connect(on_change)
@@ -331,25 +330,6 @@ class PolylineView(
         self._accent_polys = dict(accent)
         self._redraw()
 
-    def reload(self, polys: list[list[tuple[float, float]]]) -> None:
-        self._polys = self._clone_polys(polys)
-        if len(self._entity_kinds) != len(self._polys):
-            self._entity_kinds = ["polyline" for _ in self._polys]
-        if len(self._entity_meta) != len(self._polys):
-            self._entity_meta = [None for _ in self._polys]
-        valid = set(range(len(self._polys)))
-        self._sel &= valid
-        self._hidden_polys &= valid
-        self._locked_polys &= valid
-        self._groups = {k: v for k, v in self._groups.items() if k in valid}
-
-        # Phase 2: Migrate to new shape storage
-        self._shape_storage.migrate_from_polylines(
-            self._polys, self._entity_kinds, self._entity_meta
-        )
-
-        self._redraw()
-
     def get_polylines_state(self) -> list[list[tuple[float, float]]]:
         return self._clone_polys(self._polys)
 
@@ -446,9 +426,6 @@ class PolylineView(
         self._sel -= self._hidden_polys
         self._redraw()
 
-    def get_active(self) -> list[list[tuple[float, float]]]:
-        return [p for i, p in enumerate(self._polys) if i not in self._sel]
-
     def get_selected(self) -> list[list[tuple[float, float]]]:
         return [p for i, p in enumerate(self._polys) if i in self._sel]
 
@@ -464,33 +441,6 @@ class PolylineView(
         self._entity_meta.append(deepcopy(meta) if meta is not None else None)
         self._sync_shape_storage_from_entities()
         return len(self._polys) - 1
-
-    def _insert_entity(
-        self,
-        idx: int,
-        poly: list[tuple[float, float]],
-        *,
-        kind: str = "polyline",
-        meta: dict[str, Any] | None = None,
-    ) -> None:
-        self._polys.insert(idx, list(poly))
-        self._entity_kinds.insert(idx, kind)
-        self._entity_meta.insert(idx, deepcopy(meta) if meta is not None else None)
-        self._sync_shape_storage_from_entities()
-
-    def _remove_entity(self, idx: int) -> None:
-        self._polys.pop(idx)
-        if idx < len(self._entity_kinds):
-            self._entity_kinds.pop(idx)
-        if idx < len(self._entity_meta):
-            self._entity_meta.pop(idx)
-        self._sync_shape_storage_from_entities()
-
-    def _copy_entities(self) -> tuple[list[str], list[dict[str, Any] | None]]:
-        return (
-            list(self._entity_kinds),
-            self._copy_entity_meta_list(self._entity_meta),
-        )
 
     @staticmethod
     def _copy_entity_meta_list(
@@ -588,12 +538,6 @@ class PolylineView(
         self._locked_polys = new_locked
         self._redraw()
 
-    def get_hidden_indices(self) -> list[int]:
-        return sorted(self._hidden_polys)
-
-    def get_locked_indices(self) -> list[int]:
-        return sorted(self._locked_polys)
-
     def set_ghost_polylines(
         self,
         polys: list[list[tuple[float, float]]] | None,
@@ -618,15 +562,6 @@ class PolylineView(
             changed = True
         if changed:
             self._redraw()
-
-    def set_ghost_visible(self, visible: bool) -> None:
-        if bool(visible) == self._ghost_visible:
-            return
-        self._ghost_visible = bool(visible)
-        self._redraw()
-
-    def has_ghost_polylines(self) -> bool:
-        return bool(self._ghost_polys)
 
     def get_status_summary(self) -> dict[str, object]:
         precision = []
@@ -666,11 +601,8 @@ class PolylineView(
             "points": logical_points,
         }
 
-    def delete_selected(self) -> int:
-        delete_set = {idx for idx in self._sel if idx not in self._locked_polys}
-        n = len(delete_set)
-        if n:
-            self._push_undo()
+    def _compact_entities(self, drop: set[int]) -> None:
+        """Remove entities at ``drop`` indices, remapping all index-keyed state."""
         kept: list[list[tuple[float, float]]] = []
         kept_kinds: list[str] = []
         kept_meta: list[dict[str, Any] | None] = []
@@ -679,7 +611,7 @@ class PolylineView(
         new_locked: set[int] = set()
         new_groups: dict[int, int] = {}
         for i, p in enumerate(self._polys):
-            if i in delete_set:
+            if i in drop:
                 continue
             new_idx = len(kept)
             kept.append(p)
@@ -706,6 +638,13 @@ class PolylineView(
         self._hidden_polys = new_hidden
         self._locked_polys = new_locked
         self._groups = new_groups
+
+    def delete_selected(self) -> int:
+        delete_set = {idx for idx in self._sel if idx not in self._locked_polys}
+        n = len(delete_set)
+        if n:
+            self._push_undo()
+        self._compact_entities(delete_set)
         self._sel.clear()
         self._redraw()
         self._notify()
@@ -734,15 +673,6 @@ class PolylineView(
         self._notify()
         self._fire_poly_change()
         return True
-
-    def undo_delete(self) -> bool:
-        return self.undo()
-
-    def invert_selection(self) -> None:
-        visible = set(range(len(self._polys))) - self._hidden_polys
-        self._sel = visible - self._sel
-        self._redraw()
-        self._notify()
 
     def select_all(self) -> None:
         self._sel = set(range(len(self._polys))) - self._hidden_polys
@@ -829,12 +759,6 @@ class PolylineView(
     def get_mode(self) -> str:
         return self._mode
 
-    def toggle_draw_mode(self) -> None:
-        self.set_mode("draw" if self._mode != "draw" else "select")
-
-    def get_draw_mode(self) -> bool:
-        return self._mode == "draw"
-
     def fit(self) -> None:
         self._fit()
 
@@ -844,6 +768,10 @@ class PolylineView(
             return False
         self._fit_to_bounds(bounds)
         return True
+
+    def set_empty_message(self, message: str) -> None:
+        """Set the hint shown on an empty canvas ("Title\\nhint line")."""
+        self._empty_message = message
 
     def set_grid_visible(self, visible: bool) -> None:
         self._grid_visible = bool(visible)
@@ -881,35 +809,14 @@ class PolylineView(
             return (self._cursor_wx, self._cursor_wy)
         return None
 
-    def copy_selected(self) -> bool:
-        if not self._sel:
-            return False
-        self._copy_selected()
-        return True
-
-    def paste_selected(self) -> bool:
-        if not self._clipboard:
-            return False
-        self._paste_clipboard()
-        return True
-
     def duplicate_selected(self) -> None:
         self._duplicate_selected()
-
-    def cut_selected(self) -> bool:
-        if not self._sel:
-            return False
-        self._cut_selected()
-        return True
 
     def close_selected_polylines(self) -> int:
         return self._close_selected_polylines()
 
     def open_selected_polylines(self) -> int:
         return self._open_selected_polylines()
-
-    def toggle_selected_polyline_topology(self) -> int:
-        return self._toggle_selected_polyline_topology()
 
     @property
     def poly_count(self) -> int:
@@ -960,13 +867,6 @@ class PolylineView(
             dropped = self._undo_stack.pop(0)
             total -= sum(len(p) for p in dropped[0])
         self._redo_stack.clear()
-
-    def get_export_polylines_state(self) -> list[list[tuple[float, float]]]:
-        return [
-            list(poly)
-            for idx, poly in enumerate(self._polys)
-            if idx not in self._construction_polys
-        ]
 
     def get_export_dxf_state(self) -> list[dict[str, Any]]:
         self._sync_shape_storage_from_entities()

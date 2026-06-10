@@ -14,7 +14,6 @@ from src.backend.geometry.shapes import (
     shape_rect,
     shape_slot,
 )
-from src.ui.canvas.shape_manipulation import ShapeManipulationActions
 from src.ui.canvas.view import PolylineView
 
 
@@ -35,7 +34,6 @@ class DxfCanvas(PolylineView):
         on_change=None,
         on_mode_change=None,
         on_poly_change=None,
-        on_action=None,
         on_send_selected_to_pattern=None,
         on_send_selected_to_draft=None,
         on_use_selected_as_fill_pattern=None,
@@ -50,7 +48,6 @@ class DxfCanvas(PolylineView):
             on_mode_change=on_mode_change,
             on_poly_change=on_poly_change,
         )
-        self._on_action = on_action
         self._send_selected_to_pattern_cb = on_send_selected_to_pattern
         self._send_selected_to_draft_cb = on_send_selected_to_draft
         self._use_selected_as_fill_pattern_cb = on_use_selected_as_fill_pattern
@@ -438,26 +435,6 @@ class DxfCanvas(PolylineView):
         )
         align_menu.addAction(
             "Bottom", lambda: _run_transform(lambda: self.align_selected("bottom"))
-        )
-
-        composition_menu = menu.addMenu("Composition")
-        composition_menu.addAction(
-            "Break Apart",
-            lambda: _run_transform(lambda: ShapeManipulationActions.break_apart(self)),
-        )
-        composition_menu.addAction(
-            "Combine (Union)",
-            lambda: _run_transform(lambda: ShapeManipulationActions.combine(self)),
-        )
-        composition_menu.addAction(
-            "Simplify…",
-            lambda: _run_prompted_transform(
-                "Simplify Shapes",
-                "Simplification tolerance (mm):",
-                0.1,
-                0.001,
-                lambda tol: ShapeManipulationActions.simplify(self, tol),
-            ),
         )
 
         menu.addSeparator()

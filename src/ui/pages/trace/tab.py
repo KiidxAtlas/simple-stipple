@@ -221,6 +221,7 @@ class TracePage(BasePage):
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
+        self._progress.setVisible(False)  # only shown while tracing
         layout.addWidget(self._progress)
 
         # ── Advanced section ──────────────────────────────────────────────────
@@ -505,6 +506,10 @@ class TracePage(BasePage):
             on_send_selected_to_pattern=self._on_send_selected_to_pattern,
             draft_profile=True,
         )
+        self._canvas.set_empty_message(
+            "No image loaded\n"
+            "Open or drop an image (PNG/JPG) to trace it into outlines"
+        )
         self._canvas.set_grid_visible(True)
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(1.0)
@@ -605,6 +610,7 @@ class TracePage(BasePage):
         if hasattr(self, "_progress"):
             self._progress.setRange(0, 100)
             self._progress.setValue(0)
+            self._progress.setVisible(False)
 
     def _update_trace_action_states(self) -> None:
         has_image = bool(self._img_path or self._last_display_img is not None)
@@ -789,6 +795,7 @@ class TracePage(BasePage):
         self._cancel_event = cancel_event
         old_event.set()
         trace_token = self._trace_revision
+        self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
         self._set_status("Tracing…")
         threading.Thread(
@@ -827,6 +834,7 @@ class TracePage(BasePage):
         count = len(polys)
 
         self._running = False
+        self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(100)
         self._canvas.set_image_bounds(width_mm_val, height_mm_val)
@@ -872,6 +880,7 @@ class TracePage(BasePage):
         if trace_token != self._trace_revision:
             return
         self._running = False
+        self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._set_status(f"Error: {msg}", "#f85149")
@@ -881,15 +890,6 @@ class TracePage(BasePage):
             self._preview_timer.start(0)
 
     # ── Canvas actions ────────────────────────────────────────────────────────
-
-    def _undo_delete(self) -> None:
-        if self._canvas.undo_delete():
-            self._set_status("Undo: polylines restored.")
-            self._refresh_canvas_panels()
-            self._emit_state_changed()
-        else:
-            self._set_status("Nothing to undo.")
-        self._update_trace_action_states()
 
     def _on_auto_thresh_changed(self, _state: int) -> None:
         self._update_thresh_controls()

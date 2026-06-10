@@ -46,6 +46,7 @@ class _GenerateMixin:
         gen_fill_options = self._collect_fill_options()
 
         self._gen_btn.setEnabled(False)
+        self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
         self._set_status("Generating…")
 
@@ -60,6 +61,7 @@ class _GenerateMixin:
                 self._gen_btn.setEnabled(True)
                 self._progress.setRange(0, 100)
                 self._progress.setValue(0)
+                self._progress.setVisible(False)
                 self._set_status(str(exc), "#f85149")
                 return
             threading.Thread(
@@ -101,6 +103,7 @@ class _GenerateMixin:
                 self._gen_btn.setEnabled(True)
                 self._progress.setRange(0, 100)
                 self._progress.setValue(0)
+                self._progress.setVisible(False)
                 return
             border_polys = (
                 self._apply_scale(polys_snap, *scale) if include_border else None
@@ -141,6 +144,7 @@ class _GenerateMixin:
         self._generate_task.finish_run()
         if generation_token != self._generation_revision:
             return
+        self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(100)
         self._gen_btn.setEnabled(True)
@@ -168,6 +172,7 @@ class _GenerateMixin:
         self._generate_task.finish_run()
         if generation_token != self._generation_revision:
             return
+        self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._gen_btn.setEnabled(True)

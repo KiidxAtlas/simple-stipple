@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
@@ -15,8 +14,6 @@ class BasePage(QWidget):
     - ``stateChanged`` signal (workspace persistence hook)
     - ``_settings`` dict initialisation
     - ``_suspend_state`` flag + ``_emit_state_changed()``
-    - ``_suspending()`` context manager — suspends state changes and emits
-      exactly once on exit
     - Default no-op implementations of the workspace/preset state protocol
     """
 
@@ -36,16 +33,6 @@ class BasePage(QWidget):
     def _emit_state_changed(self) -> None:
         if not self._suspend_state:
             self.stateChanged.emit()
-
-    @contextmanager
-    def _suspending(self):
-        """Suspend stateChanged emissions; emit once after the block exits."""
-        self._suspend_state = True
-        try:
-            yield
-        finally:
-            self._suspend_state = False
-            self._emit_state_changed()
 
     # ── Workspace / preset protocol (override in subclasses) ──────────────
 

@@ -110,7 +110,6 @@ class _BuildMixin:
         self._ar_lock_btn.setCheckable(True)
         self._ar_lock_btn.setChecked(True)
         self._ar_lock_btn.setToolTip("Lock aspect ratio — keep W and H proportional")
-        self._ar_lock_btn.toggled.connect(self._on_ar_toggle)
         dims_row.addWidget(self._ar_lock_btn)
         dims_row.addWidget(QLabel("H (mm)"))
         self._scale_h = QLineEdit()
@@ -127,15 +126,6 @@ class _BuildMixin:
             "Shape", shape_content, expanded=True, subtitle="No file loaded"
         )
         layout.addWidget(self._shape_section)
-
-    # Legacy entry-points kept for any external callers / tests. They now
-    # delegate to the new SHAPE section so signatures still type-check.
-    def _build_source_section(self, layout: QVBoxLayout) -> None:  # pragma: no cover
-        self._build_shape_section(layout)
-
-    def _build_scale_section(self, layout: QVBoxLayout) -> None:  # pragma: no cover
-        # Folded into SHAPE — no-op so old callers don't double-build.
-        return
 
     def _build_pattern_section(self, layout: QVBoxLayout) -> None:
         """PATTERN: combo + presets + per-pattern params + modifiers."""
@@ -283,12 +273,6 @@ class _BuildMixin:
             "Pattern", pattern_content, expanded=True, subtitle=""
         )
         layout.addWidget(self._pattern_section)
-
-    # Legacy alias.
-    def _build_fill_params_section(  # pragma: no cover
-        self, layout: QVBoxLayout
-    ) -> None:
-        self._build_pattern_section(layout)
 
     def _build_zones_section(self, layout: QVBoxLayout) -> None:
         zones_content = QWidget()
@@ -466,12 +450,6 @@ class _BuildMixin:
         # Initial enable state — fill controls disabled while mode == None.
         self._on_fill_mode_changed()
 
-    # Legacy alias so any external callers keep working.
-    def _build_output_options_section(  # pragma: no cover
-        self, layout: QVBoxLayout
-    ) -> None:
-        self._build_fill_section(layout)
-
     def _build_export_section(self, layout: QVBoxLayout) -> None:
         """EXPORT: per-export options + action + status."""
         section_label(layout, "Export")
@@ -513,6 +491,7 @@ class _BuildMixin:
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
+        self._progress.setVisible(False)  # only shown while exporting
         layout.addWidget(self._progress)
 
         # Status as a chip — _set_status() still drives it via the same

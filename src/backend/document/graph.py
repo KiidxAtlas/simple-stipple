@@ -123,13 +123,8 @@ class DocumentGraph:
     def _purge_orphan_points(self) -> None:
         """Remove points no longer referenced by any segment.
 
-        This is O(points + segments). Callers that perform many segment
-        removals in a row should batch via :meth:`begin_bulk_edit` /
-        :meth:`end_bulk_edit` to avoid repeated scans.
+        This is O(points + segments).
         """
-        if getattr(self, "_bulk_edit_depth", 0) > 0:
-            self._bulk_edit_dirty = True
-            return
         referenced: set[int] = set()
         for seg in self.segments.values():
             referenced.add(seg.p0)
@@ -137,19 +132,6 @@ class DocumentGraph:
         for pid in list(self.points):
             if pid not in referenced:
                 self.points.pop(pid, None)
-
-    def begin_bulk_edit(self) -> None:
-        """Suspend orphan-point purges until :meth:`end_bulk_edit` is called."""
-        self._bulk_edit_depth = getattr(self, "_bulk_edit_depth", 0) + 1
-
-    def end_bulk_edit(self) -> None:
-        depth = getattr(self, "_bulk_edit_depth", 0)
-        if depth <= 0:
-            return
-        self._bulk_edit_depth = depth - 1
-        if self._bulk_edit_depth == 0 and getattr(self, "_bulk_edit_dirty", False):
-            self._bulk_edit_dirty = False
-            self._purge_orphan_points()
 
     def _entity_ref_exists(self, ref) -> bool:
         """Return True if an (kind, id) tuple still resolves in this graph."""
@@ -362,32 +344,12 @@ class DocumentGraph:
     def mark_layer_dirty(self, name: str) -> None:
         self.ensure_layer(name).dirty = True
 
-    def clear_layer_dirty(self, name: str) -> None:
-        self.ensure_layer(name).dirty = False
-
     # ── Primitives ────────────────────────────────────────────────────────
 
     def add_point(self, x: float, y: float) -> PointNode:
         p = PointNode(id=self._next_id(), x=x, y=y)
         self.points[p.id] = p
         return p
-
-    def remove_point(self, pid: int) -> None:
-        if pid not in self.points:
-            return
-        seg_ids = [
-            sid for sid, seg in self.segments.items() if seg.p0 == pid or seg.p1 == pid
-        ]
-        for sid in seg_ids:
-            self.remove_segment(sid)
-        self.points.pop(pid, None)
-
-    def update_point(self, pid: int, x: float, y: float) -> None:
-        p = self.points.get(pid)
-        if p is None:
-            return
-        p.x = x
-        p.y = y
 
     def find_point_near(self, x: float, y: float, tolerance: float) -> PointNode | None:
         best: PointNode | None = None
@@ -468,34 +430,7 @@ class DocumentGraph:
 
     # ── Params / Sources ─────────────────────────────────────────────────
 
-    def upsert_param(self, name: str, value: Any) -> ParamNode:
-        if name in self.params:
-            self.params[name].value = value
-            return self.params[name]
-        node = ParamNode(id=self._next_id(), name=name, value=value)
-        self.params[name] = node
-        return node
-
     # ── Relationships ────────────────────────────────────────────────────
-
-    def add_derivation_edge(
-        self,
-        source_layer: str,
-        target_layer: str,
-        operator_name: str,
-        data: dict[str, Any] | None = None,
-    ) -> DerivationEdge:
-        self.ensure_layer(source_layer)
-        self.ensure_layer(target_layer)
-        edge = DerivationEdge(
-            id=self._next_id(),
-            source_layer=source_layer,
-            target_layer=target_layer,
-            operator_name=operator_name,
-            data=dict(data or {}),
-        )
-        self.derivations[edge.id] = edge
-        return edge
 
     def reachable_dependents(self, layers: set[str]) -> set[str]:
         adjacency: dict[str, set[str]] = defaultdict(set)

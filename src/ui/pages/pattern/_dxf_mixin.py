@@ -45,6 +45,7 @@ class _DxfMixin:
 
         incoming = [[(x, y) for x, y in poly] for poly in polys]
         self._suspend_state = True
+        self._preview_user_opt_out = False
 
         self._showing_preview = False
         self._preview_btn.setChecked(False)
@@ -105,16 +106,13 @@ class _DxfMixin:
             self._load_dxf(path)
 
     def _load_dxf(self, path: str) -> None:
+        self._preview_user_opt_out = False
         try:
             polys, report = load_dxf_polylines_with_report(path)
             self._orig_polys = polys
             self._edit_polys = list(polys)
             self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
             self._exclusion_ids.clear()
-            self._imported_dxf_layers = [
-                (name, count, False, False)
-                for name, count in report.layer_counts.items()
-            ]
             self._zones.clear()
             self._refresh_zone_list()
             self._canvas.load(polys)
@@ -139,20 +137,6 @@ class _DxfMixin:
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
-
-    def _delete_selected(self) -> None:
-        if self._showing_preview:
-            return
-        n = self._canvas.delete_selected()
-        if n:
-            self._edit_polys = list(self._canvas.get_active())
-            self._outline_ids = self._sync_outline_ids(self._edit_polys)
-            self._zones.clear()
-            self._refresh_zone_list()
-            self._set_status(f"Deleted {n} polyline(s). Use ↩ Undo to restore.")
-            self._refresh_canvas_panels()
-            self._schedule_preview()
-            self._emit_state_changed()
 
     def _close_selected_outlines(self) -> None:
         if self._showing_preview:
@@ -188,29 +172,9 @@ class _DxfMixin:
         else:
             self._set_status("No closed outlines selected.")
 
-    def _undo_delete(self) -> None:
-        if self._showing_preview:
-            return
-        if not self._canvas.undo_delete():
-            self._set_status("Nothing to undo.")
-        else:
-            self._edit_polys = list(self._canvas.get_active())
-            self._outline_ids = self._sync_outline_ids(self._edit_polys)
-            self._zones.clear()
-            self._refresh_zone_list()
-            self._set_status("Undo: polylines restored.")
-            self._refresh_canvas_panels()
-            self._schedule_preview()
-            self._emit_state_changed()
-
     def _quick_load(self, path: str) -> None:
         self._dxf_edit.setText(path)
         self._load_dxf(path)
-
-    def _clear_recent(self) -> None:  # pragma: no cover - kept for back-compat
-        from src.ui.util.recent_files import clear_recent
-
-        clear_recent(self._settings, KIND_DXF)
 
     def _reveal_in_finder(self) -> None:
         from PySide6.QtCore import QUrl
@@ -226,13 +190,6 @@ class _DxfMixin:
                 )
                 return
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
-
-    def _show_recent_menu(
-        self,
-    ) -> None:  # pragma: no cover - retained for API stability
-        # Recent menu is now driven by RecentFilesButton; this shim keeps any
-        # external callers working.
-        self._recent_btn._open_menu()
 
     def _choose_pattern_library_dir(self) -> None:
         path = pick_directory(

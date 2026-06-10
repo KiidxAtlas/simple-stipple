@@ -5,7 +5,7 @@ from __future__ import annotations
 import platform as _platform
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 
 # Platform modifier for human-readable shortcut hints
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
@@ -62,8 +62,6 @@ def sidebar_panel(
 ) -> QFrame:
     """Wrap sidebar content in a styled scrollable panel."""
     frame = surface_frame("sidebar")
-    frame.setMinimumWidth(min_width)
-    frame.setMaximumWidth(max_width)
     layout = QVBoxLayout(frame)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(0)
@@ -74,6 +72,20 @@ def sidebar_panel(
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     scroll.setWidget(content)
     layout.addWidget(scroll)
+    frame.setMinimumWidth(min_width)
+    frame.setMaximumWidth(max_width)
+
+    # The horizontal scrollbar is off, so the panel must be at least as wide
+    # as the content's minimum (plus the vertical scrollbar gutter) or the
+    # content gets clipped. Callers populate `content` after wrapping it, so
+    # measure on the next event-loop turn, once the layout has settled.
+    def _fit_width() -> None:
+        gutter = scroll.verticalScrollBar().sizeHint().width() + 2
+        needed = content.minimumSizeHint().width() + gutter
+        frame.setMinimumWidth(max(min_width, needed))
+        frame.setMaximumWidth(max(max_width, needed))
+
+    QTimer.singleShot(0, _fit_width)
     return frame
 
 

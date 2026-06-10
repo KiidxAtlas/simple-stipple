@@ -58,13 +58,6 @@ class CollapsibleSection(QFrame):
         self._content.setVisible(checked)
         self.adjustSize()
 
-    def isExpanded(self) -> bool:
-        return self._toggle.isChecked()
-
-    def setExpanded(self, expanded: bool) -> None:
-        self._toggle.setChecked(expanded)
-        self._on_toggled(expanded)
-
     def set_subtitle(self, text: str, *, dim: bool = False) -> None:
         """Update the one-line state summary shown under the title.
 

@@ -35,12 +35,10 @@ class _DrawModeMixin:
         panel = DrawSidebar(
             parent=self.viewport(),
             on_draw_clicked=self._on_draw_button_clicked,
-            on_apply_shape_size=lambda: None,
             on_finish_open=lambda: self._finish_draw(close=False),
             on_close_edit=lambda: self._finish_draw(close=True),
             on_undo_point=self._key_backspace,
             on_toggle_snap=self._toggle_sidebar_snap,
-            on_toggle_construction=self._toggle_sidebar_construction,
             on_toggle_split=self._toggle_sidebar_split,
             on_cycle_arc_mode=self._cycle_arc_mode,
             on_cycle_constraint_mode=self._cycle_constraint_mode,
@@ -63,11 +61,6 @@ class _DrawModeMixin:
 
     def _toggle_sidebar_snap(self) -> None:
         self._grid_snap = not self._grid_snap
-        self._refresh_draw_sidebar_state()
-        self._redraw()
-
-    def _toggle_sidebar_construction(self) -> None:
-        self._draw_construction_mode = not self._draw_construction_mode
         self._refresh_draw_sidebar_state()
         self._redraw()
 
@@ -506,26 +499,6 @@ class _DrawModeMixin:
                 continue
             self._polys[idx] = poly[:-1]
             changed += 1
-        if changed:
-            self._redraw()
-            self._notify()
-            self._fire_poly_change()
-        return changed
-
-    def _toggle_selected_polyline_topology(self) -> int:
-        indices = self._selected_indices()
-        if not indices:
-            return 0
-        changed = 0
-        self._push_undo()
-        for idx in indices:
-            poly = self._polys[idx]
-            if self._is_poly_closed(poly):
-                self._polys[idx] = poly[:-1]
-                changed += 1
-            elif len(poly) >= 3:
-                self._polys[idx] = [*poly, poly[0]]
-                changed += 1
         if changed:
             self._redraw()
             self._notify()

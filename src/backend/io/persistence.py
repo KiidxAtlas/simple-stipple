@@ -41,40 +41,6 @@ def write_json_file_atomic(path: str | Path, payload: Any) -> None:
         raise
 
 
-def atomic_write_bytes(path: str | Path, data: bytes) -> None:
-    """Write bytes atomically (temp file + os.replace)."""
-    file_path = Path(path)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=file_path.name, dir=file_path.parent)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        os.replace(tmp_path, file_path)
-    except OSError:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-def atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> None:
-    """Write text atomically (temp file + os.replace)."""
-    file_path = Path(path)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=file_path.name, dir=file_path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding=encoding) as handle:
-            handle.write(text)
-        os.replace(tmp_path, file_path)
-    except OSError:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
 def atomic_write_via(path: str | Path, writer: Callable[[Path], None]) -> None:
     """Run ``writer`` against a temp path next to ``path`` then atomically swap.
 

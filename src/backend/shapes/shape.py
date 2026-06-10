@@ -9,7 +9,7 @@ import math
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 Point = tuple[float, float]
 
@@ -77,16 +77,6 @@ class Shape(ABC):
         """Compute tessellated point sequence. Implemented by subclasses."""
         ...
 
-    @abstractmethod
-    def to_dxf_entity(self) -> Any:
-        """Export as DXF entity. Returns None if not supported."""
-        ...
-
-    @abstractmethod
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize shape to dictionary for persistence."""
-        ...
-
     def transform(self, matrix: tuple[tuple[float, float, float], ...]) -> None:
         """Apply 2D affine transformation to shape.
 
@@ -140,34 +130,6 @@ class PolylineShape(Shape):
         """Polylines don't need tessellation — return points as-is."""
         return list(self._control_points)
 
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload.
-
-        The actual DXF writer maps this payload to concrete ezdxf entities.
-        """
-        if len(self._control_points) < 2:
-            return None
-        return {
-            "type": "LWPOLYLINE",
-            "points": [(x, y) for x, y in self._control_points],
-            "closed": bool(self.closed),
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "polyline",
-            "points": self._control_points,
-            "closed": self.closed,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }
-
-
 class LineShape(Shape):
     """A simple line segment (two points)."""
 
@@ -183,29 +145,6 @@ class LineShape(Shape):
     def _compute_tessellation(self) -> list[Point]:
         """Lines don't need tessellation."""
         return [self.start, self.end]
-
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload."""
-        return {
-            "type": "LINE",
-            "start": self.start,
-            "end": self.end,
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "line",
-            "start": self.start,
-            "end": self.end,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }
-
 
 class ArcShape(Shape):
     """A circular arc defined by center, radius, and angle range."""
@@ -261,34 +200,6 @@ class ArcShape(Shape):
 
         return points
 
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload."""
-        return {
-            "type": "ARC",
-            "center": self.center,
-            "radius": self.radius,
-            "start_angle": self.start_angle,
-            "end_angle": self.end_angle,
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "arc",
-            "center": self.center,
-            "radius": self.radius,
-            "start_angle": self.start_angle,
-            "end_angle": self.end_angle,
-            "segments": self.segments,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }
-
-
 class CircleShape(Shape):
     """A circle defined by center and radius."""
 
@@ -323,30 +234,6 @@ class CircleShape(Shape):
         # Close the circle
         points.append(points[0])
         return points
-
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload."""
-        return {
-            "type": "CIRCLE",
-            "center": self.center,
-            "radius": self.radius,
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "circle",
-            "center": self.center,
-            "radius": self.radius,
-            "segments": self.segments,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }
-
 
 class EllipseShape(Shape):
     """An ellipse defined by center, radii, and rotation."""
@@ -417,34 +304,6 @@ class EllipseShape(Shape):
         points.append(points[0])
         return points
 
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload."""
-        return {
-            "type": "ELLIPSE",
-            "center": self.center,
-            "rx": self.rx,
-            "ry": self.ry,
-            "rotation": self.rotation,
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "ellipse",
-            "center": self.center,
-            "rx": self.rx,
-            "ry": self.ry,
-            "rotation": self.rotation,
-            "segments": self.segments,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }
-
-
 class RectangleShape(Shape):
     """A rectangle defined by center, width, and height."""
 
@@ -493,32 +352,6 @@ class RectangleShape(Shape):
         """Rectangle as polyline (4 corners + close)."""
         pts = self.control_points
         return list(pts) + [pts[0]]  # Close the shape
-
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload."""
-        pts = self.control_points
-        return {
-            "type": "LWPOLYLINE",
-            "points": pts + [pts[0]],
-            "closed": True,
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "rectangle",
-            "center": self.center,
-            "width": self.width,
-            "height": self.height,
-            "rotation": self.rotation,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }
-
 
 class SplineShape(Shape):
     """A B-spline curve defined by control points."""
@@ -571,27 +404,3 @@ class SplineShape(Shape):
             # Fallback to polyline if spline fails
             return list(self._control_points)
 
-    def to_dxf_entity(self) -> Any:
-        """Export as a DXF-friendly payload."""
-        return {
-            "type": "SPLINE",
-            "control_points": list(self._control_points),
-            "degree": self.degree,
-            "closed": bool(self.closed),
-            "layer": self.layer,
-        }
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "spline",
-            "control_points": self._control_points,
-            "degree": self.degree,
-            "closed": self.closed,
-            "segments": self.segments,
-            "name": self.name,
-            "visible": self.visible,
-            "locked": self.locked,
-            "layer": self.layer,
-            "construction": self.construction,
-        }

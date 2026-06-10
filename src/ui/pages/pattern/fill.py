@@ -17,7 +17,7 @@ the user "outline + fill" with no pattern overlay.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 # The pattern combo entry that means "no pattern" — outline only.
@@ -44,9 +44,6 @@ class FillSpec:
     target_pattern: bool = False  # fill the closed pattern strokes
     inset: float = 0.0  # shrink fill region by this many mm before hatching
 
-    # Allow consumers to stash extra hints without tripping validation.
-    extras: dict[str, Any] = field(default_factory=dict, compare=False, repr=False)
-
     def __post_init__(self) -> None:
         if self.mode not in _VALID_MODES:
             raise ValueError(
@@ -65,17 +62,6 @@ class FillSpec:
     @property
     def enabled(self) -> bool:
         return self.mode != "none"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "mode": self.mode,
-            "spacing": float(self.spacing),
-            "angle_deg": float(self.angle_deg),
-            "keep_pattern": bool(self.keep_pattern),
-            "target_outline": bool(self.target_outline),
-            "target_pattern": bool(self.target_pattern),
-            "inset": float(self.inset),
-        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> FillSpec:

@@ -42,7 +42,6 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     page._suspend_state = True
     if not isinstance(state, dict):
         state = {}
-    page._imported_dxf_layers = []
     page._dxf_edit.setText(str(state.get("dxf_path", "")))
     restore_form_state(page, state.get("params", {}))
     page._orig_polys = [list(poly) for poly in state.get("orig_polys", [])]
@@ -99,7 +98,6 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
 
 def clear_pattern_workspace_state(page: Any) -> None:
     apply_pattern_workspace_state(page, {})
-    page._imported_dxf_layers = []
     page._outline_ids = []
     page._set_status("")
     page._refresh_canvas_panels()

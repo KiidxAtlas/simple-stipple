@@ -16,8 +16,6 @@ from shapely.geometry import (
     Point,
     Polygon,
 )
-from shapely.ops import split as shapely_split
-from shapely.ops import unary_union
 
 from src.backend.geometry.primitives import (
     build_circle_poly,
@@ -342,34 +340,6 @@ class _GeomOpsMixin:
         self._fire_poly_change()
         return True
 
-    def scale_selected(self, factor: float) -> bool:
-        indices = self._mutable_selected_indices()
-        bounds = self._selection_bounds(indices)
-        if not indices or bounds is None or factor <= 0:
-            return False
-        cx = (bounds[0] + bounds[2]) / 2.0
-        cy = (bounds[1] + bounds[3]) / 2.0
-        self._push_undo()
-        for idx in indices:
-            self._polys[idx] = [
-                (cx + (x - cx) * factor, cy + (y - cy) * factor)
-                for x, y in self._polys[idx]
-            ]
-            self._transform_entity_meta(
-                idx,
-                center=(cx, cy),
-                kind=self._entity_kinds[idx]
-                if idx < len(self._entity_kinds)
-                else "polyline",
-                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
-                transform="scale",
-                factor=factor,
-            )
-        self._redraw()
-        self._notify()
-        self._fire_poly_change()
-        return True
-
     def mirror_selected(self, axis: str) -> bool:
         indices = self._mutable_selected_indices()
         bounds = self._selection_bounds(indices)
@@ -428,153 +398,6 @@ class _GeomOpsMixin:
         self._notify()
         self._fire_poly_change()
         return len(created)
-
-    def trim_selected_to_intersections(self) -> int:
-        indices = self._mutable_selected_indices()
-        if not indices:
-            return 0
-
-        cutters: list[LineString] = []
-        selected_set = set(indices)
-        for idx, poly in enumerate(self._polys):
-            if idx in selected_set or len(poly) < 2:
-                continue
-            try:
-                geom = LineString(poly)
-            except (TypeError, ValueError, GEOSException):
-                continue
-            if not geom.is_empty:
-                cutters.append(geom)
-        if not cutters:
-            return 0
-
-        cutter_union = unary_union(cutters)
-        changed = 0
-        self._push_undo()
-        for idx in indices:
-            poly = self._polys[idx]
-            if len(poly) < 2 or self._is_poly_closed(poly):
-                continue
-            try:
-                target = LineString(poly)
-            except (TypeError, ValueError, GEOSException):
-                continue
-            if target.is_empty or not target.intersects(cutter_union):
-                continue
-            try:
-                pieces = shapely_split(target, cutter_union)
-            except (TypeError, ValueError, GEOSException):
-                continue
-            geoms = [
-                g for g in getattr(pieces, "geoms", []) if isinstance(g, LineString)
-            ]
-            if len(geoms) < 2:
-                continue
-            longest = max(geoms, key=lambda g: g.length)
-            coords = [(float(x), float(y)) for x, y in longest.coords]
-            if len(coords) >= 2 and coords != poly:
-                self._polys[idx] = coords
-                changed += 1
-
-        if not changed:
-            self._undo_stack.pop()
-            return 0
-        self._redraw()
-        self._notify()
-        self._fire_poly_change()
-        return changed
-
-    def extend_selected_to_intersections(self) -> int:
-        indices = self._mutable_selected_indices()
-        if not indices:
-            return 0
-
-        cutters: list[LineString] = []
-        selected_set = set(indices)
-        for idx, poly in enumerate(self._polys):
-            if idx in selected_set or len(poly) < 2:
-                continue
-            try:
-                geom = LineString(poly)
-            except (TypeError, ValueError, GEOSException):
-                continue
-            if not geom.is_empty:
-                cutters.append(geom)
-        if not cutters:
-            return 0
-
-        all_pts = [pt for poly in self._polys for pt in poly]
-        if all_pts:
-            xs, ys = zip(*all_pts)
-            ray_length = max(
-                math.hypot(max(xs) - min(xs), max(ys) - min(ys)) * 3.0, 100.0
-            )
-        else:
-            ray_length = 100.0
-
-        changed = 0
-        self._push_undo()
-        for idx in indices:
-            poly = self._polys[idx]
-            if len(poly) < 2 or self._is_poly_closed(poly):
-                continue
-            updated = list(poly)
-            start_ext = self._nearest_extension_point(
-                poly[0], poly[1], cutters, ray_length, reverse=True
-            )
-            end_ext = self._nearest_extension_point(
-                poly[-1], poly[-2], cutters, ray_length, reverse=False
-            )
-            if start_ext is not None:
-                updated[0] = start_ext
-            if end_ext is not None:
-                updated[-1] = end_ext
-            if updated != poly:
-                self._polys[idx] = updated
-                changed += 1
-
-        if not changed:
-            self._undo_stack.pop()
-            return 0
-        self._redraw()
-        self._notify()
-        self._fire_poly_change()
-        return changed
-
-    def _nearest_extension_point(
-        self,
-        anchor: tuple[float, float],
-        neighbor: tuple[float, float],
-        cutters: list[LineString],
-        ray_length: float,
-        *,
-        reverse: bool,
-    ) -> tuple[float, float] | None:
-        ax, ay = anchor
-        nx, ny = neighbor
-        dx, dy = ax - nx, ay - ny
-        mag = math.hypot(dx, dy)
-        if mag < 1e-9:
-            return None
-        ux, uy = dx / mag, dy / mag
-        ray = LineString([anchor, (ax + ux * ray_length, ay + uy * ray_length)])
-        best_t: float | None = None
-        best_pt: tuple[float, float] | None = None
-
-        for cutter in cutters:
-            try:
-                inter = ray.intersection(cutter)
-            except (TypeError, ValueError, GEOSException):
-                continue
-            for px, py in self._iter_intersection_points(inter):
-                vx, vy = px - ax, py - ay
-                t = vx * ux + vy * uy
-                if t <= 1e-6:
-                    continue
-                if best_t is None or t < best_t:
-                    best_t = t
-                    best_pt = (float(px), float(py))
-        return best_pt
 
     def _iter_intersection_points(self, geom) -> list[tuple[float, float]]:
         if geom is None or getattr(geom, "is_empty", True):
@@ -830,53 +653,6 @@ class _GeomOpsMixin:
         self._notify()
         self._fire_poly_change()
         return True
-
-    def _prompt_edit_dimensions(self) -> None:
-        from PySide6.QtWidgets import QInputDialog
-
-        indices = self._mutable_selected_indices()
-        bounds = self._selection_bounds(indices)
-        if not indices or bounds is None:
-            self._show_flash("Select shapes/lines first", 1200)
-            return
-
-        cur_w = max(bounds[2] - bounds[0], 0.0)
-        cur_h = max(bounds[3] - bounds[1], 0.0)
-
-        new_w, ok_w = QInputDialog.getDouble(
-            self,
-            "Set Width",
-            "Width (mm):",
-            cur_w,
-            0.001,
-            1_000_000.0,
-            3,
-        )
-        if not ok_w:
-            return
-
-        new_h, ok_h = QInputDialog.getDouble(
-            self,
-            "Set Height",
-            "Height (mm):",
-            cur_h,
-            0.001,
-            1_000_000.0,
-            3,
-        )
-        if not ok_h:
-            return
-
-        changed_w = abs(new_w - cur_w) > 1e-9
-        changed_h = abs(new_h - cur_h) > 1e-9
-        if not changed_w and not changed_h:
-            return
-
-        if changed_w:
-            self._set_selected_width(new_w)
-        if changed_h:
-            self._set_selected_height(new_h)
-        self._show_flash("Dimensions updated", 900)
 
     # ── Explode / Merge ───────────────────────────────────────────────────────
 

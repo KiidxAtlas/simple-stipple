@@ -211,6 +211,9 @@ class ConvertPage(BasePage):
         _cl.addWidget(self._canvas_status)
 
         self._preview_canvas = DxfCanvas(selectable=False)
+        self._preview_canvas.set_empty_message(
+            "No preview\nRun a conversion to see the result here"
+        )
         self._preview_canvas.set_grid_visible(True)
         self._preview_canvas.set_grid_snap(False)
         self._preview_canvas.set_grid_spacing(1.0)

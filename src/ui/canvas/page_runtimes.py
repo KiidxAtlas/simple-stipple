@@ -176,9 +176,6 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
 
         return _label
 
-    def _active_tree_layer_name(self) -> str:
-        return "pattern_preview" if self._get_showing_preview() else "pattern_active"
-
     def _build_tree_shape_rows(
         self,
         layer_name: str,

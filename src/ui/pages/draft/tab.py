@@ -63,7 +63,6 @@ class DraftPage(BasePage):
         super().__init__(parent, settings)
         self._last_out_path: str | None = None
         self._last_in_path: str | None = None
-        self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
         self._runtime: CanvasRuntime | None = None
 
         root = QVBoxLayout(self)
@@ -172,11 +171,14 @@ class DraftPage(BasePage):
             on_change=self._on_sel_change,
             on_mode_change=self._on_canvas_mode_change,
             on_poly_change=self._on_canvas_edit,
-            on_action=self._on_canvas_action,
             on_send_selected_to_pattern=self._on_send_selected_to_pattern,
             on_use_selected_as_fill_pattern=self._on_use_selected_as_fill_pattern,
             on_ghost_click=self._on_ghost_poly_click,
             draft_profile=True,
+        )
+        self._canvas.set_empty_message(
+            "Nothing here yet\n"
+            "Open a DXF, drop a file here, or press D to start drawing"
         )
         self._canvas.quickShapeChanged.connect(self._on_quick_shape_changed)
         self._canvas.quickShapeEnabledChanged.connect(
@@ -255,21 +257,6 @@ class DraftPage(BasePage):
         self._rt().on_tree_selection_requested(indices)
         # Do NOT call _refresh_status() — that rebuilds the tree and clears
         # the selection highlight the user just created.
-
-    def _layer_view_bucket(self, layer: str | None = None) -> dict[str, set[int]]:
-        return self._rt().layer_view_bucket(layer)
-
-    def _set_current_layer_view(self, layer: str | None = None) -> None:
-        self._rt().set_current_layer_view(layer)
-
-    def _rename_layer_view_state(self, old: str, new: str) -> None:
-        self._rt().rename_layer_view_state(old, new)
-
-    def _delete_layer_view_state(self, name: str) -> None:
-        self._rt().delete_layer_view_state(name)
-
-    def _normalize_graph_for_ui(self) -> None:
-        self._rt().normalize_graph_for_ui()
 
     def _reload_active_layer(self, *, fit: bool = False) -> None:
         self._rt().reload_active_layer(fit=fit)
@@ -353,23 +340,6 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
 
-    def _sync_browser_interaction_state(self) -> None:
-        self._rt().sync_browser_interaction_state()
-
-    def _selection_relationship_summary(self) -> str:
-        sel = self._canvas.get_selection_indices()
-        if not sel:
-            return ""
-        if len(sel) == 1:
-            idx = sel[0]
-            connected_fn = getattr(self._canvas, "_connected_poly_indices", None)
-            if callable(connected_fn):
-                connected = connected_fn(idx)
-                if isinstance(connected, (set, list, tuple)):
-                    return f"Connected group size: {len(connected)}"
-            return ""
-        return f"Multi-selection across {len(sel)} objects"
-
     def _fit_selection(self) -> None:
         if self._canvas.fit_selection():
             self._refresh_status()
@@ -378,18 +348,6 @@ class DraftPage(BasePage):
         self._rt().on_canvas_edit()
         self._refresh_status()
         self._emit_state_changed()
-
-    def _on_canvas_action(self, action_type: str, payload: dict | None = None) -> None:
-        active = self._rt().current_layer_name()
-        self._rt().doc_graph.record_action(
-            f"canvas:{action_type}",
-            payload or {},
-            touched=[("layer", active)],
-            invalidated_layers=sorted(
-                self._rt().doc_graph.reachable_dependents({active})
-            ),
-            user_initiated=True,
-        )
 
     def _on_ghost_poly_click(self, ghost_idx: int) -> None:
         """Clicking a shape from another layer activates that layer and selects the shape."""
@@ -563,13 +521,6 @@ class DraftPage(BasePage):
             self._layer_sidebar.refresh_tree()
             self._rt()._update_ghost_layers()
 
-    def _build_layer_shape_rows(
-        self,
-        layer_name: str,
-        polylines: list[list[tuple[float, float]]],
-    ) -> list[dict[str, Any]]:
-        return self._rt().build_layer_shape_rows(layer_name, polylines)
-
     def _build_layer_tree_rows(
         self,
         layer_view_state: dict[str, dict[str, set[int]]],
@@ -609,10 +560,6 @@ class DraftPage(BasePage):
         try:
             by_layer, report = load_dxf_polylines_by_layer_with_report(path)
             self._last_in_path = path
-            self._imported_dxf_layers = [
-                (name, count, False, False)
-                for name, count in report.layer_counts.items()
-            ]
             # Flatten for fit-bounds / fallback consumers.
             flat: list[list[tuple[float, float]]] = []
             for polys in by_layer.values():

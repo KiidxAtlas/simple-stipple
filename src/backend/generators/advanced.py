@@ -85,7 +85,7 @@ def gen_penrose_tiling(
             seen.add(i0)
             seen.add(i1)
             _, A1, B1, C1 = triangles[i0]
-            _, A2, B2, C2 = triangles[i1]
+            A2 = triangles[i1][1]
             quad = [
                 (A1.real, A1.imag),
                 (B1.real, B1.imag),

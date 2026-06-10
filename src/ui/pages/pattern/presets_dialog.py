@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.pages.pattern.presets import (
-    BUILTIN_PRESETS,
     export_to_file,
     import_from_file,
     merge_presets,
@@ -376,10 +375,5 @@ class PresetManagerDialog(QDialog):
         self._set_status(f"Restored {len(added)} built-in preset(s).")
 
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def builtin_count() -> int:
-        return len(BUILTIN_PRESETS)
-
 
 __all__ = ["PresetManagerDialog"]

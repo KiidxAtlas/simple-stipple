@@ -6,9 +6,7 @@ Tracks the most-recently-opened file paths *per kind* (e.g. ``"dxf"``,
 
 Design notes:
 
-* MRU lists are stored under ``settings["recent_files.<kind>"]``.  The legacy
-  ``settings["recent_dxf"]`` key is migrated transparently the first time it is
-  read so existing users keep their history.
+* MRU lists are stored under ``settings["recent_files.<kind>"]``.
 * Lists are capped at :data:`DEFAULT_LIMIT` entries.  Duplicates collapse to
   the most-recent occurrence.
 * :func:`list_recent` filters out paths that no longer exist on disk so the UI
@@ -33,18 +31,6 @@ def _key(kind: str) -> str:
     return f"recent_files.{kind}"
 
 
-def _migrate_legacy(settings: dict, kind: str) -> None:
-    """One-time migration of the pre-existing ``recent_dxf`` settings key."""
-    if kind != KIND_DXF:
-        return
-    new_key = _key(kind)
-    if new_key in settings:
-        return
-    legacy = settings.get("recent_dxf")
-    if isinstance(legacy, list) and legacy:
-        settings[new_key] = [p for p in legacy if isinstance(p, str)]
-
-
 def _normalize(path: str) -> str:
     """Return a stable absolute path for dedupe purposes."""
     try:
@@ -64,7 +50,6 @@ def record_recent(
     if not path:
         return
     norm = _normalize(path)
-    _migrate_legacy(settings, kind)
     key = _key(kind)
     current = settings.get(key)
     if not isinstance(current, list):
@@ -96,7 +81,6 @@ def list_recent(
     limit: int | None = None,
 ) -> list[str]:
     """Return the MRU list for *kind*, optionally filtering missing files."""
-    _migrate_legacy(settings, kind)
     raw = settings.get(_key(kind))
     if not isinstance(raw, list):
         return []
@@ -115,10 +99,8 @@ def list_recent(
 def clear_recent(settings: dict, kind: str) -> None:
     """Wipe the MRU list for *kind*."""
     key = _key(kind)
-    if key in settings or (kind == KIND_DXF and "recent_dxf" in settings):
+    if key in settings:
         settings[key] = []
-        if kind == KIND_DXF:
-            settings.pop("recent_dxf", None)
         save_settings(settings)
 
 
@@ -128,7 +110,6 @@ def prune_missing(
     """Drop entries that no longer exist on disk for the given *kinds*."""
     changed = False
     for kind in kinds:
-        _migrate_legacy(settings, kind)
         key = _key(kind)
         raw = settings.get(key)
         if not isinstance(raw, list):

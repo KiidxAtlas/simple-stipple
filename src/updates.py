@@ -38,7 +38,7 @@ def _detect_current_version() -> str:
         return metadata.version(_REPO_NAME)
     except metadata.PackageNotFoundError:
         return _read_version_from_pyproject()
-    except Exception:  # pragma: no cover - defensive fallback
+    except Exception:  # defensive fallback
         return _read_version_from_pyproject()
 
 

@@ -31,7 +31,6 @@ class SingleInstanceGuard(QObject):
 
     def __init__(self, name: str = "simple-stipple", parent: QObject | None = None):
         super().__init__(parent)
-        self._name = name
         self._socket_name = f"{name}.sock"
         runtime = user_runtime_dir()
         self._lock_path = runtime / f"{name}.lock"
@@ -40,7 +39,7 @@ class SingleInstanceGuard(QObject):
 
             self._lockfile = QLockFile(str(self._lock_path))
             self._lockfile.setStaleLockTime(0)
-        except ImportError:  # pragma: no cover - PySide6 always provides this
+        except ImportError:  # PySide6 always provides this
             self._lockfile = None
         self._server: QLocalServer | None = None
         self._on_activate: Callable[[], None] | None = None

@@ -11,13 +11,17 @@ from typing import Any
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -121,6 +125,7 @@ class App(QMainWindow):
         self._recent_workspaces_menu = self._workspace_menu.addMenu("Open Recent")
         self._build_workspace_actions()
         self._rebuild_recent_workspaces_menu()
+        self._build_edit_view_help_menus()
 
         # ── Keyboard shortcuts ────────────────────────────────────────────────
         self._global_actions: dict[str, QAction] = {}
@@ -133,8 +138,6 @@ class App(QMainWindow):
     def _init_tab_bindings(self) -> None:
         self._draft_page: Any = self._page_runtime.get("draft")
         self._pattern_page: Any = self._page_runtime.get("pattern")
-        self._trace_page: Any = self._page_runtime.get("trace")
-        self._convert_page: Any = self._page_runtime.get("convert")
         self._repo_page: Any = self._page_runtime.get("repo")
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
@@ -488,6 +491,194 @@ class App(QMainWindow):
             return False
         self._workspace_path = normalize_workspace_path(path)
         return self._save_workspace()
+
+    # ── Edit / View / Help menus ──────────────────────────────────────────
+
+    def _build_edit_view_help_menus(self) -> None:
+        """Standard menus routing to the active page's canvas.
+
+        Text-editing shortcuts (undo/cut/copy/paste/select-all) check the
+        focused widget first so they never hijack typing in a line edit.
+        """
+        edit_menu = self.menuBar().addMenu("Edit")
+
+        def add(menu, text, slot, shortcut=None):
+            action = QAction(text, self)
+            if shortcut is not None:
+                action.setShortcut(shortcut)
+            action.triggered.connect(slot)
+            menu.addAction(action)
+            return action
+
+        add(edit_menu, "Undo", self._menu_undo, QKeySequence.StandardKey.Undo)
+        add(edit_menu, "Redo", self._menu_redo, QKeySequence.StandardKey.Redo)
+        edit_menu.addSeparator()
+        add(edit_menu, "Cut", self._menu_cut, QKeySequence.StandardKey.Cut)
+        add(edit_menu, "Copy", self._menu_copy, QKeySequence.StandardKey.Copy)
+        add(edit_menu, "Paste", self._menu_paste, QKeySequence.StandardKey.Paste)
+        add(
+            edit_menu,
+            "Duplicate",
+            lambda: self._canvas_call("_duplicate_selected"),
+            QKeySequence("Ctrl+D"),
+        )
+        # Delete intentionally has no global shortcut: Backspace must keep
+        # working in text fields; the canvas handles it when focused.
+        add(edit_menu, "Delete Selected", lambda: self._canvas_call("delete_selected"))
+        edit_menu.addSeparator()
+        add(
+            edit_menu,
+            "Select All",
+            self._menu_select_all,
+            QKeySequence.StandardKey.SelectAll,
+        )
+        add(
+            edit_menu,
+            "Deselect All",
+            lambda: self._canvas_call("deselect_all"),
+            QKeySequence("Ctrl+Shift+A"),
+        )
+
+        view_menu = self.menuBar().addMenu("View")
+        # Single-letter canvas keys (F/S/D/E/M) stay widget-local; the menu
+        # spells them out instead of registering global shortcuts.
+        add(view_menu, "Fit View (F)", lambda: self._canvas_call("fit"))
+        add(
+            view_menu,
+            "Zoom In",
+            lambda: self._canvas_zoom(1.15),
+            QKeySequence.StandardKey.ZoomIn,
+        )
+        add(
+            view_menu,
+            "Zoom Out",
+            lambda: self._canvas_zoom(1 / 1.15),
+            QKeySequence.StandardKey.ZoomOut,
+        )
+        view_menu.addSeparator()
+        self._grid_action = QAction("Show Grid", self, checkable=True)
+        self._grid_action.triggered.connect(
+            lambda checked: self._canvas_call("set_grid_visible", checked)
+        )
+        view_menu.addAction(self._grid_action)
+        self._snap_action = QAction("Snap to Grid", self, checkable=True)
+        self._snap_action.triggered.connect(
+            lambda checked: self._canvas_call("set_grid_snap", checked)
+        )
+        view_menu.addAction(self._snap_action)
+        view_menu.aboutToShow.connect(self._sync_view_menu_state)
+
+        help_menu = self.menuBar().addMenu("Help")
+        add(help_menu, "Keyboard Shortcuts…", self._show_shortcuts_reference)
+
+    def _active_canvas(self):
+        page = self._tabs.currentWidget()
+        return getattr(page, "_canvas", None)
+
+    def _canvas_call(self, name: str, *args) -> None:
+        canvas = self._active_canvas()
+        fn = getattr(canvas, name, None)
+        if callable(fn):
+            fn(*args)
+
+    def _canvas_zoom(self, factor: float) -> None:
+        self._canvas_call("_zoom_by", factor)
+
+    def _focused_text_widget(self):
+        widget = QApplication.focusWidget()
+        if isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            return widget
+        return None
+
+    def _menu_undo(self) -> None:
+        text = self._focused_text_widget()
+        if text is not None:
+            text.undo()
+        else:
+            self._canvas_call("undo")
+
+    def _menu_redo(self) -> None:
+        text = self._focused_text_widget()
+        if text is not None:
+            text.redo()
+        else:
+            self._canvas_call("redo")
+
+    def _menu_cut(self) -> None:
+        text = self._focused_text_widget()
+        if text is not None:
+            text.cut()
+        else:
+            self._canvas_call("_cut_selected")
+
+    def _menu_copy(self) -> None:
+        text = self._focused_text_widget()
+        if text is not None:
+            text.copy()
+        else:
+            self._canvas_call("_copy_selected")
+
+    def _menu_paste(self) -> None:
+        text = self._focused_text_widget()
+        if text is not None:
+            text.paste()
+        else:
+            self._canvas_call("_paste_clipboard")
+
+    def _menu_select_all(self) -> None:
+        text = self._focused_text_widget()
+        if text is not None:
+            text.selectAll()
+        else:
+            self._canvas_call("select_all")
+
+    def _sync_view_menu_state(self) -> None:
+        canvas = self._active_canvas()
+        has_canvas = canvas is not None
+        self._grid_action.setEnabled(has_canvas)
+        self._snap_action.setEnabled(has_canvas)
+        if has_canvas:
+            self._grid_action.setChecked(bool(getattr(canvas, "_grid_visible", False)))
+            self._snap_action.setChecked(bool(getattr(canvas, "_grid_snap", False)))
+
+    def _show_shortcuts_reference(self) -> None:
+        rows = [
+            ("Workspace", ""),
+            ("New / Open / Save / Save As", "per File menu"),
+            ("Command palette", self._shortcut("app.command_palette")),
+            ("Settings", self._shortcut("app.settings")),
+            ("Switch tabs", "Alt+1 … Alt+5"),
+            ("", ""),
+            ("Canvas", ""),
+            ("Select / Draw / Edit mode", "S / D / E"),
+            ("Fit view", "F"),
+            ("Measure", "M"),
+            ("Pan", "Space-drag or middle mouse"),
+            ("Zoom", "Mouse wheel, ⌘+ / ⌘-"),
+            ("Undo / Redo", "⌘Z / ⇧⌘Z"),
+            ("Cut / Copy / Paste", "⌘X / ⌘C / ⌘V"),
+            ("Duplicate", "⌘D"),
+            ("Delete selected", "Backspace"),
+            ("Select all / Deselect", "⌘A / ⇧⌘A"),
+            ("Close / Open polyline", "⇧C / ⇧O"),
+            ("Quick shape (select mode)", "Q radial menu · ⇧R/⇧C/⇧S"),
+        ]
+        lines = []
+        for label, keys in rows:
+            if not label:
+                lines.append("")
+            elif not keys:
+                lines.append(f"<b>{label}</b>")
+            else:
+                lines.append(
+                    f"{label}&nbsp;&nbsp;&mdash;&nbsp;&nbsp;"
+                    f"<span style='color:#8b949e'>{keys}</span>"
+                )
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            "<br>".join(lines),
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._confirm_discard_if_dirty():

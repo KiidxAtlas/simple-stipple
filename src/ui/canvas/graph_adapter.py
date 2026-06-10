@@ -74,7 +74,3 @@ class CanvasGraphAdapter:
                 refs.append(self.index_to_ref[idx])
         return refs
 
-    def select_refs(self, canvas: PolylineView, refs: list[EntityRef]) -> None:
-        ref_set = set(refs)
-        indices = [idx for idx, ref in enumerate(self.index_to_ref) if ref in ref_set]
-        canvas.set_selection(indices)

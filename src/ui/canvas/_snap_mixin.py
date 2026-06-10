@@ -51,9 +51,6 @@ class _SnapMixin:
         sd = math.hypot(cx - scx, cy - scy)
         return second if sd < fd else first
 
-    def _snap_to_grid(self, wx: float, wy: float) -> tuple[float, float]:
-        return snap_behaviors.snap_to_grid(wx, wy, self._grid_spacing)
-
     def _snap_to_polyline(
         self,
         cx: float,
@@ -200,22 +197,6 @@ class _SnapMixin:
             seg_count = n if closed else n - 1
             segments.update((pi, si) for si in range(max(0, seg_count)))
         return segments
-
-    def _find_nearest_vertex_snap(
-        self,
-        cx: float,
-        cy: float,
-        *,
-        exclude: set[tuple[int, int]] | None = None,
-    ) -> tuple[float, float] | None:
-        return snap_behaviors.find_nearest_vertex_snap(
-            cx,
-            cy,
-            self._polys,
-            self._hidden_polys,
-            self._w2c,
-            exclude=exclude,
-        )
 
     def _angle_snap(
         self, ax: float, ay: float, wx: float, wy: float

@@ -88,7 +88,6 @@ class PatternPage(
         self._edit_polys: list[list[tuple[float, float]]] = []
         self._orig_w: float = 0.0
         self._orig_h: float = 0.0
-        self._ar_locked: bool = True
         self._updating_dims: bool = False
         self._preview_task = CancellableTaskState()
         self._generate_task = CancellableTaskState()
@@ -109,10 +108,10 @@ class PatternPage(
                 LOGGER.exception("Failed to persist seeded pattern presets")
         self._base_patterns: list[str] = list(PATTERNS)
         self._library_patterns: dict[str, str] = {}
-        self._imported_dxf_layers: list[tuple[str, int, bool, bool]] = []
         self._tile_interlock_cb = None
 
         self._showing_preview: bool = False
+        self._preview_user_opt_out: bool = False
         self._preview_polys_cache: list[list[tuple[float, float]]] = []
         self._preview_categories: dict[str, list[list[tuple[float, float]]]] = {
             "outline": [],
@@ -197,7 +196,7 @@ class PatternPage(
         self._preview_btn.setToolTip(
             "Toggle between outline editing and pattern preview"
         )
-        self._preview_btn.clicked.connect(self._on_preview_toggled)
+        self._preview_btn.clicked.connect(self._on_preview_clicked)
 
         self._reset_preview_btn = QPushButton("Reset")
         self._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
@@ -215,6 +214,10 @@ class PatternPage(
             on_send_selected_to_draft=self._on_send_selected_to_draft_from_canvas,
             on_cutout_toggle=self._on_canvas_cutout_toggle,
             draft_profile=True,
+        )
+        self._canvas.set_empty_message(
+            "No outline loaded\n"
+            "Load a DXF, drop a file here, or send shapes over from Draft"
         )
         self._canvas.set_grid_visible(True)
         self._canvas.set_grid_snap(False)
@@ -287,6 +290,12 @@ class PatternPage(
         self._refresh_canvas_panels()
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
+
+    def _on_preview_clicked(self, checked: bool) -> None:
+        # Explicit user action: leaving preview opts out of auto-preview
+        # until the user re-engages (new outline or pattern change).
+        self._preview_user_opt_out = not checked
+        self._on_preview_toggled(checked)
 
     def _on_preview_toggled(self, checked: bool) -> None:
         """Toggle between outline editing and pattern preview display."""

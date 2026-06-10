@@ -23,12 +23,10 @@ class DrawSidebar(QFrame):
         *,
         parent: QWidget | None,
         on_draw_clicked: Callable[[], None],
-        on_apply_shape_size: Callable[[], None],
         on_finish_open: Callable[[], None],
         on_close_edit: Callable[[], None],
         on_undo_point: Callable[[], None],
         on_toggle_snap: Callable[[], None],
-        on_toggle_construction: Callable[[], None],
         on_toggle_split: Callable[[], None],
         on_cycle_arc_mode: Callable[[], None],
         on_cycle_constraint_mode: Callable[[], None],
@@ -212,14 +210,6 @@ class DrawSidebar(QFrame):
             display_name = tool.replace("_", " ").title()
             self._tool_label.setText(display_name)
 
-    def set_shape_size_enabled(self, enabled: bool) -> None:
-        """Placeholder for shape size field control."""
-        _ = enabled
-
-    def set_shape_size_values(self, width_text: str, height_text: str) -> None:
-        """Placeholder for shape size field values."""
-        _ = (width_text, height_text)
-
     def set_polyline_actions_enabled(
         self, *, can_finish: bool, can_close: bool, can_undo: bool
     ) -> None:
@@ -241,9 +231,6 @@ class DrawSidebar(QFrame):
             self.split_button.setProperty("role", "primary" if enabled else None)
             self.split_button.style().unpolish(self.split_button)
             self.split_button.style().polish(self.split_button)
-
-    def set_construction_label(self, enabled: bool) -> None:
-        _ = enabled
 
     def set_arc_mode(self, mode: str) -> None:
         if self.arc_mode_button is None:

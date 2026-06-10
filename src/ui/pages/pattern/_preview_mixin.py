@@ -184,7 +184,6 @@ class _PreviewMixin:
             if restart and (self._edit_polys or self._zones):
                 self._preview_timer.start(0)
             return
-        was_empty = not bool(self._preview_polys_cache)
         self._preview_polys_cache = list(display_polys)
         self._preview_categories = categories or {
             "outline": [],
@@ -204,6 +203,9 @@ class _PreviewMixin:
         if self._showing_preview:
             self._canvas.load(display_polys)
             self._set_preview_status(f"{status_text} — preview", "success")
+        elif self._should_auto_preview():
+            self._preview_btn.setChecked(True)
+            self._on_preview_toggled(True)
         else:
             self._set_preview_status(f"{status_text} ready — click Preview", "success")
         self._refresh_section_subtitles()  # update fill line count in subtitle
@@ -211,6 +213,14 @@ class _PreviewMixin:
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
             self._preview_timer.start(0)
+
+    def _should_auto_preview(self) -> bool:
+        """True when entering preview won't interrupt outline editing."""
+        if self._preview_user_opt_out:
+            return False
+        if getattr(self._canvas, "_mode", "select") != "select":
+            return False
+        return not getattr(self._canvas, "sel_count", 0)
 
     def _handle_preview_error(self, payload: tuple) -> None:
         preview_token, msg = payload

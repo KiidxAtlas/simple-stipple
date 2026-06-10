@@ -10,6 +10,7 @@ class _SubtitlesMixin:
     """Mixin providing subtitle refresh, shortcuts, command palette, and scale dim callbacks."""
 
     def _switch_pattern(self, value: str) -> None:
+        self._preview_user_opt_out = False
         for w in self._pattern_widgets.values():
             w.hide()
         self._tile_library_w.hide()
@@ -293,5 +294,3 @@ class _SubtitlesMixin:
         finally:
             self._updating_dims = False
 
-    def _on_ar_toggle(self, state: int) -> None:
-        self._ar_locked = bool(state)

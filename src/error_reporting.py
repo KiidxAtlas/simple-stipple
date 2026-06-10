@@ -70,7 +70,7 @@ def _python_excepthook(exc_type, exc_value, exc_tb) -> None:
             "Unexpected Error",
             f"{exc_type.__name__}: {exc_value}",
         )
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # defensive
         pass
 
 
@@ -90,7 +90,7 @@ def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
             "Background Task Error",
             f"{args.exc_type.__name__}: {args.exc_value}",
         )
-    except Exception:  # pragma: no cover - defensive
+    except Exception:  # defensive
         pass
 
 

@@ -99,10 +99,6 @@ class DxfImportReport(NamedTuple):
     layer_counts: dict[str, int]
 
     @property
-    def flattened_entity_count(self) -> int:
-        return sum(self.flattened_entities.values())
-
-    @property
     def ignored_entities(self) -> int:
         return self.invalid_polylines + sum(self.unsupported_entities.values())
 

@@ -30,7 +30,6 @@ def apply_draft_workspace_state(page: Any, state: dict | None) -> None:
     if not isinstance(state, dict):
         state = {}
     rt = page._rt()
-    page._imported_dxf_layers = []
     rt.layer_view_state = {}
 
     graph_state = state.get("document_graph")

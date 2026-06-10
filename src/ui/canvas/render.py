@@ -791,7 +791,7 @@ class CanvasRenderer:
             QPointF(mid_x, top), QPointF(rotate_center.x(), rotate_center.y())
         )
 
-    def _paint_inference_lines(self, painter: QPainter, vp_w: int, vp_h: int) -> None:
+    def _paint_inference_lines(self, painter: QPainter) -> None:
         """Draw dotted inference lines showing H/V alignment with existing endpoints."""
         if self._cursor_wx is None or self._cursor_wy is None or not self._draw_pts:
             return
@@ -1212,7 +1212,7 @@ class CanvasRenderer:
 
         # C. Inference / alignment lines
         if self._mode == "draw" and self._draw_pts and self._cursor_wx is not None:
-            self._paint_inference_lines(painter, w, h)
+            self._paint_inference_lines(painter)
 
         if self._mode == "draw":
             self._paint_draw_shape_preview(painter)
@@ -1293,13 +1293,24 @@ class CanvasRenderer:
         painter.drawText(8, h - 8, f"{zoom_pct}%  {hint}")
 
         if not self._polys and not self._draw_pts:
+            message = getattr(self, "_empty_message", "No polylines loaded")
+            title, _, hint = message.partition("\n")
             painter.setPen(QColor("#3b4a6a"))
-            painter.setFont(QFont("Helvetica", 12))
+            painter.setFont(QFont("Helvetica", 13))
+            offset = -10 if hint else 0
             painter.drawText(
-                QRectF(0, 0, w, h),
+                QRectF(0, offset, w, h),
                 Qt.AlignmentFlag.AlignCenter,
-                "No polylines loaded",
+                title,
             )
+            if hint:
+                painter.setPen(QColor("#2c3a55"))
+                painter.setFont(QFont("Helvetica", 10))
+                painter.drawText(
+                    QRectF(0, 16, w, h),
+                    Qt.AlignmentFlag.AlignCenter,
+                    hint,
+                )
 
         # Cursor position
         if self._cursor_wx is not None:
@@ -1597,120 +1608,3 @@ class CanvasRenderer:
 
     # ── Clipboard & nudge helpers ─────────────────────────────────────────────
 
-    def _paint_help_overlay(self, painter: QPainter) -> None:
-        """Draw a centered shortcut reference overlay when _help_visible is True."""
-        vp = self.viewport()
-        vw, vh = vp.width(), vp.height()
-
-        panel_w, panel_h = 560, 400
-        px = (vw - panel_w) // 2
-        py = (vh - panel_h) // 2
-
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        # Background panel
-        painter.setPen(QPen(QColor(80, 100, 140, 180), 1))
-        painter.setBrush(QBrush(QColor(14, 18, 30, 230)))
-        painter.drawRoundedRect(QRectF(px, py, panel_w, panel_h), 10, 10)
-
-        # Header
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(_FONT_HEL_14_BOLD)
-        painter.drawText(
-            QRectF(px, py + 14, panel_w, 28),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-            "Keyboard Shortcuts  ·  press ? to close",
-        )
-
-        # Divider
-        painter.setPen(QPen(QColor(80, 100, 140, 100), 1))
-        painter.drawLine(QPointF(px + 20, py + 50), QPointF(px + panel_w - 20, py + 50))
-
-        # Two-column shortcut definitions
-        col_groups = [
-            # Left column
-            [
-                (
-                    "Navigation",
-                    [
-                        ("Space / MMB drag", "Pan"),
-                        ("Scroll", "Zoom"),
-                        ("+ / -", "Zoom in / out"),
-                        ("F", "Fit to view"),
-                        ("G", "Toggle grid"),
-                        ("S", "Toggle snap"),
-                        ("[ / ]", "Decrease / increase grid"),
-                    ],
-                ),
-                (
-                    "Select mode",
-                    [
-                        ("D", "Enter draw mode"),
-                        ("E", "Enter edit mode"),
-                        ("Cmd/Ctrl+Z", "Undo"),
-                        ("Cmd/Ctrl+Y", "Redo"),
-                        ("Cmd/Ctrl+A", "Select all"),
-                        ("Del / Bksp", "Delete selected"),
-                        ("Arrow keys", "Nudge (Shift=large)"),
-                    ],
-                ),
-            ],
-            # Right column
-            [
-                (
-                    "Draw mode",
-                    [
-                        ("Click", "Place anchor"),
-                        ("Move + click", "Size and commit shape"),
-                        ("Enter", "Finish / commit"),
-                        ("Esc", "Cancel"),
-                        ("Tab", "Cycle W \u2194 H input"),
-                        ("Type digits", "Enter exact W or H"),
-                        ("X", "Toggle construction"),
-                    ],
-                ),
-                (
-                    "Shapes & tools",
-                    [
-                        ("Rectangle", "R key in Draw toolbar"),
-                        ("Circle / Ellipse", "C / E in toolbar"),
-                        ("Polygon", "P in toolbar"),
-                        ("Arc", "A in toolbar"),
-                        ("M", "Toggle measure tool"),
-                        ("Shift+C", "Close polyline"),
-                    ],
-                ),
-            ],
-        ]
-
-        dim_color = QColor("#aabbcc")
-        header_color = QColor("#4a9eff")
-        col_x = [px + 24, px + panel_w // 2 + 12]
-        start_y = py + 62
-        row_h = 17
-        group_gap = 10
-
-        for col_idx, groups in enumerate(col_groups):
-            cy = start_y
-            for group_title, rows in groups:
-                # Group header
-                painter.setPen(header_color)
-                painter.setFont(_FONT_HEL_10_BOLD)
-                painter.drawText(QPointF(col_x[col_idx], cy + 11), group_title)
-                cy += row_h + 2
-                painter.setFont(_FONT_MENLO_9)
-                for key_label, description in rows:
-                    # Key
-                    painter.setPen(QColor("#e0e8f0"))
-                    painter.drawText(QPointF(col_x[col_idx] + 4, cy + 10), key_label)
-                    # Description (right-aligned within column half)
-                    painter.setPen(dim_color)
-                    painter.setFont(_FONT_HEL_9)
-                    painter.drawText(
-                        QRectF(col_x[col_idx] + 160, cy, panel_w // 2 - 40, row_h),
-                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                        description,
-                    )
-                    painter.setFont(_FONT_MENLO_9)
-                    cy += row_h
-                cy += group_gap

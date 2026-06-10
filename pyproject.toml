@@ -31,6 +31,10 @@ cad = [
 [project.scripts]
 simple-stipple = "src.launcher:main"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [tool.setuptools]
 include-package-data = true
 
