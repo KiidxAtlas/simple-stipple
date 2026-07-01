@@ -62,34 +62,7 @@ build-standalone: venv
 	$(PYTHON) scripts/build_standalone.py
 
 release:
-	@set -euo pipefail; \
-	# Determine version from pyproject.toml if not provided on the make command-line
-	if [ -z "$(VERSION)" ]; then \
-		VERSION=$$($(PY) -c "import tomllib,sys; print(tomllib.loads(open('pyproject.toml','rb').read())['project']['version'])"); \
-	else \
-		VERSION="$(VERSION)"; \
-	fi; \
-	# Ensure tag starts with 'v'
-	TAG=$$VERSION; case "$$TAG" in v*) ;; *) TAG="v$$TAG";; esac; \
-	echo "Releasing $$TAG"; \
-	# Fetch tags so we can inspect remote state
-	git fetch origin --tags >/dev/null 2>&1 || true; \
-	# If tag exists (locally or on origin) recreate it at the same commit and push
-	if git ls-remote --tags origin "refs/tags/$$TAG" | grep -q "$$TAG" || git rev-parse -q --verify "refs/tags/$$TAG" >/dev/null 2>&1; then \
-		# If tag exists only on origin, fetch it locally so we can read its commit
-		if ! git rev-parse -q --verify "refs/tags/$$TAG" >/dev/null 2>&1; then \
-			git fetch origin "refs/tags/$$TAG:refs/tags/$$TAG" >/dev/null 2>&1 || true; \
-		fi; \
-		commit=$$(git rev-parse $$TAG); \
-		echo "Tag $$TAG exists (commit $$commit) — recreating and pushing to origin"; \
-		git push --delete origin $$TAG 2>/dev/null || true; \
-		git tag -d $$TAG 2>/dev/null || true; \
-		git tag -a $$TAG "$$commit" -m "Release $$TAG (recreated by make release)"; \
-		git push origin $$TAG; \
-	else \
-		# Otherwise call the existing release script which will create and push the tag
-		./scripts/release.sh $$TAG; \
-	fi
+	@PY=$(PY) ./scripts/make_release.sh $(VERSION)
 
 update:
 	sh ./scripts/update.sh
