@@ -81,34 +81,6 @@ def gen_gradient_honeycomb(
     return result
 
 
-def gen_diamond_checkering(
-    outline_poly, cell_size: float, gap: float = 0.1
-) -> list[list[tuple[float, float]]]:
-    """Grid of closed diamond (rotated-square) cell outlines clipped to the outline."""
-    hs = (cell_size - gap) / 2.0
-    if hs <= 0:
-        return []
-    step = cell_size
-    minx, miny, maxx, maxy = outline_poly.bounds
-    pad = cell_size * 2.0
-    prep = prepared.prep(outline_poly)
-    result: list[list[tuple[float, float]]] = []
-    y = miny - pad
-    while y <= maxy + pad:
-        x = minx - pad
-        while x <= maxx + pad:
-            verts = [
-                (x, y + hs),
-                (x + hs, y),
-                (x, y - hs),
-                (x - hs, y),
-            ]
-            _clip_to_outline(Polygon(verts), outline_poly, prep, result)
-            x += step
-        y += step
-    return result
-
-
 def gen_fish_scale(
     outline_poly, scale_w: float, scale_h: float, n_pts: int = 24
 ) -> list[list[tuple[float, float]]]:
@@ -287,58 +259,4 @@ def gen_mesh(outline_poly, r: float, spacing: float) -> list[list[tuple[float, f
             _clip_to_outline(circle, outline_poly, prep, result)
             x += spacing
         y += spacing
-    return result
-
-
-def gen_triangle_grid(
-    outline_poly, size: float, gap: float = 0.1
-) -> list[list[tuple[float, float]]]:
-    """Equilateral triangle tessellation clipped to the outline."""
-    if size <= 0:
-        return []
-    h = size * math.sqrt(3) / 2.0
-    col_step = size + gap
-    row_step = h + gap * math.sqrt(3) / 2.0
-    if col_step <= 0 or row_step <= 0:
-        return []
-    minx, miny, maxx, maxy = outline_poly.bounds
-    pad = size * 2.0
-    prep = prepared.prep(outline_poly)
-    result: list[list[tuple[float, float]]] = []
-    row = 0
-    y = miny - pad
-    while y <= maxy + pad:
-        x = minx - pad
-        while x <= maxx + pad:
-            s2 = (size - gap) / 2.0
-            h2 = s2 * math.sqrt(3)
-            if h2 > 0 and s2 > 0:
-                up = [
-                    (x, y + h2 * 2.0 / 3.0),
-                    (x + s2, y - h2 / 3.0),
-                    (x - s2, y - h2 / 3.0),
-                ]
-                tp = Polygon(up)
-                if prep.intersects(tp):
-                    if prep.contains(tp):
-                        result.append(up + [up[0]])
-                    else:
-                        clipped = outline_poly.intersection(tp)
-                        _extract_polys(clipped, result)
-                dx_off = col_step / 2.0
-                dn = [
-                    (x + dx_off, y - h2 * 2.0 / 3.0),
-                    (x + dx_off - s2, y + h2 / 3.0),
-                    (x + dx_off + s2, y + h2 / 3.0),
-                ]
-                tp2 = Polygon(dn)
-                if prep.intersects(tp2):
-                    if prep.contains(tp2):
-                        result.append(dn + [dn[0]])
-                    else:
-                        clipped2 = outline_poly.intersection(tp2)
-                        _extract_polys(clipped2, result)
-            x += col_step
-        y += row_step
-        row += 1
     return result

@@ -83,6 +83,7 @@ class App(QMainWindow):
         self._workspace_path: Path | None = None
         self._workspace_dirty: bool = False
         self._last_saved_document: dict | None = None
+        self._has_unsaved_changes: bool = False
         self._workspace_timer = QTimer(self)
         self._workspace_timer.setSingleShot(True)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
@@ -324,6 +325,7 @@ class App(QMainWindow):
         )
 
     def _schedule_workspace_dirty_check(self) -> None:
+        self._has_unsaved_changes = True
         self._workspace_timer.start(150)
 
     def _send_shape_selection_to_pattern(
@@ -360,12 +362,14 @@ class App(QMainWindow):
             self._schedule_workspace_dirty_check()
 
     def _update_workspace_dirty(self) -> None:
-        if self._last_saved_document is None:
+        if not self._has_unsaved_changes:
             self._workspace_dirty = False
-        else:
+        elif self._last_saved_document is not None:
             self._workspace_dirty = (
                 self._collect_workspace_document() != self._last_saved_document
             )
+        else:
+            self._workspace_dirty = False
         self._update_title()
 
     def _update_title(self) -> None:
@@ -430,6 +434,7 @@ class App(QMainWindow):
         self._clear_workspace_state()
         self._last_saved_document = self._collect_workspace_document()
         self._workspace_dirty = False
+        self._has_unsaved_changes = False
         self._update_title()
 
     def _open_workspace(self) -> None:
@@ -455,6 +460,7 @@ class App(QMainWindow):
             self._workspace_path = path
             self._last_saved_document = self._collect_workspace_document()
             self._workspace_dirty = False
+            self._has_unsaved_changes = False
             self._remember_workspace_path(path)
             self._update_title()
         except (OSError, TypeError, ValueError) as exc:
@@ -468,6 +474,7 @@ class App(QMainWindow):
             write_json_file_atomic(self._workspace_path, document)
             self._last_saved_document = document
             self._workspace_dirty = False
+            self._has_unsaved_changes = False
             self._remember_workspace_path(self._workspace_path)
             self._update_title()
             return True
@@ -865,10 +872,11 @@ class App(QMainWindow):
 
     def _setup_global_shortcuts(self) -> None:
         # Fixed non-remappable shortcut for command palette (Cmd+K)
-        self._register_fixed_shortcut(
+        self._register_action(
+            "command_palette",
             "Command Palette (Cmd+K)",
-            "Meta+K",
             self._open_command_palette,
+            shortcut="Meta+K",
         )
         # workspace.* commands are already QActions via _build_workspace_actions
         _MENU_HANDLED = {
@@ -881,20 +889,19 @@ class App(QMainWindow):
             if cmd.action_id not in _MENU_HANDLED:
                 self._register_action(cmd.action_id, cmd.title, cmd.run)
 
-    def _register_action(self, action_id: str, text: str, callback) -> None:
+    def _register_action(
+        self, action_id: str, text: str, callback, *, shortcut: str | None = None
+    ) -> None:
         action = QAction(text, self)
-        shortcut = self._shortcut(action_id)
         if shortcut:
             action.setShortcut(QKeySequence(shortcut))
+        else:
+            sc = self._shortcut(action_id)
+            if sc:
+                action.setShortcut(QKeySequence(sc))
         action.triggered.connect(callback)
         self.addAction(action)
         self._global_actions[action_id] = action
-
-    def _register_fixed_shortcut(self, text: str, shortcut: str, callback) -> None:
-        action = QAction(text, self)
-        action.setShortcut(QKeySequence(shortcut))
-        action.triggered.connect(callback)
-        self.addAction(action)
 
     def _active_canvas(self) -> Any | None:
         current = self._tabs.currentWidget()
@@ -940,6 +947,7 @@ class App(QMainWindow):
                 write_json_file_atomic(self._workspace_path, document)
                 self._last_saved_document = document
                 self._workspace_dirty = False
+                self._has_unsaved_changes = False
                 self._update_title()
             except (OSError, TypeError, ValueError) as exc:
                 LOGGER.warning("Auto-save failed: %s", exc)

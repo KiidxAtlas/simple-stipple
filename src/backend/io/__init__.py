@@ -1,10 +1,9 @@
 """Core IO helper exports."""
 
+from src.backend.io.persistence import read_json_file, write_json_file_atomic
+from src.backend.io.image_trace import image_to_outlines
+from src.backend.io.svg_dxf import svg_to_dxf
 from src.backend.dxf.io import load_dxf_polylines, write_polylines_dxf
-
-from .image_trace import image_to_outlines
-from .persistence import read_json_file, write_json_file_atomic
-from .svg_dxf import svg_to_dxf
 
 __all__ = [
     "image_to_outlines",

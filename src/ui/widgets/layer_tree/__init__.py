@@ -1,4 +1,4 @@
-"""Layer tree — re-exports all public symbols for backward compatibility."""
+"""Layer tree — re-exports all public symbols."""
 
 from .model import (
     LayerRowsBuilder,

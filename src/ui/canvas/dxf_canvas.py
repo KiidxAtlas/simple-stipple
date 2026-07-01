@@ -393,6 +393,18 @@ class DxfCanvas(PolylineView):
             ),
         )
         dim_menu.addAction(
+            "Set line angle…",
+            lambda: _run_transform(
+                lambda: _run_prompted_transform(
+                    "Set Line Angle",
+                    "Angle (° CCW from +X):",
+                    0.0,
+                    -360.0,
+                    self._set_selected_line_angle,
+                )
+            ),
+        )
+        dim_menu.addAction(
             "Distribute horizontal spacing…",
             lambda: _run_transform(
                 lambda: _run_prompted_transform(
@@ -413,6 +425,34 @@ class DxfCanvas(PolylineView):
                     1.0,
                     0.0,
                     lambda value: self._distribute_selected("vertical", value),
+                )
+            ),
+        )
+        dim_menu.addAction(
+            "Distribute horizontal (center-to-center)…",
+            lambda: _run_transform(
+                lambda: _run_prompted_transform(
+                    "Distribute Horizontal (Center-to-Center)",
+                    "Center spacing (mm):",
+                    10.0,
+                    0.0,
+                    lambda value: self._distribute_selected(
+                        "horizontal", value, mode="center"
+                    ),
+                )
+            ),
+        )
+        dim_menu.addAction(
+            "Distribute vertical (center-to-center)…",
+            lambda: _run_transform(
+                lambda: _run_prompted_transform(
+                    "Distribute Vertical (Center-to-Center)",
+                    "Center spacing (mm):",
+                    10.0,
+                    0.0,
+                    lambda value: self._distribute_selected(
+                        "vertical", value, mode="center"
+                    ),
                 )
             ),
         )

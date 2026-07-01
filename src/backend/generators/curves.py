@@ -77,37 +77,6 @@ def gen_wave_fill(
     return result
 
 
-def gen_spiral(
-    outline_poly, spacing: float, direction: str = "cw"
-) -> list[list[tuple[float, float]]]:
-    """A single continuous Archimedean spiral filling the outline from centre."""
-    if spacing <= 0:
-        return []
-    minx, miny, maxx, maxy = outline_poly.bounds
-    cx = (minx + maxx) / 2.0
-    cy = (miny + maxy) / 2.0
-    max_r = math.hypot(maxx - minx, maxy - miny) / 2.0 + spacing
-    b = spacing / (2.0 * math.pi)
-    total_revs = max_r / max(spacing, 1e-9)
-    total_angle = total_revs * 2.0 * math.pi
-    n_pts = max(100, int(total_angle / 0.05))
-    sign = -1.0 if direction == "cw" else 1.0
-    pts: list[tuple[float, float]] = []
-    for i in range(n_pts + 1):
-        theta = i * total_angle / n_pts
-        r = b * theta
-        if r > max_r:
-            break
-        x = cx + r * math.cos(sign * theta)
-        y = cy + r * math.sin(sign * theta)
-        pts.append((x, y))
-    if len(pts) < 2:
-        return []
-    result: list[list[tuple[float, float]]] = []
-    _collect_lines(outline_poly.intersection(LineString(pts)), result)
-    return result
-
-
 def gen_celtic_knot(
     outline_poly, cell_size: float, line_width: float = 1.0, gap: float = 0.2
 ) -> list[list[tuple[float, float]]]:

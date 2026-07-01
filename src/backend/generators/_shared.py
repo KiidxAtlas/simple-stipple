@@ -211,7 +211,11 @@ def apply_border_fade(
             result.append(poly)
             continue
         ratio = dist / fade_width
-        h = (hash((round(cx, 2), round(cy, 2))) & 0xFFFF) / 0xFFFF
+        # Deterministic hash based on rounded integer coordinates so the
+        # border-fade pattern is stable across app restarts.
+        ck = int(round(cx * 100))
+        ck2 = int(round(cy * 100))
+        h = ((ck * 73856093 ^ ck2 * 19349663) & 0xFFFF) / 0xFFFF
         if h < ratio:
             result.append(poly)
     return result
@@ -287,14 +291,7 @@ def apply_mirror(
                         shape = shape.buffer(0)
                     if shape.is_empty:
                         continue
-                    if prep_outline.contains(shape):
-                        result.append(reflected)
-                    elif prep_outline.intersects(shape):
-                        clipped = outline_poly.intersection(shape)
-                        pieces: list[list[tuple[float, float]]] = []
-                        _extract_polys(clipped, pieces)
-                        result.extend(pieces)
-                    # else: entirely outside — drop it
+                    _clip_to_outline(shape, outline_poly, prep_outline, result)
                 except Exception:
                     result.append(reflected)
             else:
@@ -383,26 +380,15 @@ def apply_interlace(
                 if pts[0] != pts[-1]:
                     pts = pts + [pts[0]]
                 try:
-                    from shapely.geometry import Polygon as _Poly
-
-                    shape = _Poly(pts)
+                    shape = Polygon(pts)
                     if not shape.is_valid:
                         shape = shape.buffer(0)
-                    if shape.is_valid and not shape.is_empty:
-                        if prep_outline.contains(shape):
-                            result.append(shifted)
-                        elif prep_outline.intersects(shape):
-                            clipped = outline_poly.intersection(shape)  # type: ignore[union-attr]
-                            pieces: list[list[tuple[float, float]]] = []
-                            _extract_polys(clipped, pieces)
-                            result.extend(pieces)
-                        # else: entirely outside — drop it
-                    else:
-                        result.append(shifted)
+                    if not shape.is_empty:
+                        _clip_to_outline(shape, outline_poly, prep_outline, result)
+                        continue
                 except Exception:
-                    result.append(shifted)
-            else:
-                result.append(shifted)
+                    pass
+            result.append(shifted)
         else:
             result.append(shifted)
 
@@ -520,53 +506,4 @@ def _concentric_offsets(
             break
         _extract_polys(current, out)
         step += 1
-    return out
-
-
-def apply_hatch_fill(
-    polys: list[list[tuple[float, float]]],
-    *,
-    mode: str = "none",
-    spacing: float = 1.0,
-    angle_deg: float = 0.0,
-    keep_outline: bool = False,
-) -> list[list[tuple[float, float]]]:
-    """Replace each closed pattern polygon with laser-style infill polylines.
-
-    Modes:
-      * ``"none"`` — return ``polys`` unchanged.
-      * ``"lines"`` — parallel hatch lines at ``angle_deg``.
-      * ``"crosshatch"`` — two perpendicular sets of hatch lines.
-      * ``"racecar"`` — single continuous serpentine path per shape.
-      * ``"concentric"`` — inward inset loops.
-
-    When ``keep_outline`` is True, the original polygon outline is preserved
-    alongside the infill so the laser cuts/marks both edge and fill.
-    """
-    if mode == "none" or not polys or spacing <= 0:
-        return polys
-
-    out: list[list[tuple[float, float]]] = []
-    for poly in polys:
-        shape = _polygon_from_polyline(poly)
-        if shape is None:
-            # Open polylines (no enclosed area) pass straight through.
-            out.append(poly)
-            continue
-        if keep_outline:
-            out.append(poly)
-        if mode == "lines":
-            out.extend(_hatch_lines_for_polygon(shape, spacing, angle_deg))
-        elif mode == "crosshatch":
-            out.extend(_hatch_lines_for_polygon(shape, spacing, angle_deg))
-            out.extend(_hatch_lines_for_polygon(shape, spacing, angle_deg + 90.0))
-        elif mode == "racecar":
-            lines = _hatch_lines_for_polygon(shape, spacing, angle_deg)
-            out.extend(_serpentine_connect(lines, angle_deg))
-        elif mode == "concentric":
-            out.extend(_concentric_offsets(shape, spacing))
-        else:
-            # Unknown mode — fail safe and keep the original outline.
-            if not keep_outline:
-                out.append(poly)
     return out

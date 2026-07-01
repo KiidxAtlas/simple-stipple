@@ -8,7 +8,9 @@ from typing import Any, TypeAlias
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
+    QEasingCurve,
     QEvent,
+    QPoint,
     QPointF,
     QPropertyAnimation,
     QRectF,
@@ -33,7 +35,12 @@ from PySide6.QtWidgets import (
 )
 from shapely.errors import GEOSException
 from shapely.geometry import (
+    GeometryCollection,
     LineString,
+    MultiLineString,
+    MultiPoint,
+    MultiPolygon,
+    Point,
     Polygon,
 )
 from shapely.ops import split as shapely_split
@@ -42,20 +49,30 @@ from src.backend.geometry.arc import (
     arc_from_center_start_end,
     arc_from_three_points,
 )
+from src.backend.geometry.primitives import (
+    build_circle_poly,
+    build_ellipse_poly,
+    build_polygon_poly,
+    build_rect_poly,
+)
 from src.constants import DRAG_THRESH, Q_BG
 from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
 from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
-from src.ui.canvas._geom_ops_mixin import _GeomOpsMixin
-from src.ui.canvas._snap_mixin import _SnapMixin
-from src.ui.canvas.modes._draw_mixin import _DrawModeMixin
-from src.ui.canvas.modes._edit_mixin import _EditModeMixin
-from src.ui.canvas.modes._select_mixin import _SelectModeMixin
+
 from src.ui.canvas.render import CanvasRenderer
+from src.ui.canvas.shape_snapping import ShapeSnapEngine
 from src.ui.canvas.shape_storage import ShapeStorage
 from src.ui.core.focus_policy import blur_focused_line_edit
+from src.backend.behaviors.snapping import (
+    resolve_snap as _legacy_resolve_snap,
+    resolve_drag_snap as _legacy_resolve_drag_snap,
+    snap_to_polyline as _legacy_snap_to_polyline,
+    angle_snap as _legacy_angle_snap,
+)
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
+from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
 
 CanvasState: TypeAlias = tuple[
     list[list[tuple[float, float]]],
@@ -69,11 +86,6 @@ CanvasState: TypeAlias = tuple[
 class PolylineView(
     QGraphicsView,
     CanvasRenderer,
-    _SnapMixin,
-    _GeomOpsMixin,
-    _SelectModeMixin,
-    _DrawModeMixin,
-    _EditModeMixin,
 ):
     """
     Displays polyline lists with Select / Draw / Edit modes.
@@ -266,6 +278,9 @@ class PolylineView(
         # Selection dimension badge hit rects (for inline editing)
         self._sel_badge_w_rect: QRectF | None = None
         self._sel_badge_h_rect: QRectF | None = None
+        # Single-line selection: length / angle badge hit rects
+        self._sel_badge_l_rect: QRectF | None = None
+        self._sel_badge_a_rect: QRectF | None = None
         # Inline single-dimension editor
         self._sel_dim_edit: QLineEdit | None = None
         self._sel_dim_axis: str | None = None  # "w" or "h"
@@ -442,19 +457,13 @@ class PolylineView(
         self._sync_shape_storage_from_entities()
         return len(self._polys) - 1
 
-    @staticmethod
-    def _copy_entity_meta_list(
-        meta_items: list[dict[str, Any] | None],
-    ) -> list[dict[str, Any] | None]:
-        return [deepcopy(meta) if meta is not None else None for meta in meta_items]
-
     def _snapshot_state(self) -> CanvasState:
         return (
             [list(p) for p in self._polys],
             set(self._sel),
             set(self._construction_polys),
             list(self._entity_kinds),
-            self._copy_entity_meta_list(self._entity_meta),
+            [deepcopy(meta) if meta is not None else None for meta in self._entity_meta],
         )
 
     def _restore_state_snapshot(self, snapshot: CanvasState) -> None:
@@ -495,16 +504,6 @@ class PolylineView(
             self._entity_kinds,
             self._entity_meta,
         )
-
-    def _demote_selected_entities_to_polylines(
-        self, indices: list[int] | None = None
-    ) -> None:
-        if indices is None:
-            indices = self._selected_indices()
-        for idx in indices:
-            if 0 <= idx < len(self._entity_kinds):
-                self._entity_kinds[idx] = "polyline"
-                self._entity_meta[idx] = None
 
     def get_selection_indices(self) -> list[int]:
         return self._selected_indices()
@@ -785,14 +784,692 @@ class PolylineView(
         self._grid_spacing = max(0.001, float(spacing))
         self._redraw()
 
-    def get_precision_state(self) -> dict[str, float | bool]:
-        return {
-            "grid_visible": self._grid_visible,
-            "grid_snap": self._grid_snap,
-            "grid_spacing": self._grid_spacing,
-            "construction_mode": self._draw_construction_mode,
-            "measure_mode": self._measure_mode,
-        }
+    # ── Inlined from removed mixins (methods actually called from view.py) ──
+
+    def _transform_entity_meta(
+        self,
+        idx: int,
+        *,
+        center: tuple[float, float],
+        kind: str,
+        meta: dict[str, Any] | None,
+        transform: str,
+        factor: float | None = None,
+        angle_deg: float = 0.0,
+        axis: str | None = None,
+        dx: float = 0.0,
+        dy: float = 0.0,
+    ) -> None:
+        if not meta or kind == "polyline":
+            return
+        updated = deepcopy(meta)
+
+        def _translate_point(pt: tuple[float, float]) -> tuple[float, float]:
+            return (pt[0] + dx, pt[1] + dy)
+
+        def _xform_point(pt: tuple[float, float]) -> tuple[float, float]:
+            if transform == "translate":
+                return _translate_point(pt)
+            if transform == "rotate":
+                return self._rotate_point(pt, center, angle_deg)
+            if transform == "scale":
+                if factor is None:
+                    return pt
+                return self._scale_point(pt, center, factor)
+            if transform == "mirror" and axis is not None:
+                return self._mirror_point(pt, center, axis)
+            return pt
+
+        if kind == "line":
+            start = updated.get("start")
+            end = updated.get("end")
+            if isinstance(start, tuple) and isinstance(end, tuple):
+                updated["start"] = _xform_point(tuple(start))
+                updated["end"] = _xform_point(tuple(end))
+        elif kind == "circle":
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = _xform_point(tuple(ctr))
+            if transform == "scale" and factor is not None:
+                updated["radius"] = float(updated.get("radius", 0.0)) * abs(factor)
+        elif kind == "ellipse":
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = _xform_point(tuple(ctr))
+            if transform == "scale" and factor is not None:
+                updated["rx"] = float(updated.get("rx", 0.0)) * abs(factor)
+                updated["ry"] = float(updated.get("ry", 0.0)) * abs(factor)
+            rot = float(updated.get("rotation", 0.0))
+            if transform == "rotate":
+                updated["rotation"] = (rot + angle_deg) % 360.0
+            elif transform == "mirror" and axis is not None:
+                if axis == "horizontal":
+                    updated["rotation"] = (180.0 - rot) % 360.0
+                elif axis == "vertical":
+                    updated["rotation"] = (-rot) % 360.0
+        elif kind == "arc":
+            ctr = updated.get("center")
+            radius = float(updated.get("radius", 0.0))
+            start_angle = float(updated.get("start_angle", 0.0))
+            end_angle = float(updated.get("end_angle", 0.0))
+            if isinstance(ctr, tuple) and radius > 0:
+                cpt = tuple(ctr)
+                start_pt = (
+                    cpt[0] + radius * math.cos(math.radians(start_angle)),
+                    cpt[1] + radius * math.sin(math.radians(start_angle)),
+                )
+                end_pt = (
+                    cpt[0] + radius * math.cos(math.radians(end_angle)),
+                    cpt[1] + radius * math.sin(math.radians(end_angle)),
+                )
+                cpt = _xform_point(cpt)
+                start_pt = _xform_point(start_pt)
+                end_pt = _xform_point(end_pt)
+                updated["center"] = cpt
+                updated["radius"] = math.hypot(
+                    start_pt[0] - cpt[0], start_pt[1] - cpt[1]
+                )
+                updated["start_angle"] = (
+                    math.degrees(math.atan2(start_pt[1] - cpt[1], start_pt[0] - cpt[0]))
+                    % 360.0
+                )
+                updated["end_angle"] = (
+                    math.degrees(math.atan2(end_pt[1] - cpt[1], end_pt[0] - cpt[0]))
+                    % 360.0
+                )
+        elif kind == "rectangle":
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = _xform_point(tuple(ctr))
+            if transform == "scale" and factor is not None:
+                updated["width"] = float(updated.get("width", 0.0)) * abs(factor)
+                updated["height"] = float(updated.get("height", 0.0)) * abs(factor)
+            if transform == "rotate":
+                updated["rotation"] = (float(updated.get("rotation", 0.0)) + angle_deg) % 360.0
+            elif transform == "mirror" and axis is not None:
+                rot = float(updated.get("rotation", 0.0))
+                if axis == "horizontal":
+                    updated["rotation"] = (180.0 - rot) % 360.0
+                elif axis == "vertical":
+                    updated["rotation"] = (-rot) % 360.0
+        elif kind == "spline":
+            cps = updated.get("control_points")
+            if isinstance(cps, list):
+                updated_cps: list[tuple[float, float]] = []
+                for pt in cps:
+                    if isinstance(pt, tuple):
+                        updated_cps.append(_xform_point(tuple(pt)))
+                if len(updated_cps) >= 2:
+                    updated["control_points"] = updated_cps
+
+        if idx < len(self._entity_meta):
+            self._entity_meta[idx] = updated
+
+    @staticmethod
+    def _translated_entity_meta(
+        kind: str,
+        meta: dict[str, Any] | None,
+        dx: float,
+        dy: float,
+    ) -> dict[str, Any] | None:
+        if meta is None or kind == "polyline":
+            return None
+        updated = deepcopy(meta)
+        if kind == "line":
+            start = updated.get("start")
+            end = updated.get("end")
+            if isinstance(start, tuple):
+                updated["start"] = (start[0] + dx, start[1] + dy)
+            if isinstance(end, tuple):
+                updated["end"] = (end[0] + dx, end[1] + dy)
+        elif kind in {"circle", "ellipse", "arc", "rectangle"}:
+            ctr = updated.get("center")
+            if isinstance(ctr, tuple):
+                updated["center"] = (ctr[0] + dx, ctr[1] + dy)
+        elif kind == "spline":
+            cps = updated.get("control_points")
+            if isinstance(cps, list):
+                updated["control_points"] = [
+                    (pt[0] + dx, pt[1] + dy) for pt in cps if isinstance(pt, tuple)
+                ]
+        return updated
+
+    @staticmethod
+    def _rotate_point(
+        point: tuple[float, float],
+        center: tuple[float, float],
+        angle_deg: float,
+    ) -> tuple[float, float]:
+        if abs(angle_deg) < 1e-9:
+            return point
+        ang = math.radians(angle_deg)
+        ca = math.cos(ang)
+        sa = math.sin(ang)
+        px, py = point
+        cx, cy = center
+        dx = px - cx
+        dy = py - cy
+        return (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
+
+    @staticmethod
+    def _scale_point(
+        point: tuple[float, float],
+        center: tuple[float, float],
+        factor: float,
+    ) -> tuple[float, float]:
+        if abs(factor - 1.0) < 1e-9:
+            return point
+        px, py = point
+        cx, cy = center
+        return (cx + (px - cx) * factor, cy + (py - cy) * factor)
+
+    @staticmethod
+    def _mirror_point(
+        point: tuple[float, float],
+        center: tuple[float, float],
+        axis: str,
+    ) -> tuple[float, float]:
+        px, py = point
+        cx, cy = center
+        if axis == "horizontal":
+            return (2 * cx - px, py)
+        if axis == "vertical":
+            return (px, 2 * cy - py)
+        return point
+
+    def _key_delete(self) -> None:
+        if self._mode == "edit":
+            if getattr(self, "_edit_selected_verts", None):
+                self._delete_edit_vertices(set(getattr(self, "_edit_selected_verts", set())))
+                return
+            if getattr(self, "_hover_vert", None) is not None:
+                self._delete_edit_vertices({self._hover_vert})
+                return
+        if self._mode == "select":
+            self.delete_selected()
+
+    def _key_backspace(self) -> None:
+        if getattr(self, "_mode", None) == "draw" and getattr(self, "_draw_pts", []):
+            self._draw_pts.pop()
+            if getattr(self, "_draw_point_snap_types", []):
+                self._draw_point_snap_types.pop()
+            if not getattr(self, "_draw_pts", []):
+                self._dismiss_dim_inputs()
+                self._draw_constraint = None
+            self._refresh_draw_sidebar_state()
+            self._redraw()
+        elif getattr(self, "_mode", None) == "edit":
+            self._key_delete()
+        elif getattr(self, "_mode", None) == "select":
+            self.delete_selected()
+
+    def _linked_vertices(self, poly_idx: int, vert_idx: int) -> set[tuple[int, int]]:
+        if poly_idx >= len(self._polys) or vert_idx >= len(self._polys[poly_idx]):
+            return set()
+        target_pt = self._polys[poly_idx][vert_idx]
+        linked = {(poly_idx, vert_idx)}
+        def _eq(a: tuple, b: tuple) -> bool:
+            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+        for i, poly in enumerate(self._polys):
+            if i == poly_idx:
+                is_closed = len(poly) >= 4 and _eq(poly[0], poly[-1])
+                if is_closed and (vert_idx == 0 or vert_idx == len(poly) - 1):
+                    linked.add((i, 0))
+                    linked.add((i, len(poly) - 1))
+            else:
+                for j, pt in enumerate(poly):
+                    if _eq(target_pt, pt):
+                        linked.add((i, j))
+        return linked
+
+    def _apply_edit_vertex_position(self, wx: float, wy: float) -> None:
+        if getattr(self, "_edit_poly", None) is None or getattr(self, "_edit_vert", None) is None:
+            return
+        kind = (
+            self._entity_kinds[self._edit_poly]
+            if self._edit_poly < len(self._entity_kinds)
+            else "polyline"
+        )
+        meta = (
+            self._entity_meta[self._edit_poly]
+            if self._edit_poly < len(self._entity_meta)
+            else None
+        )
+        if kind == "arc" and isinstance(meta, dict):
+            center = meta.get("center")
+            if isinstance(center, tuple):
+                cx = float(center[0])
+                cy = float(center[1])
+                radius = max(1e-3, math.hypot(wx - cx, wy - cy))
+                meta["radius"] = radius
+                poly_len = len(self._polys[self._edit_poly])
+                if self._edit_vert <= 1:
+                    meta["start_angle"] = (math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0)
+                elif self._edit_vert >= max(0, poly_len - 2):
+                    meta["end_angle"] = (math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0)
+                return
+        if kind == "rectangle" and isinstance(meta, dict):
+            center = meta.get("center")
+            if isinstance(center, tuple):
+                cx = float(center[0])
+                cy = float(center[1])
+                meta["width"] = max(1e-3, 2.0 * abs(wx - cx))
+                meta["height"] = max(1e-3, 2.0 * abs(wy - cy))
+                return
+
+        targets = (
+            getattr(self, "_edit_drag_targets", None)
+            or getattr(self, "_edit_linked_verts", None)
+            or {(self._edit_poly, self._edit_vert)}
+        )
+        for pi, vi in targets:
+            if pi in self._locked_polys:
+                continue
+            if 0 <= pi < len(self._polys) and 0 <= vi < len(self._polys[pi]):
+                self._polys[pi][vi] = (wx, wy)
+
+        if self._edit_poly is not None and 0 <= self._edit_poly < len(self._polys):
+            if kind == "line" and isinstance(meta, dict) and len(self._polys[self._edit_poly]) >= 2:
+                meta["start"] = tuple(self._polys[self._edit_poly][0])
+                meta["end"] = tuple(self._polys[self._edit_poly][-1])
+            elif kind == "spline" and isinstance(meta, dict):
+                meta["control_points"] = [tuple(pt) for pt in self._polys[self._edit_poly]]
+
+    def _select_edit_vertices_in_rect(
+        self, x1c: float, y1c: float, x2c: float, y2c: float, *, additive: bool = True
+    ) -> int:
+        if not additive:
+            self._edit_selected_verts.clear()
+        added = 0
+        for pi, poly in enumerate(self._polys):
+            for vi, (vx, vy) in enumerate(poly):
+                cx, cy = self._w2c(vx, vy)
+                if x1c <= cx <= x2c and y1c <= cy <= y2c:
+                    self._edit_selected_verts.add((pi, vi))
+                    added += 1
+        return added
+
+    def _copy_selected(self) -> None:
+        if not self._sel:
+            return
+        self._clipboard = []
+        for i in sorted(self._sel):
+            if i >= len(self._polys):
+                continue
+            self._clipboard.append({
+                "polyline": list(self._polys[i]),
+                "kind": self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline",
+                "meta": deepcopy(self._entity_meta[i]) if i < len(self._entity_meta) and self._entity_meta[i] is not None else None,
+                "construction": i in getattr(self, "_construction_polys", set()),
+            })
+
+    def _paste_clipboard(self) -> None:
+        if not getattr(self, "_clipboard", []):
+            return
+        self._push_undo()
+        offset = 1.0
+        new_indices = []
+        for record in getattr(self, "_clipboard", []):
+            poly = list(record.get("polyline", []))
+            new_poly = [(x + offset, y + offset) for x, y in poly]
+            kind = str(record.get("kind", "polyline"))
+            meta = self._translated_entity_meta(kind, record.get("meta"), offset, offset)
+            new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
+            if record.get("construction"):
+                self._construction_polys.add(new_idx)
+            new_indices.append(new_idx)
+        self._sel = set(new_indices)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _duplicate_selected(self) -> None:
+        if not self._sel:
+            return
+        self._copy_selected()
+        self._paste_clipboard()
+
+    def _duplicate_selected_with_offset(self) -> None:
+        if not self._sel or not self._polys:
+            return
+        min_x, max_x, min_y, max_y = (float("inf"), float("-inf"), float("inf"), float("-inf"))
+        for idx in self._sel:
+            if idx < len(self._polys):
+                for x, y in self._polys[idx]:
+                    min_x = min(min_x, x)
+                    max_x = max(max_x, x)
+                    min_y = min(min_y, y)
+                    max_y = max(max_y, y)
+        width = max_x - min_x if max_x > min_x else 10.0
+        height = max_y - min_y if max_y > min_y else 10.0
+        offset = max(2.0, min(width, height) * 0.1)
+        self._copy_selected()
+        self._paste_clipboard_with_offset(offset)
+
+    def _paste_clipboard_with_offset(self, offset: float) -> None:
+        if not getattr(self, "_clipboard", []):
+            return
+        self._push_undo()
+        new_indices = []
+        for record in getattr(self, "_clipboard", []):
+            poly = list(record.get("polyline", []))
+            new_poly = [(x + offset, y + offset) for x, y in poly]
+            kind = str(record.get("kind", "polyline"))
+            meta = self._translated_entity_meta(kind, record.get("meta"), offset, offset)
+            new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
+            if record.get("construction"):
+                self._construction_polys.add(new_idx)
+            new_indices.append(new_idx)
+        self._sel = set(new_indices)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _cut_selected(self) -> None:
+        if not self._sel:
+            return
+        cut_set = {idx for idx in self._sel if idx not in getattr(self, "_locked_polys", set())}
+        if not cut_set:
+            return
+        self._copy_selected()
+        self._push_undo()
+        self._compact_entities(cut_set)
+        self._sel.clear()
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _nudge_selected(self, dx: float, dy: float) -> None:
+        if not self._sel:
+            return
+        mutable = [idx for idx in self._sel if idx not in getattr(self, "_locked_polys", set())]
+        if not mutable:
+            return
+        if not getattr(self, "_nudge_undo_pushed", False):
+            self._push_undo()
+            object.__setattr__(self, "_nudge_undo_pushed", True)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(500, self._reset_nudge_undo)
+        for idx in mutable:
+            if idx < len(self._polys):
+                self._polys[idx] = [(x + dx, y + dy) for x, y in self._polys[idx]]
+                self._transform_entity_meta(
+                    idx,
+                    center=(0.0, 0.0),
+                    kind=self._entity_kinds[idx] if idx < len(self._entity_kinds) else "polyline",
+                    meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                    transform="translate", dx=dx, dy=dy,
+                )
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _reset_nudge_undo(self) -> None:
+        object.__setattr__(self, "_nudge_undo_pushed", False)
+
+    def _shape_primitive_active(self) -> bool:
+        return getattr(self, "_draw_primitive", "polyline") in {"rectangle", "circle", "ellipse", "polygon"}
+
+    def _is_near_start(self) -> bool:
+        if getattr(self, "_mode", None) != "draw":
+            return False
+        draw_pts = getattr(self, "_draw_pts", [])
+        if len(draw_pts) < 3:
+            return False
+        cursor_wx = getattr(self, "_cursor_wx", None)
+        cursor_wy = getattr(self, "_cursor_wy", None)
+        if cursor_wx is None or cursor_wy is None:
+            return False
+        start_cx, start_cy = self._w2c(*draw_pts[0])
+        cur_cx, cur_cy = self._w2c(cursor_wx, cursor_wy)
+        return math.hypot(cur_cx - start_cx, cur_cy - start_cy) < 10.0
+
+    def _finish_draw(self, *, close: bool = False) -> None:
+        if getattr(self, "_mode", None) != "draw" or len(getattr(self, "_draw_pts", [])) < 2:
+            return
+        draw_pts = self._draw_pts
+        primitive = getattr(self, "_draw_primitive", "polyline")
+        if primitive == "spline" and len(draw_pts) < 3:
+            self._show_flash("Spline needs at least 3 points", 900)
+            return
+        if close and draw_pts[0] != draw_pts[-1]:
+            draw_pts.append(draw_pts[0])
+        drawn = list(draw_pts)
+        self._commit_drawn_polyline(drawn, primitive=primitive, close=close, created_flash="Polyline created")
+
+    def _commit_drawn_polyline(
+        self, poly: list[tuple[float, float]], *, primitive: str, close: bool = False, created_flash: str = "Polyline created"
+    ) -> bool:
+        if len(poly) < 2:
+            return False
+        self._push_undo()
+        split_happened = False
+        split_closed = 0
+        split_open = 0
+        can_cut_split = getattr(self, "_draw_split_enabled", True) and primitive in {"line", "polyline", "arc", "spline"}
+        if can_cut_split and not close and len(poly) >= 2:
+            split_happened, split_closed, split_open = self._split_geometry_with_line(poly)
+
+        kind = "polyline"
+        meta: dict[str, Any] | None = None
+        if primitive == "line" and len(poly) >= 2:
+            kind = "line"
+            meta = {"start": tuple(poly[0]), "end": tuple(poly[-1])}
+        elif primitive == "arc" and len(poly) >= 3:
+            from src.backend.geometry.arc import arc_spec_from_center_start_end, arc_spec_from_three_points
+            if getattr(self, "_draw_arc_mode", "center-start-end") == "center-start-end":
+                spec = arc_spec_from_center_start_end(poly[0], poly[1], poly[2])
+            else:
+                spec = arc_spec_from_three_points(poly[0], poly[1], poly[2])
+            if spec is not None:
+                meta = {"center": spec.center, "radius": spec.radius, "start_angle": spec.start_angle, "end_angle": spec.end_angle}
+        elif primitive == "spline" and len(poly) >= 2:
+            kind = "spline"
+            meta = {"segments": 24, "closed": close, "control_points": [tuple(pt) for pt in poly], "degree": 3}
+
+        self._entity_kinds.append(kind)
+        self._entity_meta.append(meta)
+        self._polys.append(list(poly))
+        new_idx = len(self._polys) - 1
+        if getattr(self, "_draw_construction_mode", False):
+            self._construction_polys.add(new_idx)
+
+        merged_idx: int | None = None
+        if (primitive in {"line", "polyline"} and not getattr(self, "_draw_construction_mode", False) and not split_happened and any(snap_type == "vertex" for snap_type in getattr(self, "_draw_point_snap_types", []))):
+            merged_idx = self._try_merge_endpoints()
+            if merged_idx is not None:
+                new_idx = merged_idx
+
+        self._sel.clear()
+        self._sel.add(new_idx)
+        self._notify()
+        self._fire_poly_change()
+        object.__setattr__(self, "_draw_pts", [])
+        object.__setattr__(self, "_draw_point_snap_types", [])
+        self._draw_constraint = None
+        self._dismiss_dim_inputs()
+        self._refresh_draw_sidebar_state()
+        if split_happened:
+            if split_closed and split_open:
+                self._show_flash("Regions cut + segments split", 900)
+            elif split_closed:
+                self._show_flash("Regions cut", 900)
+            else:
+                self._show_flash("Segments split", 900)
+        elif merged_idx is not None and self._is_poly_closed(self._polys[new_idx]):
+            self._show_flash("Polyline closed", 800)
+        elif merged_idx is not None:
+            self._show_flash("Segments merged", 800)
+        else:
+            self._show_flash(created_flash, 800)
+        self._redraw()
+        return True
+
+    def _close_selected_polylines(self) -> int:
+        indices = self._mutable_selected_indices()
+        if not indices:
+            return 0
+        changed = 0
+        self._push_undo()
+        for idx in indices:
+            poly = self._polys[idx]
+            if len(poly) < 3 or self._is_poly_closed(poly):
+                continue
+            self._polys[idx] = [*poly, poly[0]]
+            changed += 1
+        if changed:
+            self._redraw()
+            self._notify()
+            self._fire_poly_change()
+        return changed
+
+    def _open_selected_polylines(self) -> int:
+        indices = self._mutable_selected_indices()
+        if not indices:
+            return 0
+        changed = 0
+        self._push_undo()
+        for idx in indices:
+            poly = self._polys[idx]
+            if not self._is_poly_closed(poly) or len(poly) < 2:
+                continue
+            self._polys[idx] = poly[:-1]
+            changed += 1
+        if changed:
+            self._redraw()
+            self._notify()
+            self._fire_poly_change()
+        return changed
+
+    def _toggle_selected_construction(self) -> None:
+        if not self._sel:
+            return
+        self._push_undo()
+        for idx in list(self._sel):
+            if idx in getattr(self, "_construction_polys", set()):
+                self._construction_polys.discard(idx)
+            else:
+                self._construction_polys.add(idx)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _try_merge_endpoints(self) -> int | None:
+        if len(self._polys) < 2:
+            return None
+        survivor_idx = len(self._polys) - 1
+        if len(self._polys[survivor_idx]) < 2:
+            return None
+
+        def _eq(a: tuple, b: tuple) -> bool:
+            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
+        merged_any = False
+        changed = True
+        while changed:
+            changed = False
+            survivor = self._polys[survivor_idx]
+            if len(survivor) < 2:
+                break
+            survivor_start, survivor_end = survivor[0], survivor[-1]
+            for i, poly in enumerate(self._polys):
+                if i == survivor_idx or len(poly) < 2:
+                    continue
+                p_start, p_end = poly[0], poly[-1]
+                if _eq(p_start, p_end):
+                    continue
+                merged: list[tuple[float, float]] | None = None
+                if _eq(survivor_end, p_start):
+                    merged = survivor[:-1] + poly
+                elif _eq(survivor_end, p_end):
+                    merged = survivor[:-1] + list(reversed(poly))
+                elif _eq(survivor_start, p_end):
+                    merged = poly[:-1] + survivor
+                elif _eq(survivor_start, p_start):
+                    merged = list(reversed(poly))[:-1] + survivor
+                if merged is None:
+                    continue
+                popped_was_construction = i in getattr(self, "_construction_polys", set())
+                survivor_was_construction = survivor_idx in getattr(self, "_construction_polys", set())
+                self._polys[survivor_idx] = merged
+                if survivor_idx < len(self._entity_kinds):
+                    self._entity_kinds[survivor_idx] = "polyline"
+                if survivor_idx < len(self._entity_meta):
+                    self._entity_meta[survivor_idx] = None
+                self._polys.pop(i)
+                if i < len(self._entity_kinds):
+                    self._entity_kinds.pop(i)
+                if i < len(self._entity_meta):
+                    self._entity_meta.pop(i)
+                remapped: set[int] = set()
+                for ci in getattr(self, "_construction_polys", set()):
+                    if ci == i:
+                        continue
+                    remapped.add(ci - 1 if ci > i else ci)
+                self._construction_polys = remapped
+                if i < survivor_idx:
+                    survivor_idx -= 1
+                if popped_was_construction or survivor_was_construction:
+                    self._construction_polys.add(survivor_idx)
+                merged_any = True
+                changed = True
+                break
+        return survivor_idx if merged_any else None
+
+    def _delete_edit_vertices(self, verts: set[tuple[int, int]]) -> int:
+        if not verts:
+            return 0
+        grouped: dict[int, set[int]] = {}
+        for pi, vi in verts:
+            if pi in getattr(self, "_locked_polys", set()):
+                continue
+            poly = self._polys[pi]
+            if not (0 <= vi < len(poly)):
+                continue
+            if self._is_poly_closed(poly):
+                if len(poly) - 1 > 3:
+                    grouped.setdefault(pi, set()).add(vi)
+            elif len(poly) > 3:
+                grouped.setdefault(pi, set()).add(vi)
+        if not grouped:
+            return 0
+        self._push_undo()
+        deleted = 0
+        for pi in sorted(grouped.keys(), reverse=True):
+            if not (0 <= pi < len(self._polys)):
+                continue
+            poly = self._polys[pi]
+            if self._is_poly_closed(poly):
+                for vi in sorted(grouped[pi], reverse=True):
+                    if 0 <= vi < len(poly):
+                        poly.pop(vi)
+                        deleted += 1
+                if len(poly) >= 4:
+                    poly[-1] = poly[0]
+            else:
+                for vi in sorted(grouped[pi], reverse=True):
+                    if 0 <= vi < len(poly):
+                        poly.pop(vi)
+                        deleted += 1
+                poly[-1] = poly[0]
+        self._edit_selected_verts.clear()
+        object.__setattr__(self, "_edit_drag_targets", set())
+        object.__setattr__(self, "_edit_linked_verts", set())
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return deleted
+
+    def _prompt_offset_selected(self) -> None:
+        if not self._sel:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        from PySide6.QtWidgets import QInputDialog
+        value, ok = QInputDialog.getDouble(
+            self, "Offset Geometry", "Offset distance (mm):", 1.0, -1_000_000.0, 1_000_000.0, 3
+        )
+        if ok:
+            self.offset_selected(value)
 
     def set_construction_mode(self, enabled: bool) -> None:
         self._draw_construction_mode = bool(enabled)
@@ -901,6 +1578,7 @@ class PolylineView(
     def _bbox(self) -> tuple[float, float, float, float]:
         pts = [pt for p in self._polys for pt in p]
         if self._img_bounds:
+
             bw, bh = self._img_bounds
             pts.extend([(0.0, 0.0), (bw, bh)])
         if not pts:
@@ -1149,79 +1827,91 @@ class PolylineView(
                     best = (pi, vi)
         return best
 
+    @staticmethod
+    def _poly_closed_n(poly: list[tuple[float, float]]) -> int:
+        """Return segment count: n if closed, n-1 if open.  0 for tiny polys."""
+        n = len(poly)
+        if n < 2:
+            return 0
+        if n >= 3 and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01:
+            return n
+        return n - 1
+
+    def _closest_point_on_poly(
+        self,
+        poly: list[tuple[float, float]],
+        wx: float,
+        wy: float,
+        cx: float,
+        cy: float,
+        *,
+        return_segment: bool = False,
+    ):
+        """Compute closest point on every segment of *poly* to world point (wx,wy).
+
+        Returns the screen-distance and, depending on *return_segment*, either
+        just the poly index (``int | None``) or a tuple ``(pi, seg_idx,
+        closest_world_pt) | None``.  This is the single source of truth for
+        all segment-distance hit-testing.
+        """
+        best_dist = float("inf")
+        best: Any = None
+        n = len(poly)
+        if n < 2:
+            return (None, (None, None, None)) if return_segment else None
+        seg_count = self._poly_closed_n(poly)
+        for vi in range(seg_count):
+            ax, ay = poly[vi]
+            bx, by = poly[(vi + 1) % n]
+            dx, dy = bx - ax, by - ay
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-12:
+                scx, scy = self._w2c(ax, ay)
+                d = math.hypot(cx - scx, cy - scy)
+            else:
+                t = max(0.0, min(1.0, ((wx - ax) * dx + (wy - ay) * dy) / seg_len_sq))
+                px, py_ = ax + t * dx, ay + t * dy
+                scx, scy = self._w2c(px, py_)
+                d = math.hypot(cx - scx, cy - scy)
+            if d < best_dist:
+                best_dist = d
+                px_py = (ax + t * dx, ay + t * dy) if seg_len_sq >= 1e-12 else (ax, ay)
+                if return_segment:
+                    best = (vi, px_py)
+                else:
+                    best = vi
+        if return_segment:
+            return best_dist, best
+        return best_dist if best is not None else None
+
     def _find_nearest_edge(
         self, cx: float, cy: float
     ) -> tuple[int, int, tuple[float, float]] | None:
         best_dist = _EDGE_HIT
-        best = None
         wx, wy = self._c2w(cx, cy)
         for pi, poly in enumerate(self._polys):
             if pi in self._hidden_polys:
                 continue
-            n = len(poly)
-            is_closed = (
-                n >= 3
-                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                < 0.01
+            dist, result = self._closest_point_on_poly(
+                poly, wx, wy, cx, cy, return_segment=True
             )
-            seg_count = n if is_closed else n - 1
-            for vi in range(seg_count):
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                dx, dy = bx - ax, by - ay
-                seg_len_sq = dx * dx + dy * dy
-                if seg_len_sq < 1e-12:
-                    continue
-                t = max(
-                    0.0,
-                    min(
-                        1.0,
-                        ((wx - ax) * dx + (wy - ay) * dy) / seg_len_sq,
-                    ),
-                )
-                px, py_ = ax + t * dx, ay + t * dy
-                scx, scy = self._w2c(px, py_)
-                d = math.hypot(cx - scx, cy - scy)
-                if d < best_dist:
-                    best_dist = d
-                    best = (pi, vi, (px, py_))
+            if dist is not None and dist < best_dist and result is not None:
+                best_dist = dist
+                seg_idx, closest_pt = result
+                best = (pi, seg_idx, closest_pt)
         return best
 
     def _find_poly_at(self, cx: float, cy: float) -> int | None:
         best_dist = 8.0
-        best = None
         wx, wy = self._c2w(cx, cy)
+        best: int | None = None
         for pi, poly in enumerate(self._polys):
             if pi in self._hidden_polys:
                 continue
-            n = len(poly)
-            is_closed = (
-                n >= 3
-                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                < 0.01
-            )
-            seg_count = n if is_closed else n - 1
-            for vi in range(seg_count):
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                dx, dy = bx - ax, by - ay
-                seg_len_sq = dx * dx + dy * dy
-                if seg_len_sq < 1e-12:
-                    d = math.hypot(cx - self._w2c(ax, ay)[0], cy - self._w2c(ax, ay)[1])
-                else:
-                    t = max(
-                        0.0,
-                        min(
-                            1.0,
-                            ((wx - ax) * dx + (wy - ay) * dy) / seg_len_sq,
-                        ),
-                    )
-                    px, py_ = ax + t * dx, ay + t * dy
-                    scx, scy = self._w2c(px, py_)
-                    d = math.hypot(cx - scx, cy - scy)
-                if d < best_dist:
-                    best_dist = d
-                    best = pi
+            dist = self._closest_point_on_poly(poly, wx, wy, cx, cy)
+            if dist is not None and dist < best_dist:
+                best_dist = dist
+                best = pi
         return best
 
     def _find_ghost_poly_at(self, cx: float, cy: float) -> int | None:
@@ -1229,37 +1919,12 @@ class PolylineView(
         if not self._ghost_polys or not self._ghost_visible:
             return None
         best_dist = 8.0
-        best = None
         wx, wy = self._c2w(cx, cy)
         for pi, poly in enumerate(self._ghost_polys):
-            n = len(poly)
-            is_closed = (
-                n >= 3
-                and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
-                < 0.01
-            )
-            seg_count = n if is_closed else n - 1
-            for vi in range(seg_count):
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                dx, dy = bx - ax, by - ay
-                seg_len_sq = dx * dx + dy * dy
-                if seg_len_sq < 1e-12:
-                    d = math.hypot(cx - self._w2c(ax, ay)[0], cy - self._w2c(ax, ay)[1])
-                else:
-                    t = max(
-                        0.0,
-                        min(
-                            1.0,
-                            ((wx - ax) * dx + (wy - ay) * dy) / seg_len_sq,
-                        ),
-                    )
-                    px, py_ = ax + t * dx, ay + t * dy
-                    scx, scy = self._w2c(px, py_)
-                    d = math.hypot(cx - scx, cy - scy)
-                if d < best_dist:
-                    best_dist = d
-                    best = pi
+            dist = self._closest_point_on_poly(poly, wx, wy, cx, cy)
+            if dist is not None and dist < best_dist:
+                best_dist = dist
+                best = pi
         return best
 
     # ── Drawing ───────────────────────────────────────────────────────────────
@@ -1372,18 +2037,18 @@ class PolylineView(
                     and self._dim_angle_edit is not None
                     and (obj is self._dim_distance_edit or obj is self._dim_angle_edit)
                 ):
+                    # Focus + select only: dirty is driven by textEdited, so the
+                    # live value keeps tracking the cursor until the user types.
                     if (obj is self._dim_distance_edit and not reverse) or (
                         obj is self._dim_angle_edit and reverse
                     ):
                         self._dim_angle_edit.setFocus()
                         self._dim_angle_edit.selectAll()
-                        self._dim_angle_dirty = True
                     elif (obj is self._dim_angle_edit and not reverse) or (
                         obj is self._dim_distance_edit and reverse
                     ):
                         self._dim_distance_edit.setFocus()
                         self._dim_distance_edit.selectAll()
-                        self._dim_distance_dirty = True
                     return True  # Consume the Tab — prevent Qt focus chain
         return super().eventFilter(obj, event)
 
@@ -1557,14 +2222,6 @@ class PolylineView(
                 else:
                     self._show_flash("No open polyline selected", 900)
                 return
-        elif key == Qt.Key.Key_R and not ctrl and not shift_mod:
-            if self._mode in ("select", "edit"):
-                self._prompt_round_shortcut()
-                return
-        elif key == Qt.Key.Key_C and not ctrl and not shift_mod:
-            if self._mode in ("select", "edit"):
-                self._prompt_chamfer_shortcut()
-                return
         elif key == Qt.Key.Key_O and not ctrl and not shift_mod:
             if self._mode in ("select", "edit"):
                 self._prompt_offset_selected()
@@ -1694,6 +2351,20 @@ class PolylineView(
                 self.set_mode("draw" if self._mode != "draw" else "select")
             elif key == Qt.Key.Key_E:
                 self.set_mode("edit" if self._mode != "edit" else "select")
+            elif (
+                key == Qt.Key.Key_A
+                and self._mode == "draw"
+                and self._draw_pts
+                and not self._shape_primitive_active()
+            ):
+                # Quick-focus the angle field so the next segment can be typed.
+                if self._dim_angle_edit is None:
+                    self._show_dim_inputs()
+                if self._dim_angle_edit is not None:
+                    self._dim_angle_edit.setFocus()
+                    self._dim_angle_edit.selectAll()
+                event.accept()
+                return
             elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 if (
                     self._mode == "draw"
@@ -1720,26 +2391,23 @@ class PolylineView(
             elif key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
                 reverse = key == Qt.Key.Key_Backtab
                 if self._mode == "select" and self._sel:
-                    if self._sel_dim_edit is None:
-                        if reverse and self._sel_badge_h_rect is not None:
-                            self._show_sel_dim_editor("h", self._sel_badge_h_rect)
-                        elif self._sel_badge_w_rect is not None:
-                            self._show_sel_dim_editor("w", self._sel_badge_w_rect)
-                        elif self._sel_badge_h_rect is not None:
-                            self._show_sel_dim_editor("h", self._sel_badge_h_rect)
-                    else:
-                        axis = self._sel_dim_axis
-                        self._apply_sel_dim_editor()
-                        if reverse:
-                            if axis == "h" and self._sel_badge_w_rect is not None:
-                                self._show_sel_dim_editor("w", self._sel_badge_w_rect)
-                            elif self._sel_badge_h_rect is not None:
-                                self._show_sel_dim_editor("h", self._sel_badge_h_rect)
+                    # Tab cycles through the available selection badges
+                    # (W, H, and for a single line also L and ∠).
+                    axes = self._sel_badge_axes()
+                    if axes:
+                        if self._sel_dim_edit is None:
+                            axis, rect = axes[-1] if reverse else axes[0]
+                            self._show_sel_dim_editor(axis, rect)
                         else:
-                            if axis == "w" and self._sel_badge_h_rect is not None:
-                                self._show_sel_dim_editor("h", self._sel_badge_h_rect)
-                            elif self._sel_badge_w_rect is not None:
-                                self._show_sel_dim_editor("w", self._sel_badge_w_rect)
+                            cur = self._sel_dim_axis
+                            self._apply_sel_dim_editor()
+                            axes = self._sel_badge_axes()
+                            if axes:
+                                names = [a for a, _ in axes]
+                                pos_i = names.index(cur) if cur in names else -1
+                                step = -1 if reverse else 1
+                                axis, rect = axes[(pos_i + step) % len(axes)]
+                                self._show_sel_dim_editor(axis, rect)
                     event.accept()
                     return
                 if (
@@ -1782,28 +2450,28 @@ class PolylineView(
                     self._dim_distance_edit is not None
                     and self._dim_angle_edit is not None
                 ):
+                    # Focus + select only — dirty is set by textEdited when the
+                    # user actually types, so the value keeps live-updating and
+                    # the first keystroke replaces it.
                     if (self._dim_distance_edit.hasFocus() and not reverse) or (
                         self._dim_angle_edit.hasFocus() and reverse
                     ):
                         self._dim_angle_edit.setFocus()
                         self._dim_angle_edit.selectAll()
-                        self._dim_angle_dirty = True
                     elif (self._dim_angle_edit.hasFocus() and not reverse) or (
                         self._dim_distance_edit.hasFocus() and reverse
                     ):
                         self._dim_distance_edit.setFocus()
                         self._dim_distance_edit.selectAll()
-                        self._dim_distance_dirty = True
                     else:
                         # Neither field has focus — give focus to distance
+                        # (Shift+Tab goes straight to angle)
                         if reverse:
                             self._dim_angle_edit.setFocus()
                             self._dim_angle_edit.selectAll()
-                            self._dim_angle_dirty = True
                         else:
                             self._dim_distance_edit.setFocus()
                             self._dim_distance_edit.selectAll()
-                            self._dim_distance_dirty = True
                 event.accept()
                 return
             else:
@@ -1864,19 +2532,14 @@ class PolylineView(
             self.toggle_measure()
             return
 
-        # Clicking directly on a W/H selection badge opens inline dimension editor
+        # Clicking directly on a selection badge (W/H, or L/∠ for a single
+        # line) opens the inline dimension editor
         if self._mode == "select" and self._sel:
             pt = QPointF(pos.x(), pos.y())
-            if self._sel_badge_w_rect is not None and self._sel_badge_w_rect.contains(
-                pt
-            ):
-                self._show_sel_dim_editor("w", self._sel_badge_w_rect)
-                return
-            if self._sel_badge_h_rect is not None and self._sel_badge_h_rect.contains(
-                pt
-            ):
-                self._show_sel_dim_editor("h", self._sel_badge_h_rect)
-                return
+            for axis, rect in self._sel_badge_axes():
+                if rect.contains(pt):
+                    self._show_sel_dim_editor(axis, rect)
+                    return
             wx0, wy0 = self._c2w(pos.x(), pos.y())
             if (
                 self._gizmo_rotate_rect is not None
@@ -1957,6 +2620,10 @@ class PolylineView(
             if hit is not None:
                 pi, vi = hit
                 if pi in self._locked_polys:
+                    return
+                if pi < 0 or pi >= len(self._polys):
+                    return
+                if vi < 0 or vi >= len(self._polys[pi]):
                     return
                 self._edit_poly = pi
                 self._edit_vert = vi
@@ -2151,6 +2818,10 @@ class PolylineView(
                 and target not in self._locked_polys
             ):
                 pi, vi = hit
+                if pi < 0 or pi >= len(self._polys):
+                    return
+                if vi < 0 or vi >= len(self._polys[pi]):
+                    return
                 self._edit_poly = pi
                 self._edit_vert = vi
                 self._edit_dragging = True
@@ -2367,8 +3038,26 @@ class PolylineView(
                 self._angle_snap_active = False
 
             # 4. Explicit draw constraint locks, then fallback auto-detection.
+            #    A user-typed angle takes highest precedence: the segment locks
+            #    to that ray with live feedback, and the pointer sets the length.
             self._draw_constraint = None
-            if self._draw_pts:
+            typed_angle = self._typed_draw_angle()
+            if self._draw_pts and typed_angle is not None:
+                last_wx, last_wy = self._draw_pts[-1]
+                ar = math.radians(typed_angle)
+                dirx, diry = math.cos(ar), math.sin(ar)
+                typed_dist = self._typed_draw_distance()
+                if typed_dist is not None:
+                    length = typed_dist
+                else:
+                    proj = (eff_x - last_wx) * dirx + (eff_y - last_wy) * diry
+                    length = max(0.0, proj)
+                eff_x = last_wx + dirx * length
+                eff_y = last_wy + diry * length
+                self._draw_snap = (eff_x, eff_y)
+                self._angle_snap_active = True
+                self._draw_constraint = f"∠{typed_angle:g}°"
+            elif self._draw_pts:
                 last_wx, last_wy = self._draw_pts[-1]
                 if self._draw_constraint_lock == "H":
                     self._draw_constraint = "H"
@@ -2466,6 +3155,8 @@ class PolylineView(
                     dy_w = new_wy - self._move_origin[1]
                     for idx in self._sel:
                         if idx in self._locked_polys:
+                            continue
+                        if idx < 0 or idx >= len(self._polys):
                             continue
                         self._polys[idx] = [
                             (x + dx_w, y + dy_w) for x, y in self._polys[idx]
@@ -2663,8 +3354,13 @@ class PolylineView(
             hit = self._find_nearest_edge(pos.x(), pos.y())
             if hit is not None:
                 pi, seg_idx, pt = hit
+                if pi < 0 or pi >= len(self._polys):
+                    return
+                poly = self._polys[pi]
+                if seg_idx + 1 > len(poly):
+                    return
                 self._push_undo()
-                self._polys[pi].insert(seg_idx + 1, pt)
+                poly.insert(seg_idx + 1, pt)
                 self._redraw()
                 self._notify()
                 self._fire_poly_change()
@@ -2854,8 +3550,1076 @@ class PolylineView(
             coords[-1] = (ax + dx / d * amount, ay + dy / d * amount)
         return LineString(coords)
 
+    # ---- Snap helpers (inlined from _SnapMixin) ----
+
+    def _shape_snap_candidate(self, cx: float, cy: float) -> tuple[float, float, str] | None:
+        best: tuple[float, float, str] | None = None
+        best_dist = float("inf")
+        for shape in self._shape_storage.get_all_shapes():
+            if not getattr(shape, "visible", True):
+                continue
+            for sx, sy, snap_type in ShapeSnapEngine.get_snap_candidates(shape):
+                pcx, pcy = self._w2c(sx, sy)
+                dist = math.hypot(cx - pcx, cy - pcy)
+                if dist <= ShapeSnapEngine.SNAP_RADIUS and dist < best_dist:
+                    best_dist = dist
+                    best = (sx, sy, snap_type)
+        return best
+
+    def _pick_better_snap(
+        self,
+        cx: float,
+        cy: float,
+        first: tuple[float, float, str] | None,
+        second: tuple[float, float, str] | None,
+    ) -> tuple[float, float, str] | None:
+        if first is None:
+            return second
+        if second is None:
+            return first
+        fcx, fcy = self._w2c(first[0], first[1])
+        scx, scy = self._w2c(second[0], second[1])
+        fd = math.hypot(cx - fcx, cy - fcy)
+        sd = math.hypot(cx - scx, cy - scy)
+        return second if sd < fd else first
+
+    def _snap_to_polyline(
+        self,
+        cx: float,
+        cy: float,
+        *,
+        reference_point: tuple[float, float] | None = None,
+    ) -> tuple[float, float, str] | None:
+        return _legacy_snap_to_polyline(
+            cx, cy, self._polys, self._hidden_polys, self._scale,
+            self._w2c, self._c2w, self._poly_bounds,
+            self._is_poly_closed, self._segment_intersection_point,
+            reference_point=reference_point, draw_points=self._draw_pts, mode=self._mode,
+        )
+
+    def _resolve_snap(
+        self,
+        cx: float, cy: float, wx: float, wy: float,
+        *,
+        allow_polyline: bool = True, allow_grid: bool = True,
+        reference_point: tuple[float, float] | None = None,
+    ) -> tuple[float, float, str] | None:
+        legacy = _legacy_resolve_snap(
+            cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
+            grid_snap_enabled=self._grid_snap, grid_spacing=self._grid_spacing,
+            polylines=self._polys, hidden_polys=self._hidden_polys, scale=self._scale,
+            w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
+            is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
+            mode=self._mode, reference_point=reference_point, draw_points=self._draw_pts,
+        )
+        shape_candidate = self._shape_snap_candidate(cx, cy)
+        return self._pick_better_snap(cx, cy, legacy, shape_candidate)
+
+    def _resolve_drag_snap(
+        self,
+        cx: float, cy: float, wx: float, wy: float,
+        *,
+        allow_polyline: bool = True, allow_grid: bool = True, allow_vertex: bool = True,
+        exclude_vertices: set[tuple[int, int]] | None = None,
+        exclude_segments: set[tuple[int, int]] | None = None,
+        reference_point: tuple[float, float] | None = None,
+    ) -> tuple[float, float, str] | None:
+        legacy = _legacy_resolve_drag_snap(
+            cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
+            allow_vertex=allow_vertex, grid_snap_enabled=self._grid_snap,
+            grid_spacing=self._grid_spacing, polylines=self._polys, hidden_polys=self._hidden_polys,
+            scale=self._scale, w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
+            is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
+            mode=self._mode, exclude_vertices=exclude_vertices, exclude_segments=exclude_segments,
+            reference_point=reference_point, draw_points=self._draw_pts,
+        )
+        shape_candidate = self._shape_snap_candidate(cx, cy)
+        return self._pick_better_snap(cx, cy, legacy, shape_candidate)
+
+    def _angle_snap(self, ax: float, ay: float, wx: float, wy: float) -> tuple[float, float]:
+        return _legacy_angle_snap(ax, ay, wx, wy)
+
+    # ---- Shape preview helpers (inlined from _DrawModeMixin) ----
+
+
+
+
+    def _offset_selected(self, distance: float) -> int:
+        indices = self._mutable_selected_indices()
+        if not indices or abs(distance) <= 1e-9:
+            return 0
+
+        created: list[tuple[list[tuple[float, float]], bool]] = []
+        for idx in indices:
+            poly = self._polys[idx]
+            offset_poly = self._offset_polyline(poly, distance)
+            if offset_poly is None or len(offset_poly) < 2:
+                continue
+            created.append((offset_poly, idx in self._construction_polys))
+        if not created:
+            return 0
+
+        self._push_undo()
+        new_sel: set[int] = set()
+        for poly, is_construction in created:
+            new_idx = len(self._polys)
+            self._polys.append(poly)
+            if is_construction:
+                self._construction_polys.add(new_idx)
+            new_sel.add(new_idx)
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(created)
+
     def _fire_poly_change(self) -> None:
         """Notify the on_poly_change callback when polylines are structurally modified."""
         self._sync_shape_storage_from_entities()
         if callable(self._on_poly_change):
             self._on_poly_change()
+
+
+
+    # ── Methods restored from pre-refactor mixins (were dropped in the
+    #    mixin-inlining refactor; callers in dxf_canvas.py/render.py remained). ──
+
+    def _append_draw_polyline(
+        self,
+        poly: list[tuple[float, float]],
+        *,
+        enter_edit: bool = False,
+        kind: str = "polyline",
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        if len(poly) < 2:
+            return
+        self._push_undo()
+        new_idx = self._append_entity(list(poly), kind=kind, meta=meta)
+        if self._draw_construction_mode:
+            self._construction_polys.add(new_idx)
+        self._sel = {new_idx}
+        self._notify()
+        self._fire_poly_change()
+        self._refresh_draw_sidebar_state()
+        self._redraw()
+        if enter_edit:
+            self.set_mode("edit")
+
+    def _ctx_delete_poly(self, idx: int) -> None:
+        self._push_undo()
+        self._polys.pop(idx)
+        if idx < len(self._entity_kinds):
+            self._entity_kinds.pop(idx)
+        if idx < len(self._entity_meta):
+            self._entity_meta.pop(idx)
+        remapped: set[int] = set()
+        for pi in self._construction_polys:
+            if pi == idx:
+                continue
+            remapped.add(pi - 1 if pi > idx else pi)
+        self._construction_polys = remapped
+        self._sel.discard(idx)
+        self._sel = {i if i < idx else i - 1 for i in self._sel if i != idx}
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _ctx_deselect(self, idx: int) -> None:
+        self._sel.discard(idx)
+        self._redraw()
+        self._notify()
+
+    def _ctx_select(self, idx: int) -> None:
+        self._sel.add(idx)
+        self._redraw()
+        self._notify()
+
+    def _distribute_selected(
+        self, axis: str, spacing: float, *, mode: str = "gap"
+    ) -> bool:
+        """Distribute selected shapes along ``axis`` at fixed ``spacing``.
+
+        ``mode="gap"`` spaces adjacent bounding-box edges (edge-to-edge);
+        ``mode="center"`` spaces bounding-box centers (center-to-center).
+        The shape lowest along the axis stays anchored.
+        """
+        indices = self._mutable_selected_indices()
+        if len(indices) < 2 or spacing < 0 or mode not in ("gap", "center"):
+            return False
+        if axis == "horizontal":
+            lo, hi = 0, 2
+        elif axis == "vertical":
+            lo, hi = 1, 3
+        else:
+            return False
+
+        keyed = [(idx, self._poly_bounds(self._polys[idx])) for idx in indices]
+        keyed.sort(key=lambda x: x[1][lo])
+
+        self._push_undo()
+        first_b = keyed[0][1]
+        cur_edge = first_b[hi]
+        cur_center = (first_b[lo] + first_b[hi]) / 2.0
+        for idx, b in keyed[1:]:
+            if mode == "center":
+                delta = (cur_center + spacing) - (b[lo] + b[hi]) / 2.0
+            else:
+                delta = (cur_edge + spacing) - b[lo]
+            dx, dy = (delta, 0.0) if axis == "horizontal" else (0.0, delta)
+            self._polys[idx] = [(x + dx, y + dy) for x, y in self._polys[idx]]
+            self._transform_entity_meta(
+                idx,
+                center=(0.0, 0.0),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx]
+                if idx < len(self._entity_meta)
+                else None,
+                transform="translate",
+                dx=dx,
+                dy=dy,
+            )
+            nb = self._poly_bounds(self._polys[idx])
+            cur_edge = nb[hi]
+            cur_center = (nb[lo] + nb[hi]) / 2.0
+
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _scale_single_line_extent(self, idx: int, axis: str, target: float) -> bool:
+        """Uniformly scale a 2-point line about its start point so its extent
+        along ``axis`` ("w"/"h") equals ``target``, preserving its angle.
+
+        Axis-only scaling would shear the segment and change its angle, so a
+        lone line gets proportional scaling instead.
+        """
+        (ax, ay), (bx, by) = self._polys[idx]
+        extent = abs(bx - ax) if axis == "w" else abs(by - ay)
+        if extent <= 1e-9:
+            self._show_flash(
+                "Line has no {} — change its angle first".format(
+                    "width" if axis == "w" else "height"
+                ),
+                1100,
+            )
+            return False
+        f = target / extent
+        self._push_undo()
+        self._polys[idx][1] = (ax + (bx - ax) * f, ay + (by - ay) * f)
+        self._sync_line_meta_from_poly(idx)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _set_selected_height(self, height: float) -> bool:
+        indices = self._mutable_selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None or height <= 0:
+            return False
+        if len(indices) == 1 and len(self._polys[indices[0]]) == 2:
+            return self._scale_single_line_extent(indices[0], "h", height)
+        cur_h = bounds[3] - bounds[1]
+        if cur_h <= 1e-9:
+            return False
+        fy = height / cur_h
+        cy = (bounds[1] + bounds[3]) / 2.0
+        self._demote_selected_entities_to_polylines(indices)
+        self._push_undo()
+        for idx in indices:
+            self._polys[idx] = [(x, cy + (y - cy) * fy) for x, y in self._polys[idx]]
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _set_selected_width(self, width: float) -> bool:
+        indices = self._mutable_selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None or width <= 0:
+            return False
+        if len(indices) == 1 and len(self._polys[indices[0]]) == 2:
+            return self._scale_single_line_extent(indices[0], "w", width)
+        cur_w = bounds[2] - bounds[0]
+        if cur_w <= 1e-9:
+            return False
+        fx = width / cur_w
+        cx = (bounds[0] + bounds[2]) / 2.0
+        self._demote_selected_entities_to_polylines(indices)
+        self._push_undo()
+        for idx in indices:
+            self._polys[idx] = [(cx + (x - cx) * fx, y) for x, y in self._polys[idx]]
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def align_selected(self, mode: str) -> bool:
+        indices = self._mutable_selected_indices()
+        bounds = self._selection_bounds(indices)
+        if len(indices) < 2 or bounds is None:
+            return False
+        bx0, by0, bx1, by1 = bounds
+        center_x = (bx0 + bx1) / 2.0
+        center_y = (by0 + by1) / 2.0
+        self._push_undo()
+        for idx in indices:
+            px0, py0, px1, py1 = self._poly_bounds(self._polys[idx])
+            dx = dy = 0.0
+            if mode == "left":
+                dx = bx0 - px0
+            elif mode == "center-x":
+                dx = center_x - (px0 + px1) / 2.0
+            elif mode == "right":
+                dx = bx1 - px1
+            elif mode == "top":
+                dy = by1 - py1
+            elif mode == "center-y":
+                dy = center_y - (py0 + py1) / 2.0
+            elif mode == "bottom":
+                dy = by0 - py0
+            else:
+                return False
+            self._polys[idx] = [(x + dx, y + dy) for x, y in self._polys[idx]]
+            self._transform_entity_meta(
+                idx,
+                center=(center_x, center_y),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="translate",
+                dx=dx,
+                dy=dy,
+            )
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def mirror_selected(self, axis: str) -> bool:
+        indices = self._mutable_selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None:
+            return False
+        cx = (bounds[0] + bounds[2]) / 2.0
+        cy = (bounds[1] + bounds[3]) / 2.0
+        self._push_undo()
+        for idx in indices:
+            if axis == "horizontal":
+                self._polys[idx] = [(2 * cx - x, y) for x, y in self._polys[idx]]
+            elif axis == "vertical":
+                self._polys[idx] = [(x, 2 * cy - y) for x, y in self._polys[idx]]
+            else:
+                return False
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="mirror",
+                axis=axis,
+            )
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def rotate_selected(self, angle_deg: float) -> bool:
+        indices = self._mutable_selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None:
+            return False
+        cx = (bounds[0] + bounds[2]) / 2.0
+        cy = (bounds[1] + bounds[3]) / 2.0
+        angle = math.radians(angle_deg)
+        ca, sa = math.cos(angle), math.sin(angle)
+        self._push_undo()
+        for idx in indices:
+            self._polys[idx] = [
+                (
+                    cx + (x - cx) * ca - (y - cy) * sa,
+                    cy + (x - cx) * sa + (y - cy) * ca,
+                )
+                for x, y in self._polys[idx]
+            ]
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="rotate",
+                angle_deg=angle_deg,
+            )
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _scale_all(self, factor: float) -> None:
+        """Scale all polylines uniformly around their bounding box center."""
+        if not self._polys:
+            return
+        self._push_undo()
+        all_pts = [pt for p in self._polys for pt in p]
+        xs, ys = zip(*all_pts)
+        cx = (min(xs) + max(xs)) / 2
+        cy = (min(ys) + max(ys)) / 2
+        self._polys = [
+            [(cx + (x - cx) * factor, cy + (y - cy) * factor) for x, y in poly]
+            for poly in self._polys
+        ]
+        for idx in range(len(self._polys)):
+            self._transform_entity_meta(
+                idx,
+                center=(cx, cy),
+                kind=self._entity_kinds[idx]
+                if idx < len(self._entity_kinds)
+                else "polyline",
+                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                transform="scale",
+                factor=factor,
+            )
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _apply_shape_size_inputs(self) -> None:
+        if (
+            self._draw_shape_w_edit is None
+            or self._draw_shape_h_edit is None
+            or self._draw_shape_anchor_w is None
+            or not self._shape_primitive_active()
+        ):
+            return
+        try:
+            w = max(0.001, float(self._draw_shape_w_edit.text().strip()))
+            h = max(0.001, float(self._draw_shape_h_edit.text().strip()))
+        except ValueError:
+            return
+
+        sx, sy = self._draw_shape_anchor_w
+        if self._draw_shape_cursor_w is None:
+            self._draw_shape_cursor_w = (sx + w, sy + h)
+        ex0, ey0 = self._draw_shape_cursor_w
+        sign_x = 1.0 if ex0 >= sx else -1.0
+        sign_y = 1.0 if ey0 >= sy else -1.0
+        self._draw_shape_cursor_w = (sx + sign_x * w, sy + sign_y * h)
+        self._redraw()
+
+    def _immediate_segments_for_vertices(
+        self,
+        vertices: set[tuple[int, int]],
+    ) -> set[tuple[int, int]]:
+        """Return segment keys ``(poly_idx, seg_idx)`` touching the given vertices."""
+        excluded: set[tuple[int, int]] = set()
+        for pi, vi in vertices:
+            if not (0 <= pi < len(self._polys)):
+                continue
+            poly = self._polys[pi]
+            n = len(poly)
+            if n < 2:
+                continue
+            closed = self._is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            if seg_count <= 0:
+                continue
+            if closed:
+                excluded.add((pi, vi % seg_count))
+                excluded.add((pi, (vi - 1) % seg_count))
+            else:
+                if 0 <= vi < seg_count:
+                    excluded.add((pi, vi))
+                if 0 <= (vi - 1) < seg_count:
+                    excluded.add((pi, vi - 1))
+        return excluded
+
+    def _offset_polyline(
+        self,
+        poly: list[tuple[float, float]],
+        distance: float,
+    ) -> list[tuple[float, float]] | None:
+        if len(poly) < 2:
+            return None
+        try:
+            if self._is_poly_closed(poly):
+                pts = list(poly)
+                if pts[0] != pts[-1]:
+                    pts.append(pts[0])
+                geom = Polygon(pts)
+                if not geom.is_valid:
+                    geom = geom.buffer(0)
+                if geom.is_empty:
+                    return None
+                # Round joins prevent spikes at sharp corners on closed shapes.
+                buffered = geom.buffer(distance, join_style="round")
+                if buffered.is_empty:
+                    return None
+                if isinstance(buffered, MultiPolygon):
+                    buffered = max(buffered.geoms, key=lambda g: g.area)
+                if not isinstance(buffered, Polygon):
+                    return None
+                coords = list(buffered.exterior.coords)
+                return [(float(x), float(y)) for x, y in coords]
+
+            line = LineString(poly)
+            if line.is_empty:
+                return None
+            side = "left" if distance >= 0 else "right"
+            offset_geom = line.parallel_offset(
+                abs(distance),
+                side,
+                join_style="mitre",
+                mitre_limit=2.0,  # cap spike length at 2× offset distance
+            )
+            if offset_geom.is_empty:
+                return None
+            if isinstance(offset_geom, MultiLineString):
+                offset_geom = max(offset_geom.geoms, key=lambda g: g.length)
+            if not isinstance(offset_geom, LineString):
+                return None
+            coords = list(offset_geom.coords)
+            return [(float(x), float(y)) for x, y in coords]
+        except (TypeError, ValueError, GEOSException):
+            return None
+
+    @staticmethod
+    def _points_equal(a: tuple[float, float], b: tuple[float, float]) -> bool:
+        return math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6
+
+    def _segments_for_polylines(self, poly_indices: set[int]) -> set[tuple[int, int]]:
+        segments: set[tuple[int, int]] = set()
+        for pi in poly_indices:
+            if not (0 <= pi < len(self._polys)):
+                continue
+            poly = self._polys[pi]
+            n = len(poly)
+            if n < 2:
+                continue
+            closed = self._is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            segments.update((pi, si) for si in range(max(0, seg_count)))
+        return segments
+
+    def _split_segment_by_cutter_points(
+        self,
+        a: tuple[float, float],
+        b: tuple[float, float],
+        cutter: LineString,
+    ) -> list[list[tuple[float, float]]]:
+        if self._points_equal(a, b):
+            return []
+        seg_line = LineString([a, b])
+        if seg_line.is_empty or not cutter.intersects(seg_line):
+            return [[a, b]]
+
+        try:
+            inter = seg_line.intersection(cutter)
+        except (TypeError, ValueError, GEOSException):
+            return [[a, b]]
+
+        dx = b[0] - a[0]
+        dy = b[1] - a[1]
+        denom = dx * dx + dy * dy
+        if denom < 1e-12:
+            return [[a, b]]
+
+        points: list[tuple[float, float]] = [a, b]
+
+        def _add_point(pt: tuple[float, float]) -> None:
+            if any(self._points_equal(pt, existing) for existing in points):
+                return
+            points.append(pt)
+
+        if isinstance(inter, Point):
+            _add_point((float(inter.x), float(inter.y)))
+        elif isinstance(inter, MultiPoint):
+            for g in inter.geoms:
+                _add_point((float(g.x), float(g.y)))
+        elif isinstance(inter, LineString):
+            coords = list(inter.coords)
+            if len(coords) >= 2:
+                _add_point((float(coords[0][0]), float(coords[0][1])))
+                _add_point((float(coords[-1][0]), float(coords[-1][1])))
+        elif isinstance(inter, MultiLineString):
+            for g in inter.geoms:
+                coords = list(g.coords)
+                if len(coords) >= 2:
+                    _add_point((float(coords[0][0]), float(coords[0][1])))
+                    _add_point((float(coords[-1][0]), float(coords[-1][1])))
+        elif isinstance(inter, GeometryCollection):
+            for pt in self._iter_intersection_points(inter):
+                _add_point((float(pt[0]), float(pt[1])))
+
+        def _param(pt: tuple[float, float]) -> float:
+            return ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / denom
+
+        ordered = sorted(points, key=_param)
+        parts: list[list[tuple[float, float]]] = []
+        for i in range(len(ordered) - 1):
+            p0 = ordered[i]
+            p1 = ordered[i + 1]
+            if self._points_equal(p0, p1):
+                continue
+            parts.append([p0, p1])
+        return parts or [[a, b]]
+
+    def _update_shape_size_fields_from_preview(self) -> None:
+        if self._draw_shape_w_edit is None or self._draw_shape_h_edit is None:
+            return
+        enabled = (
+            self._shape_primitive_active() and self._draw_shape_anchor_w is not None
+        )
+        self._draw_shape_w_edit.setEnabled(enabled)
+        self._draw_shape_h_edit.setEnabled(enabled)
+        if not enabled:
+            return
+        if self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
+            return
+        sx, sy = self._draw_shape_anchor_w
+        ex, ey = self._draw_shape_cursor_w
+        self._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
+        self._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
+
+    def _vertices_for_polylines(self, poly_indices: set[int]) -> set[tuple[int, int]]:
+        vertices: set[tuple[int, int]] = set()
+        for pi in poly_indices:
+            if 0 <= pi < len(self._polys):
+                vertices.update((pi, vi) for vi in range(len(self._polys[pi])))
+        return vertices
+
+    def _would_split_closed_polygon(self, polygon: Polygon, cutter: LineString) -> bool:
+        if polygon.is_empty or cutter.is_empty or not cutter.intersects(polygon):
+            return False
+        boundary = polygon.boundary
+        try:
+            overlap = cutter.intersection(boundary)
+        except (TypeError, ValueError, GEOSException):
+            return False
+        if isinstance(overlap, (LineString, MultiLineString)) and overlap.length > 1e-6:
+            return False
+
+        inner = polygon.buffer(-1e-6)
+        if inner.is_empty:
+            inner = polygon
+        try:
+            inside = cutter.intersection(inner)
+        except (TypeError, ValueError, GEOSException):
+            return False
+        if getattr(inside, "is_empty", True):
+            return False
+
+        bounds = polygon.bounds
+        diag = math.hypot(bounds[2] - bounds[0], bounds[3] - bounds[1])
+        ext_cutter = self._extend_line(cutter, max(diag * 2.0, 1.0))
+        split_candidates: list[tuple[int, list]] = []
+        for order, candidate in enumerate((cutter, ext_cutter)):
+            pieces = shapely_split(polygon, candidate)
+            trial = list(pieces.geoms) if hasattr(pieces, "geoms") else []
+            if len(trial) >= 2:
+                split_candidates.append((order, trial))
+        return bool(split_candidates)
+
+    def offset_selected(self, distance: float) -> int:
+        indices = self._mutable_selected_indices()
+        if not indices or abs(distance) <= 1e-9:
+            return 0
+
+        created: list[tuple[list[tuple[float, float]], bool]] = []
+        for idx in indices:
+            poly = self._polys[idx]
+            offset_poly = self._offset_polyline(poly, distance)
+            if offset_poly is None or len(offset_poly) < 2:
+                continue
+            created.append((offset_poly, idx in self._construction_polys))
+        if not created:
+            return 0
+
+        self._push_undo()
+        new_sel: set[int] = set()
+        for poly, is_construction in created:
+            new_idx = len(self._polys)
+            self._polys.append(poly)
+            if is_construction:
+                self._construction_polys.add(new_idx)
+            new_sel.add(new_idx)
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(created)
+
+    def _selected_single_line(self) -> int | None:
+        """Index of the sole selected 2-point line, or ``None``."""
+        if len(self._sel) != 1:
+            return None
+        idx = next(iter(self._sel))
+        if not (0 <= idx < len(self._polys)) or len(self._polys[idx]) != 2:
+            return None
+        return idx
+
+    def _sel_badge_axes(self) -> list[tuple[str, QRectF]]:
+        """Available selection badges as ordered (axis, hit-rect) pairs."""
+        pairs = [
+            ("w", self._sel_badge_w_rect),
+            ("h", self._sel_badge_h_rect),
+            ("l", self._sel_badge_l_rect),
+            ("a", self._sel_badge_a_rect),
+        ]
+        return [(a, r) for a, r in pairs if r is not None]
+
+    def _sync_line_meta_from_poly(self, idx: int) -> None:
+        """Refresh a line entity's start/end meta from its polyline points."""
+        kind = self._entity_kinds[idx] if idx < len(self._entity_kinds) else "polyline"
+        meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+        if kind == "line" and isinstance(meta, dict):
+            meta["start"] = tuple(self._polys[idx][0])
+            meta["end"] = tuple(self._polys[idx][-1])
+
+    def _set_selected_line_length(self, length: float) -> bool:
+        indices = self._mutable_selected_indices()
+        if len(indices) != 1 or length <= 0:
+            return False
+        poly = self._polys[indices[0]]
+        if len(poly) != 2:
+            return False
+        ax, ay = poly[0]
+        bx, by = poly[1]
+        dx, dy = bx - ax, by - ay
+        cur_len = math.hypot(dx, dy)
+        if cur_len <= 1e-9:
+            return False
+        ux, uy = dx / cur_len, dy / cur_len
+        self._push_undo()
+        self._polys[indices[0]][1] = (ax + ux * length, ay + uy * length)
+        # Only the free endpoint moves — sync meta from points rather than
+        # translating it (which would also shift the anchored start point).
+        self._sync_line_meta_from_poly(indices[0])
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _set_selected_line_angle(self, angle_deg: float) -> bool:
+        """Rotate the selected 2-point line about its start point to an
+        absolute angle in degrees (CCW from +X), preserving its length."""
+        indices = self._mutable_selected_indices()
+        if len(indices) != 1:
+            return False
+        poly = self._polys[indices[0]]
+        if len(poly) != 2:
+            return False
+        ax, ay = poly[0]
+        bx, by = poly[1]
+        cur_len = math.hypot(bx - ax, by - ay)
+        if cur_len <= 1e-9:
+            return False
+        ar = math.radians(angle_deg)
+        self._push_undo()
+        self._polys[indices[0]][1] = (
+            ax + cur_len * math.cos(ar),
+            ay + cur_len * math.sin(ar),
+        )
+        self._sync_line_meta_from_poly(indices[0])
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _iter_intersection_points(self, geom) -> list[tuple[float, float]]:
+        if geom is None or getattr(geom, "is_empty", True):
+            return []
+        if isinstance(geom, Point):
+            return [(float(geom.x), float(geom.y))]
+        if isinstance(geom, MultiPoint):
+            return [(float(g.x), float(g.y)) for g in geom.geoms]
+        if isinstance(geom, LineString):
+            coords = list(geom.coords)
+            if len(coords) >= 2:
+                return [
+                    (float(coords[0][0]), float(coords[0][1])),
+                    (float(coords[-1][0]), float(coords[-1][1])),
+                ]
+            return []
+        if isinstance(geom, MultiLineString):
+            pts: list[tuple[float, float]] = []
+            for g in geom.geoms:
+                pts.extend(self._iter_intersection_points(g))
+            return pts
+        if isinstance(geom, GeometryCollection):
+            pts: list[tuple[float, float]] = []
+            for g in geom.geoms:
+                pts.extend(self._iter_intersection_points(g))
+            return pts
+        return []
+
+    def _demote_selected_entities_to_polylines(
+        self, indices: list[int] | None = None
+    ) -> None:
+        if indices is None:
+            indices = self._selected_indices()
+        for idx in indices:
+            if 0 <= idx < len(self._entity_kinds):
+                self._entity_kinds[idx] = "polyline"
+                self._entity_meta[idx] = None
+
+    # ── Draw sidebar + shape preview (restored from pre-refactor _draw_mixin) ──
+
+    def _build_draw_sidebar(self) -> None:
+        panel = DrawSidebar(
+            parent=self.viewport(),
+            on_draw_clicked=self._on_draw_button_clicked,
+            on_finish_open=lambda: self._finish_draw(close=False),
+            on_close_edit=lambda: self._finish_draw(close=True),
+            on_undo_point=self._key_backspace,
+            on_toggle_snap=self._toggle_sidebar_snap,
+            on_toggle_split=self._toggle_sidebar_split,
+            on_cycle_arc_mode=self._cycle_arc_mode,
+            on_cycle_constraint_mode=self._cycle_constraint_mode,
+            on_cancel_draw=self._cancel_draw_points,
+            on_back_to_select=lambda: self.set_mode("select"),
+        )
+        panel.hide()
+
+        # Create tool picker dialog
+        self._tool_picker_dialog = ToolPickerDialog(parent=self.viewport())
+
+        anim = QPropertyAnimation(panel, b"pos", self)
+        anim.setDuration(150)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(self._on_draw_sidebar_anim_finished)
+
+        self._draw_sidebar = panel
+        self._draw_sidebar_anim = anim
+        self._refresh_draw_sidebar_state()
+
+    def _layout_draw_sidebar(self) -> None:
+        if self._draw_sidebar is None:
+            return
+        y = 8
+        target_h = max(260, self.viewport().height() - 16)
+        self._draw_sidebar.setFixedHeight(min(430, target_h))
+        x = 8 if self._draw_sidebar_visible else -self._draw_sidebar.width() + 20
+        self._draw_sidebar.move(x, y)
+
+    def _set_draw_sidebar_visible(self, visible: bool, *, animate: bool = True) -> None:
+        if self._draw_sidebar is None or self._draw_sidebar_anim is None:
+            return
+        if self._draw_sidebar_visible == visible and self._draw_sidebar.isVisible():
+            self._refresh_draw_sidebar_state()
+            return
+
+        self._draw_sidebar_visible = visible
+        self._refresh_draw_sidebar_state()
+        y = 8
+        hidden_x = -self._draw_sidebar.width() + 20
+        shown_x = 8
+        self._draw_sidebar.setFixedHeight(
+            min(430, max(260, self.viewport().height() - 16))
+        )
+
+        if not animate:
+            if visible:
+                self._draw_sidebar.show()
+                self._draw_sidebar.move(shown_x, y)
+            else:
+                self._draw_sidebar.move(hidden_x, y)
+                self._draw_sidebar.hide()
+            return
+
+        if visible:
+            self._draw_sidebar.show()
+            self._draw_sidebar.move(hidden_x, y)
+            self._draw_sidebar_anim.stop()
+            self._draw_sidebar_anim.setStartValue(QPoint(hidden_x, y))
+            self._draw_sidebar_anim.setEndValue(QPoint(shown_x, y))
+            self._draw_sidebar_anim.start()
+        else:
+            self._draw_sidebar_anim.stop()
+            self._draw_sidebar_anim.setStartValue(self._draw_sidebar.pos())
+            self._draw_sidebar_anim.setEndValue(QPoint(hidden_x, y))
+            self._draw_sidebar_anim.start()
+
+    def _refresh_draw_sidebar_state(self) -> None:
+        if not isinstance(self._draw_sidebar, DrawSidebar):
+            return
+        has_pts = len(self._draw_pts)
+        self._draw_sidebar.set_polyline_actions_enabled(
+            can_finish=has_pts >= 2,
+            can_close=has_pts >= 3,
+            can_undo=has_pts >= 1,
+        )
+        self._draw_sidebar.set_snap_label(self._grid_snap)
+        self._draw_sidebar.set_split_label(self._draw_split_enabled)
+        self._draw_sidebar.set_active_tool(self._draw_primitive)
+        self._draw_sidebar.set_arc_mode(self._draw_arc_mode)
+        self._draw_sidebar.set_arc_mode_enabled(self._draw_primitive == "arc")
+        self._draw_sidebar.set_constraint_mode(self._draw_constraint_lock)
+        self._draw_sidebar.set_constraint_mode_enabled(
+            self._draw_primitive in {"line", "polyline"}
+        )
+        self._update_shape_size_fields_from_preview()
+
+    def _commit_shape_preview(self) -> bool:
+        if not self._draw_shape_preview_active:
+            return False
+        if self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
+            return False
+        sx, sy = self._draw_shape_anchor_w
+        ex, ey = self._draw_shape_cursor_w
+        cx = (sx + ex) / 2.0
+        cy = (sy + ey) / 2.0
+        w = abs(ex - sx)
+        h = abs(ey - sy)
+
+        poly: list[tuple[float, float]] = []
+        kind = "polyline"
+        meta: dict[str, Any] | None = None
+        if self._draw_primitive == "rectangle":
+            poly = build_rect_poly(cx, cy, w, h)
+            kind = "rectangle"
+            meta = {
+                "center": (cx, cy),
+                "width": w,
+                "height": h,
+                "rotation": 0.0,
+            }
+        elif self._draw_primitive == "circle":
+            # Match preview behavior: first click is center, drag to radius.
+            radius = math.hypot(ex - sx, ey - sy)
+            poly = build_circle_poly(sx, sy, radius)
+            kind = "circle"
+            meta = {"center": (sx, sy), "radius": radius}
+        elif self._draw_primitive == "ellipse":
+            poly = build_ellipse_poly(cx, cy, w / 2.0, h / 2.0)
+            kind = "ellipse"
+            meta = {"center": (cx, cy), "rx": w / 2.0, "ry": h / 2.0, "rotation": 0.0}
+        elif self._draw_primitive == "polygon":
+            poly = build_polygon_poly(cx, cy, min(w, h) / 2.0, 6)
+
+        self._draw_shape_preview_active = False
+        self._draw_shape_anchor_w = None
+        self._draw_shape_cursor_w = None
+
+        if len(poly) >= 2:
+            self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
+            self._show_flash(f"{self._draw_primitive.title()} created", 800)
+            self._refresh_draw_sidebar_state()
+            self._redraw()
+            return True
+
+        self._refresh_draw_sidebar_state()
+        self._redraw()
+        return False
+
+    def _on_draw_sidebar_anim_finished(self) -> None:
+        if self._draw_sidebar is None:
+            return
+        if not self._draw_sidebar_visible:
+            self._draw_sidebar.hide()
+
+    def _on_draw_button_clicked(self) -> None:
+        """Show the tool picker modal and handle tool selection."""
+        if (
+            hasattr(self, "_tool_picker_dialog")
+            and self._tool_picker_dialog is not None
+        ):
+            if self._tool_picker_dialog.exec() == 1:  # QDialog.Accepted
+                tool = self._tool_picker_dialog.get_selected_tool()
+                if tool is not None:
+                    self._set_draw_primitive(tool)
+
+    def _toggle_sidebar_snap(self) -> None:
+        self._grid_snap = not self._grid_snap
+        self._refresh_draw_sidebar_state()
+        self._redraw()
+
+    def _toggle_sidebar_split(self) -> None:
+        self._draw_split_enabled = not self._draw_split_enabled
+        self._refresh_draw_sidebar_state()
+        self._show_flash("Split: on" if self._draw_split_enabled else "Split: off", 800)
+
+    def _cycle_arc_mode(self) -> None:
+        if self._draw_primitive != "arc":
+            self._set_draw_primitive("arc")
+            return
+        self._draw_arc_mode = (
+            "center-start-end" if self._draw_arc_mode == "3point" else "3point"
+        )
+        self._draw_arc_pts.clear()
+        self._refresh_draw_sidebar_state()
+        self._show_flash(
+            "Arc: center-start-end"
+            if self._draw_arc_mode == "center-start-end"
+            else "Arc: three-point",
+            900,
+        )
+        self._redraw()
+
+    def _cycle_constraint_mode(self) -> None:
+        modes = [None, "H", "V", "45"]
+        try:
+            idx = modes.index(self._draw_constraint_lock)
+        except ValueError:
+            idx = 0
+        self._draw_constraint_lock = modes[(idx + 1) % len(modes)]
+        self._refresh_draw_sidebar_state()
+        self._show_flash(
+            f"Constraint: {self._draw_constraint_lock}"
+            if self._draw_constraint_lock
+            else "Constraint: Free",
+            900,
+        )
+        self._redraw()
+
+    def _cancel_draw_points(self) -> None:
+        if self._mode != "draw":
+            return
+        self._draw_pts.clear()
+        self._draw_point_snap_types.clear()
+        self._draw_snap = None
+        self._draw_snap_type = None
+        self._draw_constraint = None
+        self._angle_snap_active = False
+        self._draw_shape_preview_active = False
+        self._draw_shape_anchor_w = None
+        self._draw_shape_cursor_w = None
+        self._draw_arc_pts.clear()
+        if hasattr(self, "_dismiss_shape_dim_inputs"):
+            self._dismiss_shape_dim_inputs()
+        self._dismiss_dim_inputs()
+        self._refresh_draw_sidebar_state()
+        self._redraw()
+
+    def _set_draw_primitive(self, tool: str) -> None:
+        valid = {
+            "polyline",
+            "line",
+            "arc",
+            "spline",
+            "rectangle",
+            "circle",
+            "ellipse",
+            "polygon",
+        }
+        if tool not in valid:
+            return
+        self._draw_primitive = tool
+        self._draw_pts.clear()
+        self._draw_arc_pts.clear()
+        self._draw_shape_preview_active = False
+        self._draw_shape_anchor_w = None
+        self._draw_shape_cursor_w = None
+        self._dismiss_dim_inputs()
+        self._update_shape_size_fields_from_preview()
+        self._refresh_draw_sidebar_state()
+        self._show_flash(f"Tool: {tool}", 650)
+        self._redraw()

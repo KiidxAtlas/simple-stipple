@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 from scipy.stats.qmc import PoissonDisk  # type: ignore[import-untyped]
@@ -57,30 +57,49 @@ def gen_stipple_dots(
     result: list[list[tuple[float, float]]] = []
 
     for cx, cy in centres_world:
-        pts = [
-            (
-                cx + radius * math.cos(2 * math.pi * i / n_seg),
-                cy + radius * math.sin(2 * math.pi * i / n_seg),
-            )
-            for i in range(n_seg)
-        ]
-        pts.append(pts[0])
-        circ = Polygon(pts)
-        if not prep.intersects(circ):
-            continue
-        clipped = outline_poly.intersection(circ)
-        if clipped.is_empty:
-            continue
-        geoms = (
-            [clipped]
-            if isinstance(clipped, Polygon)
-            else list(clipped.geoms)
-            if isinstance(clipped, MultiPolygon)
-            else []
+        result.extend(
+            _circle_segments(cx, cy, radius, n_seg, outline_poly, prep)
         )
-        for g in geoms:
-            if not g.is_empty and g.area >= math.pi * radius * radius * 0.5:
-                result.append(_coords_to_polyline(g.exterior.coords))
+    return result
+
+
+def _circle_segments(
+    cx: float,
+    cy: float,
+    radius: float,
+    n_seg: int,
+    outline_poly,
+    prep,
+) -> list[list[tuple[float, float]]]:
+    """Create a circle polygon at (cx,cy) and clip it to outline_poly.
+
+    Returns the exterior coordinate polylines of all valid clipped pieces.
+    """
+    pts = [
+        (
+            cx + radius * math.cos(2 * math.pi * i / n_seg),
+            cy + radius * math.sin(2 * math.pi * i / n_seg),
+        )
+        for i in range(n_seg)
+    ]
+    pts.append(pts[0])
+    circ = Polygon(pts)
+    if not prep.intersects(circ):
+        return []
+    clipped = outline_poly.intersection(circ)
+    if clipped.is_empty:
+        return []
+    geoms = (
+        [clipped]
+        if isinstance(clipped, Polygon)
+        else list(clipped.geoms)
+        if isinstance(clipped, MultiPolygon)
+        else []
+    )
+    result: list[list[tuple[float, float]]] = []
+    for g in geoms:
+        if not g.is_empty and g.area >= math.pi * radius * radius * 0.5:
+            result.append(_coords_to_polyline(g.exterior.coords))
     return result
 
 
@@ -114,31 +133,9 @@ def gen_stipple_interlaced(
             y = miny + row * row_spacing
             cx, cy = x, y
 
-            pts = [
-                (
-                    cx + radius * math.cos(2 * math.pi * i / n_seg),
-                    cy + radius * math.sin(2 * math.pi * i / n_seg),
-                )
-                for i in range(n_seg)
-            ]
-            pts.append(pts[0])
-            circ = Polygon(pts)
-
-            if not prep.intersects(circ):
-                continue
-            clipped = outline_poly.intersection(circ)
-            if clipped.is_empty:
-                continue
-            geoms = (
-                [clipped]
-                if isinstance(clipped, Polygon)
-                else list(clipped.geoms)
-                if isinstance(clipped, MultiPolygon)
-                else []
+            result.extend(
+                _circle_segments(cx, cy, radius, n_seg, outline_poly, prep)
             )
-            for g in geoms:
-                if not g.is_empty and g.area >= math.pi * radius * radius * 0.5:
-                    result.append(_coords_to_polyline(g.exterior.coords))
 
     return result
 
@@ -166,28 +163,13 @@ def gen_voronoi(
         clipped = outline_poly.intersection(cell)
         if clipped.is_empty:
             continue
-        geoms = (
-            [clipped]
-            if isinstance(clipped, Polygon)
-            else list(clipped.geoms)
-            if isinstance(clipped, MultiPolygon)
-            else []
-        )
-        for g in geoms:
-            if g.is_empty or g.area < 0.001:
-                continue
-            if shrink > 0:
-                shrunk = g.buffer(-shrink)
-                if shrunk is None or shrunk.is_empty:
-                    shrunk = g
-            else:
-                shrunk = g
-            if isinstance(shrunk, Polygon):
-                result.append(_coords_to_polyline(shrunk.exterior.coords))
-            elif hasattr(shrunk, "geoms"):
-                for s in cast(Any, shrunk).geoms:
-                    if not s.is_empty and s.area >= 0.001:
-                        result.append(_coords_to_polyline(s.exterior.coords))
+        if shrink > 0:
+            shrunk = clipped.buffer(-shrink)
+            if shrunk is None or shrunk.is_empty:
+                shrunk = clipped
+        else:
+            shrunk = clipped
+        _extract_polys(shrunk, result)
     return result
 
 

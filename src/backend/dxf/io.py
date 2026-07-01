@@ -202,7 +202,20 @@ def _load_dxf_polylines_with_report(
 def _load_dxf_polylines_by_layer_with_report(
     path: str,
 ) -> tuple[dict[str, list[list[tuple[float, float]]]], DxfImportReport]:
-    doc = _ezdxf_readfile(path)
+    try:
+        doc = _ezdxf_readfile(path)
+    except (OSError, FileNotFoundError, ValueError) as exc:
+        _LOG.error("Failed to open DXF file %s: %s", path, exc)
+        return (
+            {},
+            DxfImportReport(
+                supported_polylines=0,
+                flattened_entities={},
+                unsupported_entities={},
+                invalid_polylines=0,
+                layer_counts={},
+            ),
+        )
     msp = doc.modelspace()
     by_layer: dict[str, list[list[tuple[float, float]]]] = {}
     flattened_entities: Counter[str] = Counter()

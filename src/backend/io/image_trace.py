@@ -146,14 +146,15 @@ def _build_edge_mask(
 # ---------------------------------------------------------------------------
 
 
-def _find_contours(mask: np.ndarray, outer_only: bool = True) -> list[np.ndarray]:
+def _find_contours(mask: np.ndarray, outer_only: bool = False) -> list[np.ndarray]:
     """Extract contours from binary mask.
 
-    ``outer_only=True`` (default) uses ``cv2.RETR_CCOMP`` and keeps only
-    top-level contours (parent == -1).  This prevents inner hole boundaries
-    (e.g. inside letters A, B, D, O) from appearing as separate outlines.
-    ``outer_only=False`` falls back to ``cv2.RETR_LIST`` and returns all
-    contours.
+    ``outer_only=False`` (default) uses ``cv2.RETR_LIST`` and returns all
+    contours — outer boundaries *and* interior holes, so lettering with
+    counters (o, a, p, d…) traces faithfully.
+    ``outer_only=True`` uses ``cv2.RETR_CCOMP`` and keeps only top-level
+    contours (parent == -1), discarding hole boundaries for a silhouette-only
+    trace.
     """
     if outer_only:
         contours, hierarchy = cv2.findContours(
@@ -256,7 +257,7 @@ def image_to_outlines(
     edge_mode: bool = False,
     canny_low: int = 50,
     canny_high: int = 150,
-    outer_only: bool = True,
+    outer_only: bool = False,
     on_progress: Callable[[int, str], None] | None = None,
 ) -> tuple[Image.Image, list[Poly], int, int]:
     """
@@ -275,8 +276,8 @@ def image_to_outlines(
     canny_low / canny_high:
         Lower / upper hysteresis thresholds for Canny (edge mode only).
     outer_only:
-        Discard inner hole contours so shapes like letters A/B/D/O do not
-        produce spurious inner outlines.  Defaults to ``True``.
+        Discard inner hole contours for a silhouette-only trace.  Defaults to
+        ``False`` so letter counters (o, a, p, d…) are included.
     on_progress:
         Optional ``(percent: int, label: str) -> None`` callback invoked at
         each pipeline step.  Safe to emit a Qt signal from a background thread.

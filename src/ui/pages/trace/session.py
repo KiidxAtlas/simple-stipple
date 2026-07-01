@@ -61,7 +61,7 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
     page._edge_mode_cb.setChecked(bool(state.get("edge_mode", False)))
     page._canny_low.setText(str(state.get("canny_low", "50")))
     page._canny_high.setText(str(state.get("canny_high", "150")))
-    page._outer_only_cb.setChecked(bool(state.get("outer_only", True)))
+    page._outer_only_cb.setChecked(bool(state.get("outer_only", False)))
     page._simplify.setText(str(state.get("simplify", "2.0")))
     page._min_area.setText(str(state.get("min_area", "100")))
     page._max_area.setText(str(state.get("max_area", "")))

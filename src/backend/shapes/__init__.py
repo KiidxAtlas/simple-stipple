@@ -1,12 +1,10 @@
-"""Shape system for the curve redesign.
-
-Provides polymorphic shape objects to replace the old polyline + metadata system.
-"""
+"""Shape system for the curve redesign."""
 
 from src.backend.shapes.factory import ShapeFactory
 from src.backend.shapes.shape import (
     ArcShape,
     CircleShape,
+    CircleShape as Circle,
     EllipseShape,
     LineShape,
     Point,
@@ -18,6 +16,7 @@ from src.backend.shapes.shape import (
 
 __all__ = [
     "ArcShape",
+    "Circle",
     "CircleShape",
     "EllipseShape",
     "LineShape",

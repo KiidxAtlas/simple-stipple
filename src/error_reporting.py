@@ -55,6 +55,9 @@ def report_error(title: str, exc: BaseException) -> None:
         # Fall back to the last non-empty line from the full detail.
         lines = [ln for ln in detail.splitlines() if ln.strip()]
         snippet = lines[-1] if lines else "Unexpected error"
+    # Guard against empty/whitespace-only exception message producing "None"
+    if snippet == "None":
+        snippet = "Unexpected error"
     _BUS.error_raised.emit(title, snippet)
 
 

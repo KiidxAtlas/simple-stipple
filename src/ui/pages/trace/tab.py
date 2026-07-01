@@ -337,12 +337,12 @@ class TracePage(BasePage):
         self._invert_cb.setToolTip("Swap foreground/background before tracing")
         self._invert_cb.stateChanged.connect(self._schedule_trace)
 
-        self._outer_only_cb = QCheckBox("Outer contours only")
-        self._outer_only_cb.setChecked(True)
+        self._outer_only_cb = QCheckBox("Outer contours only (skip holes)")
+        self._outer_only_cb.setChecked(False)
         self._outer_only_cb.setToolTip(
-            "Only extract the outermost outlines of shapes.\n"
-            "Prevents inner holes (e.g. inside letters A, B, O) from\n"
-            "appearing as extra separate outlines."
+            "Only extract the outermost outlines of shapes, discarding\n"
+            "interior holes — e.g. the counters inside letters A, B, O, a,\n"
+            "p, d. Leave unchecked to trace lettering faithfully."
         )
         self._outer_only_cb.stateChanged.connect(self._schedule_trace)
 

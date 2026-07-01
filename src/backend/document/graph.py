@@ -114,11 +114,11 @@ class DocumentGraph:
     ) -> list[list[tuple[float, float]]]:
         return [list(poly) for poly in polylines]
 
-    def ordered_layer_names(self) -> list[str]:
+    def _ordered_layer_names(self) -> list[str]:
         return [name for name in self.layer_order if name in self.layers]
 
     def iter_layers(self) -> list[tuple[str, LayerNode]]:
-        return [(name, self.layers[name]) for name in self.ordered_layer_names()]
+        return [(name, self.layers[name]) for name in self._ordered_layer_names()]
 
     def _purge_orphan_points(self) -> None:
         """Remove points no longer referenced by any segment.
@@ -224,7 +224,7 @@ class DocumentGraph:
 
         seg_ids = [sid for sid, seg in self.segments.items() if seg.layer == name]
         for sid in seg_ids:
-            self.remove_segment(sid)
+            self._remove_segment(sid)
 
         derivation_ids = [
             did
@@ -242,11 +242,11 @@ class DocumentGraph:
         if name not in self.layers:
             raise ValueError(f"Layer does not exist: {name}")
 
-        ordered = self.ordered_layer_names()
+        ordered = self._ordered_layer_names()
         if name not in ordered:
             return
         ordered.remove(name)
-        new_index = max(1, min(int(new_index), len(ordered)))
+        new_index = max(0, min(int(new_index), len(ordered)))
         ordered.insert(new_index, name)
         self.layer_order = ordered
 
@@ -284,7 +284,7 @@ class DocumentGraph:
                 if p0 is None or p1 is None:
                     continue
                 moved_polylines.append([(p0.x, p0.y), (p1.x, p1.y)])
-                self.remove_segment(sid)
+                self._remove_segment(sid)
         else:
             source = self.ensure_layer(source_layer)
             poly_refs = sorted(
@@ -338,20 +338,20 @@ class DocumentGraph:
         if layer.polylines:
             return self._clone_polylines(layer.polylines)
         if name == "geometry" and fallback_geometry:
-            return self.geometry_polylines()
+            return self._geometry_polylines()
         return []
 
-    def mark_layer_dirty(self, name: str) -> None:
+    def _mark_layer_dirty(self, name: str) -> None:
         self.ensure_layer(name).dirty = True
 
     # ── Primitives ────────────────────────────────────────────────────────
 
-    def add_point(self, x: float, y: float) -> PointNode:
+    def _add_point(self, x: float, y: float) -> PointNode:
         p = PointNode(id=self._next_id(), x=x, y=y)
         self.points[p.id] = p
         return p
 
-    def find_point_near(self, x: float, y: float, tolerance: float) -> PointNode | None:
+    def _find_point_near(self, x: float, y: float, tolerance: float) -> PointNode | None:
         best: PointNode | None = None
         best_d = tolerance
         for point in self.points.values():
@@ -361,7 +361,7 @@ class DocumentGraph:
                 best_d = d
         return best
 
-    def add_segment(self, p0: int, p1: int, *, layer: str = "geometry") -> SegmentNode:
+    def _add_segment(self, p0: int, p1: int, *, layer: str = "geometry") -> SegmentNode:
         if p0 not in self.points or p1 not in self.points:
             raise ValueError("Segment endpoints must exist as points.")
         seg = SegmentNode(id=self._next_id(), p0=p0, p1=p1, layer=layer)
@@ -369,7 +369,7 @@ class DocumentGraph:
         self.ensure_layer(layer)
         return seg
 
-    def remove_segment(self, sid: int) -> None:
+    def _remove_segment(self, sid: int) -> None:
         self.segments.pop(sid, None)
         # Drop constraint edges targeting this segment
         to_remove = [
@@ -381,7 +381,7 @@ class DocumentGraph:
             self.constraints.pop(cid, None)
         self._purge_orphan_points()
 
-    def geometry_polylines(self) -> list[list[tuple[float, float]]]:
+    def _geometry_polylines(self) -> list[list[tuple[float, float]]]:
         polylines: list[list[tuple[float, float]]] = []
         for seg in sorted(self.segments.values(), key=lambda s: s.id):
             p0 = self.points.get(seg.p0)
@@ -414,17 +414,17 @@ class DocumentGraph:
                 continue
 
             if merge_points:
-                existing = self.find_point_near(x, y, tolerance)
+                existing = self._find_point_near(x, y, tolerance)
                 if existing is not None:
                     point_ids.append(existing.id)
                     continue
-            point_ids.append(self.add_point(x, y).id)
+            point_ids.append(self._add_point(x, y).id)
 
         seg_ids: list[int] = []
         for i in range(len(point_ids) - 1):
             if point_ids[i] == point_ids[i + 1]:
                 continue
-            seg = self.add_segment(point_ids[i], point_ids[i + 1], layer=layer)
+            seg = self._add_segment(point_ids[i], point_ids[i + 1], layer=layer)
             seg_ids.append(seg.id)
         return seg_ids
 
@@ -469,69 +469,80 @@ class DocumentGraph:
         )
         self.actions.append(rec)
         for layer in rec.invalidated_layers:
-            self.mark_layer_dirty(layer)
+            self._mark_layer_dirty(layer)
         return rec
 
     # ── Serialization ────────────────────────────────────────────────────
 
     def snapshot(self) -> dict[str, Any]:
-        return {
-            "points": {pid: (p.x, p.y) for pid, p in self.points.items()},
-            "segments": {
-                sid: (seg.p0, seg.p1, seg.layer) for sid, seg in self.segments.items()
-            },
-            "params": {
-                name: (node.id, node.value) for name, node in self.params.items()
-            },
-            "sources": {
-                sid: {
-                    "kind": src.kind,
-                    "payload": dict(src.payload),
-                }
-                for sid, src in self.sources.items()
-            },
-            "layers": {
-                name: {
-                    "id": layer.id,
-                    "polylines": self._clone_polylines(layer.polylines),
-                    "entity_refs": list(layer.entity_refs),
-                    "dirty": layer.dirty,
-                }
-                for name, layer in self.iter_layers()
-            },
-            "layer_order": list(self.ordered_layer_names()),
-            "constraints": {
-                cid: {
-                    "kind": edge.kind,
-                    "source": edge.source,
-                    "target": edge.target,
-                    "data": dict(edge.data),
-                }
-                for cid, edge in self.constraints.items()
-            },
-            "derivations": {
-                did: {
-                    "source_layer": edge.source_layer,
-                    "target_layer": edge.target_layer,
-                    "operator_name": edge.operator_name,
-                    "data": dict(edge.data),
-                }
-                for did, edge in self.derivations.items()
-            },
-            "actions": [
-                {
-                    "id": rec.id,
-                    "action_type": rec.action_type,
-                    "payload": dict(rec.payload),
-                    "touched": list(rec.touched),
-                    "invalidated_layers": list(rec.invalidated_layers),
-                    "user_initiated": rec.user_initiated,
-                }
-                for rec in self.actions
-            ],
-            "active_layer": self.active_layer,
-            "next_id": next(self._id_counter),
-        }
+        # Capture the current next_id without consuming it, so that
+        # calling snapshot() multiple times does not advance the counter.
+        next_id_value = next(self._id_counter)
+        # Put it back by creating a new counter starting from the same value.
+        saved_counter = self._id_counter
+        self._id_counter = count(next_id_value)
+        try:
+            result = {
+                "points": {pid: (p.x, p.y) for pid, p in self.points.items()},
+                "segments": {
+                    sid: (seg.p0, seg.p1, seg.layer) for sid, seg in self.segments.items()
+                },
+                "params": {
+                    name: (node.id, node.value) for name, node in self.params.items()
+                },
+                "sources": {
+                    sid: {
+                        "kind": src.kind,
+                        "payload": dict(src.payload),
+                    }
+                    for sid, src in self.sources.items()
+                },
+                "layers": {
+                    name: {
+                        "id": layer.id,
+                        "polylines": self._clone_polylines(layer.polylines),
+                        "entity_refs": list(layer.entity_refs),
+                        "dirty": layer.dirty,
+                    }
+                    for name, layer in self.iter_layers()
+                },
+                "layer_order": list(self._ordered_layer_names()),
+                "constraints": {
+                    cid: {
+                        "kind": edge.kind,
+                        "source": edge.source,
+                        "target": edge.target,
+                        "data": dict(edge.data),
+                    }
+                    for cid, edge in self.constraints.items()
+                },
+                "derivations": {
+                    did: {
+                        "source_layer": edge.source_layer,
+                        "target_layer": edge.target_layer,
+                        "operator_name": edge.operator_name,
+                        "data": dict(edge.data),
+                    }
+                    for did, edge in self.derivations.items()
+                },
+                "actions": [
+                    {
+                        "id": rec.id,
+                        "action_type": rec.action_type,
+                        "payload": dict(rec.payload),
+                        "touched": list(rec.touched),
+                        "invalidated_layers": list(rec.invalidated_layers),
+                        "user_initiated": rec.user_initiated,
+                    }
+                    for rec in self.actions
+                ],
+                "active_layer": self.active_layer,
+                "next_id": next_id_value,
+            }
+        finally:
+            # Always restore the real counter, even if serialization fails.
+            self._id_counter = saved_counter
+        return result
 
     def restore(self, state: dict[str, Any]) -> None:
         self.points.clear()
@@ -586,8 +597,16 @@ class DocumentGraph:
 
         for cid, payload in state.get("constraints", {}).items():
             cid_i = int(cid)
-            source = tuple(payload.get("source", ("point", 0)))
-            target = tuple(payload.get("target", ("point", 0)))
+            src_raw = payload.get("source")
+            tgt_raw = payload.get("target")
+            if isinstance(src_raw, tuple):
+                source = src_raw
+            else:
+                source = ("point", 0)
+            if isinstance(tgt_raw, tuple):
+                target = tgt_raw
+            else:
+                target = ("point", 0)
             # Drop dangling constraint edges whose endpoints don't exist.
             if not self._entity_ref_exists(source) or not self._entity_ref_exists(
                 target
@@ -596,8 +615,8 @@ class DocumentGraph:
             self.constraints[cid_i] = ConstraintEdge(
                 id=cid_i,
                 kind=str(payload.get("kind", "")),
-                source=source,  # type: ignore[arg-type]
-                target=target,  # type: ignore[arg-type]
+                source=source,
+                target=target,
                 data=dict(payload.get("data", {})),
             )
 

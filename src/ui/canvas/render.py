@@ -36,62 +36,24 @@ from src.backend.geometry.spline import build_spline_poly
 from src.constants import DIM, POLY, SEL
 from src.ui.canvas._constants import (
     BADGE_BG as _BADGE_BG,
-)
-from src.ui.canvas._constants import (
     BADGE_DIM as _BADGE_DIM,
-)
-from src.ui.canvas._constants import (
     BADGE_TEXT as _BADGE_TEXT,
-)
-from src.ui.canvas._constants import (
     DRAW_COLOR as _DRAW_COLOR,
-)
-from src.ui.canvas._constants import (
     DRAW_LINE_W as _DRAW_LINE_W,
-)
-from src.ui.canvas._constants import (
     DRAW_VERT_R as _DRAW_VERT_R,
-)
-from src.ui.canvas._constants import (
     GRID_AXIS as _GRID_AXIS,
-)
-from src.ui.canvas._constants import (
     GRID_MAJOR as _GRID_MAJOR,
-)
-from src.ui.canvas._constants import (
     GRID_MINOR as _GRID_MINOR,
-)
-from src.ui.canvas._constants import (
     GUIDE_COLOR as _GUIDE_COLOR,
-)
-from src.ui.canvas._constants import (
     HANDLE as _HANDLE,
-)
-from src.ui.canvas._constants import (
     HANDLE_ACTIVE as _HANDLE_ACTIVE,
-)
-from src.ui.canvas._constants import (
     HANDLE_HOVER as _HANDLE_HOVER,
-)
-from src.ui.canvas._constants import (
     HANDLE_R as _HANDLE_R,
-)
-from src.ui.canvas._constants import (
     MEASURE_COLOR as _MEASURE_COLOR,
-)
-from src.ui.canvas._constants import (
     ORTHO_COLOR as _ORTHO_COLOR,
-)
-from src.ui.canvas._constants import (
     RUBBER_W as _RUBBER_W,
-)
-from src.ui.canvas._constants import (
     SELECT_PT as _SELECT_PT,
-)
-from src.ui.canvas._constants import (
     SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE,
-)
-from src.ui.canvas._constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
 
@@ -152,6 +114,92 @@ class CanvasRenderer:
         target_rect = QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized()
         source_rect = QRectF(self._bg_pixmap.rect())
         painter.drawPixmap(target_rect, self._bg_pixmap, source_rect)
+
+    def _paint_ghost_polys(
+        self, painter: QPainter, visible: QRectF
+    ) -> None:
+        if not self._ghost_polys or not self._ghost_visible:
+            return
+        ghost_color = QColor(POLY)
+        ghost_color.setAlpha(90)
+        ghost_pen = QPen(ghost_color, 1.0)
+        ghost_pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(ghost_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for poly in self._ghost_polys:
+            if len(poly) < 2:
+                continue
+            _gp_rect = self._poly_rect_for_culling(poly)
+            if not visible.intersects(_gp_rect):
+                continue
+            gpath = QPainterPath()
+            gx, gy = self._w2c(*poly[0])
+            gpath.moveTo(gx, gy)
+            for pt in poly[1:]:
+                px, py_ = self._w2c(*pt)
+                gpath.lineTo(px, py_)
+            if (
+                len(poly) >= 3
+                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1])
+                < 0.5
+            ):
+                gpath.closeSubpath()
+            painter.drawPath(gpath)
+
+    def _paint_main_polys(self, painter: QPainter, visible: QRectF) -> None:
+        for idx, poly in enumerate(self._polys):
+            if idx in self._hidden_polys:
+                continue
+            if len(poly) < 2:
+                continue
+            _poly_rect = self._poly_rect_for_culling(poly)
+            if not visible.intersects(_poly_rect):
+                continue
+            sel = idx in self._sel
+            is_construction = idx in self._construction_polys
+            is_locked = idx in self._locked_polys
+            if sel:
+                color = QColor(SEL)
+            elif idx in self._accent_polys:
+                color = QColor(self._accent_polys[idx])
+            elif is_construction:
+                color = QColor(_GUIDE_COLOR)
+            else:
+                color = QColor(POLY)
+            if is_locked:
+                color = QColor("#8b949e")
+            lw = 2.0 if sel else (1.2 if is_construction else 1.5)
+            pen = QPen(color, lw)
+            if is_construction or is_locked:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            render_poly = poly
+            if (
+                idx < len(self._entity_kinds)
+                and self._entity_kinds[idx] == "spline"
+                and len(poly) >= 2
+            ):
+                meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+                render_poly = build_spline_poly(
+                    poly,
+                    segments=int(meta.get("segments", 24)) if meta else 24,
+                    closed=bool(meta.get("closed", False)) if meta else False,
+                )
+                if len(render_poly) < 2:
+                    continue
+            path = QPainterPath()
+            sx, sy = self._w2c(*render_poly[0])
+            path.moveTo(sx, sy)
+            for pt in render_poly[1:]:
+                px, py_ = self._w2c(*pt)
+                path.lineTo(px, py_)
+            if (
+                len(poly) >= 3
+                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
+            ):
+                path.closeSubpath()
+            painter.drawPath(path)
 
     def _paint_grid(self, painter: QPainter, canvas_w: int, canvas_h: int) -> None:
         spacing = max(self._grid_spacing, 0.001)
@@ -601,6 +649,14 @@ class CanvasRenderer:
 
     def _paint_draw_preview_badges(self, painter: QPainter) -> None:
         outcomes = self._draw_preview_outcomes()
+
+    def _draw_preview_outcomes(self) -> list[str]:
+        """Return a list of badge labels to display during drawing preview.
+
+        Returns an empty list by default; subclasses can override for
+        custom badge behaviour (e.g. showing snap types).
+        """
+        return []
         if not outcomes or self._cursor_wx is None or self._cursor_wy is None:
             return
         cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
@@ -790,6 +846,39 @@ class CanvasRenderer:
         painter.drawLine(
             QPointF(mid_x, top), QPointF(rotate_center.x(), rotate_center.y())
         )
+
+    def _paint_selection_bbox(self, painter: QPainter, visible: QRectF) -> None:
+        if not self._sel or self._mode != "select":
+            self._gizmo_scale_rect = None
+            self._gizmo_rotate_rect = None
+            return
+        sel_pts = [
+            pt
+            for i in self._sel
+            if 0 <= i < len(self._polys)
+            for pt in self._polys[i]
+        ]
+        if not sel_pts:
+            self._gizmo_scale_rect = None
+            self._gizmo_rotate_rect = None
+            return
+        xs, ys = zip(*sel_pts)
+        bx0, by0 = self._w2c(min(xs), max(ys))
+        bx1, by1 = self._w2c(max(xs), min(ys))
+        if self._show_selection_bbox:
+            pad = 4
+            pen = QPen(QColor(SEL), 1.0, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(
+                QRectF(
+                    bx0 - pad,
+                    by0 - pad,
+                    bx1 - bx0 + 2 * pad,
+                    by1 - by0 + 2 * pad,
+                )
+            )
+        self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
 
     def _paint_inference_lines(self, painter: QPainter) -> None:
         """Draw dotted inference lines showing H/V alignment with existing endpoints."""
@@ -995,119 +1084,10 @@ class CanvasRenderer:
             QPointF(max(_tl_wx, _br_wx), max(_tl_wy, _br_wy)),
         )
 
-        # Ghost polylines (context-only overlay, drawn beneath the main polys).
-        if self._ghost_polys and self._ghost_visible:
-            ghost_color = QColor(POLY)
-            ghost_color.setAlpha(90)
-            ghost_pen = QPen(ghost_color, 1.0)
-            ghost_pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(ghost_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            for poly in self._ghost_polys:
-                if len(poly) < 2:
-                    continue
-                _gp_rect = self._poly_rect_for_culling(poly)
-                if not _visible_world.intersects(_gp_rect):
-                    continue
-                gpath = QPainterPath()
-                gx, gy = self._w2c(*poly[0])
-                gpath.moveTo(gx, gy)
-                for pt in poly[1:]:
-                    px, py_ = self._w2c(*pt)
-                    gpath.lineTo(px, py_)
-                if (
-                    len(poly) >= 3
-                    and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1])
-                    < 0.5
-                ):
-                    gpath.closeSubpath()
-                painter.drawPath(gpath)
+        self._paint_ghost_polys(painter, _visible_world)
+        self._paint_main_polys(painter, _visible_world)
 
-        # Polylines
-        for idx, poly in enumerate(self._polys):
-            if idx in self._hidden_polys:
-                continue
-            if len(poly) < 2:
-                continue
-            # Frustum culling: skip polylines entirely outside the viewport
-            _poly_rect = self._poly_rect_for_culling(poly)
-            if not _visible_world.intersects(_poly_rect):
-                continue
-            sel = idx in self._sel
-            is_construction = idx in self._construction_polys
-            is_locked = idx in self._locked_polys
-            if sel:
-                color = QColor(SEL)
-            elif idx in self._accent_polys:
-                color = QColor(self._accent_polys[idx])
-            elif is_construction:
-                color = QColor(_GUIDE_COLOR)
-            else:
-                color = QColor(POLY)
-            if is_locked:
-                color = QColor("#8b949e")
-            lw = 2.0 if sel else (1.2 if is_construction else 1.5)
-            pen = QPen(color, lw)
-            if is_construction or is_locked:
-                pen.setStyle(Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            render_poly = poly
-            if (
-                idx < len(self._entity_kinds)
-                and self._entity_kinds[idx] == "spline"
-                and len(poly) >= 2
-            ):
-                meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
-                render_poly = build_spline_poly(
-                    poly,
-                    segments=int(meta.get("segments", 24)) if meta else 24,
-                    closed=bool(meta.get("closed", False)) if meta else False,
-                )
-                if len(render_poly) < 2:
-                    continue
-            path = QPainterPath()
-            sx, sy = self._w2c(*render_poly[0])
-            path.moveTo(sx, sy)
-            for pt in render_poly[1:]:
-                px, py_ = self._w2c(*pt)
-                path.lineTo(px, py_)
-            if (
-                len(poly) >= 3
-                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
-            ):
-                path.closeSubpath()
-            painter.drawPath(path)
-
-        # Selection bounding box + transform gizmo
-        if self._sel and self._mode == "select":
-            sel_pts = [
-                pt for i in self._sel if i < len(self._polys) for pt in self._polys[i]
-            ]
-            if sel_pts:
-                xs, ys = zip(*sel_pts)
-                bx0, by0 = self._w2c(min(xs), max(ys))
-                bx1, by1 = self._w2c(max(xs), min(ys))
-                if self._show_selection_bbox:
-                    pad = 4
-                    pen = QPen(QColor(SEL), 1.0, Qt.PenStyle.DashLine)
-                    painter.setPen(pen)
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.drawRect(
-                        QRectF(
-                            bx0 - pad,
-                            by0 - pad,
-                            bx1 - bx0 + 2 * pad,
-                            by1 - by0 + 2 * pad,
-                        )
-                    )
-                self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
-            else:
-                self._gizmo_scale_rect = None
-                self._gizmo_rotate_rect = None
-        else:
-            self._gizmo_scale_rect = None
-            self._gizmo_rotate_rect = None
+        self._paint_selection_bbox(painter, _visible_world)
 
         # Select-mode dimensions (Fusion-like quick readout)
         if self._mode == "select" and self._sel:
@@ -1126,27 +1106,29 @@ class CanvasRenderer:
                 self._sel_badge_h_rect = self._draw_badge(
                     painter, max(cx0, cx1) + 26, my, f"H {height:.2f}", 9
                 )
-                if len(self._sel) == 1:
-                    idx = next(iter(self._sel))
-                    if 0 <= idx < len(self._polys):
-                        poly = self._polys[idx]
-                        if len(poly) == 2:
-                            (ax, ay), (bx, by) = poly
-                            llen = math.hypot(bx - ax, by - ay)
-                            ang = math.degrees(math.atan2(by - ay, bx - ax))
-                            self._draw_badge(
-                                painter,
-                                mx,
-                                max(cy0, cy1) + 16,
-                                f"L {llen:.2f}  ∠ {ang:.1f}°",
-                                9,
-                            )
+                self._sel_badge_l_rect = None
+                self._sel_badge_a_rect = None
+                line_idx = self._selected_single_line()
+                if line_idx is not None:
+                    (ax, ay), (bx, by) = self._polys[line_idx]
+                    llen = math.hypot(bx - ax, by - ay)
+                    ang = math.degrees(math.atan2(by - ay, bx - ax))
+                    self._sel_badge_l_rect = self._draw_badge(
+                        painter, mx - 34, max(cy0, cy1) + 16, f"L {llen:.2f}", 9
+                    )
+                    self._sel_badge_a_rect = self._draw_badge(
+                        painter, mx + 34, max(cy0, cy1) + 16, f"∠ {ang:.1f}°", 9
+                    )
             else:
                 self._sel_badge_w_rect = None
                 self._sel_badge_h_rect = None
+                self._sel_badge_l_rect = None
+                self._sel_badge_a_rect = None
         else:
             self._sel_badge_w_rect = None
             self._sel_badge_h_rect = None
+            self._sel_badge_l_rect = None
+            self._sel_badge_a_rect = None
 
         # Edit mode: vertex handles
         if self._mode == "edit":
@@ -1396,11 +1378,19 @@ class CanvasRenderer:
 
         dist_edit = self._make_hud_edit("d:", 70)
         dist_edit.returnPressed.connect(self._apply_dim_input)
+        # textEdited fires only on user keystrokes (not setText), so the dirty
+        # flag tracks genuine typing; clearing the field resumes live updates.
+        dist_edit.textEdited.connect(
+            lambda t: setattr(self, "_dim_distance_dirty", bool(t.strip()))
+        )
         self._dim_distance_edit = dist_edit
         self._dim_distance_dirty = False
 
         angle_edit = self._make_hud_edit("\u2220:", 55)
         angle_edit.returnPressed.connect(self._apply_dim_input)
+        angle_edit.textEdited.connect(
+            lambda t: setattr(self, "_dim_angle_dirty", bool(t.strip()))
+        )
         self._dim_angle_edit = angle_edit
         self._dim_angle_dirty = False
 
@@ -1420,13 +1410,27 @@ class CanvasRenderer:
     # ── Inline selection-badge dimension editor ───────────────────────────────
 
     def _show_sel_dim_editor(self, axis: str, rect: QRectF) -> None:
-        """Show a floating QLineEdit over the W or H badge for direct editing."""
+        """Show a floating QLineEdit over a selection badge for direct editing.
+
+        ``axis`` is "w"/"h" (bounding-box size) or, for a single selected
+        2-point line, "l" (length) / "a" (absolute angle in degrees).
+        """
         self._dismiss_sel_dim_editor()
-        bounds = self._selection_bounds()
-        if bounds is None:
-            return
-        x0, y0, x1, y1 = bounds
-        cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
+        if axis in ("l", "a"):
+            line_idx = self._selected_single_line()
+            if line_idx is None:
+                return
+            (ax, ay), (bx, by) = self._polys[line_idx]
+            if axis == "l":
+                cur_val = math.hypot(bx - ax, by - ay)
+            else:
+                cur_val = math.degrees(math.atan2(by - ay, bx - ax))
+        else:
+            bounds = self._selection_bounds()
+            if bounds is None:
+                return
+            x0, y0, x1, y1 = bounds
+            cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
 
         edit = self._make_hud_edit(
             width=max(int(rect.width()) + 10, 70),
@@ -1457,12 +1461,19 @@ class CanvasRenderer:
             val = float(text)
         except ValueError:
             return
+        if axis == "a":
+            # Absolute angle: any value is valid (normalized by trig)
+            self._set_selected_line_angle(val)
+            self._show_flash("Angle updated", 900)
+            return
         if val <= 0:
             return
         if axis == "w":
             self._set_selected_width(val)
-        else:
+        elif axis == "h":
             self._set_selected_height(val)
+        elif axis == "l":
+            self._set_selected_line_length(val)
         self._show_flash("Dimension updated", 900)
 
     def _dismiss_sel_dim_editor(self) -> None:
@@ -1496,11 +1507,51 @@ class CanvasRenderer:
             self._dim_angle_edit.move(int(cx + dx), int(cy + dy + 24))
 
     def _update_dim_values(self, distance: float, angle: float) -> None:
-        """Update displayed values in the dim inputs, unless user has typed."""
+        """Update displayed values in the dim inputs, unless user has typed.
+
+        When a field is focused but untouched, keep its text selected so the
+        next keystroke replaces the live value instead of appending to it.
+        """
         if self._dim_distance_edit is not None and not self._dim_distance_dirty:
             self._dim_distance_edit.setText(f"{distance:.2f}")
+            if self._dim_distance_edit.hasFocus():
+                self._dim_distance_edit.selectAll()
         if self._dim_angle_edit is not None and not self._dim_angle_dirty:
             self._dim_angle_edit.setText(f"{angle:.1f}")
+            if self._dim_angle_edit.hasFocus():
+                self._dim_angle_edit.selectAll()
+
+    def _typed_draw_angle(self) -> float | None:
+        """Return the user-typed segment angle (deg) if the angle field is dirty.
+
+        Returns ``None`` when the field is auto-populated (not dirty) or does not
+        parse, so callers only lock to a value the user explicitly entered.
+        """
+        if not getattr(self, "_dim_angle_dirty", False):
+            return None
+        if self._dim_angle_edit is None:
+            return None
+        text = self._dim_angle_edit.text().strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _typed_draw_distance(self) -> float | None:
+        """Return the user-typed segment length if the distance field is dirty."""
+        if not getattr(self, "_dim_distance_dirty", False):
+            return None
+        if self._dim_distance_edit is None:
+            return None
+        text = self._dim_distance_edit.text().strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
 
     def _apply_dim_input(self) -> None:
         """Read distance/angle from the HUD fields and place a point."""
@@ -1516,9 +1567,6 @@ class CanvasRenderer:
             angle_text = (
                 self._dim_angle_edit.text().strip() if self._dim_angle_edit else ""
             )
-            if not dist_text:
-                return
-            dist = float(dist_text)
             if angle_text:
                 angle_deg = float(angle_text)
             elif self._cursor_wx is not None and self._cursor_wy is not None:
@@ -1530,6 +1578,19 @@ class CanvasRenderer:
                 )
             else:
                 angle_deg = 0.0
+            if dist_text:
+                dist = float(dist_text)
+            elif self._cursor_wx is not None and self._cursor_wy is not None:
+                # Angle-only entry: project the cursor onto the typed-angle ray
+                # so the length still tracks the pointer.
+                ar = math.radians(angle_deg)
+                vx = self._cursor_wx - last_wx
+                vy = self._cursor_wy - last_wy
+                dist = max(0.0, vx * math.cos(ar) + vy * math.sin(ar))
+            else:
+                return
+            if dist <= 0:
+                return
             angle_rad = math.radians(angle_deg)
             new_x = last_wx + dist * math.cos(angle_rad)
             new_y = last_wy + dist * math.sin(angle_rad)

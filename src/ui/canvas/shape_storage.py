@@ -11,7 +11,7 @@ class ShapeStorage:
     """Ordered Shape objects derived from the canvas polyline state.
 
     Rebuilt by ``PolylineView._sync_shape_storage_from_entities`` after each
-    edit; consumed by ``_SnapMixin`` for shape-aware snap candidates.
+     edit; consumed by PolylineView for shape-aware snap candidates.
     """
 
     def __init__(self):
