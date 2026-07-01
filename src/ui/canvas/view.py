@@ -1891,6 +1891,7 @@ class PolylineView(
     ) -> tuple[int, int, tuple[float, float]] | None:
         best_dist = _EDGE_HIT
         wx, wy = self._c2w(cx, cy)
+        best: tuple[int, int, tuple[float, float]] | None = None
         for pi, poly in enumerate(self._polys):
             if pi in self._hidden_polys:
                 continue
@@ -1922,6 +1923,7 @@ class PolylineView(
             return None
         best_dist = 8.0
         wx, wy = self._c2w(cx, cy)
+        best: int | None = None
         for pi, poly in enumerate(self._ghost_polys):
             dist = self._closest_point_on_poly(poly, wx, wy, cx, cy)
             if dist is not None and dist < best_dist:

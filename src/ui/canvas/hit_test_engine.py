@@ -169,6 +169,7 @@ class HitTestEngine:
         self, cx: float, cy: float, polys: list, hidden_polys: set[int], w2c: callable[[float, float], tuple[float, float]], edge_hit: float
     ) -> tuple[int, int, tuple[float, float]] | None:
         best_dist = edge_hit
+        best: tuple[int, int, tuple[float, float]] | None = None
         for pi, poly in enumerate(polys):
             if pi in hidden_polys:
                 continue
