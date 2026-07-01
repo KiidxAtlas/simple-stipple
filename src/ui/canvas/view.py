@@ -30,7 +30,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QGraphicsScene,
     QGraphicsView,
+    QInputDialog,
     QLineEdit,
+    QMenu,
     QWidget,
 )
 from shapely.errors import GEOSException
@@ -4623,3 +4625,480 @@ class PolylineView(
         self._refresh_draw_sidebar_state()
         self._show_flash(f"Tool: {tool}", 650)
         self._redraw()
+
+    # ── Second restoration pass: methods referenced as callbacks
+    #    (menu actions) that the call-only audit missed. ──
+
+    def _group_selected(self) -> None:
+        if len(self._sel) < 2:
+            self._show_flash("Select 2+ shapes to group", 1000)
+            return
+        gid = self._next_group_id
+        self._next_group_id += 1
+        for idx in self._sel:
+            self._groups[idx] = gid
+        self._show_flash(f"Grouped {len(self._sel)} shapes", 900)
+        self._notify()
+
+    def _ungroup_selected(self) -> None:
+        ungrouped = {self._groups.pop(idx) for idx in self._sel if idx in self._groups}
+        if not ungrouped:
+            return
+        # Also remove other group members if their whole group is being dissolved
+        stale = {idx for idx, gid in list(self._groups.items()) if gid in ungrouped}
+        for idx in stale:
+            self._groups.pop(idx, None)
+        self._show_flash("Ungrouped", 700)
+        self._notify()
+
+    def _send_selected_to_draft(self) -> None:
+        cb = getattr(self, "_send_selected_to_draft_cb", None)
+        if not callable(cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        cb(payload)
+        self._show_flash("Sent to Draft", 900)
+
+    def _send_selected_to_pattern(self) -> None:
+        cb = getattr(self, "_send_selected_to_pattern_cb", None)
+        if not callable(cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        cb(payload)
+        self._show_flash("Sent to Pattern Fill", 900)
+
+    def _use_selected_as_fill_pattern(self) -> None:
+        cb = getattr(self, "_use_selected_as_fill_pattern_cb", None)
+        if not callable(cb):
+            return
+        selected = self.get_selected()
+        if not selected:
+            self._show_flash("Select shape(s) first", 1000)
+            return
+        payload = [[(x, y) for x, y in poly] for poly in selected]
+        cb(payload)
+        self._show_flash("Sent as fill pattern", 900)
+
+    def explode_selected_to_segments(self) -> int:
+        """Split each selected multi-vertex polyline into individual 2-pt line segments.
+
+        Returns the number of new segments created.
+        """
+        indices = self._mutable_selected_indices()
+        if not indices:
+            return 0
+        # Only explode polylines with more than 2 points (1 segment is already atomic).
+        to_explode = [i for i in indices if len(self._polys[i]) > 2]
+        if not to_explode:
+            return 0
+        self._push_undo()
+        new_polys: list[list[tuple[float, float]]] = []
+        new_construction: set[int] = set()
+        new_kinds: list[str] = []
+        new_meta: list[dict[str, Any] | None] = []
+        new_sel: set[int] = set()
+        for i, poly in enumerate(self._polys):
+            is_construction = i in self._construction_polys
+            kind = self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
+            meta = self._entity_meta[i] if i < len(self._entity_meta) else None
+            if i in to_explode:
+                pts = list(poly)
+                is_closed = False
+                # If closed (first == last) drop the duplicate closing point first
+                if (
+                    len(pts) >= 3
+                    and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1])
+                    < 1e-6
+                ):
+                    pts = pts[:-1]
+                    is_closed = True
+                seg_count = len(pts) if is_closed else max(0, len(pts) - 1)
+                for j in range(seg_count):
+                    seg = [pts[j], pts[(j + 1) % len(pts)]]
+                    si = len(new_polys)
+                    new_polys.append(seg)
+                    new_kinds.append("line")
+                    new_meta.append({"start": seg[0], "end": seg[1]})
+                    if is_construction:
+                        new_construction.add(si)
+                    new_sel.add(si)
+            else:
+                ni = len(new_polys)
+                new_polys.append(poly)
+                new_kinds.append(kind)
+                new_meta.append(deepcopy(meta) if meta is not None else None)
+                if is_construction:
+                    new_construction.add(ni)
+        self._polys = new_polys
+        self._entity_kinds = new_kinds
+        self._entity_meta = new_meta
+        self._construction_polys = new_construction
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_sel)
+
+    def merge_selected_segments_to_objects(self) -> int:
+        """Merge selected geometry by segment connectivity.
+
+        Accepts a mix of atomic 2-point segments and multi-vertex polylines.
+        Selected polylines are decomposed into their constituent segments first,
+        then rebuilt into one or more connected objects.
+        """
+        indices = self._mutable_selected_indices()
+        if len(indices) < 2:
+            return 0
+
+        def _eq(a: tuple[float, float], b: tuple[float, float]) -> bool:
+            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
+        segs: list[tuple[tuple[float, float], tuple[float, float], bool]] = []
+        for i in indices:
+            poly = self._polys[i]
+            if len(poly) < 2:
+                continue
+            is_construction = i in self._construction_polys
+            pts = list(poly)
+            is_closed = False
+            if (
+                len(pts) >= 3
+                and math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) < 1e-6
+            ):
+                pts = pts[:-1]
+                is_closed = True
+            if len(pts) < 2:
+                continue
+            seg_count = len(pts) if is_closed else max(0, len(pts) - 1)
+            for j in range(seg_count):
+                a = pts[j]
+                b = pts[(j + 1) % len(pts)]
+                if _eq(a, b):
+                    continue
+                segs.append((a, b, is_construction))
+
+        if len(segs) < 2:
+            return 0
+
+        sel_set = set(indices)
+
+        self._push_undo()
+
+        merged_polys: list[tuple[list[tuple[float, float]], bool]] = []
+        used = [False] * len(segs)
+
+        for si, seg in enumerate(segs):
+            if used[si]:
+                continue
+            used[si] = True
+            chain = [seg[0], seg[1]]
+            chain_construction = seg[2]
+
+            changed = True
+            while changed:
+                changed = False
+                for j, s in enumerate(segs):
+                    if used[j]:
+                        continue
+                    a, b = s[0], s[1]
+                    head, tail = chain[0], chain[-1]
+                    if _eq(tail, a):
+                        chain.append(b)
+                    elif _eq(tail, b):
+                        chain.append(a)
+                    elif _eq(head, b):
+                        chain.insert(0, a)
+                    elif _eq(head, a):
+                        chain.insert(0, b)
+                    else:
+                        continue
+                    used[j] = True
+                    chain_construction = chain_construction or s[2]
+                    changed = True
+                    break
+
+            if len(chain) >= 3 and _eq(chain[0], chain[-1]):
+                # normalize explicit closure point
+                chain[-1] = chain[0]
+            merged_polys.append((
+                self._normalize_merged_chain(chain),
+                chain_construction,
+            ))
+
+        kept_polys: list[list[tuple[float, float]]] = []
+        kept_construction: set[int] = set()
+        for i, poly in enumerate(self._polys):
+            if i in sel_set:
+                continue
+            ni = len(kept_polys)
+            kept_polys.append(poly)
+            if i in self._construction_polys:
+                kept_construction.add(ni)
+
+        new_sel: set[int] = set()
+        for poly, is_construction in merged_polys:
+            ni = len(kept_polys)
+            kept_polys.append(poly)
+            new_sel.add(ni)
+            if is_construction:
+                kept_construction.add(ni)
+
+        self._polys = kept_polys
+        self._construction_polys = kept_construction
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_sel)
+
+    @staticmethod
+    def _normalize_merged_chain(
+        chain: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        if not chain:
+            return []
+        normalized: list[tuple[float, float]] = [chain[0]]
+        for pt in chain[1:]:
+            if math.hypot(normalized[-1][0] - pt[0], normalized[-1][1] - pt[1]) >= 1e-6:
+                normalized.append(pt)
+        if (
+            len(normalized) >= 3
+            and math.hypot(
+                normalized[0][0] - normalized[-1][0],
+                normalized[0][1] - normalized[-1][1],
+            )
+            < 1e-6
+        ):
+            normalized[-1] = normalized[0]
+        return normalized
+
+
+    # ── Base right-click handling + vertex ops (restored from _select/_edit mixins) ──
+
+    def _rightclick_cb(self, cx: float, cy: float) -> None:
+        if self._mode == "draw":
+            if self._draw_shape_preview_active and self._shape_primitive_active():
+                self._cancel_draw_points()
+                self._show_flash("Shape preview canceled", 700)
+                return
+            # Right-click = finish open polyline (no close), stay in draw mode
+            self._finish_draw(close=False)
+            return
+
+        if self._mode == "edit":
+            hit = self._find_nearest_vertex(cx, cy)
+            if hit is not None:
+                pi, vi = hit
+                menu = QMenu()
+
+                def _prompt_round_corner() -> None:
+                    radius, ok = QInputDialog.getDouble(
+                        self,
+                        "Round Corner",
+                        "Radius (mm):",
+                        1.0,
+                        0.01,
+                        1000000.0,
+                        3,
+                    )
+                    if ok:
+                        self._round_vertex(pi, vi, radius)
+
+                def _prompt_chamfer_corner() -> None:
+                    distance, ok = QInputDialog.getDouble(
+                        self,
+                        "Chamfer Corner",
+                        "Distance (mm):",
+                        1.0,
+                        0.01,
+                        1000000.0,
+                        3,
+                    )
+                    if ok:
+                        self._chamfer_vertex(pi, vi, distance)
+
+                poly = self._polys[pi]
+                is_closed = (
+                    len(poly) >= 4
+                    and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1])
+                    < 0.01
+                )
+                unique_count = len(poly) - 1 if is_closed else len(poly)
+                if unique_count > 3:
+                    menu.addAction("Delete vertex", lambda: self._delete_vertex(pi, vi))
+                if (is_closed and unique_count >= 3) or (
+                    not is_closed and 0 < vi < len(poly) - 1
+                ):
+                    menu.addAction("Round corner…", _prompt_round_corner)
+                    menu.addAction("Chamfer corner…", _prompt_chamfer_corner)
+                menu.addAction("Delete polyline", lambda: self._delete_poly(pi))
+                menu.popup(self.mapToGlobal(QPointF(cx, cy).toPoint()))
+            return
+
+    def _delete_poly(self, pi: int) -> None:
+        self._push_undo()
+        self._polys.pop(pi)
+        remapped: set[int] = set()
+        for idx in self._construction_polys:
+            if idx == pi:
+                continue
+            remapped.add(idx - 1 if idx > pi else idx)
+        self._construction_polys = remapped
+        self._sel.discard(pi)
+        self._sel = {i if i < pi else i - 1 for i in self._sel if i != pi}
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+
+    def _delete_vertex(self, pi: int, vi: int) -> None:
+        # Check if shape is currently closed BEFORE deletion
+        poly = self._polys[pi]
+        is_closed = (
+            len(poly) >= 4
+            and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01
+        )
+
+        self._push_undo()
+        self._polys[pi].pop(vi)
+        self._redraw()
+
+        # Re-close shape if it was closed before deletion
+        if is_closed and len(self._polys[pi]) >= 4:
+            self._polys[pi][-1] = self._polys[pi][0]
+        self._notify()
+        self._fire_poly_change()
+
+    def _chamfer_vertex(self, pi: int, vi: int, dist: float) -> bool:
+        if not (0 <= pi < len(self._polys)) or dist <= 0:
+            return False
+        poly = self._polys[pi]
+        closed = self._is_poly_closed(poly)
+        pts = poly[:-1] if closed else list(poly)
+        n = len(pts)
+        if n < 3:
+            return False
+        if closed and vi == n:
+            vi = 0
+        if not (0 <= vi < n):
+            return False
+        if not closed and (vi == 0 or vi == n - 1):
+            return False
+
+        prev_i = (vi - 1) % n
+        next_i = (vi + 1) % n
+        ax, ay = pts[prev_i]
+        bx, by = pts[vi]
+        cx, cy = pts[next_i]
+        v1 = (ax - bx, ay - by)
+        v2 = (cx - bx, cy - by)
+        l1 = math.hypot(*v1)
+        l2 = math.hypot(*v2)
+        if l1 < 1e-9 or l2 < 1e-9:
+            return False
+        d = min(dist, l1 * 0.45, l2 * 0.45)
+        u1 = (v1[0] / l1, v1[1] / l1)
+        u2 = (v2[0] / l2, v2[1] / l2)
+        p1 = (bx + u1[0] * d, by + u1[1] * d)
+        p2 = (bx + u2[0] * d, by + u2[1] * d)
+
+        new_pts = pts[:vi] + [p1, p2] + pts[vi + 1 :]
+        if closed:
+            new_poly = new_pts + [new_pts[0]]
+        else:
+            new_poly = new_pts
+        self._push_undo()
+        self._polys[pi] = new_poly
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _round_vertex(self, pi: int, vi: int, radius: float) -> bool:
+        if not (0 <= pi < len(self._polys)) or radius <= 0:
+            return False
+        poly = self._polys[pi]
+        closed = self._is_poly_closed(poly)
+        pts = poly[:-1] if closed else list(poly)
+        n = len(pts)
+        if n < 3:
+            return False
+        if closed and vi == n:
+            vi = 0
+        if not (0 <= vi < n):
+            return False
+        if not closed and (vi == 0 or vi == n - 1):
+            return False
+
+        prev_i = (vi - 1) % n
+        next_i = (vi + 1) % n
+        ax, ay = pts[prev_i]
+        bx, by = pts[vi]
+        cx, cy = pts[next_i]
+        u1 = (ax - bx, ay - by)
+        u2 = (cx - bx, cy - by)
+        l1 = math.hypot(*u1)
+        l2 = math.hypot(*u2)
+        if l1 < 1e-9 or l2 < 1e-9:
+            return False
+        u1 = (u1[0] / l1, u1[1] / l1)
+        u2 = (u2[0] / l2, u2[1] / l2)
+        dot = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+        phi = math.acos(dot)
+        if phi < 1e-3 or abs(math.pi - phi) < 1e-3:
+            return False
+
+        offset = radius / math.tan(phi / 2.0)
+        offset = min(offset, l1 * 0.45, l2 * 0.45)
+        if offset <= 1e-6:
+            return False
+        r = offset * math.tan(phi / 2.0)
+
+        t1 = (bx + u1[0] * offset, by + u1[1] * offset)
+        t2 = (bx + u2[0] * offset, by + u2[1] * offset)
+
+        bis = (u1[0] + u2[0], u1[1] + u2[1])
+        bl = math.hypot(*bis)
+        if bl < 1e-9:
+            return False
+        bis = (bis[0] / bl, bis[1] / bl)
+        center_dist = r / math.sin(phi / 2.0)
+        center = (bx + bis[0] * center_dist, by + bis[1] * center_dist)
+
+        a1 = math.atan2(t1[1] - center[1], t1[0] - center[0])
+        a2 = math.atan2(t2[1] - center[1], t2[0] - center[0])
+        # Use the minor arc between tangent points; choosing the major arc
+        # produces loop-like rounding artifacts.
+        span = a2 - a1
+        while span <= -math.pi:
+            span += 2 * math.pi
+        while span > math.pi:
+            span -= 2 * math.pi
+        steps = max(4, min(24, int(abs(span) / (math.pi / 18.0))))
+        arc_pts = [
+            (
+                center[0] + r * math.cos(a1 + span * (i / steps)),
+                center[1] + r * math.sin(a1 + span * (i / steps)),
+            )
+            for i in range(steps + 1)
+        ]
+
+        new_pts = pts[:vi] + arc_pts + pts[vi + 1 :]
+        if closed:
+            new_poly = new_pts + [new_pts[0]]
+        else:
+            new_poly = new_pts
+        self._push_undo()
+        self._polys[pi] = new_poly
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
