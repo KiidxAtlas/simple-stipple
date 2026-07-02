@@ -64,6 +64,12 @@ from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
 from src.backend.shapes.factory import transform_legacy_meta
+from src.ui.canvas.entities import (
+    EntityRecord,
+    KindsView,
+    MetaView,
+    PolylinesView,
+)
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
 from src.ui.canvas.shape_storage import ShapeStorage
@@ -104,6 +110,33 @@ class PolylineView(
     selectionChanged = Signal(int)  # type: ignore[assignment]
     modeChanged = Signal(str)
 
+    # ── Legacy array facade over the entity list ─────────────────────────
+    # Reads and per-item writes behave exactly like the old parallel lists;
+    # structural mutation must go through _append_entity/_compact_entities/
+    # self._entities so kind/meta can never desync from geometry. There is
+    # deliberately no setter: wholesale assignment raises AttributeError.
+
+    @property
+    def _polys(self) -> PolylinesView:
+        view = self.__dict__.get("_polys_view")
+        if view is None:
+            view = self.__dict__["_polys_view"] = PolylinesView(self)
+        return view
+
+    @property
+    def _entity_kinds(self) -> KindsView:
+        view = self.__dict__.get("_kinds_view")
+        if view is None:
+            view = self.__dict__["_kinds_view"] = KindsView(self)
+        return view
+
+    @property
+    def _entity_meta(self) -> MetaView:
+        view = self.__dict__.get("_meta_view")
+        if view is None:
+            view = self.__dict__["_meta_view"] = MetaView(self)
+        return view
+
     @staticmethod
     def _clone_polys(
         polys: list[list[tuple[float, float]]],
@@ -138,9 +171,10 @@ class PolylineView(
         if on_mode_change:
             self.modeChanged.connect(on_mode_change)
 
-        self._polys: list[list[tuple[float, float]]] = []
-        self._entity_kinds: list[str] = []
-        self._entity_meta: list[dict[str, Any] | None] = []
+        # Single source of truth for drawable entities. The legacy names
+        # (_polys / _entity_kinds / _entity_meta) are live views over this
+        # list — see src/ui/canvas/entities.py.
+        self._entities: list[EntityRecord] = []
         self._sel: set[int] = set()
 
         # Phase 2: New shape storage (Phase 2+)
@@ -322,9 +356,7 @@ class PolylineView(
     # ── Public API ────────────────────────────────────────────────────────────
 
     def load(self, polys: list[list[tuple[float, float]]]) -> None:
-        self._polys = self._clone_polys(polys)
-        self._entity_kinds = ["polyline" for _ in self._polys]
-        self._entity_meta = [None for _ in self._polys]
+        self._entities = [EntityRecord(points=list(p)) for p in polys]
         self._sel.clear()
         self._hidden_polys.clear()
         self._locked_polys.clear()
@@ -354,9 +386,7 @@ class PolylineView(
     def set_polylines_state(
         self, polys: list[list[tuple[float, float]]], fit: bool = False
     ) -> None:
-        self._polys = self._clone_polys(polys)
-        self._entity_kinds = ["polyline" for _ in self._polys]
-        self._entity_meta = [None for _ in self._polys]
+        self._entities = [EntityRecord(points=list(p)) for p in polys]
         self._sel.clear()
         self._construction_polys.clear()
         self._hidden_polys.clear()
@@ -454,9 +484,13 @@ class PolylineView(
         kind: str = "polyline",
         meta: dict[str, Any] | None = None,
     ) -> int:
-        self._polys.append(list(poly))
-        self._entity_kinds.append(kind)
-        self._entity_meta.append(deepcopy(meta) if meta is not None else None)
+        self._entities.append(
+            EntityRecord(
+                points=list(poly),
+                kind=kind,
+                meta=deepcopy(meta) if meta is not None else None,
+            )
+        )
         self._sync_shape_storage_from_entities()
         return len(self._polys) - 1
 
@@ -471,7 +505,7 @@ class PolylineView(
 
     def _restore_state_snapshot(self, snapshot: CanvasState) -> None:
         polys, sel, construction, kinds, meta = snapshot
-        self._polys = polys
+        self._entities = [EntityRecord(points=p) for p in polys]
         self._sel = {i for i in sel if i < len(self._polys)}
         self._construction_polys = {i for i in construction if i < len(self._polys)}
         self._set_entities_from_copy(kinds, meta)
@@ -497,8 +531,10 @@ class PolylineView(
         kinds: list[str],
         meta: list[dict[str, Any] | None],
     ) -> None:
-        self._entity_kinds = list(kinds)
-        self._entity_meta = [deepcopy(m) if m is not None else None for m in meta]
+        for i, ent in enumerate(self._entities):
+            ent.kind = kinds[i] if i < len(kinds) else "polyline"
+            m = meta[i] if i < len(meta) else None
+            ent.meta = deepcopy(m) if m is not None else None
 
     def _sync_shape_storage_from_entities(self) -> None:
         """Keep Phase-2 shape storage synchronized with current entity arrays."""
@@ -633,9 +669,10 @@ class PolylineView(
                 new_locked.add(new_idx)
             if i in self._groups:
                 new_groups[new_idx] = self._groups[i]
-        self._polys = kept
-        self._entity_kinds = kept_kinds
-        self._entity_meta = kept_meta
+        self._entities = [
+            EntityRecord(points=p, kind=k, meta=m)
+            for p, k, m in zip(kept, kept_kinds, kept_meta)
+        ]
         self._construction_polys = new_construction
         self._hidden_polys = new_hidden
         self._locked_polys = new_locked
@@ -1165,10 +1202,8 @@ class PolylineView(
             kind = "spline"
             meta = {"segments": 24, "closed": close, "control_points": [tuple(pt) for pt in poly], "degree": 3}
 
-        self._entity_kinds.append(kind)
-        self._entity_meta.append(meta)
-        self._polys.append(list(poly))
-        new_idx = len(self._polys) - 1
+        self._entities.append(EntityRecord(points=list(poly), kind=kind, meta=meta))
+        new_idx = len(self._entities) - 1
         if getattr(self, "_draw_construction_mode", False):
             self._construction_polys.add(new_idx)
 
@@ -1294,11 +1329,7 @@ class PolylineView(
                     self._entity_kinds[survivor_idx] = "polyline"
                 if survivor_idx < len(self._entity_meta):
                     self._entity_meta[survivor_idx] = None
-                self._polys.pop(i)
-                if i < len(self._entity_kinds):
-                    self._entity_kinds.pop(i)
-                if i < len(self._entity_meta):
-                    self._entity_meta.pop(i)
+                del self._entities[i]
                 remapped: set[int] = set()
                 for ci in getattr(self, "_construction_polys", set()):
                     if ci == i:
@@ -3465,9 +3496,10 @@ class PolylineView(
                 except (TypeError, ValueError, GEOSException):
                     _keep(src_idx, poly)
 
-        self._polys = result_polys
-        self._entity_kinds = result_kinds
-        self._entity_meta = result_meta
+        self._entities = [
+            EntityRecord(points=p, kind=k, meta=m)
+            for p, k, m in zip(result_polys, result_kinds, result_meta)
+        ]
         self._construction_polys = new_construction
         self._hidden_polys = new_hidden
         self._locked_polys = new_locked
@@ -3655,18 +3687,8 @@ class PolylineView(
 
     def _ctx_delete_poly(self, idx: int) -> None:
         self._push_undo()
-        self._polys.pop(idx)
-        if idx < len(self._entity_kinds):
-            self._entity_kinds.pop(idx)
-        if idx < len(self._entity_meta):
-            self._entity_meta.pop(idx)
-        remapped: set[int] = set()
-        for pi in self._construction_polys:
-            if pi == idx:
-                continue
-            remapped.add(pi - 1 if pi > idx else pi)
-        self._construction_polys = remapped
-        self._sel.discard(idx)
+        # _compact_entities removes the entity and remaps all flag state.
+        self._compact_entities({idx})
         self._sel = {i if i < idx else i - 1 for i in self._sel if i != idx}
         self._redraw()
         self._notify()
@@ -3920,10 +3942,11 @@ class PolylineView(
         xs, ys = zip(*all_pts)
         cx = (min(xs) + max(xs)) / 2
         cy = (min(ys) + max(ys)) / 2
-        self._polys = [
-            [(cx + (x - cx) * factor, cy + (y - cy) * factor) for x, y in poly]
-            for poly in self._polys
-        ]
+        for ent in self._entities:
+            ent.points = [
+                (cx + (x - cx) * factor, cy + (y - cy) * factor)
+                for x, y in ent.points
+            ]
         for idx in range(len(self._polys)):
             self._transform_entity_meta(
                 idx,
@@ -4683,9 +4706,10 @@ class PolylineView(
                 new_meta.append(deepcopy(meta) if meta is not None else None)
                 if is_construction:
                     new_construction.add(ni)
-        self._polys = new_polys
-        self._entity_kinds = new_kinds
-        self._entity_meta = new_meta
+        self._entities = [
+            EntityRecord(points=p, kind=k, meta=m)
+            for p, k, m in zip(new_polys, new_kinds, new_meta)
+        ]
         self._construction_polys = new_construction
         self._sel = new_sel
         self._redraw()
@@ -4888,14 +4912,9 @@ class PolylineView(
 
     def _delete_poly(self, pi: int) -> None:
         self._push_undo()
-        self._polys.pop(pi)
-        remapped: set[int] = set()
-        for idx in self._construction_polys:
-            if idx == pi:
-                continue
-            remapped.add(idx - 1 if idx > pi else idx)
-        self._construction_polys = remapped
-        self._sel.discard(pi)
+        # Previously popped only _polys, silently desyncing kinds/meta —
+        # _compact_entities removes the entity and remaps all flag state.
+        self._compact_entities({pi})
         self._sel = {i if i < pi else i - 1 for i in self._sel if i != pi}
         self._redraw()
         self._notify()
