@@ -84,13 +84,9 @@ from src.backend.behaviors.snapping import (
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
 
-CanvasState: TypeAlias = tuple[
-    list[list[tuple[float, float]]],
-    set[int],
-    set[int],
-    list[str],
-    list[dict[str, Any] | None],
-]
+# Undo snapshot: the full entity list (geometry, kind, meta, and all flags —
+# the old 5-tuple silently dropped hidden/locked/group state) + selection.
+CanvasState: TypeAlias = tuple[list[EntityRecord], set[int]]
 
 
 class PolylineView(
@@ -538,20 +534,14 @@ class PolylineView(
         return len(self._polys) - 1
 
     def _snapshot_state(self) -> CanvasState:
-        return (
-            [list(p) for p in self._polys],
-            set(self._sel),
-            set(self._construction_polys),
-            list(self._entity_kinds),
-            [deepcopy(meta) if meta is not None else None for meta in self._entity_meta],
-        )
+        return (deepcopy(self._entities), set(self._sel))
 
     def _restore_state_snapshot(self, snapshot: CanvasState) -> None:
-        polys, sel, construction, kinds, meta = snapshot
-        self._entities = [EntityRecord(points=p) for p in polys]
-        self._sel = {i for i in sel if i < len(self._polys)}
-        self._construction_polys = {i for i in construction if i < len(self._polys)}
-        self._set_entities_from_copy(kinds, meta)
+        entities, sel = snapshot
+        # The snapshot was popped off its stack, so we can install the
+        # records directly without another copy.
+        self._entities = list(entities)
+        self._sel = {i for i in sel if i < len(self._entities)}
         self._sync_shape_storage_from_entities()
 
     def _reset_edit_interaction_state(self) -> None:
@@ -568,16 +558,6 @@ class PolylineView(
         stack.append(snapshot)
         if len(stack) > 30:
             stack.pop(0)
-
-    def _set_entities_from_copy(
-        self,
-        kinds: list[str],
-        meta: list[dict[str, Any] | None],
-    ) -> None:
-        for i, ent in enumerate(self._entities):
-            ent.kind = kinds[i] if i < len(kinds) else "polyline"
-            m = meta[i] if i < len(meta) else None
-            ent.meta = deepcopy(m) if m is not None else None
 
     def _sync_shape_storage_from_entities(self) -> None:
         """Invalidate the lazily-built snap-shape cache."""
@@ -1478,10 +1458,12 @@ class PolylineView(
         # ~200k vertices roughly equals ~3 MB of float pairs; we keep
         # the budget generous but bounded.
         _UNDO_VERTEX_BUDGET = 200_000
-        total = sum(sum(len(p) for p in entry[0]) for entry in self._undo_stack)
+        total = sum(
+            sum(len(e.points) for e in entry[0]) for entry in self._undo_stack
+        )
         while total > _UNDO_VERTEX_BUDGET and len(self._undo_stack) > 1:
             dropped = self._undo_stack.pop(0)
-            total -= sum(len(p) for p in dropped[0])
+            total -= sum(len(e.points) for e in dropped[0])
         self._redo_stack.clear()
 
     def get_export_dxf_state(self) -> list[dict[str, Any]]:
