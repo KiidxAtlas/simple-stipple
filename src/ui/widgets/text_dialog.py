@@ -75,13 +75,13 @@ class AddTextDialog(QDialog):
         style_row.addStretch()
         form.addRow("Style", style_row)
 
-        # Live preview in the selected font/style.
+        # Live preview in the selected font/style. The font must be set via
+        # a per-widget stylesheet: the app-wide QSS declares a global
+        # font-family, and Qt stylesheets override setFont(), so a plain
+        # setFont() here would be silently ignored.
         self._preview = QLabel("Preview")
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview.setMinimumHeight(64)
-        self._preview.setStyleSheet(
-            "background: #10161d; border: 1px solid #2a3a44; border-radius: 4px;"
-        )
         form.addRow(self._preview)
 
         buttons = QDialogButtonBox(
@@ -103,11 +103,14 @@ class AddTextDialog(QDialog):
         self._text_edit.setFocus()
 
     def _update_preview(self, *_args) -> None:
-        font = QFont(self._font_combo.currentFont().family())
-        font.setPointSize(28)
-        font.setBold(self._bold_cb.isChecked())
-        font.setItalic(self._italic_cb.isChecked())
-        self._preview.setFont(font)
+        family = self._font_combo.currentFont().family().replace('"', "")
+        weight = "bold" if self._bold_cb.isChecked() else "normal"
+        style = "italic" if self._italic_cb.isChecked() else "normal"
+        self._preview.setStyleSheet(
+            "background: #10161d; border: 1px solid #2a3a44; border-radius: 4px;"
+            f'font-family: "{family}"; font-size: 28px; '
+            f"font-weight: {weight}; font-style: {style};"
+        )
         self._preview.setText(self._text_edit.text() or "Preview")
 
     def _import_font(self) -> None:
