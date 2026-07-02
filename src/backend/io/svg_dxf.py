@@ -16,9 +16,7 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, cast
 
-import ezdxf  # type: ignore[attr-defined]
 
 _NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _CMD_RE = re.compile(rf"[MmLlHhVvZz]|{_NUM_RE}")
@@ -40,11 +38,6 @@ def _parse_points_attr(points: str) -> list[tuple[float, float]]:
     for i in range(0, len(values) - 1, 2):
         pts.append((values[i], values[i + 1]))
     return pts
-
-
-def _ensure_layer(doc: Any, name: str) -> None:
-    if name not in doc.layers:
-        doc.layers.add(name, color=7)
 
 
 def _parse_path_d(d: str) -> list[list[tuple[float, float]]]:
@@ -154,6 +147,18 @@ def svg_to_dxf(
     *,
     flip_y: bool = True,
 ) -> dict:
+    """Convert supported SVG elements to DXF.
+
+    Parsing produces (polyline, kind, meta) records which are written by
+    :func:`src.backend.dxf.io.write_polylines_dxf` — the single DXF writer,
+    so SVG conversions get the same validation guarantees as every other
+    export (audit gate, finite checks, ellipse axis handling). Previously
+    this function assembled its own ezdxf document and wrote it even when
+    the audit reported errors.
+    """
+    from src.backend.dxf.io import write_polylines_dxf
+    from src.backend.shapes.factory import shape_from_legacy_meta
+
     tree = ET.parse(str(input_path))
     root = tree.getroot()
     y_flip = _svg_height(root)
@@ -163,13 +168,17 @@ def svg_to_dxf(
             return y
         return y_flip - y if y_flip else -y
 
-    doc = cast(Any, ezdxf).new("R2010")
-    doc.header["$INSUNITS"] = 4
-    msp = doc.modelspace()
-    _ensure_layer(doc, "0")
-
-    polylines: list[list[tuple[float, float]]] = []
+    records: list[tuple[list[tuple[float, float]], str, dict | None]] = []
     native_entities = {"LINE": 0, "CIRCLE": 0, "ELLIPSE": 0}
+
+    def _add_meta_entity(kind: str, meta: dict, counter: str) -> None:
+        shape = shape_from_legacy_meta(kind, meta)
+        if shape is None:
+            return
+        pts = [tuple(pt) for pt in shape.points]
+        if len(pts) >= 2:
+            records.append((pts, kind, meta))
+            native_entities[counter] += 1
 
     for elem in root.iter():
         tag = elem.tag.split("}")[-1].lower()
@@ -177,22 +186,25 @@ def svg_to_dxf(
         if tag == "polyline":
             pts = _parse_points_attr(elem.attrib.get("points", ""))
             if len(pts) >= 2:
-                polylines.append([(x, yf(y)) for x, y in pts])
+                records.append(([(x, yf(y)) for x, y in pts], "polyline", None))
 
         elif tag == "polygon":
             pts = _parse_points_attr(elem.attrib.get("points", ""))
             if len(pts) >= 3:
                 if pts[0] != pts[-1]:
                     pts.append(pts[0])
-                polylines.append([(x, yf(y)) for x, y in pts])
+                records.append(([(x, yf(y)) for x, y in pts], "polyline", None))
 
         elif tag == "line":
             x1 = _parse_float(elem.attrib.get("x1"))
             y1 = _parse_float(elem.attrib.get("y1"))
             x2 = _parse_float(elem.attrib.get("x2"))
             y2 = _parse_float(elem.attrib.get("y2"))
-            msp.add_line((x1, yf(y1)), (x2, yf(y2)))
-            native_entities["LINE"] += 1
+            _add_meta_entity(
+                "line",
+                {"start": (x1, yf(y1)), "end": (x2, yf(y2))},
+                "LINE",
+            )
 
         elif tag == "rect":
             x = _parse_float(elem.attrib.get("x"))
@@ -201,15 +213,16 @@ def svg_to_dxf(
             h = _parse_float(elem.attrib.get("height"))
             if w > 0 and h > 0:
                 pts = [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]
-                polylines.append([(px, yf(py)) for px, py in pts])
+                records.append(([(px, yf(py)) for px, py in pts], "polyline", None))
 
         elif tag == "circle":
             cx = _parse_float(elem.attrib.get("cx"))
             cy = _parse_float(elem.attrib.get("cy"))
             r = _parse_float(elem.attrib.get("r"))
             if r > 0:
-                msp.add_circle((cx, yf(cy)), r)
-                native_entities["CIRCLE"] += 1
+                _add_meta_entity(
+                    "circle", {"center": (cx, yf(cy)), "radius": r}, "CIRCLE"
+                )
 
         elif tag == "ellipse":
             cx = _parse_float(elem.attrib.get("cx"))
@@ -217,13 +230,11 @@ def svg_to_dxf(
             rx = _parse_float(elem.attrib.get("rx"))
             ry = _parse_float(elem.attrib.get("ry"))
             if rx > 0 and ry > 0:
-                ratio = ry / rx if rx else 1.0
-                msp.add_ellipse(
-                    (cx, yf(cy)),
-                    (rx, 0.0),
-                    ratio=ratio,
+                _add_meta_entity(
+                    "ellipse",
+                    {"center": (cx, yf(cy)), "rx": rx, "ry": ry, "rotation": 0.0},
+                    "ELLIPSE",
                 )
-                native_entities["ELLIPSE"] += 1
 
         elif tag == "path":
             d = elem.attrib.get("d", "")
@@ -231,35 +242,17 @@ def svg_to_dxf(
                 continue
             for p in _parse_path_d(d):
                 if len(p) >= 2:
-                    polylines.append([(x, yf(y)) for x, y in p])
+                    records.append(([(x, yf(y)) for x, y in p], "polyline", None))
 
-    for pts in polylines:
-        from ..dxf.io import _normalize_polyline_for_dxf
+    write_polylines_dxf(
+        [poly for poly, _k, _m in records],
+        str(output_path),
+        entity_kinds=[k for _p, k, _m in records],
+        entity_meta=[m for _p, _k, m in records],
+    )
 
-        coords, is_closed = _normalize_polyline_for_dxf(pts)
-        if len(coords) >= 2:
-            msp.add_lwpolyline(coords, close=is_closed)
-
-    # Best-effort audit so a malformed SVG does not silently produce a
-    # broken DXF.
-    try:
-        auditor = doc.audit()
-        if auditor.has_errors:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "svg_to_dxf: %d audit error(s) writing %s",
-                len(auditor.errors),
-                output_path,
-            )
-    except (AttributeError, RuntimeError, ValueError):
-        pass
-
-    from .persistence import atomic_write_via
-
-    atomic_write_via(output_path, lambda p: doc.saveas(str(p)))
-
-    all_pts = [pt for poly in polylines for pt in poly]
+    plain = [poly for poly, kind, _m in records if kind == "polyline"]
+    all_pts = [pt for poly in plain for pt in poly]
     if all_pts:
         xs, ys = zip(*all_pts)
         width = max(xs) - min(xs)
@@ -267,10 +260,9 @@ def svg_to_dxf(
     else:
         width = height = 0.0
 
-    stats = {
-        "polylines": len(polylines),
+    return {
+        "polylines": len(plain),
         "width_mm": round(width, 4),
         "height_mm": round(height, 4),
         "native_entities": native_entities,
     }
-    return stats
