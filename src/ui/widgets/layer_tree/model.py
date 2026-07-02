@@ -46,19 +46,61 @@ def build_shape_rows(
     *,
     editable: bool,
     draggable: bool,
+    groups: dict[int, int] | None = None,
 ) -> list[LayerTreeRow]:
+    """Build one tree row per shape — except grouped shapes, which collapse
+    into a single row per group (like an SVG ``<g>``). A group row's key is
+    the tuple of member indices; use :func:`flatten_shape_keys` to resolve
+    keys back to indices."""
     rows: list[LayerTreeRow] = []
+    groups = groups or {}
+    members_by_gid: dict[int, list[int]] = {}
+    for idx in range(len(polylines)):
+        gid = groups.get(idx)
+        if gid is not None:
+            members_by_gid.setdefault(gid, []).append(idx)
+
+    emitted: set[int] = set()
     for idx, poly in enumerate(polylines):
+        gid = groups.get(idx)
+        if gid is None:
+            rows.append(
+                {
+                    "key": idx,
+                    "label": label_builder(idx, poly),
+                    "visible": idx not in hidden,
+                    "editable": editable,
+                    "draggable": draggable,
+                }
+            )
+            continue
+        if gid in emitted:
+            continue
+        emitted.add(gid)
+        members = members_by_gid[gid]
         rows.append(
             {
-                "key": idx,
-                "label": label_builder(idx, poly),
-                "visible": idx not in hidden,
-                "editable": editable,
+                "key": tuple(members),
+                "label": f"{idx + 1:02d}  Group  ·  {len(members)} shapes",
+                "visible": any(i not in hidden for i in members),
+                "editable": False,
                 "draggable": draggable,
             }
         )
     return rows
+
+
+def flatten_shape_keys(keys: object) -> list[int]:
+    """Resolve tree shape keys (ints or group tuples) to shape indices."""
+    if not isinstance(keys, (list, tuple, set)):
+        keys = [keys]
+    out: list[int] = []
+    for k in keys:
+        if isinstance(k, int):
+            out.append(k)
+        elif isinstance(k, (tuple, list)):
+            out.extend(int(i) for i in k if isinstance(i, int))
+    return out
 
 
 def build_layer_row(

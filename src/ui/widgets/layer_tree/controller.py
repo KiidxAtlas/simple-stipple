@@ -10,6 +10,7 @@ from .model import (
     LayerTreeState,
     apply_layer_visibility,
     apply_shape_visibility,
+    flatten_shape_keys,
     hidden_bucket,
 )
 
@@ -89,10 +90,12 @@ class CanvasLayerSidebarController:
         shape_key: object,
         visible: bool,
     ) -> None:
-        if not isinstance(shape_key, int):
+        indices = flatten_shape_keys(shape_key)
+        if not indices:
             return
         hidden = self.hidden_for(layer)
-        apply_shape_visibility(hidden, shape_key, visible)
+        for idx in indices:
+            apply_shape_visibility(hidden, idx, visible)
         self.apply_current_visibility()
         self._on_visibility_changed()
 

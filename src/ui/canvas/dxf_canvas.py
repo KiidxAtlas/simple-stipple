@@ -246,20 +246,27 @@ class DxfCanvas(PolylineView):
             return
 
         menu = QMenu(self)
-        shape_menu = menu.addMenu("Create shape")
-        shape_menu.addAction(
-            "Rectangle (drag)", lambda: self.set_quick_shape_mode("rectangle")
-        )
-        shape_menu.addAction(
-            "Circle (drag)", lambda: self.set_quick_shape_mode("circle")
-        )
-        shape_menu.addAction("Slot (drag)", lambda: self.set_quick_shape_mode("slot"))
-        shape_menu.addAction(
-            "Hexagon (drag)", lambda: self.set_quick_shape_mode("hexagon")
-        )
-        menu.addSeparator()
+        # "Create shape" only leads the menu when there is nothing to act on —
+        # with a selection or a shape under the cursor, the actions the user
+        # actually came for (delete/duplicate/close/group) come first.
+        poly_hit_early = self._find_poly_at(cx, cy)
+        if not self._sel and poly_hit_early is None:
+            shape_menu = menu.addMenu("Create shape")
+            shape_menu.addAction(
+                "Rectangle (drag)", lambda: self.set_quick_shape_mode("rectangle")
+            )
+            shape_menu.addAction(
+                "Circle (drag)", lambda: self.set_quick_shape_mode("circle")
+            )
+            shape_menu.addAction(
+                "Slot (drag)", lambda: self.set_quick_shape_mode("slot")
+            )
+            shape_menu.addAction(
+                "Hexagon (drag)", lambda: self.set_quick_shape_mode("hexagon")
+            )
+            menu.addSeparator()
 
-        poly_hit = self._find_poly_at(cx, cy)
+        poly_hit = poly_hit_early
         if poly_hit is not None:
             idx = poly_hit
             if idx in self._sel:
@@ -330,6 +337,16 @@ class DxfCanvas(PolylineView):
         if self._sel:
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
             menu.addAction("Duplicate  [⌘D]", self.duplicate_selected)
+            open_count = sum(
+                1
+                for i in self._sel
+                if i < len(self._polys) and not self._is_poly_closed(self._polys[i])
+            )
+            if open_count:
+                label = "Close path"
+                if len(self._sel) > 1:
+                    label = f"Close path (join {len(self._sel)} into one)"
+                menu.addAction(label, self.close_selection_as_path)
             menu.addAction("Fit selection", self.fit_selection)
             menu.addAction(
                 "Explode to segments",

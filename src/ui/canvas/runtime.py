@@ -16,6 +16,7 @@ from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import graph_from_polylines
 from src.ui.canvas.graph_adapter import CanvasGraphAdapter
 from src.ui.widgets.layer_tree import (
+    flatten_shape_keys,
     build_layer_row,
     build_shape_rows,
     describe_polyline,
@@ -49,7 +50,7 @@ class CanvasRuntime:
         return getattr(self.doc_graph, "active_layer", self.default_layer)
 
     def on_tree_selection_requested(self, indices: list[int]) -> None:
-        self._canvas.set_selection([int(i) for i in indices if isinstance(i, int)])
+        self._canvas.set_selection(flatten_shape_keys(indices))
 
     def layer_view_bucket(self, layer: str | None = None) -> dict[str, set[int]]:
         layer_name = layer or self.current_layer_name()
@@ -175,7 +176,7 @@ class CanvasRuntime:
         """
         if source_layer == target_layer:
             return False
-        indices = sorted({int(k) for k in shape_keys if isinstance(k, int)})
+        indices = sorted(set(flatten_shape_keys(shape_keys)))
         if not indices:
             return False
         self.graph_adapter.capture_from_canvas(self._canvas)
@@ -276,12 +277,17 @@ class CanvasRuntime:
         polylines: list[list[tuple[float, float]]],
     ) -> list[dict[str, Any]]:
         hidden = hidden_bucket(self.layer_view_state, layer_name)
+        groups: dict[int, int] | None = None
+        if layer_name == self.current_layer_name():
+            # Grouped shapes collapse into a single row (like an SVG <g>).
+            groups = dict(self._canvas._groups.items())
         return build_shape_rows(
             polylines,
             hidden,
             self._shape_label_builder(layer_name),
             editable=True,
             draggable=True,
+            groups=groups,
         )
 
     def build_layer_tree_rows(

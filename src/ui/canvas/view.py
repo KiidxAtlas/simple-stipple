@@ -1248,6 +1248,19 @@ class PolylineView(
             self._fire_poly_change()
         return changed
 
+    def close_selection_as_path(self) -> None:
+        """Join the selected segments into one path (when several are
+        selected) and close it — the context-menu "Close path" action."""
+        if not self._sel:
+            return
+        if len(self._sel) > 1:
+            self.merge_selected_segments_to_objects()
+        closed = self._close_selected_polylines()
+        if closed:
+            self._show_flash("Path closed", 900)
+        else:
+            self._show_flash("Already closed", 900)
+
     def _open_selected_polylines(self) -> int:
         indices = self._mutable_selected_indices()
         if not indices:
