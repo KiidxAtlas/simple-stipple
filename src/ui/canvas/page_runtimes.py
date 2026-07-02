@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src.ui.widgets.layer_tree import (
+    flatten_shape_keys,
     build_layer_row,
     build_shape_rows,
     describe_polyline,
@@ -30,7 +31,7 @@ class CanvasPageRuntimeBase:
         self._toolbar_module.set_selection_count(count)
 
     def on_tree_selection_requested(self, indices: list[int]) -> None:
-        self._canvas.set_selection(indices)
+        self._canvas.set_selection(flatten_shape_keys(indices))
 
     def fit_selection(self) -> bool:
         return bool(self._canvas.fit_selection())
@@ -189,12 +190,14 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         label_fn = (
             self._shape_label_builder(layer_name) if is_outline else describe_polyline
         )
+        groups = dict(self._canvas._groups.items()) if is_outline else None
         return build_shape_rows(
             polylines,
             hidden,
             label_fn,
             editable=is_outline,
             draggable=is_outline,
+            groups=groups,
         )
 
     def build_layer_tree_rows(
