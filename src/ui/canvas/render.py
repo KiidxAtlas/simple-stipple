@@ -147,7 +147,7 @@ class CanvasRenderer:
             painter.drawPath(gpath)
 
     def _paint_main_polys(self, painter: QPainter, visible: QRectF) -> None:
-        for idx, poly in enumerate(self._polys):
+        for idx, poly in enumerate(e.points for e in self._entities):
             if idx in self._hidden_polys:
                 continue
             if len(poly) < 2:
@@ -176,11 +176,11 @@ class CanvasRenderer:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             render_poly = poly
             if (
-                idx < len(self._entity_kinds)
-                and self._entity_kinds[idx] == "spline"
+                idx < len(self._entities)
+                and self._entities[idx].kind == "spline"
                 and len(poly) >= 2
             ):
-                meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+                meta = self._entities[idx].meta if idx < len(self._entities) else None
                 render_poly = build_spline_poly(
                     poly,
                     segments=int(meta.get("segments", 24)) if meta else 24,
@@ -238,9 +238,9 @@ class CanvasRenderer:
             y += spacing
 
     def _paint_edit_handles(self, painter: QPainter) -> None:
-        for pi, poly in enumerate(self._polys):
+        for pi, poly in enumerate(e.points for e in self._entities):
             kind = (
-                self._entity_kinds[pi] if pi < len(self._entity_kinds) else "polyline"
+                self._entities[pi].kind if pi < len(self._entities) else "polyline"
             )
             if kind in {"arc", "circle", "ellipse"}:
                 continue
@@ -278,14 +278,14 @@ class CanvasRenderer:
         if not self._sel:
             return
         for pi in sorted(self._sel):
-            if pi < 0 or pi >= len(self._polys):
+            if pi < 0 or pi >= len(self._entities):
                 continue
             kind = (
-                self._entity_kinds[pi] if pi < len(self._entity_kinds) else "polyline"
+                self._entities[pi].kind if pi < len(self._entities) else "polyline"
             )
             if kind in {"arc", "circle", "ellipse"}:
                 continue
-            poly = self._polys[pi]
+            poly = self._entities[pi].points
             for vi, pt in enumerate(poly):
                 cx, cy = self._w2c(*pt)
                 is_hover = self._hover_vert == (pi, vi)
@@ -855,8 +855,8 @@ class CanvasRenderer:
         sel_pts = [
             pt
             for i in self._sel
-            if 0 <= i < len(self._polys)
-            for pt in self._polys[i]
+            if 0 <= i < len(self._entities)
+            for pt in self._entities[i].points
         ]
         if not sel_pts:
             self._gizmo_scale_rect = None
@@ -889,7 +889,7 @@ class CanvasRenderer:
 
         # Collect all candidate endpoints (existing polyline endpoints + last draw point)
         candidates: list[tuple[float, float]] = [
-            pt for poly in self._polys for pt in poly
+            pt for poly in (e.points for e in self._entities) for pt in poly
         ]
         candidates.extend(self._draw_pts)
 
@@ -1110,7 +1110,7 @@ class CanvasRenderer:
                 self._sel_badge_a_rect = None
                 line_idx = self._selected_single_line()
                 if line_idx is not None:
-                    (ax, ay), (bx, by) = self._polys[line_idx]
+                    (ax, ay), (bx, by) = self._entities[line_idx].points
                     llen = math.hypot(bx - ax, by - ay)
                     ang = math.degrees(math.atan2(by - ay, bx - ax))
                     self._sel_badge_l_rect = self._draw_badge(
@@ -1167,7 +1167,7 @@ class CanvasRenderer:
             _dim_dot = QColor("#4a5a6a")
             _helper_count = 0
             _helper_cap = 1800
-            for _dpoly in self._polys:
+            for _dpoly in (e.points for e in self._entities):
                 if not _visible_world.intersects(self._poly_rect_for_culling(_dpoly)):
                     continue
                 for _dpt in _dpoly:
@@ -1182,7 +1182,7 @@ class CanvasRenderer:
                     break
             # Highlight endpoints of existing polylines (connection targets)
             _ep_color = QColor("#5a8aaa")
-            for _dpoly in self._polys:
+            for _dpoly in (e.points for e in self._entities):
                 if not _visible_world.intersects(self._poly_rect_for_culling(_dpoly)):
                     continue
                 if len(_dpoly) >= 2:
@@ -1245,7 +1245,7 @@ class CanvasRenderer:
             painter.drawEllipse(QPointF(_mpx, _mpy), 6, 6)
 
         # Info overlay
-        n, s = len(self._polys), len(self._sel)
+        n, s = len(self._entities), len(self._sel)
         info = f"{n} polylines" + (f"  ·  {s} selected" if s else "")
         if self._mode == "draw":
             pts_hint = f"  {len(self._draw_pts)} pt(s)" if self._draw_pts else ""
@@ -1274,7 +1274,7 @@ class CanvasRenderer:
         painter.setFont(QFont("Helvetica", 9))
         painter.drawText(8, h - 8, f"{zoom_pct}%  {hint}")
 
-        if not self._polys and not self._draw_pts:
+        if not self._entities and not self._draw_pts:
             message = getattr(self, "_empty_message", "No polylines loaded")
             title, _, hint = message.partition("\n")
             painter.setPen(QColor("#3b4a6a"))
@@ -1420,7 +1420,7 @@ class CanvasRenderer:
             line_idx = self._selected_single_line()
             if line_idx is None:
                 return
-            (ax, ay), (bx, by) = self._polys[line_idx]
+            (ax, ay), (bx, by) = self._entities[line_idx].points
             if axis == "l":
                 cur_val = math.hypot(bx - ax, by - ay)
             else:

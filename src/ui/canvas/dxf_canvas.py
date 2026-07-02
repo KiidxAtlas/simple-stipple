@@ -340,7 +340,7 @@ class DxfCanvas(PolylineView):
             open_count = sum(
                 1
                 for i in self._sel
-                if i < len(self._polys) and not self._is_poly_closed(self._polys[i])
+                if i < len(self._entities) and not self._is_poly_closed(self._entities[i].points)
             )
             if open_count:
                 label = "Close path"
@@ -686,7 +686,7 @@ class DxfCanvas(PolylineView):
         ex, ey = self._c2w(float(end_c.x()), float(end_c.y()))
         poly = self._build_drag_shape(self._shape_drag_mode, sx, sy, ex, ey)
         if poly:
-            was_empty = len(self._polys) == 0
+            was_empty = len(self._entities) == 0
             kind = "polyline"
             meta = None
             cx = (sx + ex) / 2.0
@@ -705,7 +705,7 @@ class DxfCanvas(PolylineView):
                     "rotation": 0.0,
                 }
             self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
-            self._sel = {len(self._polys) - 1}
+            self._sel = {len(self._entities) - 1}
             if was_empty:
                 self._fit()
             else:
