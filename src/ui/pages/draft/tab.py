@@ -14,17 +14,21 @@ from typing import Any
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from src.backend.dxf.io import (
     load_dxf_polylines_by_layer_with_report,
+    load_dxf_polylines_with_report,
     summarize_dxf_import_report,
     write_polylines_dxf,
 )
+from src.backend.dxf.svg import write_polylines_svg
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.modules import (
     CanvasGridModule,
@@ -94,10 +98,20 @@ class DraftPage(BasePage):
     # ── Toolbar ───────────────────────────────────────────────────────────
 
     def _build_toolbar(self) -> QWidget:
-        open_btn = QPushButton("Open DXF")
+        open_btn = QToolButton()
+        open_btn.setText("Open DXF")
         open_btn.setMinimumHeight(28)
-        open_btn.setToolTip("Open a DXF file into the draft canvas for editing")
+        open_btn.setToolTip(
+            "Open a DXF file (replaces the drawing).\n"
+            "Use the arrow for 'Import into drawing' to add instead."
+        )
+        open_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         open_btn.clicked.connect(self._browse_dxf)
+        open_menu = QMenu(open_btn)
+        open_menu.addAction(
+            "Import into drawing (add)…", self._browse_dxf_add
+        )
+        open_btn.setMenu(open_menu)
 
         self._recent_btn = RecentFilesButton(
             self._settings,
@@ -118,11 +132,20 @@ class DraftPage(BasePage):
         merge_btn.setToolTip("Merge selected segments into connected objects")
         merge_btn.clicked.connect(self._merge_selected)
 
-        export_btn = QPushButton("Export DXF")
+        export_btn = QToolButton()
+        export_btn.setText("Export DXF")
         export_btn.setMinimumHeight(28)
         export_btn.setMinimumWidth(90)
         export_btn.setProperty("role", "primary")
+        export_btn.setToolTip(
+            "Export as DXF (grouped shapes share a layer, so a laser runs\n"
+            "each group as one job). Use the arrow for SVG export."
+        )
+        export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         export_btn.clicked.connect(self._export)
+        export_menu = QMenu(export_btn)
+        export_menu.addAction("Export SVG (single layer)…", self._export_svg)
+        export_btn.setMenu(export_menu)
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
@@ -556,6 +579,89 @@ class DraftPage(BasePage):
         if path:
             self._load_dxf(path)
 
+    def _warn_import_report(self, path: str, report) -> None:
+        if report.has_issues:
+            detail = summarize_dxf_import_report(report)
+            if detail:
+                QMessageBox.warning(
+                    self,
+                    "DXF Import Notice",
+                    f"{Path(path).name} loaded, but some DXF content could not be preserved.\n\n{detail}",
+                )
+
+    def _browse_dxf_add(self) -> None:
+        path = pick_open_file(
+            self,
+            self._settings,
+            "draft_input_dxf",
+            "Import DXF into Drawing",
+            "DXF files (*.dxf *.Dxf *.DXF);;All files (*)",
+            fallback_dir=self._settings.get("draft_input_dxf_dir", ""),
+        )
+        if path:
+            self._import_dxf_add(path)
+
+    def _import_dxf_add(self, path: str) -> None:
+        """Add a DXF's shapes to the existing drawing (instead of replacing)."""
+        try:
+            polys, report = load_dxf_polylines_with_report(path)
+            if not polys:
+                QMessageBox.information(
+                    self, "Import DXF", "No shapes found in that DXF."
+                )
+                return
+            canvas = self._canvas
+            was_empty = not canvas._entities
+            canvas._push_undo()
+            new_indices = [canvas._append_entity(list(p)) for p in polys]
+            canvas._sel = set(new_indices)
+            if was_empty:
+                canvas.fit()
+            canvas._show_flash(
+                f"Added {len(new_indices)} shapes from {Path(path).name}", 1200
+            )
+            canvas._redraw()
+            canvas._notify()
+            canvas._fire_poly_change()
+            record_recent(self._settings, KIND_DXF, path)
+            self._warn_import_report(path, report)
+            self._refresh_status()
+            self._emit_state_changed()
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Import DXF Failed", str(exc))
+
+    def _export_svg(self) -> None:
+        records = self._canvas.get_export_dxf_state()
+        if not records:
+            QMessageBox.information(
+                self,
+                "Nothing to Export",
+                "The canvas is empty — draw or drag-create shapes first.",
+            )
+            return
+        out_path = pick_save_file(
+            self,
+            self._settings,
+            "draft_output",
+            "Export SVG",
+            "draft.svg",
+            "SVG files (*.svg);;All files (*)",
+            fallback_dir=self._settings.get("draft_output_dir", ""),
+        )
+        if not out_path:
+            return
+        try:
+            stats = write_polylines_svg(
+                [list(r["polyline"]) for r in records], out_path
+            )
+            self._last_out_path = out_path
+            self._canvas._show_flash(
+                f"Exported SVG: {Path(out_path).name} ({stats['polylines']} paths)",
+                1200,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Export Failed", str(exc))
+
     def _load_dxf(self, path: str) -> None:
         try:
             by_layer, report = load_dxf_polylines_by_layer_with_report(path)
@@ -571,14 +677,7 @@ class DraftPage(BasePage):
                 rt.load_polys(flat, fit=bool(flat))
             self._canvas._show_flash(f"Loaded DXF: {Path(path).name}", 1200)
             record_recent(self._settings, KIND_DXF, path)
-            if report.has_issues:
-                detail = summarize_dxf_import_report(report)
-                if detail:
-                    QMessageBox.warning(
-                        self,
-                        "DXF Import Notice",
-                        f"{Path(path).name} loaded, but some DXF content could not be preserved.\n\n{detail}",
-                    )
+            self._warn_import_report(path, report)
             self._refresh_status()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:

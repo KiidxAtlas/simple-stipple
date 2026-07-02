@@ -50,31 +50,22 @@ def _poly_to_svg_d(
     return " ".join(parts)
 
 
-def dxf_to_svg(
-    input_path: str | Path,
+def write_polylines_svg(
+    polys: list[list[tuple[float, float]]],
     output_path: str | Path,
+    *,
     stroke: str = "#000000",
     stroke_width: float = 0.5,
     padding: float = 2.0,
 ) -> dict:
-    """
-    Convert DXF polylines to SVG.
+    """Write polylines to a single-group SVG (one consolidated layer).
 
-    Parameters
-    ----------
-    input_path:   Path to source .dxf file.
-    output_path:  Path to write .svg file.
-    stroke:       CSS colour for all paths (default black).
-    stroke_width: Path stroke width in mm (default 0.5 mm).
-    padding:      Extra whitespace around the drawing in mm (default 2 mm).
-
-    Returns
-    -------
-    dict with keys ``polylines``, ``width_mm``, ``height_mm``.
+    Coordinates are mm, y-up; the viewBox hugs the drawing plus padding.
+    Returns ``{"polylines", "width_mm", "height_mm"}``.
     """
-    polys, report = load_dxf_polylines_with_report(str(input_path))
+    from ..io.persistence import atomic_write_via
+
     if not polys:
-        # Write empty SVG
         root = ET.Element(
             "svg",
             xmlns="http://www.w3.org/2000/svg",
@@ -82,27 +73,20 @@ def dxf_to_svg(
             width="10mm",
             height="10mm",
         )
-        from ..io.persistence import atomic_write_via
-
         atomic_write_via(
             output_path,
             lambda p: ET.ElementTree(root).write(
                 str(p), xml_declaration=True, encoding="utf-8"
             ),
         )
-        result = {"polylines": 0, "width_mm": 0.0, "height_mm": 0.0}
-        if report.has_issues:
-            result["ignored_entities"] = report.ignored_entities
-            result["ignored_entity_summary"] = summarize_dxf_import_report(report)
-        return result
+        return {"polylines": 0, "width_mm": 0.0, "height_mm": 0.0}
 
     x0, y0, x1, y1 = _bbox(polys)
     vw = (x1 - x0) + padding * 2
     vh = (y1 - y0) + padding * 2
 
     # SVG Y-axis points downward; DXF/mm Y axis points upward.
-    # We flip by writing  svg_y = (y1 + padding) - dxf_y  which equals (vbox_h - (dxf_y - y0 + padding)).
-    y_total = y1 + padding  # constant for y-flip formula
+    y_total = y1 + padding
 
     root = ET.Element(
         "svg",
@@ -120,25 +104,38 @@ def dxf_to_svg(
             "stroke-width": f"{stroke_width:.4f}",
         },
     )
-
     for pts in polys:
-        d = _poly_to_svg_d(pts, y_total)
-        ET.SubElement(g, "path", d=d)
+        ET.SubElement(g, "path", d=_poly_to_svg_d(pts, y_total))
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
-    from ..io.persistence import atomic_write_via
-
     atomic_write_via(
         output_path,
         lambda p: tree.write(str(p), xml_declaration=True, encoding="utf-8"),
     )
-
-    result = {
+    return {
         "polylines": len(polys),
         "width_mm": round(vw, 4),
         "height_mm": round(vh, 4),
     }
+
+
+def dxf_to_svg(
+    input_path: str | Path,
+    output_path: str | Path,
+    stroke: str = "#000000",
+    stroke_width: float = 0.5,
+    padding: float = 2.0,
+) -> dict:
+    """Convert DXF polylines to a consolidated single-layer SVG."""
+    polys, report = load_dxf_polylines_with_report(str(input_path))
+    result = write_polylines_svg(
+        polys,
+        output_path,
+        stroke=stroke,
+        stroke_width=stroke_width,
+        padding=padding,
+    )
     if report.has_issues:
         result["ignored_entities"] = report.ignored_entities
         result["ignored_entity_summary"] = summarize_dxf_import_report(report)

@@ -1507,11 +1507,18 @@ class PolylineView(
                 self._entities[idx].kind
             )
             meta = self._entities[idx].meta
+            # Grouped shapes share one layer name so downstream laser
+            # software runs the whole group as a single job; ungrouped
+            # shapes keep their own per-shape layer.
+            gid = self._groups.get(idx)
+            default_name = (
+                f"group_{gid + 1}" if gid is not None else f"shape_{idx + 1}"
+            )
             if meta is None:
-                export_meta: dict[str, Any] = {"name": f"shape_{idx + 1}"}
+                export_meta: dict[str, Any] = {"name": default_name}
             else:
                 export_meta = deepcopy(meta)
-                export_meta.setdefault("name", f"shape_{idx + 1}")
+                export_meta.setdefault("name", default_name)
             if kind == "line" and len(poly) >= 2:
                 export_meta["start"] = tuple(poly[0])
                 export_meta["end"] = tuple(poly[-1])
