@@ -66,6 +66,8 @@ from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
 from src.ui.canvas.entities import (
     EntityRecord,
+    FlagSetView,
+    GroupsView,
     KindsView,
     MetaView,
     PolylinesView,
@@ -136,6 +138,54 @@ class PolylineView(
             view = self.__dict__["_meta_view"] = MetaView(self)
         return view
 
+    # Flag state lives on the entities too; these set/dict-like views keep
+    # the legacy index-set call sites working. Wholesale assignment routes
+    # through .replace() via the setters.
+
+    @property
+    def _construction_polys(self) -> FlagSetView:
+        view = self.__dict__.get("_construction_view")
+        if view is None:
+            view = self.__dict__["_construction_view"] = FlagSetView(self, "construction")
+        return view
+
+    @_construction_polys.setter
+    def _construction_polys(self, indices) -> None:
+        self._construction_polys.replace(indices)
+
+    @property
+    def _hidden_polys(self) -> FlagSetView:
+        view = self.__dict__.get("_hidden_view")
+        if view is None:
+            view = self.__dict__["_hidden_view"] = FlagSetView(self, "hidden")
+        return view
+
+    @_hidden_polys.setter
+    def _hidden_polys(self, indices) -> None:
+        self._hidden_polys.replace(indices)
+
+    @property
+    def _locked_polys(self) -> FlagSetView:
+        view = self.__dict__.get("_locked_view")
+        if view is None:
+            view = self.__dict__["_locked_view"] = FlagSetView(self, "locked")
+        return view
+
+    @_locked_polys.setter
+    def _locked_polys(self, indices) -> None:
+        self._locked_polys.replace(indices)
+
+    @property
+    def _groups(self) -> GroupsView:
+        view = self.__dict__.get("_groups_view")
+        if view is None:
+            view = self.__dict__["_groups_view"] = GroupsView(self)
+        return view
+
+    @_groups.setter
+    def _groups(self, mapping) -> None:
+        self._groups.replace(mapping)
+
     @staticmethod
     def _clone_polys(
         polys: list[list[tuple[float, float]]],
@@ -180,11 +230,10 @@ class PolylineView(
         # any structural/geometry change).
         self._snap_shapes_cache: list | None = None
 
-        self._construction_polys: set[int] = set()
-        self._hidden_polys: set[int] = set()
-        self._locked_polys: set[int] = set()
+        # construction/hidden/locked/group flags live on EntityRecord;
+        # _construction_polys/_hidden_polys/_locked_polys/_groups are live
+        # views (see the properties above).
         self._accent_polys: dict[int, str] = {}  # index → color hex for role overlays
-        self._groups: dict[int, int] = {}  # poly_idx → group_id
         self._next_group_id: int = 0
         self._draw_construction_mode: bool = False
         self._draw_split_enabled: bool = True
@@ -640,44 +689,15 @@ class PolylineView(
         }
 
     def _compact_entities(self, drop: set[int]) -> None:
-        """Remove entities at ``drop`` indices, remapping all index-keyed state."""
-        kept: list[list[tuple[float, float]]] = []
-        kept_kinds: list[str] = []
-        kept_meta: list[dict[str, Any] | None] = []
-        new_construction: set[int] = set()
-        new_hidden: set[int] = set()
-        new_locked: set[int] = set()
-        new_groups: dict[int, int] = {}
-        for i, p in enumerate(self._polys):
-            if i in drop:
-                continue
-            new_idx = len(kept)
-            kept.append(p)
-            kept_kinds.append(
-                self._entity_kinds[i]
-            )
-            kept_meta.append(
-                deepcopy(self._entity_meta[i])
-                if self._entity_meta[i] is not None
-                else None
-            )
-            if i in self._construction_polys:
-                new_construction.add(new_idx)
-            if i in self._hidden_polys:
-                new_hidden.add(new_idx)
-            if i in self._locked_polys:
-                new_locked.add(new_idx)
-            if i in self._groups:
-                new_groups[new_idx] = self._groups[i]
-        self._entities = [
-            EntityRecord(points=p, kind=k, meta=m)
-            for p, k, m in zip(kept, kept_kinds, kept_meta)
-        ]
-        self._construction_polys = new_construction
-        self._hidden_polys = new_hidden
-        self._locked_polys = new_locked
-        self._groups = new_groups
+        """Remove entities at ``drop`` indices.
 
+        Kind/meta/flags live on the EntityRecord, so they travel with the
+        surviving entities — no index remapping needed (previously ~45 lines
+        of error-prone bookkeeping).
+        """
+        self._entities = [
+            e for i, e in enumerate(self._entities) if i not in drop
+        ]
     def delete_selected(self) -> int:
         delete_set = {idx for idx in self._sel if idx not in self._locked_polys}
         n = len(delete_set)
