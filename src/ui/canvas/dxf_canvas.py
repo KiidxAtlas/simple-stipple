@@ -348,14 +348,6 @@ class DxfCanvas(PolylineView):
                     label = f"Close path (join {len(self._sel)} into one)"
                 menu.addAction(label, self.close_selection_as_path)
             menu.addAction("Fit selection", self.fit_selection)
-            menu.addAction(
-                "Explode to segments",
-                lambda: _run_transform(self.explode_selected_to_segments),
-            )
-            menu.addAction(
-                "Merge segments to object",
-                lambda: _run_transform(self.merge_selected_segments_to_objects),
-            )
             if len(self._sel) >= 2:
                 menu.addAction("Group", self._group_selected)
             if any(i in self._groups for i in self._sel):
@@ -377,6 +369,35 @@ class DxfCanvas(PolylineView):
                 lambda: _run_transform(self._send_selected_to_draft),
             )
 
+        arrange_menu = menu.addMenu("Arrange")
+        for label, mode in (
+            ("Align left", "left"),
+            ("Align center X", "center-x"),
+            ("Align right", "right"),
+            ("Align top", "top"),
+            ("Align center Y", "center-y"),
+            ("Align bottom", "bottom"),
+        ):
+            arrange_menu.addAction(
+                label, lambda _m=mode: _run_transform(lambda: self.align_selected(_m))
+            )
+        arrange_menu.addSeparator()
+        for label, title, prompt, default, axis, dist_mode in (
+            ("Distribute horizontal — gap…", "Distribute Horizontal", "Spacing (mm):", 1.0, "horizontal", "gap"),
+            ("Distribute vertical — gap…", "Distribute Vertical", "Spacing (mm):", 1.0, "vertical", "gap"),
+            ("Distribute horizontal — center-to-center…", "Distribute Horizontal (Center-to-Center)", "Center spacing (mm):", 10.0, "horizontal", "center"),
+            ("Distribute vertical — center-to-center…", "Distribute Vertical (Center-to-Center)", "Center spacing (mm):", 10.0, "vertical", "center"),
+        ):
+            arrange_menu.addAction(
+                label,
+                lambda _t=title, _p=prompt, _d=default, _a=axis, _m=dist_mode: _run_transform(
+                    lambda: _run_prompted_transform(
+                        _t, _p, _d, 0.0,
+                        lambda value: self._distribute_selected(_a, value, mode=_m),
+                    )
+                ),
+            )
+
         transform_menu = menu.addMenu("Transform")
         transform_menu.addAction(
             "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0))
@@ -392,12 +413,11 @@ class DxfCanvas(PolylineView):
             "Mirror vertical",
             lambda: _run_transform(lambda: self.mirror_selected("vertical")),
         )
-
-        dim_menu = transform_menu.addMenu("Dimensions / Spacing")
-        dim_menu.addAction(
+        transform_menu.addSeparator()
+        transform_menu.addAction(
             "Edit width + height…  [⌘⇧D]", lambda: _run_transform(self._show_size_hud)
         )
-        dim_menu.addAction(
+        transform_menu.addAction(
             "Set line length…",
             lambda: _run_transform(
                 lambda: _run_prompted_transform(
@@ -409,7 +429,7 @@ class DxfCanvas(PolylineView):
                 )
             ),
         )
-        dim_menu.addAction(
+        transform_menu.addAction(
             "Set line angle…",
             lambda: _run_transform(
                 lambda: _run_prompted_transform(
@@ -421,77 +441,14 @@ class DxfCanvas(PolylineView):
                 )
             ),
         )
-        dim_menu.addAction(
-            "Distribute horizontal spacing…",
-            lambda: _run_transform(
-                lambda: _run_prompted_transform(
-                    "Distribute Horizontal",
-                    "Spacing (mm):",
-                    1.0,
-                    0.0,
-                    lambda value: self._distribute_selected("horizontal", value),
-                )
-            ),
+        transform_menu.addSeparator()
+        transform_menu.addAction(
+            "Explode to segments",
+            lambda: _run_transform(self.explode_selected_to_segments),
         )
-        dim_menu.addAction(
-            "Distribute vertical spacing…",
-            lambda: _run_transform(
-                lambda: _run_prompted_transform(
-                    "Distribute Vertical",
-                    "Spacing (mm):",
-                    1.0,
-                    0.0,
-                    lambda value: self._distribute_selected("vertical", value),
-                )
-            ),
-        )
-        dim_menu.addAction(
-            "Distribute horizontal (center-to-center)…",
-            lambda: _run_transform(
-                lambda: _run_prompted_transform(
-                    "Distribute Horizontal (Center-to-Center)",
-                    "Center spacing (mm):",
-                    10.0,
-                    0.0,
-                    lambda value: self._distribute_selected(
-                        "horizontal", value, mode="center"
-                    ),
-                )
-            ),
-        )
-        dim_menu.addAction(
-            "Distribute vertical (center-to-center)…",
-            lambda: _run_transform(
-                lambda: _run_prompted_transform(
-                    "Distribute Vertical (Center-to-Center)",
-                    "Center spacing (mm):",
-                    10.0,
-                    0.0,
-                    lambda value: self._distribute_selected(
-                        "vertical", value, mode="center"
-                    ),
-                )
-            ),
-        )
-
-        align_menu = transform_menu.addMenu("Align")
-        align_menu.addAction(
-            "Left", lambda: _run_transform(lambda: self.align_selected("left"))
-        )
-        align_menu.addAction(
-            "Center X", lambda: _run_transform(lambda: self.align_selected("center-x"))
-        )
-        align_menu.addAction(
-            "Right", lambda: _run_transform(lambda: self.align_selected("right"))
-        )
-        align_menu.addAction(
-            "Top", lambda: _run_transform(lambda: self.align_selected("top"))
-        )
-        align_menu.addAction(
-            "Center Y", lambda: _run_transform(lambda: self.align_selected("center-y"))
-        )
-        align_menu.addAction(
-            "Bottom", lambda: _run_transform(lambda: self.align_selected("bottom"))
+        transform_menu.addAction(
+            "Merge segments to object",
+            lambda: _run_transform(self.merge_selected_segments_to_objects),
         )
 
         menu.addSeparator()

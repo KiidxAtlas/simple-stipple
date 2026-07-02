@@ -35,10 +35,6 @@ class SettingsDialog(QDialog):
         ("fvi_output_dir", "Trace output folder"),
     ]
 
-    _REPO_FIELDS = [
-        ("repo_dir", "Repository folder"),
-    ]
-
     _TOGGLE_FIELDS = [
         ("check_updates_on_startup", "Check for app updates on startup", False),
     ]
@@ -99,16 +95,6 @@ class SettingsDialog(QDialog):
         for key, label in self._FOLDER_FIELDS[2:]:
             self._add_row(output_layout, key, label, browse=True)
         content_layout.addWidget(output_card)
-
-        # ── Repository ────────────────────────────────────────────
-        repo_card = surface_frame("panel")
-        repo_layout = QVBoxLayout(repo_card)
-        repo_layout.setContentsMargins(12, 12, 12, 12)
-        repo_layout.setSpacing(6)
-        section_label(repo_layout, "Repository")
-        for key, label in self._REPO_FIELDS:
-            self._add_row(repo_layout, key, label, browse=True)
-        content_layout.addWidget(repo_card)
 
         # ── Behavior ──────────────────────────────────────────────
         behavior_card = surface_frame("panel")

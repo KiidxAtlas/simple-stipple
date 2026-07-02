@@ -89,9 +89,6 @@ class App(QMainWindow):
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
 
         # Periodic auto-fetch while app is open (when enabled in settings)
-        self._auto_fetch_timer = QTimer(self)
-        self._auto_fetch_timer.setSingleShot(False)
-        self._auto_fetch_timer.timeout.connect(self._attempt_auto_fetch)
 
         # Auto-save every 60 seconds if workspace has a path and is dirty
         self._autosave_timer = QTimer(self)
@@ -139,7 +136,6 @@ class App(QMainWindow):
     def _init_tab_bindings(self) -> None:
         self._draft_page: Any = self._page_runtime.get("draft")
         self._pattern_page: Any = self._page_runtime.get("pattern")
-        self._repo_page: Any = self._page_runtime.get("repo")
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
 
@@ -694,7 +690,6 @@ class App(QMainWindow):
         # Stop timers before children destroyed to avoid late callbacks.
         for timer in (
             getattr(self, "_workspace_timer", None),
-            getattr(self, "_auto_fetch_timer", None),
             getattr(self, "_autosave_timer", None),
         ):
             if timer is not None:
@@ -724,47 +719,9 @@ class App(QMainWindow):
             return
         self._startup_done = True
 
-        # Auto-fetch repository metadata on startup if setting is enabled
-        if self._settings.get("auto_fetch_on_startup", False):
-            QTimer.singleShot(500, self._attempt_auto_fetch)
-
-        # Keep fetching periodically while app remains open (if enabled)
-        self._configure_auto_fetch_timer()
-
         # Check for updates on startup if setting is enabled
         if self._settings.get("check_updates_on_startup", False):
             QTimer.singleShot(1000, self._attempt_startup_update_check)
-
-    def _attempt_auto_fetch(self) -> None:
-        """Attempt to fetch remote repository metadata without altering the working tree."""
-        try:
-            self._repo_page.auto_fetch()
-        except (OSError, RuntimeError, ValueError) as exc:
-            LOGGER.warning("Auto-fetch failed: %s", exc)
-
-    def _auto_fetch_interval_ms(self) -> int:
-        """Return periodic auto-fetch interval in milliseconds."""
-        raw = self._settings.get("auto_fetch_interval_minutes", 10)
-        try:
-            minutes = int(raw)
-        except (TypeError, ValueError):
-            minutes = 10
-        minutes = max(1, minutes)
-        return minutes * 60_000
-
-    def _configure_auto_fetch_timer(self) -> None:
-        """Start/stop periodic auto-fetch based on current settings."""
-        enabled = bool(self._settings.get("auto_fetch_periodic", False))
-        if not enabled:
-            self._auto_fetch_timer.stop()
-            return
-
-        interval_ms = self._auto_fetch_interval_ms()
-        if self._auto_fetch_timer.interval() != interval_ms:
-            self._auto_fetch_timer.setInterval(interval_ms)
-
-        if not self._auto_fetch_timer.isActive():
-            self._auto_fetch_timer.start()
 
     def _attempt_startup_update_check(self) -> None:
         """Check for updates on startup (silent if up-to-date)."""
@@ -963,7 +920,6 @@ class App(QMainWindow):
             self._settings = dlg._settings
             self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
             self._page_runtime.apply_settings(self._settings)
-            self._repo_page.sync_from_settings()
 
             for action_id, action in self._global_actions.items():
                 shortcut = self._shortcut(action_id)
@@ -983,8 +939,6 @@ class App(QMainWindow):
             self._save_workspace_as_action.setShortcut(
                 QKeySequence(self._shortcut("workspace.save_as"))
             )
-
-            self._configure_auto_fetch_timer()
 
     def _open_update_check(self) -> None:
         """Open the update check dialog."""

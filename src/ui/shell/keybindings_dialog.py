@@ -35,7 +35,6 @@ _KEYBINDING_FIELDS = [
     ("tab.pattern", "Switch to Pattern page"),
     ("tab.trace", "Switch to Trace page"),
     ("tab.convert", "Switch to Convert page"),
-    ("tab.repo", "Switch to Repo page"),
 ]
 
 
@@ -94,7 +93,20 @@ class KeybindingsDialog(QDialog):
         actions_row.addWidget(reset_btn)
         card_layout.addLayout(actions_row)
 
+        _GROUP_TITLES = {
+            "workspace": "Workspace",
+            "app": "Application",
+            "canvas": "Canvas",
+            "tab": "Pages",
+        }
+        current_group = None
         for key, label in _KEYBINDING_FIELDS:
+            group = key.split(".", 1)[0]
+            if group != current_group:
+                current_group = group
+                header = QLabel(_GROUP_TITLES.get(group, group.title()))
+                header.setProperty("role", "hint")
+                card_layout.addWidget(header)
             self._add_row(card_layout, key, label)
 
         layout.addWidget(card, stretch=1)
