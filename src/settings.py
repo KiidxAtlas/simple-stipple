@@ -28,6 +28,7 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
     "tab.pattern": "Alt+2",
     "tab.trace": "Alt+3",
     "tab.convert": "Alt+4",
+    "tab.repo": "Alt+5",
 }
 
 

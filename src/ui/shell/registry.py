@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QWidget
 from src.ui.pages.convert.tab import ConvertPage
 from src.ui.pages.draft.tab import DraftPage
 from src.ui.pages.pattern.tab import PatternPage
+from src.ui.pages.repo.tab import RepoPage
 from src.ui.pages.trace.tab import TracePage
 
 PageFactory = Callable[[dict], QWidget]
@@ -52,6 +53,10 @@ def _build_convert_page(settings: dict) -> QWidget:
     return ConvertPage(settings=settings)
 
 
+def _build_repo_page(settings: dict) -> QWidget:
+    return RepoPage(settings=settings)
+
+
 def default_page_specs() -> tuple[PageSpec, ...]:
     """Return default page registrations in UI order."""
     return (
@@ -82,5 +87,11 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             command_keywords="page convert utilities",
             factory=_build_convert_page,
             content_canvas_attrs=("_preview_canvas",),
+        ),
+        PageSpec(
+            page_id="repo",
+            title="Repo",
+            command_keywords="page repo git",
+            factory=_build_repo_page,
         ),
     )

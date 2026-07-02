@@ -35,6 +35,7 @@ _KEYBINDING_FIELDS = [
     ("tab.pattern", "Switch to Pattern page"),
     ("tab.trace", "Switch to Trace page"),
     ("tab.convert", "Switch to Convert page"),
+    ("tab.repo", "Switch to Repo page"),
 ]
 
 
