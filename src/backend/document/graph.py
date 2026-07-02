@@ -29,6 +29,11 @@ class LayerNode:
     polylines: list[Polyline] = field(default_factory=list)
     entity_refs: list[EntityRef] = field(default_factory=list)
     dirty: bool = False
+    # Full entity records (points/kind/meta/flags/group) captured from the
+    # canvas. ``polylines`` stays as the derived flat geometry consumed by
+    # exports and ghost rendering; records preserve everything else across
+    # layer switches and sessions.
+    records: list[dict] | None = None
 
 
 class DocumentGraph:
@@ -146,16 +151,31 @@ class DocumentGraph:
             reverse=True,
         )
         extracted: list[tuple[int, Polyline]] = []
+        moved_records: list[dict] = []
+        src_records = source.records if source.records is not None else None
         for idx in indices:
             if 0 <= idx < len(source.polylines):
                 extracted.append((idx, list(source.polylines.pop(idx))))
+                if src_records is not None and 0 <= idx < len(src_records):
+                    moved_records.append(src_records.pop(idx))
         source.entity_refs = []
         if not extracted:
             return
         extracted.sort(key=lambda item: item[0])
-        target.polylines.extend(
-            self._clone_polylines([poly for _idx, poly in extracted])
-        )
+        moved_polys = [poly for _idx, poly in extracted]
+        target.polylines.extend(self._clone_polylines(moved_polys))
+        if moved_records:
+            if target.records is None:
+                # Synthesize plain records for pre-existing target geometry
+                # so indices stay aligned.
+                existing = len(target.polylines) - len(moved_polys)
+                target.records = [
+                    {"points": [list(pt) for pt in p], "kind": "polyline", "meta": None}
+                    for p in target.polylines[:existing]
+                ]
+            target.records.extend(reversed(moved_records))
+        elif target.records is not None:
+            target.records = None
         target.entity_refs = []
 
     # ── Polyline access ───────────────────────────────────────────────────
@@ -167,11 +187,13 @@ class DocumentGraph:
         *,
         entity_refs: list[EntityRef] | None = None,
         mark_dirty: bool = False,
+        records: list[dict] | None = None,
     ) -> None:
         layer = self.ensure_layer(name)
         layer.polylines = self._clone_polylines(polylines)
         layer.entity_refs = list(entity_refs or [])
         layer.dirty = mark_dirty
+        layer.records = records
 
     def get_layer_polylines(
         self,
@@ -192,6 +214,7 @@ class DocumentGraph:
                     "polylines": self._clone_polylines(layer.polylines),
                     "entity_refs": list(layer.entity_refs),
                     "dirty": layer.dirty,
+                    "records": layer.records,
                 }
                 for name, layer in self.layers.items()
             },
@@ -225,12 +248,14 @@ class DocumentGraph:
                 (str(kind), int(ref))
                 for kind, ref in payload.get("entity_refs", []) or []
             ]
+            records = payload.get("records")
             node = LayerNode(
                 id=layer_id or 0,
                 name=str(name),
                 polylines=polylines,
                 entity_refs=refs,
                 dirty=bool(payload.get("dirty", False)),
+                records=records if isinstance(records, list) else None,
             )
             self.layers[str(name)] = node
             max_id = max(max_id, node.id)

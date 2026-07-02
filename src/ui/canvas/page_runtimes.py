@@ -158,6 +158,12 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
 
     def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
         """Persist a custom display label for an outline shape."""
+        if isinstance(shape_key, (tuple, list)) and shape_key:
+            first = shape_key[0]
+            gid = self._canvas._groups.get(first) if isinstance(first, int) else None
+            if gid is not None:
+                self._canvas.set_group_label(gid, new_label)
+            return
         if not isinstance(shape_key, int):
             return
         self._shape_labels.setdefault(layer_name, {})[int(shape_key)] = new_label
@@ -198,6 +204,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             editable=is_outline,
             draggable=is_outline,
             groups=groups,
+            group_labels=dict(getattr(self._canvas, "_group_labels", {})),
         )
 
     def build_layer_tree_rows(

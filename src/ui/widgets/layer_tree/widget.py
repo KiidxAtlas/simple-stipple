@@ -29,6 +29,7 @@ class DxfLayersTree(QFrame):
     """Hierarchical layer and shape tree for canvas sidebars."""
 
     selectionRequested = Signal(object)
+    shapesDeleteRequested = Signal(str, list)  # layer, shape keys
     fitRequested = Signal()
     layerActivated = Signal(str)
     layerVisibilityChanged = Signal(str, bool)
@@ -299,6 +300,19 @@ class DxfLayersTree(QFrame):
 
     def _delete_current_layer(self) -> None:
         if not self._editable:
+            return
+        # Del on selected shape/group rows deletes those shapes; the layer
+        # itself is only deleted when a layer row is what's selected.
+        shape_keys = [
+            self._item_shape_key(it)
+            for it in self._tree.selectedItems()
+            if self._item_kind(it) == "shape"
+        ]
+        if shape_keys:
+            item = self._tree.currentItem()
+            parent = item.parent() if item is not None else None
+            layer = self._item_internal_name(parent) if parent is not None else ""
+            self.shapesDeleteRequested.emit(layer, shape_keys)
             return
         item = self._tree.currentItem()
         if item is None:

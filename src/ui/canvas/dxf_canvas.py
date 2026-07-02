@@ -349,9 +349,9 @@ class DxfCanvas(PolylineView):
                 menu.addAction(label, self.close_selection_as_path)
             menu.addAction("Fit selection", self.fit_selection)
             if len(self._sel) >= 2:
-                menu.addAction("Group", self._group_selected)
+                menu.addAction("Group  [⌘G]", self._group_selected)
             if any(i in self._groups for i in self._sel):
-                menu.addAction("Ungroup", self._ungroup_selected)
+                menu.addAction("Ungroup  [⌘⇧G]", self._ungroup_selected)
         else:
             menu.addAction("Select all", self.select_all)
 

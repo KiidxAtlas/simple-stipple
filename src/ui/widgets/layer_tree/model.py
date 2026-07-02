@@ -47,6 +47,7 @@ def build_shape_rows(
     editable: bool,
     draggable: bool,
     groups: dict[int, int] | None = None,
+    group_labels: dict[int, str] | None = None,
 ) -> list[LayerTreeRow]:
     """Build one tree row per shape — except grouped shapes, which collapse
     into a single row per group (like an SVG ``<g>``). A group row's key is
@@ -78,12 +79,14 @@ def build_shape_rows(
             continue
         emitted.add(gid)
         members = members_by_gid[gid]
+        custom = (group_labels or {}).get(gid)
+        title = custom or "Group"
         rows.append(
             {
                 "key": tuple(members),
-                "label": f"{idx + 1:02d}  Group  ·  {len(members)} shapes",
+                "label": f"{idx + 1:02d}  {title}  ·  {len(members)} shapes",
                 "visible": any(i not in hidden for i in members),
-                "editable": False,
+                "editable": editable,
                 "draggable": draggable,
             }
         )

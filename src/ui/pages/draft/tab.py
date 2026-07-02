@@ -240,6 +240,9 @@ class DraftPage(BasePage):
         self._layers_tree.shapesMoveRequested.connect(self._on_shapes_move_requested)
         self._layers_tree.moveSelectedRequested.connect(self._on_move_selected_to_layer)
         self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
+        self._layers_tree.shapesDeleteRequested.connect(
+            self._on_shapes_delete_requested
+        )
         side_layout.addWidget(self._layer_module, stretch=1)
 
         splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
@@ -366,6 +369,15 @@ class DraftPage(BasePage):
     def _fit_selection(self) -> None:
         if self._canvas.fit_selection():
             self._refresh_status()
+
+    def _on_shapes_delete_requested(self, layer: str, keys: list) -> None:
+        from src.ui.widgets.layer_tree import flatten_shape_keys
+
+        indices = flatten_shape_keys(keys)
+        if not indices or layer != self._current_layer_name():
+            return
+        self._canvas.set_selection(indices)
+        self._canvas.delete_selected()
 
     def _on_canvas_edit(self) -> None:
         self._rt().on_canvas_edit()

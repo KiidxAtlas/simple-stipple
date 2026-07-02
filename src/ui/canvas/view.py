@@ -86,6 +86,24 @@ from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
 CanvasState: TypeAlias = tuple[list[EntityRecord], set[int]]
 
 
+
+def _rehydrate_meta(meta: dict) -> dict:
+    """Convert JSON-round-tripped meta lists back to point tuples."""
+    out = dict(meta)
+    for key in ("start", "end", "center"):
+        v = out.get(key)
+        if isinstance(v, (list, tuple)) and len(v) >= 2:
+            out[key] = (float(v[0]), float(v[1]))
+    cps = out.get("control_points")
+    if isinstance(cps, list):
+        out["control_points"] = [
+            (float(p[0]), float(p[1]))
+            for p in cps
+            if isinstance(p, (list, tuple)) and len(p) >= 2
+        ]
+    return out
+
+
 class PolylineView(
     QGraphicsView,
     CanvasRenderer,
@@ -197,6 +215,7 @@ class PolylineView(
         # views (see the properties above).
         self._accent_polys: dict[int, str] = {}  # index → color hex for role overlays
         self._next_group_id: int = 0
+        self._group_labels: dict[int, str] = {}  # gid → custom name
         self._draw_construction_mode: bool = False
         self._draw_split_enabled: bool = True
 
@@ -372,6 +391,7 @@ class PolylineView(
         self._hidden_polys.clear()
         self._locked_polys.clear()
         self._groups.clear()
+        self._group_labels.clear()
         self._construction_polys.clear()
 
         self._sync_shape_storage_from_entities()
@@ -400,6 +420,7 @@ class PolylineView(
         self._hidden_polys.clear()
         self._locked_polys.clear()
         self._groups.clear()
+        self._group_labels.clear()
 
         self._sync_shape_storage_from_entities()
 
@@ -425,6 +446,7 @@ class PolylineView(
             "hidden_indices": sorted(self._hidden_polys),
             "locked_indices": sorted(self._locked_polys),
             "groups": {str(k): v for k, v in self._groups.items()},
+            "group_labels": {str(k): v for k, v in self._group_labels.items()},
         }
 
     def set_view_state(self, state: dict[str, float | str | bool | list[int]]) -> None:
@@ -476,6 +498,13 @@ class PolylineView(
                 and 0 <= int(k) < len(self._entities)
             }
             self._next_group_id = max(self._groups.values(), default=0) + 1
+        raw_labels = state.get("group_labels", {})
+        if isinstance(raw_labels, dict):
+            self._group_labels = {
+                int(k): str(v)
+                for k, v in raw_labels.items()
+                if str(k).lstrip("-").isdigit() and str(v).strip()
+            }
         self._sel -= self._hidden_polys
         self._redraw()
 
@@ -644,6 +673,15 @@ class PolylineView(
         self._entities = [
             e for i, e in enumerate(self._entities) if i not in drop
         ]
+        # A group with fewer than two surviving members is meaningless —
+        # dissolve it so no phantom "Group · 1 shapes" rows linger.
+        counts: dict[int, int] = {}
+        for e in self._entities:
+            if e.group is not None:
+                counts[e.group] = counts.get(e.group, 0) + 1
+        for e in self._entities:
+            if e.group is not None and counts[e.group] < 2:
+                e.group = None
     def delete_selected(self) -> int:
         delete_set = {idx for idx in self._sel if idx not in self._locked_polys}
         n = len(delete_set)
@@ -994,14 +1032,14 @@ class PolylineView(
                 "kind": self._entities[i].kind,
                 "meta": deepcopy(self._entities[i].meta) if self._entities[i].meta is not None else None,
                 "construction": i in getattr(self, "_construction_polys", set()),
+                "group": self._entities[i].group,
             })
 
-    def _paste_clipboard(self) -> None:
-        if not getattr(self, "_clipboard", []):
-            return
-        self._push_undo()
-        offset = 1.0
-        new_indices = []
+    def _paste_records(self, offset: float) -> list[int]:
+        """Append clipboard records at ``offset``; grouped sources stay
+        grouped in the copy (each source group maps to a fresh group id)."""
+        new_indices: list[int] = []
+        gid_map: dict[int, int] = {}
         for record in getattr(self, "_clipboard", []):
             poly = list(record.get("polyline", []))
             new_poly = [(x + offset, y + offset) for x, y in poly]
@@ -1010,7 +1048,20 @@ class PolylineView(
             new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
             if record.get("construction"):
                 self._construction_polys.add(new_idx)
+            src_gid = record.get("group")
+            if src_gid is not None:
+                if src_gid not in gid_map:
+                    gid_map[src_gid] = self._next_group_id
+                    self._next_group_id += 1
+                self._entities[new_idx].group = gid_map[src_gid]
             new_indices.append(new_idx)
+        return new_indices
+
+    def _paste_clipboard(self) -> None:
+        if not getattr(self, "_clipboard", []):
+            return
+        self._push_undo()
+        new_indices = self._paste_records(1.0)
         self._sel = set(new_indices)
         self._redraw()
         self._notify()
@@ -1043,16 +1094,7 @@ class PolylineView(
         if not getattr(self, "_clipboard", []):
             return
         self._push_undo()
-        new_indices = []
-        for record in getattr(self, "_clipboard", []):
-            poly = list(record.get("polyline", []))
-            new_poly = [(x + offset, y + offset) for x, y in poly]
-            kind = str(record.get("kind", "polyline"))
-            meta = self._translated_entity_meta(kind, record.get("meta"), offset, offset)
-            new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
-            if record.get("construction"):
-                self._construction_polys.add(new_idx)
-            new_indices.append(new_idx)
+        new_indices = self._paste_records(offset)
         self._sel = set(new_indices)
         self._redraw()
         self._notify()
@@ -1497,6 +1539,72 @@ class PolylineView(
             total -= sum(len(e.points) for e in dropped[0])
         self._redo_stack.clear()
 
+    def get_entity_records(self) -> list[dict[str, Any]]:
+        """Serialize entities (geometry + kind/meta/flags/group) for layer
+        storage and sessions. JSON-safe: points become [x, y] lists."""
+        out: list[dict[str, Any]] = []
+        for e in self._entities:
+            out.append(
+                {
+                    "points": [[float(x), float(y)] for x, y in e.points],
+                    "kind": e.kind,
+                    "meta": deepcopy(e.meta) if e.meta is not None else None,
+                    "construction": e.construction,
+                    "hidden": e.hidden,
+                    "locked": e.locked,
+                    "group": e.group,
+                    "group_label": (
+                        self._group_labels.get(e.group)
+                        if e.group is not None
+                        else None
+                    ),
+                }
+            )
+        return out
+
+    def set_entity_records(
+        self, records: list[dict[str, Any]], *, fit: bool = False
+    ) -> None:
+        """Restore entities from :meth:`get_entity_records` output."""
+        ents: list[EntityRecord] = []
+        max_gid = -1
+        for r in records or []:
+            pts = [(float(p[0]), float(p[1])) for p in r.get("points", [])]
+            meta = r.get("meta")
+            if isinstance(meta, dict):
+                meta = _rehydrate_meta(meta)
+            gid = r.get("group")
+            gid = int(gid) if isinstance(gid, (int, float)) and gid is not None else None
+            if gid is not None:
+                max_gid = max(max_gid, gid)
+            ents.append(
+                EntityRecord(
+                    points=pts,
+                    kind=str(r.get("kind", "polyline")),
+                    meta=meta,
+                    construction=bool(r.get("construction", False)),
+                    hidden=bool(r.get("hidden", False)),
+                    locked=bool(r.get("locked", False)),
+                    group=gid,
+                )
+            )
+        self._entities = ents
+        self._group_labels = {}
+        for r in records or []:
+            g = r.get("group")
+            lbl = r.get("group_label")
+            if g is not None and lbl:
+                self._group_labels[int(g)] = str(lbl)
+        self._next_group_id = max(self._next_group_id, max_gid + 1)
+        self._sel.clear()
+        self._sync_shape_storage_from_entities()
+        if fit:
+            self._needs_fit = True
+            self._fit()
+        else:
+            self._redraw()
+        self._notify()
+
     def get_export_dxf_state(self) -> list[dict[str, Any]]:
         self._sync_shape_storage_from_entities()
         result: list[dict[str, Any]] = []
@@ -1511,9 +1619,10 @@ class PolylineView(
             # software runs the whole group as a single job; ungrouped
             # shapes keep their own per-shape layer.
             gid = self._groups.get(idx)
-            default_name = (
-                f"group_{gid + 1}" if gid is not None else f"shape_{idx + 1}"
-            )
+            if gid is not None:
+                default_name = self._group_labels.get(gid) or f"group_{gid + 1}"
+            else:
+                default_name = f"shape_{idx + 1}"
             if meta is None:
                 export_meta: dict[str, Any] = {"name": default_name}
             else:
@@ -2122,6 +2231,12 @@ class PolylineView(
                     self.deselect_all()
                 else:
                     self.select_all()
+                return
+            elif key == Qt.Key.Key_G:
+                if shift_mod:
+                    self._ungroup_selected()
+                else:
+                    self._group_selected()
                 return
             elif key == Qt.Key.Key_I:
                 # Ctrl+I: Invert selection
@@ -2764,10 +2879,16 @@ class PolylineView(
                 members = {
                     i
                     for i, g in self._groups.items()
-                    if g == gid and i < len(self._entities)
+                    if g == gid
+                    and i < len(self._entities)
+                    and i not in self._hidden_polys
                 }
                 if ctrl or shift_toggle:
-                    self._sel |= members
+                    # Toggle the whole group as one unit.
+                    if members <= self._sel:
+                        self._sel -= members
+                    else:
+                        self._sel |= members
                 elif target not in self._sel:
                     self._sel = members
                 # else: already selected — preserve current selection for group move
@@ -4632,6 +4753,16 @@ class PolylineView(
             self._groups[idx] = gid
         self._show_flash(f"Grouped {len(self._sel)} shapes", 900)
         self._notify()
+        self._fire_poly_change()
+
+    def set_group_label(self, gid: int, label: str) -> None:
+        label = str(label).strip()
+        if label:
+            self._group_labels[int(gid)] = label
+        else:
+            self._group_labels.pop(int(gid), None)
+        self._notify()
+        self._fire_poly_change()
 
     def _ungroup_selected(self) -> None:
         ungrouped = {self._groups.pop(idx) for idx in self._sel if idx in self._groups}
@@ -4641,8 +4772,11 @@ class PolylineView(
         stale = {idx for idx, gid in list(self._groups.items()) if gid in ungrouped}
         for idx in stale:
             self._groups.pop(idx, None)
+        for gid in ungrouped:
+            self._group_labels.pop(gid, None)
         self._show_flash("Ungrouped", 700)
         self._notify()
+        self._fire_poly_change()
 
     def _send_selected_to_draft(self) -> None:
         cb = getattr(self, "_send_selected_to_draft_cb", None)

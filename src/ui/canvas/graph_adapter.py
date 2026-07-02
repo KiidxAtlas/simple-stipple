@@ -22,13 +22,19 @@ class CanvasGraphAdapter:
         self.index_to_ref = [("layer-polyline", idx) for idx in range(len(polys))]
 
     def load_to_canvas(self, canvas: PolylineView, *, fit: bool = False) -> None:
-        polys = self.graph.get_layer_polylines(self.display_layer)
-        canvas.set_polylines_state(polys, fit=fit)
+        layer = self.graph.ensure_layer(self.display_layer)
+        if layer.records is not None:
+            canvas.set_entity_records(layer.records, fit=fit)
+        else:
+            canvas.set_polylines_state(layer.polylines, fit=fit)
         self._build_index_mapping()
 
     def capture_from_canvas(self, canvas: PolylineView) -> None:
+        records = canvas.get_entity_records()
         self.graph.set_layer_polylines(
-            self.display_layer, canvas.get_polylines_state()
+            self.display_layer,
+            [[(p[0], p[1]) for p in r["points"]] for r in records],
+            records=records,
         )
         self._build_index_mapping()
 
