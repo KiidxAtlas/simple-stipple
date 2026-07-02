@@ -264,11 +264,6 @@ class DxfCanvas(PolylineView):
             shape_menu.addAction(
                 "Hexagon (drag)", lambda: self.set_quick_shape_mode("hexagon")
             )
-            wx_txt, wy_txt = self._c2w(cx, cy)
-            menu.addAction(
-                "Add text…",
-                lambda: self.prompt_add_text(wx_txt, wy_txt),
-            )
             menu.addSeparator()
 
         poly_hit = poly_hit_early
@@ -455,6 +450,9 @@ class DxfCanvas(PolylineView):
             "Merge segments to object",
             lambda: _run_transform(self.merge_selected_segments_to_objects),
         )
+
+        wx_txt, wy_txt = self._c2w(cx, cy)
+        menu.addAction("Add text…  [T]", lambda: self.prompt_add_text(wx_txt, wy_txt))
 
         menu.addSeparator()
         menu.addAction("Fit view [F]", self.fit)

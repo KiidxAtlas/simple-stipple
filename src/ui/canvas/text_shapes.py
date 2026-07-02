@@ -9,7 +9,12 @@ the image tracer produces them.
 
 from __future__ import annotations
 
-from PySide6.QtGui import QFont, QPainterPath
+import shutil
+from pathlib import Path
+
+from PySide6.QtGui import QFont, QFontDatabase, QPainterPath
+
+from src.paths import user_data_dir
 
 Polyline = list[tuple[float, float]]
 
@@ -63,3 +68,41 @@ def text_to_polylines(
             pts.append(pts[0])
         polys.append(pts)
     return polys
+
+
+def user_fonts_dir() -> Path:
+    """Folder scanned for extra .ttf/.otf fonts (drop files in to add fonts)."""
+    d = user_data_dir() / "fonts"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def load_user_fonts() -> list[str]:
+    """Register every font file in the user fonts folder; return families."""
+    families: list[str] = []
+    for f in sorted(user_fonts_dir().iterdir()):
+        if f.suffix.lower() in {".ttf", ".otf", ".ttc"}:
+            font_id = QFontDatabase.addApplicationFont(str(f))
+            if font_id >= 0:
+                families.extend(QFontDatabase.applicationFontFamilies(font_id))
+    return families
+
+
+def install_font_file(path: str) -> str | None:
+    """Copy a font file into the user fonts folder and register it.
+
+    Returns the first family name on success, None on failure.
+    """
+    src_path = Path(path)
+    if src_path.suffix.lower() not in {".ttf", ".otf", ".ttc"}:
+        return None
+    dest = user_fonts_dir() / src_path.name
+    try:
+        shutil.copyfile(src_path, dest)
+    except OSError:
+        return None
+    font_id = QFontDatabase.addApplicationFont(str(dest))
+    if font_id < 0:
+        return None
+    fams = QFontDatabase.applicationFontFamilies(font_id)
+    return fams[0] if fams else None

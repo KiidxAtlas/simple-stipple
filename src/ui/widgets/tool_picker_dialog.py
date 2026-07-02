@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QDialog,
@@ -23,6 +23,7 @@ TOOL_SPECS = [
     ("Circle", "circle"),
     ("Ellipse", "ellipse"),
     ("Polygon", "polygon"),
+    ("Text", "text"),
 ]
 
 
@@ -94,6 +95,16 @@ class ToolButton(QPushButton):
             path.lineTo(icon_rect.left() + 2, cy - 2)
             path.closeSubpath()
             painter.drawPath(path)
+        elif self._tool == "text":
+            # Serif "T" glyph
+            painter.drawLine(
+                QPointF(icon_rect.left() + 2, icon_rect.top() + 2),
+                QPointF(icon_rect.right() - 2, icon_rect.top() + 2),
+            )
+            painter.drawLine(
+                QPointF(cx, icon_rect.top() + 2),
+                QPointF(cx, icon_rect.bottom() - 1),
+            )
         painter.end()
 
 

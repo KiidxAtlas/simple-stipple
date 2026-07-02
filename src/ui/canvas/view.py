@@ -2305,6 +2305,13 @@ class PolylineView(
                 self.set_mode("draw" if self._mode != "draw" else "select")
             elif key == Qt.Key.Key_E:
                 self.set_mode("edit" if self._mode != "edit" else "select")
+            elif key == Qt.Key.Key_T and self._mode == "select":
+                wx = self._cursor_wx
+                wy = self._cursor_wy
+                if wx is None or wy is None:
+                    vp = self.viewport()
+                    wx, wy = self._c2w(vp.width() / 2.0, vp.height() / 2.0)
+                self.prompt_add_text(wx, wy)
             elif (
                 key == Qt.Key.Key_A
                 and self._mode == "draw"
@@ -2609,6 +2616,12 @@ class PolylineView(
 
             if self._draw_snap is not None:
                 wx, wy = self._draw_snap
+
+            if self._draw_primitive == "text":
+                # Click chooses the anchor; the dialog does the rest.
+                self.prompt_add_text(wx, wy)
+                self.set_mode("select")
+                return
 
             if self._draw_primitive in {"rectangle", "circle", "ellipse", "polygon"}:
                 if not self._draw_shape_preview_active:
@@ -4583,6 +4596,7 @@ class PolylineView(
             "circle",
             "ellipse",
             "polygon",
+            "text",
         }
         if tool not in valid:
             return
