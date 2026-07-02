@@ -14,6 +14,8 @@ from shapely.geometry import Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
+from src.backend.shapes.factory import shape_from_legacy_meta
+
 _LOG = logging.getLogger(__name__)
 OUTLINE_CLOSE_TOLERANCE_MM = 2.0
 OUTLINE_MIN_AREA_MM2 = 1.0
@@ -499,12 +501,6 @@ def write_polylines_dxf(
     if len(metas) < len(polylines):
         metas += [None] * (len(polylines) - len(metas))
 
-    def _finite(*vals: Any) -> bool:
-        try:
-            return all(math.isfinite(float(v)) for v in vals)
-        except (TypeError, ValueError):
-            return False
-
     for i, (c, kind, meta) in enumerate(zip(polylines, kinds, metas)):
         if len(c) >= 2:
             entity_attrs = dict(dxfattrs)
@@ -518,103 +514,19 @@ def write_polylines_dxf(
                     doc.layers.add(layer_from_name, color=2)
                 entity_attrs["layer"] = layer_from_name
 
-            # Kind-specific entity emission. Every branch validates its meta
-            # (finite values, positive radii, non-degenerate geometry); on any
-            # invalidity it falls through to the LWPOLYLINE path below so the
-            # shape is still exported from its flattened polyline instead of
-            # being dropped or written as a corrupt entity.
-            if kind == "line" and meta and "start" in meta and "end" in meta:
-                start = tuple(meta["start"])
-                end = tuple(meta["end"])
-                if (
-                    len(start) >= 2
-                    and len(end) >= 2
-                    and _finite(start[0], start[1], end[0], end[1])
-                    and math.hypot(end[0] - start[0], end[1] - start[1]) > 1e-9
-                ):
-                    msp.add_line(
-                        (float(start[0]), float(start[1])),
-                        (float(end[0]), float(end[1])),
-                        dxfattribs=entity_attrs or None,
-                    )
-                    continue
-            if kind == "circle" and meta and "center" in meta and "radius" in meta:
-                ctr = tuple(meta["center"])
-                if (
-                    len(ctr) >= 2
-                    and _finite(ctr[0], ctr[1], meta["radius"])
-                    and float(meta["radius"]) > 1e-9
-                ):
-                    msp.add_circle(
-                        (float(ctr[0]), float(ctr[1])),
-                        float(meta["radius"]),
-                        dxfattribs=entity_attrs or None,
-                    )
-                    continue
-            if (
-                kind == "ellipse"
-                and meta
-                and "center" in meta
-                and "rx" in meta
-                and "ry" in meta
-                and _finite(meta["rx"], meta["ry"])
-            ):
-                ctr = tuple(meta["center"])
-                rx = float(meta["rx"])
-                ry = float(meta["ry"])
-                rot_deg = float(meta.get("rotation", meta.get("angle", 0.0)))
-                if len(ctr) >= 2 and _finite(ctr[0], ctr[1], rot_deg) and rx > 0 and ry > 0:
-                    # DXF requires ratio ≤ 1 (minor/major). If ry > rx, the
-                    # major axis is the y one — swap and rotate 90°.
-                    if ry > rx:
-                        rx, ry = ry, rx
-                        rot_deg += 90.0
-                    rot = math.radians(rot_deg)
-                    major_axis = (rx * math.cos(rot), rx * math.sin(rot))
-                    msp.add_ellipse(
-                        (float(ctr[0]), float(ctr[1])),
-                        major_axis,
-                        ratio=min(ry / rx, 1.0),
-                        dxfattribs=entity_attrs or None,
-                    )
-                    continue
-            if kind == "arc" and meta and "center" in meta and "radius" in meta:
-                ctr = tuple(meta["center"])
-                start_a = float(meta.get("start_angle", 0.0)) if _finite(meta.get("start_angle", 0.0)) else None
-                end_a = float(meta.get("end_angle", 360.0)) if _finite(meta.get("end_angle", 360.0)) else None
-                if (
-                    len(ctr) >= 2
-                    and _finite(ctr[0], ctr[1], meta["radius"])
-                    and float(meta["radius"]) > 1e-9
-                    and start_a is not None
-                    and end_a is not None
-                ):
-                    msp.add_arc(
-                        (float(ctr[0]), float(ctr[1])),
-                        float(meta["radius"]),
-                        start_a,
-                        end_a,
-                        dxfattribs=entity_attrs or None,
-                    )
-                    continue
-            if kind == "spline" and meta and "control_points" in meta:
-                cps = [
-                    (float(pt[0]), float(pt[1]))
-                    for pt in cast(
-                        list[tuple[float, float]], meta.get("control_points", [])
-                    )
-                    if len(pt) >= 2 and _finite(pt[0], pt[1])
-                ]
-                # ezdxf needs at least degree+1 control points; clamp the
-                # degree rather than emitting an invalid spline.
-                degree = int(meta.get("degree", 3)) if _finite(meta.get("degree", 3)) else 3
-                degree = max(1, min(degree, len(cps) - 1))
-                if len(cps) >= 2 and degree >= 1:
-                    msp.add_spline(
-                        cps,
-                        degree=degree,
-                        dxfattribs=entity_attrs or None,
-                    )
+            # Kind-specific entity emission is owned by the Shape classes
+            # (src/backend/shapes/shape.py). Each shape validates its own
+            # parameters (finite values, positive radii, ellipse axis swap,
+            # spline degree clamp); to_dxf() returns False for degenerate or
+            # unsupported shapes, and we fall through to the LWPOLYLINE path
+            # below so the geometry is still exported from its flattened
+            # polyline instead of being dropped or written corrupt.
+            if kind != "polyline" and isinstance(meta, dict):
+                if kind == "ellipse" and "rotation" not in meta and "angle" in meta:
+                    # Legacy files stored the ellipse rotation under "angle".
+                    meta = {**meta, "rotation": meta["angle"]}
+                shape = shape_from_legacy_meta(kind, meta)
+                if shape is not None and shape.to_dxf(msp, entity_attrs or None):
                     continue
 
             force_close = bool(close) and not bool(open_paths)

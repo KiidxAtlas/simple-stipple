@@ -14,6 +14,39 @@ from typing import Literal
 Point = tuple[float, float]
 
 
+def _finite(*vals: object) -> bool:
+    try:
+        return all(math.isfinite(float(v)) for v in vals)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
+
+def _rotate_pt(p: Point, center: Point, angle_deg: float) -> Point:
+    if abs(angle_deg) < 1e-9:
+        return p
+    ang = math.radians(angle_deg)
+    ca, sa = math.cos(ang), math.sin(ang)
+    dx, dy = p[0] - center[0], p[1] - center[1]
+    return (center[0] + dx * ca - dy * sa, center[1] + dx * sa + dy * ca)
+
+
+def _scale_pt(p: Point, center: Point, factor: float) -> Point:
+    if abs(factor - 1.0) < 1e-9:
+        return p
+    return (
+        center[0] + (p[0] - center[0]) * factor,
+        center[1] + (p[1] - center[1]) * factor,
+    )
+
+
+def _mirror_pt(p: Point, center: Point, axis: str) -> Point:
+    if axis == "horizontal":
+        return (2 * center[0] - p[0], p[1])
+    if axis == "vertical":
+        return (p[0], 2 * center[1] - p[1])
+    return p
+
+
 @dataclass
 class Shape(ABC):
     """Base class for all shape types.
@@ -77,28 +110,45 @@ class Shape(ABC):
         """Compute tessellated point sequence. Implemented by subclasses."""
         ...
 
-    def transform(self, matrix: tuple[tuple[float, float, float], ...]) -> None:
-        """Apply 2D affine transformation to shape.
+    # ── Geometric operations ─────────────────────────────────────────────
+    # Each shape transforms its own parametric fields; there is exactly one
+    # implementation per shape kind (previously this logic was duplicated as
+    # kind-string switches in view.py, dxf/io.py, and factory.py).
 
-        Default implementation transforms control points. Subclasses may override.
+    def _map_points(self, fn) -> None:
+        """Apply a point mapping to this shape's defining geometry.
+
+        Default covers point-list shapes; parametric subclasses override.
         """
-        # Simple 2D affine: apply to each control point
-        new_points = []
-        for pt in self.control_points:
-            x, y = pt
-            # Assume 2x3 matrix: [[a, b, tx], [c, d, ty]]
-            if len(matrix) == 2 and len(matrix[0]) == 3:
-                a, b, tx = matrix[0]
-                c, d, ty = matrix[1]
-                new_x = a * x + b * y + tx
-                new_y = c * x + d * y + ty
-                new_points.append((new_x, new_y))
-            else:
-                # Fallback: just translate
-                new_points.append(pt)
+        raise NotImplementedError
 
-        # Subclasses should override this to properly transform their properties
-        self.invalidate_cache()
+    def translate(self, dx: float, dy: float) -> None:
+        self._map_points(lambda p: (p[0] + dx, p[1] + dy))
+
+    def rotate(self, center: Point, angle_deg: float) -> None:
+        self._map_points(lambda p: _rotate_pt(p, center, angle_deg))
+
+    def scale(self, center: Point, factor: float) -> None:
+        self._map_points(lambda p: _scale_pt(p, center, factor))
+
+    def mirror(self, center: Point, axis: str) -> None:
+        self._map_points(lambda p: _mirror_pt(p, center, axis))
+
+    # ── Interop ──────────────────────────────────────────────────────────
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        """Return ``(kind, meta)`` in the legacy polyline+metadata encoding."""
+        return (self.shape_type, None)
+
+    def to_dxf(self, msp, dxfattribs: dict | None = None) -> bool:
+        """Emit this shape as a native DXF entity onto ``msp``.
+
+        Returns ``False`` when the shape has no native DXF form or its
+        parameters are degenerate (non-finite, zero radius, …); callers then
+        fall back to writing the tessellated polyline, so no shape is ever
+        dropped or written corrupt.
+        """
+        return False
 
     def copy(self, new_id: int) -> Shape:
         """Create a deep copy with a new ID."""
@@ -130,6 +180,10 @@ class PolylineShape(Shape):
         """Polylines don't need tessellation — return points as-is."""
         return list(self._control_points)
 
+    def _map_points(self, fn) -> None:
+        self.control_points = [fn(p) for p in self._control_points]
+
+
 class LineShape(Shape):
     """A simple line segment (two points)."""
 
@@ -145,6 +199,23 @@ class LineShape(Shape):
     def _compute_tessellation(self) -> list[Point]:
         """Lines don't need tessellation."""
         return [self.start, self.end]
+
+    def _map_points(self, fn) -> None:
+        self.start = fn(self.start)
+        self.end = fn(self.end)
+        self.invalidate_cache()
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        return ("line", {"start": tuple(self.start), "end": tuple(self.end)})
+
+    def to_dxf(self, msp, dxfattribs: dict | None = None) -> bool:
+        sx, sy = self.start
+        ex, ey = self.end
+        if not _finite(sx, sy, ex, ey) or math.hypot(ex - sx, ey - sy) <= 1e-9:
+            return False
+        msp.add_line((float(sx), float(sy)), (float(ex), float(ey)), dxfattribs=dxfattribs)
+        return True
+
 
 class ArcShape(Shape):
     """A circular arc defined by center, radius, and angle range."""
@@ -200,6 +271,57 @@ class ArcShape(Shape):
 
         return points
 
+    def _map_points(self, fn) -> None:
+        """Transform the arc by mapping its center/start/end points, then
+        re-deriving radius and angles (matches legacy canvas behavior,
+        including the sweep flip a mirror produces)."""
+        start_rad = math.radians(self.start_angle)
+        end_rad = math.radians(self.end_angle)
+        start_pt = (
+            self.center[0] + self.radius * math.cos(start_rad),
+            self.center[1] + self.radius * math.sin(start_rad),
+        )
+        end_pt = (
+            self.center[0] + self.radius * math.cos(end_rad),
+            self.center[1] + self.radius * math.sin(end_rad),
+        )
+        c = fn(self.center)
+        s = fn(start_pt)
+        e = fn(end_pt)
+        self.center = c
+        self.radius = math.hypot(s[0] - c[0], s[1] - c[1])
+        self.start_angle = math.degrees(math.atan2(s[1] - c[1], s[0] - c[0])) % 360.0
+        self.end_angle = math.degrees(math.atan2(e[1] - c[1], e[0] - c[0])) % 360.0
+        self.invalidate_cache()
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        return (
+            "arc",
+            {
+                "center": tuple(self.center),
+                "radius": self.radius,
+                "start_angle": self.start_angle,
+                "end_angle": self.end_angle,
+            },
+        )
+
+    def to_dxf(self, msp, dxfattribs: dict | None = None) -> bool:
+        cx, cy = self.center
+        if (
+            not _finite(cx, cy, self.radius, self.start_angle, self.end_angle)
+            or self.radius <= 1e-9
+        ):
+            return False
+        msp.add_arc(
+            (float(cx), float(cy)),
+            float(self.radius),
+            float(self.start_angle),
+            float(self.end_angle),
+            dxfattribs=dxfattribs,
+        )
+        return True
+
+
 class CircleShape(Shape):
     """A circle defined by center and radius."""
 
@@ -234,6 +356,26 @@ class CircleShape(Shape):
         # Close the circle
         points.append(points[0])
         return points
+
+    def _map_points(self, fn) -> None:
+        self.center = fn(self.center)
+        self.invalidate_cache()
+
+    def scale(self, center: Point, factor: float) -> None:
+        self.center = _scale_pt(self.center, center, factor)
+        self.radius = self.radius * abs(factor)
+        self.invalidate_cache()
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        return ("circle", {"center": tuple(self.center), "radius": self.radius})
+
+    def to_dxf(self, msp, dxfattribs: dict | None = None) -> bool:
+        cx, cy = self.center
+        if not _finite(cx, cy, self.radius) or self.radius <= 1e-9:
+            return False
+        msp.add_circle((float(cx), float(cy)), float(self.radius), dxfattribs=dxfattribs)
+        return True
+
 
 class EllipseShape(Shape):
     """An ellipse defined by center, radii, and rotation."""
@@ -304,6 +446,60 @@ class EllipseShape(Shape):
         points.append(points[0])
         return points
 
+    def _map_points(self, fn) -> None:
+        self.center = fn(self.center)
+        self.invalidate_cache()
+
+    def rotate(self, center: Point, angle_deg: float) -> None:
+        self.center = _rotate_pt(self.center, center, angle_deg)
+        self.rotation = (self.rotation + angle_deg) % 360.0
+        self.invalidate_cache()
+
+    def scale(self, center: Point, factor: float) -> None:
+        self.center = _scale_pt(self.center, center, factor)
+        self.rx = self.rx * abs(factor)
+        self.ry = self.ry * abs(factor)
+        self.invalidate_cache()
+
+    def mirror(self, center: Point, axis: str) -> None:
+        self.center = _mirror_pt(self.center, center, axis)
+        if axis == "horizontal":
+            self.rotation = (180.0 - self.rotation) % 360.0
+        elif axis == "vertical":
+            self.rotation = (-self.rotation) % 360.0
+        self.invalidate_cache()
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        return (
+            "ellipse",
+            {
+                "center": tuple(self.center),
+                "rx": self.rx,
+                "ry": self.ry,
+                "rotation": self.rotation,
+            },
+        )
+
+    def to_dxf(self, msp, dxfattribs: dict | None = None) -> bool:
+        cx, cy = self.center
+        rx, ry, rot_deg = self.rx, self.ry, self.rotation
+        if not _finite(cx, cy, rx, ry, rot_deg) or rx <= 0 or ry <= 0:
+            return False
+        # DXF requires ratio ≤ 1 (minor/major). If ry > rx, the major axis
+        # is the y one — swap and rotate 90°.
+        if ry > rx:
+            rx, ry = ry, rx
+            rot_deg += 90.0
+        rot = math.radians(rot_deg)
+        msp.add_ellipse(
+            (float(cx), float(cy)),
+            (rx * math.cos(rot), rx * math.sin(rot)),
+            ratio=min(ry / rx, 1.0),
+            dxfattribs=dxfattribs,
+        )
+        return True
+
+
 class RectangleShape(Shape):
     """A rectangle defined by center, width, and height."""
 
@@ -352,6 +548,43 @@ class RectangleShape(Shape):
         """Rectangle as polyline (4 corners + close)."""
         pts = self.control_points
         return list(pts) + [pts[0]]  # Close the shape
+
+    def _map_points(self, fn) -> None:
+        self.center = fn(self.center)
+        self.invalidate_cache()
+
+    def rotate(self, center: Point, angle_deg: float) -> None:
+        self.center = _rotate_pt(self.center, center, angle_deg)
+        self.rotation = (self.rotation + angle_deg) % 360.0
+        self.invalidate_cache()
+
+    def scale(self, center: Point, factor: float) -> None:
+        self.center = _scale_pt(self.center, center, factor)
+        self.width = self.width * abs(factor)
+        self.height = self.height * abs(factor)
+        self.invalidate_cache()
+
+    def mirror(self, center: Point, axis: str) -> None:
+        self.center = _mirror_pt(self.center, center, axis)
+        if axis == "horizontal":
+            self.rotation = (180.0 - self.rotation) % 360.0
+        elif axis == "vertical":
+            self.rotation = (-self.rotation) % 360.0
+        self.invalidate_cache()
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        return (
+            "rectangle",
+            {
+                "center": tuple(self.center),
+                "width": self.width,
+                "height": self.height,
+                "rotation": self.rotation,
+            },
+        )
+    # Rectangles have no native DXF entity — base to_dxf() returns False and
+    # the caller emits the tessellated LWPOLYLINE (matches legacy writer).
+
 
 class SplineShape(Shape):
     """A B-spline curve defined by control points."""
@@ -403,4 +636,36 @@ class SplineShape(Shape):
         except Exception:
             # Fallback to polyline if spline fails
             return list(self._control_points)
+
+    def _map_points(self, fn) -> None:
+        self.control_points = [fn(p) for p in self._control_points]
+
+    def to_legacy_meta(self) -> tuple[str, dict | None]:
+        return (
+            "spline",
+            {
+                "control_points": [tuple(p) for p in self._control_points],
+                "degree": self.degree,
+                "closed": self.closed,
+                "segments": self.segments,
+            },
+        )
+
+    def to_dxf(self, msp, dxfattribs: dict | None = None) -> bool:
+        cps = [
+            (float(p[0]), float(p[1]))
+            for p in self._control_points
+            if len(p) >= 2 and _finite(p[0], p[1])
+        ]
+        if len(cps) < 2:
+            return False
+        # ezdxf needs at least degree+1 control points; clamp the degree
+        # rather than emitting an invalid spline.
+        try:
+            degree = int(self.degree)
+        except (TypeError, ValueError):
+            degree = 3
+        degree = max(1, min(degree, len(cps) - 1))
+        msp.add_spline(cps, degree=degree, dxfattribs=dxfattribs)
+        return True
 

@@ -310,3 +310,55 @@ class ShapeFactory:
                 closed=data.get("closed", False),
                 **kwargs,
             )
+
+
+def shape_from_legacy_meta(kind: str, meta: dict[str, Any]) -> Shape | None:
+    """Build a Shape from the legacy ``kind`` + metadata encoding, or None."""
+    try:
+        return ShapeFactory.from_dict({"type": kind, "id": 0, **meta})
+    except (TypeError, ValueError, KeyError, IndexError):
+        return None
+
+
+def transform_legacy_meta(
+    kind: str,
+    meta: dict[str, Any] | None,
+    *,
+    transform: str,
+    center: Point = (0.0, 0.0),
+    factor: float | None = None,
+    angle_deg: float = 0.0,
+    axis: str | None = None,
+    dx: float = 0.0,
+    dy: float = 0.0,
+) -> dict[str, Any] | None:
+    """Apply a geometric transform to legacy ``kind`` + ``meta`` metadata.
+
+    Reconstructs the shape, delegates to its transform method, and returns
+    the updated metadata (preserving any extra keys such as ``name``).
+    Returns ``None`` when the transform does not apply — callers keep the
+    original metadata in that case.
+    """
+    if not meta or kind == "polyline":
+        return None
+    shape = shape_from_legacy_meta(kind, meta)
+    if shape is None:
+        return None
+    if transform == "translate":
+        shape.translate(dx, dy)
+    elif transform == "rotate":
+        shape.rotate(center, angle_deg)
+    elif transform == "scale":
+        if factor is None:
+            return None
+        shape.scale(center, factor)
+    elif transform == "mirror":
+        if axis is None:
+            return None
+        shape.mirror(center, axis)
+    else:
+        return None
+    _, new_meta = shape.to_legacy_meta()
+    if new_meta is None:
+        return None
+    return {**meta, **new_meta}

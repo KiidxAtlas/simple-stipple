@@ -63,6 +63,7 @@ from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
+from src.backend.shapes.factory import transform_legacy_meta
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
 from src.ui.canvas.shape_storage import ShapeStorage
@@ -802,109 +803,24 @@ class PolylineView(
         dx: float = 0.0,
         dy: float = 0.0,
     ) -> None:
-        if not meta or kind == "polyline":
-            return
-        updated = deepcopy(meta)
+        """Transform an entity's parametric metadata via its Shape class.
 
-        def _translate_point(pt: tuple[float, float]) -> tuple[float, float]:
-            return (pt[0] + dx, pt[1] + dy)
-
-        def _xform_point(pt: tuple[float, float]) -> tuple[float, float]:
-            if transform == "translate":
-                return _translate_point(pt)
-            if transform == "rotate":
-                return self._rotate_point(pt, center, angle_deg)
-            if transform == "scale":
-                if factor is None:
-                    return pt
-                return self._scale_point(pt, center, factor)
-            if transform == "mirror" and axis is not None:
-                return self._mirror_point(pt, center, axis)
-            return pt
-
-        if kind == "line":
-            start = updated.get("start")
-            end = updated.get("end")
-            if isinstance(start, tuple) and isinstance(end, tuple):
-                updated["start"] = _xform_point(tuple(start))
-                updated["end"] = _xform_point(tuple(end))
-        elif kind == "circle":
-            ctr = updated.get("center")
-            if isinstance(ctr, tuple):
-                updated["center"] = _xform_point(tuple(ctr))
-            if transform == "scale" and factor is not None:
-                updated["radius"] = float(updated.get("radius", 0.0)) * abs(factor)
-        elif kind == "ellipse":
-            ctr = updated.get("center")
-            if isinstance(ctr, tuple):
-                updated["center"] = _xform_point(tuple(ctr))
-            if transform == "scale" and factor is not None:
-                updated["rx"] = float(updated.get("rx", 0.0)) * abs(factor)
-                updated["ry"] = float(updated.get("ry", 0.0)) * abs(factor)
-            rot = float(updated.get("rotation", 0.0))
-            if transform == "rotate":
-                updated["rotation"] = (rot + angle_deg) % 360.0
-            elif transform == "mirror" and axis is not None:
-                if axis == "horizontal":
-                    updated["rotation"] = (180.0 - rot) % 360.0
-                elif axis == "vertical":
-                    updated["rotation"] = (-rot) % 360.0
-        elif kind == "arc":
-            ctr = updated.get("center")
-            radius = float(updated.get("radius", 0.0))
-            start_angle = float(updated.get("start_angle", 0.0))
-            end_angle = float(updated.get("end_angle", 0.0))
-            if isinstance(ctr, tuple) and radius > 0:
-                cpt = tuple(ctr)
-                start_pt = (
-                    cpt[0] + radius * math.cos(math.radians(start_angle)),
-                    cpt[1] + radius * math.sin(math.radians(start_angle)),
-                )
-                end_pt = (
-                    cpt[0] + radius * math.cos(math.radians(end_angle)),
-                    cpt[1] + radius * math.sin(math.radians(end_angle)),
-                )
-                cpt = _xform_point(cpt)
-                start_pt = _xform_point(start_pt)
-                end_pt = _xform_point(end_pt)
-                updated["center"] = cpt
-                updated["radius"] = math.hypot(
-                    start_pt[0] - cpt[0], start_pt[1] - cpt[1]
-                )
-                updated["start_angle"] = (
-                    math.degrees(math.atan2(start_pt[1] - cpt[1], start_pt[0] - cpt[0]))
-                    % 360.0
-                )
-                updated["end_angle"] = (
-                    math.degrees(math.atan2(end_pt[1] - cpt[1], end_pt[0] - cpt[0]))
-                    % 360.0
-                )
-        elif kind == "rectangle":
-            ctr = updated.get("center")
-            if isinstance(ctr, tuple):
-                updated["center"] = _xform_point(tuple(ctr))
-            if transform == "scale" and factor is not None:
-                updated["width"] = float(updated.get("width", 0.0)) * abs(factor)
-                updated["height"] = float(updated.get("height", 0.0)) * abs(factor)
-            if transform == "rotate":
-                updated["rotation"] = (float(updated.get("rotation", 0.0)) + angle_deg) % 360.0
-            elif transform == "mirror" and axis is not None:
-                rot = float(updated.get("rotation", 0.0))
-                if axis == "horizontal":
-                    updated["rotation"] = (180.0 - rot) % 360.0
-                elif axis == "vertical":
-                    updated["rotation"] = (-rot) % 360.0
-        elif kind == "spline":
-            cps = updated.get("control_points")
-            if isinstance(cps, list):
-                updated_cps: list[tuple[float, float]] = []
-                for pt in cps:
-                    if isinstance(pt, tuple):
-                        updated_cps.append(_xform_point(tuple(pt)))
-                if len(updated_cps) >= 2:
-                    updated["control_points"] = updated_cps
-
-        if idx < len(self._entity_meta):
+        All per-kind transform math lives on the Shape subclasses in
+        src/backend/shapes/shape.py — this is a thin delegation shim kept for
+        the legacy kind+meta storage until the canvas migrates to shapes.
+        """
+        updated = transform_legacy_meta(
+            kind,
+            meta,
+            transform=transform,
+            center=center,
+            factor=factor,
+            angle_deg=angle_deg,
+            axis=axis,
+            dx=dx,
+            dy=dy,
+        )
+        if updated is not None and idx < len(self._entity_meta):
             self._entity_meta[idx] = updated
 
     @staticmethod
@@ -914,27 +830,7 @@ class PolylineView(
         dx: float,
         dy: float,
     ) -> dict[str, Any] | None:
-        if meta is None or kind == "polyline":
-            return None
-        updated = deepcopy(meta)
-        if kind == "line":
-            start = updated.get("start")
-            end = updated.get("end")
-            if isinstance(start, tuple):
-                updated["start"] = (start[0] + dx, start[1] + dy)
-            if isinstance(end, tuple):
-                updated["end"] = (end[0] + dx, end[1] + dy)
-        elif kind in {"circle", "ellipse", "arc", "rectangle"}:
-            ctr = updated.get("center")
-            if isinstance(ctr, tuple):
-                updated["center"] = (ctr[0] + dx, ctr[1] + dy)
-        elif kind == "spline":
-            cps = updated.get("control_points")
-            if isinstance(cps, list):
-                updated["control_points"] = [
-                    (pt[0] + dx, pt[1] + dy) for pt in cps if isinstance(pt, tuple)
-                ]
-        return updated
+        return transform_legacy_meta(kind, meta, transform="translate", dx=dx, dy=dy)
 
     @staticmethod
     def _rotate_point(
