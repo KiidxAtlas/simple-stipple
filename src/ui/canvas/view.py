@@ -63,7 +63,7 @@ from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
-from src.backend.shapes.factory import transform_legacy_meta
+from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
 from src.ui.canvas.entities import (
     EntityRecord,
     KindsView,
@@ -72,7 +72,6 @@ from src.ui.canvas.entities import (
 )
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
-from src.ui.canvas.shape_storage import ShapeStorage
 from src.ui.core.focus_policy import blur_focused_line_edit
 from src.backend.behaviors.snapping import (
     resolve_snap as _legacy_resolve_snap,
@@ -177,8 +176,9 @@ class PolylineView(
         self._entities: list[EntityRecord] = []
         self._sel: set[int] = set()
 
-        # Phase 2: New shape storage (Phase 2+)
-        self._shape_storage = ShapeStorage()
+        # Lazily-built Shape objects for the snap engine (invalidated on
+        # any structural/geometry change).
+        self._snap_shapes_cache: list | None = None
 
         self._construction_polys: set[int] = set()
         self._hidden_polys: set[int] = set()
@@ -363,10 +363,7 @@ class PolylineView(
         self._groups.clear()
         self._construction_polys.clear()
 
-        # Phase 2: Migrate to new shape storage
-        self._shape_storage.migrate_from_polylines(
-            self._polys, self._entity_kinds, self._entity_meta
-        )
+        self._sync_shape_storage_from_entities()
 
         self._needs_fit = True
         self._fit()
@@ -393,10 +390,7 @@ class PolylineView(
         self._locked_polys.clear()
         self._groups.clear()
 
-        # Phase 2: Migrate to new shape storage
-        self._shape_storage.migrate_from_polylines(
-            self._polys, self._entity_kinds, self._entity_meta
-        )
+        self._sync_shape_storage_from_entities()
 
         if fit:
             self._needs_fit = True
@@ -537,12 +531,18 @@ class PolylineView(
             ent.meta = deepcopy(m) if m is not None else None
 
     def _sync_shape_storage_from_entities(self) -> None:
-        """Keep Phase-2 shape storage synchronized with current entity arrays."""
-        self._shape_storage.migrate_from_polylines(
-            self._polys,
-            self._entity_kinds,
-            self._entity_meta,
-        )
+        """Invalidate the lazily-built snap-shape cache."""
+        self._snap_shapes_cache = None
+
+    def _snap_shapes(self) -> list:
+        """Shape objects for the snap engine, rebuilt from entities on demand."""
+        if self._snap_shapes_cache is None:
+            ShapeFactory.reset_id_counter(0)
+            self._snap_shapes_cache = [
+                ShapeFactory.from_legacy(kind=e.kind, points=e.points, metadata=e.meta)
+                for e in self._entities
+            ]
+        return self._snap_shapes_cache
 
     def get_selection_indices(self) -> list[int]:
         return self._selected_indices()
@@ -654,11 +654,11 @@ class PolylineView(
             new_idx = len(kept)
             kept.append(p)
             kept_kinds.append(
-                self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
+                self._entity_kinds[i]
             )
             kept_meta.append(
                 deepcopy(self._entity_meta[i])
-                if i < len(self._entity_meta) and self._entity_meta[i] is not None
+                if self._entity_meta[i] is not None
                 else None
             )
             if i in self._construction_polys:
@@ -960,16 +960,8 @@ class PolylineView(
     def _apply_edit_vertex_position(self, wx: float, wy: float) -> None:
         if getattr(self, "_edit_poly", None) is None or getattr(self, "_edit_vert", None) is None:
             return
-        kind = (
-            self._entity_kinds[self._edit_poly]
-            if self._edit_poly < len(self._entity_kinds)
-            else "polyline"
-        )
-        meta = (
-            self._entity_meta[self._edit_poly]
-            if self._edit_poly < len(self._entity_meta)
-            else None
-        )
+        kind = self._entity_kinds[self._edit_poly]
+        meta = self._entity_meta[self._edit_poly]
         if kind == "arc" and isinstance(meta, dict):
             center = meta.get("center")
             if isinstance(center, tuple):
@@ -1033,8 +1025,8 @@ class PolylineView(
                 continue
             self._clipboard.append({
                 "polyline": list(self._polys[i]),
-                "kind": self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline",
-                "meta": deepcopy(self._entity_meta[i]) if i < len(self._entity_meta) and self._entity_meta[i] is not None else None,
+                "kind": self._entity_kinds[i],
+                "meta": deepcopy(self._entity_meta[i]) if self._entity_meta[i] is not None else None,
                 "construction": i in getattr(self, "_construction_polys", set()),
             })
 
@@ -1131,8 +1123,8 @@ class PolylineView(
                 self._transform_entity_meta(
                     idx,
                     center=(0.0, 0.0),
-                    kind=self._entity_kinds[idx] if idx < len(self._entity_kinds) else "polyline",
-                    meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                    kind=self._entity_kinds[idx],
+                    meta=self._entity_meta[idx],
                     transform="translate", dx=dx, dy=dy,
                 )
         self._redraw()
@@ -1325,10 +1317,8 @@ class PolylineView(
                 popped_was_construction = i in getattr(self, "_construction_polys", set())
                 survivor_was_construction = survivor_idx in getattr(self, "_construction_polys", set())
                 self._polys[survivor_idx] = merged
-                if survivor_idx < len(self._entity_kinds):
-                    self._entity_kinds[survivor_idx] = "polyline"
-                if survivor_idx < len(self._entity_meta):
-                    self._entity_meta[survivor_idx] = None
+                self._entity_kinds[survivor_idx] = "polyline"
+                self._entity_meta[survivor_idx] = None
                 del self._entities[i]
                 remapped: set[int] = set()
                 for ci in getattr(self, "_construction_polys", set()):
@@ -1481,9 +1471,9 @@ class PolylineView(
             if idx in self._construction_polys:
                 continue
             kind = (
-                self._entity_kinds[idx] if idx < len(self._entity_kinds) else "polyline"
+                self._entity_kinds[idx]
             )
-            meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+            meta = self._entity_meta[idx]
             if meta is None:
                 export_meta: dict[str, Any] = {"name": f"shape_{idx + 1}"}
             else:
@@ -2736,8 +2726,6 @@ class PolylineView(
             hit = self._find_nearest_vertex(pos.x(), pos.y())
             target_kind = (
                 self._entity_kinds[target]
-                if target < len(self._entity_kinds)
-                else "polyline"
             )
             if (
                 hit is not None
@@ -3095,12 +3083,8 @@ class PolylineView(
                         self._transform_entity_meta(
                             idx,
                             center=(0.0, 0.0),
-                            kind=self._entity_kinds[idx]
-                            if idx < len(self._entity_kinds)
-                            else "polyline",
-                            meta=self._entity_meta[idx]
-                            if idx < len(self._entity_meta)
-                            else None,
+                            kind=self._entity_kinds[idx],
+                            meta=self._entity_meta[idx],
                             transform="translate",
                             dx=dx_w,
                             dy=dy_w,
@@ -3349,10 +3333,8 @@ class PolylineView(
             result_polys.append(p)
             result_kinds.append(
                 self._entity_kinds[src_idx]
-                if src_idx < len(self._entity_kinds)
-                else "polyline"
             )
-            m = self._entity_meta[src_idx] if src_idx < len(self._entity_meta) else None
+            m = self._entity_meta[src_idx]
             result_meta.append(deepcopy(m) if m is not None else None)
             _carry_flags(src_idx, ni)
             if src_idx in self._groups:
@@ -3533,7 +3515,7 @@ class PolylineView(
     def _shape_snap_candidate(self, cx: float, cy: float) -> tuple[float, float, str] | None:
         best: tuple[float, float, str] | None = None
         best_dist = float("inf")
-        for shape in self._shape_storage.get_all_shapes():
+        for shape in self._snap_shapes():
             if not getattr(shape, "visible", True):
                 continue
             for sx, sy, snap_type in ShapeSnapEngine.get_snap_candidates(shape):
@@ -3740,12 +3722,8 @@ class PolylineView(
             self._transform_entity_meta(
                 idx,
                 center=(0.0, 0.0),
-                kind=self._entity_kinds[idx]
-                if idx < len(self._entity_kinds)
-                else "polyline",
-                meta=self._entity_meta[idx]
-                if idx < len(self._entity_meta)
-                else None,
+                kind=self._entity_kinds[idx],
+                meta=self._entity_meta[idx],
                 transform="translate",
                 dx=dx,
                 dy=dy,
@@ -3857,10 +3835,8 @@ class PolylineView(
             self._transform_entity_meta(
                 idx,
                 center=(center_x, center_y),
-                kind=self._entity_kinds[idx]
-                if idx < len(self._entity_kinds)
-                else "polyline",
-                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                kind=self._entity_kinds[idx],
+                meta=self._entity_meta[idx],
                 transform="translate",
                 dx=dx,
                 dy=dy,
@@ -3888,10 +3864,8 @@ class PolylineView(
             self._transform_entity_meta(
                 idx,
                 center=(cx, cy),
-                kind=self._entity_kinds[idx]
-                if idx < len(self._entity_kinds)
-                else "polyline",
-                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                kind=self._entity_kinds[idx],
+                meta=self._entity_meta[idx],
                 transform="mirror",
                 axis=axis,
             )
@@ -3921,10 +3895,8 @@ class PolylineView(
             self._transform_entity_meta(
                 idx,
                 center=(cx, cy),
-                kind=self._entity_kinds[idx]
-                if idx < len(self._entity_kinds)
-                else "polyline",
-                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                kind=self._entity_kinds[idx],
+                meta=self._entity_meta[idx],
                 transform="rotate",
                 angle_deg=angle_deg,
             )
@@ -3951,10 +3923,8 @@ class PolylineView(
             self._transform_entity_meta(
                 idx,
                 center=(cx, cy),
-                kind=self._entity_kinds[idx]
-                if idx < len(self._entity_kinds)
-                else "polyline",
-                meta=self._entity_meta[idx] if idx < len(self._entity_meta) else None,
+                kind=self._entity_kinds[idx],
+                meta=self._entity_meta[idx],
                 transform="scale",
                 factor=factor,
             )
@@ -4249,8 +4219,8 @@ class PolylineView(
 
     def _sync_line_meta_from_poly(self, idx: int) -> None:
         """Refresh a line entity's start/end meta from its polyline points."""
-        kind = self._entity_kinds[idx] if idx < len(self._entity_kinds) else "polyline"
-        meta = self._entity_meta[idx] if idx < len(self._entity_meta) else None
+        kind = self._entity_kinds[idx]
+        meta = self._entity_meta[idx]
         if kind == "line" and isinstance(meta, dict):
             meta["start"] = tuple(self._polys[idx][0])
             meta["end"] = tuple(self._polys[idx][-1])
@@ -4676,8 +4646,8 @@ class PolylineView(
         new_sel: set[int] = set()
         for i, poly in enumerate(self._polys):
             is_construction = i in self._construction_polys
-            kind = self._entity_kinds[i] if i < len(self._entity_kinds) else "polyline"
-            meta = self._entity_meta[i] if i < len(self._entity_meta) else None
+            kind = self._entity_kinds[i]
+            meta = self._entity_meta[i]
             if i in to_explode:
                 pts = list(poly)
                 is_closed = False
