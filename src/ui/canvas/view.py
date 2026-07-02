@@ -1214,6 +1214,58 @@ class PolylineView(
             self._fire_poly_change()
         return changed
 
+    def add_text_at(
+        self,
+        wx: float,
+        wy: float,
+        *,
+        text: str,
+        family: str,
+        height_mm: float,
+        bold: bool = False,
+        italic: bool = False,
+    ) -> int:
+        """Place ``text`` as grouped polyline outlines with its bottom-left
+        at world (wx, wy). Returns the number of contours created."""
+        from src.ui.canvas.text_shapes import text_to_polylines
+
+        polys = text_to_polylines(
+            text, family=family, height_mm=height_mm, bold=bold, italic=italic
+        )
+        if not polys:
+            return 0
+        self._push_undo()
+        new_indices: list[int] = []
+        for poly in polys:
+            idx = self._append_entity([(x + wx, y + wy) for x, y in poly])
+            new_indices.append(idx)
+        # Group the glyph contours so the text behaves as one object in the
+        # canvas and shows as a single row in the layer tree.
+        if len(new_indices) > 1:
+            gid = self._next_group_id
+            self._next_group_id += 1
+            for idx in new_indices:
+                self._groups[idx] = gid
+        self._sel = set(new_indices)
+        self._show_flash(f"Text placed ({len(new_indices)} contours)", 900)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_indices)
+
+    def prompt_add_text(self, wx: float, wy: float) -> None:
+        """Open the Add Text dialog and place the result at world (wx, wy)."""
+        from src.ui.widgets.text_dialog import AddTextDialog
+
+        dlg = AddTextDialog(self)
+        if dlg.exec() != AddTextDialog.DialogCode.Accepted:
+            return
+        vals = dlg.values()
+        if not vals["text"].strip():
+            self._show_flash("No text entered", 900)
+            return
+        self.add_text_at(wx, wy, **vals)
+
     def close_selection_as_path(self) -> None:
         """Join the selected segments into one path (when several are
         selected) and close it — the context-menu "Close path" action."""
