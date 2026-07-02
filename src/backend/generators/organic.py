@@ -18,6 +18,8 @@ from shapely.geometry import (  # type: ignore[import-untyped]
 )
 from shapely.ops import voronoi_diagram  # type: ignore[import-untyped]
 
+from src.backend.generators._shared import _extract_polys
+
 from src.backend.generators._shared import (
     LOGGER,
     _clip_to_outline,

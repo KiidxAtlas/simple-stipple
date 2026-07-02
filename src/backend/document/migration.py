@@ -9,18 +9,12 @@ def graph_from_polylines(
     polylines: list[list[tuple[float, float]]],
     *,
     layer: str = "geometry",
-    as_segments: bool = True,
+    as_segments: bool = True,  # kept for call-site compatibility; unused
 ) -> DocumentGraph:
     """Build a ``DocumentGraph`` from polyline geometry for a target layer."""
     graph = DocumentGraph()
     graph.set_active_layer(layer)
-
-    if as_segments:
-        for poly in polylines:
-            graph.add_polyline_as_segments(poly, layer=layer, merge_points=False)
-    else:
-        graph.set_layer_polylines(layer, polylines)
-
+    graph.set_layer_polylines(layer, polylines)
     return graph
 
 
