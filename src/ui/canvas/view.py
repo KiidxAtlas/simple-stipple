@@ -3401,10 +3401,48 @@ class PolylineView(
         closed_splits = 0
         open_splits = 0
         result_polys: list[list[tuple[float, float]]] = []
+        result_kinds: list[str] = []
+        result_meta: list[dict[str, Any] | None] = []
+        new_construction: set[int] = set()
+        new_hidden: set[int] = set()
+        new_locked: set[int] = set()
+        new_groups: dict[int, int] = {}
 
-        for poly in self._polys:
+        def _carry_flags(src_idx: int, ni: int) -> None:
+            if src_idx in self._construction_polys:
+                new_construction.add(ni)
+            if src_idx in self._hidden_polys:
+                new_hidden.add(ni)
+            if src_idx in self._locked_polys:
+                new_locked.add(ni)
+
+        def _keep(src_idx: int, p: list[tuple[float, float]]) -> None:
+            """Carry an unchanged poly through with its kind/meta/flags intact."""
+            ni = len(result_polys)
+            result_polys.append(p)
+            result_kinds.append(
+                self._entity_kinds[src_idx]
+                if src_idx < len(self._entity_kinds)
+                else "polyline"
+            )
+            m = self._entity_meta[src_idx] if src_idx < len(self._entity_meta) else None
+            result_meta.append(deepcopy(m) if m is not None else None)
+            _carry_flags(src_idx, ni)
+            if src_idx in self._groups:
+                new_groups[ni] = self._groups[src_idx]
+
+        def _emit(src_idx: int, p: list[tuple[float, float]]) -> None:
+            """Emit a split piece: geometry changed, so it demotes to a plain
+            polyline (stale circle/arc meta must not survive the cut)."""
+            ni = len(result_polys)
+            result_polys.append(p)
+            result_kinds.append("polyline")
+            result_meta.append(None)
+            _carry_flags(src_idx, ni)
+
+        for src_idx, poly in enumerate(self._polys):
             if len(poly) < 2:
-                result_polys.append(poly)
+                _keep(src_idx, poly)
                 continue
 
             is_closed = self._is_poly_closed(poly)
@@ -3420,12 +3458,12 @@ class PolylineView(
                     if not shapely_poly.is_valid:
                         shapely_poly = shapely_poly.buffer(0)
                     if shapely_poly.is_empty:
-                        result_polys.append(poly)
+                        _keep(src_idx, poly)
                         continue
 
                     # Check if cutting line actually intersects
                     if not cutter.intersects(shapely_poly):
-                        result_polys.append(poly)
+                        _keep(src_idx, poly)
                         continue
 
                     if self._would_split_closed_polygon(shapely_poly, cutter):
@@ -3455,7 +3493,7 @@ class PolylineView(
                             if isinstance(g, Polygon) and not g.is_empty:
                                 coords_out = list(g.exterior.coords)
                                 if len(coords_out) >= 3:
-                                    result_polys.append([(x, y) for x, y in coords_out])
+                                    _emit(src_idx, [(x, y) for x, y in coords_out])
                         any_split = True
                         closed_splits += 1
                     else:
@@ -3464,7 +3502,7 @@ class PolylineView(
                             poly[:-1] if self._points_equal(poly[0], poly[-1]) else poly
                         )
                         if len(pts) < 3:
-                            result_polys.append(poly)
+                            _keep(src_idx, poly)
                             continue
                         rebuilt: list[tuple[float, float]] = [pts[0]]
                         boundary_changed = False
@@ -3482,22 +3520,22 @@ class PolylineView(
                             if not self._points_equal(rebuilt[0], rebuilt[-1]):
                                 rebuilt.append(rebuilt[0])
                             if boundary_changed:
-                                result_polys.append(rebuilt)
+                                _emit(src_idx, rebuilt)
                                 any_split = True
                                 closed_splits += 1
                             else:
-                                result_polys.append(poly)
+                                _keep(src_idx, poly)
                         else:
-                            result_polys.append(poly)
+                            _keep(src_idx, poly)
                 except (TypeError, ValueError, GEOSException):
                     # Any Shapely error — keep original geometry untouched
-                    result_polys.append(poly)
+                    _keep(src_idx, poly)
             else:
                 # ── Split open geometry segment-by-segment ────────────────
                 try:
                     pts = list(poly)
                     if len(pts) < 2:
-                        result_polys.append(poly)
+                        _keep(src_idx, poly)
                         continue
 
                     # Each "chain" grows into one output polyline.
@@ -3521,15 +3559,23 @@ class PolylineView(
                             chains[-1].append(b)
 
                     if segment_changed:
-                        result_polys.extend(c for c in chains if len(c) >= 2)
+                        for c in chains:
+                            if len(c) >= 2:
+                                _emit(src_idx, c)
                         any_split = True
                         open_splits += 1
                     else:
-                        result_polys.append(poly)
+                        _keep(src_idx, poly)
                 except (TypeError, ValueError, GEOSException):
-                    result_polys.append(poly)
+                    _keep(src_idx, poly)
 
         self._polys = result_polys
+        self._entity_kinds = result_kinds
+        self._entity_meta = result_meta
+        self._construction_polys = new_construction
+        self._hidden_polys = new_hidden
+        self._locked_polys = new_locked
+        self._groups = new_groups
         return any_split, closed_splits, open_splits
 
     @staticmethod
@@ -3666,8 +3712,9 @@ class PolylineView(
         self._push_undo()
         new_sel: set[int] = set()
         for poly, is_construction in created:
-            new_idx = len(self._polys)
-            self._polys.append(poly)
+            # _append_entity keeps _entity_kinds/_entity_meta in sync — a bare
+            # _polys.append desyncs them and corrupts later DXF export.
+            new_idx = self._append_entity(poly)
             if is_construction:
                 self._construction_polys.add(new_idx)
             new_sel.add(new_idx)
@@ -4250,8 +4297,9 @@ class PolylineView(
         self._push_undo()
         new_sel: set[int] = set()
         for poly, is_construction in created:
-            new_idx = len(self._polys)
-            self._polys.append(poly)
+            # _append_entity keeps _entity_kinds/_entity_meta in sync — a bare
+            # _polys.append desyncs them and corrupts later DXF export.
+            new_idx = self._append_entity(poly)
             if is_construction:
                 self._construction_polys.add(new_idx)
             new_sel.add(new_idx)
@@ -4760,8 +4808,14 @@ class PolylineView(
         if len(indices) < 2:
             return 0
 
+        # Endpoint weld tolerance. 1e-6 mm was so tight that float error from
+        # prior transforms (rotate/scale/move) made visually-coincident
+        # endpoints fail to join; 0.01 mm is far below drawing scale but
+        # absorbs accumulated round-off.
+        _MERGE_TOL = 0.01
+
         def _eq(a: tuple[float, float], b: tuple[float, float]) -> bool:
-            return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+            return abs(a[0] - b[0]) < _MERGE_TOL and abs(a[1] - b[1]) < _MERGE_TOL
 
         segs: list[tuple[tuple[float, float], tuple[float, float], bool]] = []
         for i in indices:
@@ -4835,26 +4889,17 @@ class PolylineView(
                 chain_construction,
             ))
 
-        kept_polys: list[list[tuple[float, float]]] = []
-        kept_construction: set[int] = set()
-        for i, poly in enumerate(self._polys):
-            if i in sel_set:
-                continue
-            ni = len(kept_polys)
-            kept_polys.append(poly)
-            if i in self._construction_polys:
-                kept_construction.add(ni)
-
+        # Remove the merged sources via _compact_entities so entity kinds,
+        # meta, hidden/locked sets, and groups are all remapped consistently —
+        # rebuilding _polys alone left those arrays describing the wrong
+        # shapes (stale meta then exported incorrect entities to DXF).
+        self._compact_entities(sel_set)
         new_sel: set[int] = set()
         for poly, is_construction in merged_polys:
-            ni = len(kept_polys)
-            kept_polys.append(poly)
+            ni = self._append_entity(poly)
             new_sel.add(ni)
             if is_construction:
-                kept_construction.add(ni)
-
-        self._polys = kept_polys
-        self._construction_polys = kept_construction
+                self._construction_polys.add(ni)
         self._sel = new_sel
         self._redraw()
         self._notify()
