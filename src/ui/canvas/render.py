@@ -649,6 +649,13 @@ class CanvasRenderer:
 
     def _paint_draw_preview_badges(self, painter: QPainter) -> None:
         outcomes = self._draw_preview_outcomes()
+        if not outcomes or self._cursor_wx is None or self._cursor_wy is None:
+            return
+        cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
+        y = cy - 42
+        for label in outcomes:
+            self._draw_badge(painter, cx + 36, y, label, 10)
+            y -= 20
 
     def _draw_preview_outcomes(self) -> list[str]:
         """Return a list of badge labels to display during drawing preview.
@@ -657,13 +664,6 @@ class CanvasRenderer:
         custom badge behaviour (e.g. showing snap types).
         """
         return []
-        if not outcomes or self._cursor_wx is None or self._cursor_wy is None:
-            return
-        cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
-        y = cy - 42
-        for label in outcomes:
-            self._draw_badge(painter, cx + 36, y, label, 10)
-            y -= 20
 
     def _paint_snap_overlay(
         self,
