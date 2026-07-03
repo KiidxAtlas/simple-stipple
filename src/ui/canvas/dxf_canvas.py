@@ -224,7 +224,7 @@ class DxfCanvas(PolylineView):
             )
             preview = self._build_drag_shape(self._shape_drag_mode, sx, sy, ex, ey)
             if len(preview) >= 2:
-                painter_preview = QPainter(self.viewport())
+                painter_preview = QPainter(self)
                 painter_preview.setRenderHint(QPainter.RenderHint.Antialiasing)
                 pen = QPen(QColor("#f85149"), 1.5, Qt.PenStyle.DashLine)
                 painter_preview.setPen(pen)
@@ -235,7 +235,7 @@ class DxfCanvas(PolylineView):
                 painter_preview.end()
 
             if self._mode == "select" and self._radial_active:
-                painter = QPainter(self.viewport())
+                painter = QPainter(self)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 self._paint_radial_menu(painter)
                 painter.end()
@@ -489,7 +489,7 @@ class DxfCanvas(PolylineView):
             "padding: 2px 6px;"
         )
 
-        self._size_w_edit = QLineEdit(self.viewport())
+        self._size_w_edit = QLineEdit(self)
         self._size_w_edit.setFixedWidth(90)
         self._size_w_edit.setFixedHeight(24)
         self._size_w_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -501,7 +501,7 @@ class DxfCanvas(PolylineView):
         self._size_w_edit.editingFinished.connect(self._apply_size_hud)
         self._size_w_edit.show()
 
-        self._size_h_edit = QLineEdit(self.viewport())
+        self._size_h_edit = QLineEdit(self)
         self._size_h_edit.setFixedWidth(90)
         self._size_h_edit.setFixedHeight(24)
         self._size_h_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -563,8 +563,7 @@ class DxfCanvas(PolylineView):
             cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
             self._radial_center_c = QPoint(int(cx), int(cy))
         else:
-            vp = self.viewport()
-            self._radial_center_c = QPoint(vp.width() // 2, vp.height() // 2)
+            self._radial_center_c = QPoint(self.width() // 2, self.height() // 2)
         self._radial_active = True
         self._redraw()
 

@@ -1,7 +1,7 @@
 """CanvasRenderer — paint-method mixin for PolylineView.
 
 All ``_paint_*`` helpers and ``_draw_badge`` live here.
-PolylineView inherits this mixin via ``class PolylineView(QGraphicsView, CanvasRenderer)``.
+PolylineView inherits this mixin via ``class PolylineView(QWidget, CanvasRenderer)``.
 Since the methods are resolved through the normal MRO, every ``self.*`` reference
 works without any modification.
 """
@@ -33,7 +33,7 @@ from src.backend.geometry.primitives import (
     build_rect_poly,
 )
 from src.backend.geometry.spline import build_spline_poly
-from src.constants import DIM, POLY, SEL
+from src.constants import DIM, POLY, Q_BG, SEL
 from src.ui.canvas._constants import (
     BADGE_BG as _BADGE_BG,
     BADGE_DIM as _BADGE_DIM,
@@ -78,7 +78,7 @@ def _pil_to_qpixmap(pil_img: PILImage.Image) -> QPixmap:
 class CanvasRenderer:
     """Mixin providing all ``_paint_*`` draw helpers for :class:`PolylineView`.
 
-    Do not instantiate directly — inherit alongside ``QGraphicsView``.
+    Do not instantiate directly — inherit alongside ``QWidget``.
     """
 
     def _paint_bg_image(self, painter: QPainter) -> None:
@@ -438,8 +438,7 @@ class CanvasRenderer:
                     eff_wx3 - self._draw_pts[-1][0],
                     eff_wy3 - self._draw_pts[-1][1],
                 )
-            vp = self.viewport()
-            vw = max(vp.width(), 100)
+            vw = max(self.width(), 100)
             summary_text = f"Total: {total_len:.2f} mm  |  {len(self._draw_pts)} pts"
             self._draw_badge(painter, vw - 100, 50, summary_text, 10)
 
@@ -1032,12 +1031,12 @@ class CanvasRenderer:
             )
 
     def paintEvent(self, event, /):
-        painter = QPainter(self.viewport())
+        painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        vp = self.viewport()
-        w = max(vp.width(), 100)
-        h = max(vp.height(), 100)
+        w = max(self.width(), 100)
+        h = max(self.height(), 100)
+        painter.fillRect(self.rect(), Q_BG)
 
         if self._grid_visible:
             self._paint_grid(painter, w, h)
@@ -1358,8 +1357,8 @@ class CanvasRenderer:
         height: int = 20,
         align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignRight,
     ) -> QLineEdit:
-        """Create a styled HUD QLineEdit parented to the viewport."""
-        edit = QLineEdit(self.viewport())
+        """Create a styled HUD QLineEdit parented to the canvas."""
+        edit = QLineEdit(self)
         edit.setFixedWidth(width)
         edit.setFixedHeight(height)
         edit.setAlignment(align)
@@ -1490,9 +1489,8 @@ class CanvasRenderer:
         snap indicator icons and labels (drawn at +18, +4 from snap point)
         never get covered.
         """
-        vp = self.viewport()
-        vw = max(vp.width(), 100)
-        vh = max(vp.height(), 100)
+        vw = max(self.width(), 100)
+        vh = max(self.height(), 100)
         # Default: below-right of cursor
         dx, dy = 28, 22
         # If near right edge, flip to left side
@@ -1617,7 +1615,7 @@ class CanvasRenderer:
         chx, chy = self._w2c(hx, hy)
         mx, my = (cax + chx) / 2, (cay + chy) / 2
 
-        le = QLineEdit(self.viewport())
+        le = QLineEdit(self)
         le.setText(f"{dist:.2f}")
         le.setFixedWidth(100)
         le.setFixedHeight(24)

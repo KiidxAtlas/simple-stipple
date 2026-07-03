@@ -1,4 +1,4 @@
-"""PolylineView — interactive pan/zoom QGraphicsView with polyline selection, measure, draw, and edit tools."""
+"""PolylineView — interactive pan/zoom canvas widget with polyline selection, measure, draw, and edit tools."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
-    QBrush,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -28,8 +27,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QGraphicsScene,
-    QGraphicsView,
     QInputDialog,
     QLineEdit,
     QMenu,
@@ -105,7 +102,7 @@ def _rehydrate_meta(meta: dict) -> dict:
 
 
 class PolylineView(
-    QGraphicsView,
+    QWidget,
     CanvasRenderer,
 ):
     """
@@ -181,14 +178,6 @@ class PolylineView(
         on_poly_change=None,
     ):
         super().__init__(parent)
-        self._scene = QGraphicsScene(self)
-        self.setScene(self._scene)
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setBackgroundBrush(QBrush(Q_BG))
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._selectable = selectable
@@ -1744,9 +1733,8 @@ class PolylineView(
         return visited
 
     def _fit_to_bounds(self, bounds: tuple[float, float, float, float]) -> None:
-        vp = self.viewport()
-        w = max(vp.width(), 100)
-        h = max(vp.height(), 100)
+        w = max(self.width(), 100)
+        h = max(self.height(), 100)
         x0, y0, x1, y1 = bounds
         dw = max(x1 - x0, 1e-6)
         dh = max(y1 - y0, 1e-6)
@@ -1808,8 +1796,7 @@ class PolylineView(
         self._redraw()
 
     def _zoom_by(self, factor: float) -> None:
-        vp = self.viewport()
-        w, h = max(vp.width(), 100), max(vp.height(), 100)
+        w, h = max(self.width(), 100), max(self.height(), 100)
         cx, cy = w / 2, h / 2
         wx, wy = self._c2w(cx, cy)
         self._scale = max(_MIN_SCALE, self._scale * factor)
@@ -2000,11 +1987,10 @@ class PolylineView(
     # ── Drawing ───────────────────────────────────────────────────────────────
 
     def _redraw(self) -> None:
-        self.viewport().update()
+        self.update()
 
     def paintEvent(self, event) -> None:
         """Bridge Qt paint dispatch to CanvasRenderer mixin implementation."""
-        super().paintEvent(event)
         CanvasRenderer.paintEvent(self, event)
 
     def _start_gizmo_drag(self, mode: str, wx: float, wy: float) -> bool:
@@ -2431,8 +2417,7 @@ class PolylineView(
                 wx = self._cursor_wx
                 wy = self._cursor_wy
                 if wx is None or wy is None:
-                    vp = self.viewport()
-                    wx, wy = self._c2w(vp.width() / 2.0, vp.height() / 2.0)
+                    wx, wy = self._c2w(self.width() / 2.0, self.height() / 2.0)
                 self.prompt_add_text(wx, wy)
             elif (
                 key == Qt.Key.Key_A
@@ -4490,7 +4475,7 @@ class PolylineView(
 
     def _build_draw_sidebar(self) -> None:
         panel = DrawSidebar(
-            parent=self.viewport(),
+            parent=self,
             on_draw_clicked=self._on_draw_button_clicked,
             on_finish_open=lambda: self._finish_draw(close=False),
             on_close_edit=lambda: self._finish_draw(close=True),
@@ -4505,7 +4490,7 @@ class PolylineView(
         panel.hide()
 
         # Create tool picker dialog
-        self._tool_picker_dialog = ToolPickerDialog(parent=self.viewport())
+        self._tool_picker_dialog = ToolPickerDialog(parent=self)
 
         anim = QPropertyAnimation(panel, b"pos", self)
         anim.setDuration(150)
@@ -4520,7 +4505,7 @@ class PolylineView(
         if self._draw_sidebar is None:
             return
         y = 8
-        target_h = max(260, self.viewport().height() - 16)
+        target_h = max(260, self.height() - 16)
         self._draw_sidebar.setFixedHeight(min(430, target_h))
         x = 8 if self._draw_sidebar_visible else -self._draw_sidebar.width() + 20
         self._draw_sidebar.move(x, y)
@@ -4538,7 +4523,7 @@ class PolylineView(
         hidden_x = -self._draw_sidebar.width() + 20
         shown_x = 8
         self._draw_sidebar.setFixedHeight(
-            min(430, max(260, self.viewport().height() - 16))
+            min(430, max(260, self.height() - 16))
         )
 
         if not animate:
