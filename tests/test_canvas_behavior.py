@@ -743,3 +743,47 @@ def test_vertical_guide_from_left_ruler(qapp):
     release(c, 250.0, 300.0)
     assert len(c._guides) == 1
     assert c._guides[0][0] == "v"
+
+
+# ── 8-handle selection frame ─────────────────────────────────────────────────
+
+
+def _paint_once(view):
+    view.grab()  # forces a full paintEvent so overlay hit-rects populate
+
+
+def test_handle_scale_corner_uniform(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    _paint_once(v)
+    handles = dict(v._gizmo_handle_rects)
+    assert set(handles) == {"nw", "n", "ne", "e", "se", "s", "sw", "w"}
+    rect = handles["e"]  # right edge: axis-only scale
+    cx, cy = rect.center().x(), rect.center().y()
+    tx, ty = v._w2c(20.0, 5.0)  # drag right edge from x=10 to x=20
+    press(v, cx, cy)
+    move(v, tx, ty)
+    release(v, tx, ty)
+    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    assert x1 - x0 == pytest.approx(20.0, abs=0.3)
+    assert y1 - y0 == pytest.approx(10.0, abs=0.3)  # height untouched
+    assert v.undo()
+
+
+def test_handle_scale_corner_keeps_anchor(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    _paint_once(v)
+    handles = dict(v._gizmo_handle_rects)
+    rect = handles["se"]  # world (max x, min y); anchor = world (0, 10)
+    cx, cy = rect.center().x(), rect.center().y()
+    tx, ty = v._w2c(20.0, -10.0)
+    press(v, cx, cy)
+    move(v, tx, ty)
+    release(v, tx, ty)
+    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    # uniform scale ×2 anchored at the opposite corner (0, 10)
+    assert x0 == pytest.approx(0.0, abs=0.3)
+    assert y1 == pytest.approx(10.0, abs=0.3)
+    assert x1 - x0 == pytest.approx(20.0, abs=0.5)
+    assert y1 - y0 == pytest.approx(20.0, abs=0.5)

@@ -616,6 +616,13 @@ class SelectTool(CanvasTool):
                 v._show_sel_dim_editor(axis, rect)
                 return True
         wx0, wy0 = v._c2w(pos.x(), pos.y())
+        alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        for name, rect in v._gizmo_handle_rects:
+            if rect.contains(pt) and v._start_gizmo_drag(
+                f"scale-{name}", wx0, wy0, from_center=alt
+            ):
+                v._redraw()
+                return True
         if (
             v._gizmo_rotate_rect is not None
             and v._gizmo_rotate_rect.contains(pt)

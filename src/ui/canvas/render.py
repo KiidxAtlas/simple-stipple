@@ -949,15 +949,11 @@ class CanvasRenderer:
         right = max(bx0, bx1)
         mid_x = (bx0 + bx1) / 2.0
 
-        scale_center = QPointF(right + 12.0, bottom + 12.0)
+        left = min(bx0, bx1)
+        mid_y = (by0 + by1) / 2.0
         rotate_center = QPointF(mid_x, top - 34.0)
 
-        self._gizmo_scale_rect = QRectF(
-            scale_center.x() - 6,
-            scale_center.y() - 6,
-            12,
-            12,
-        )
+        self._gizmo_scale_rect = None
         self._gizmo_rotate_rect = QRectF(
             rotate_center.x() - 8,
             rotate_center.y() - 8,
@@ -965,9 +961,34 @@ class CanvasRenderer:
             16,
         )
 
+        # Selection frame + 8 resize handles. Canvas y grows downward while
+        # world y grows upward, so the screen top edge is world "n".
+        frame_pen = QPen(QColor("#79c0ff"), 1.0)
+        painter.setPen(frame_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(QRectF(QPointF(left, top), QPointF(right, bottom)))
+
+        hs = 4.0
+        handles = [
+            ("nw", left, top),
+            ("n", mid_x, top),
+            ("ne", right, top),
+            ("e", right, mid_y),
+            ("se", right, bottom),
+            ("s", mid_x, bottom),
+            ("sw", left, bottom),
+            ("w", left, mid_y),
+        ]
+        self._gizmo_handle_rects = []
         painter.setPen(QPen(QColor("#79c0ff"), 1.2))
-        painter.setBrush(QBrush(QColor("#1f3a6e")))
-        painter.drawRect(self._gizmo_scale_rect)
+        painter.setBrush(QBrush(QColor("#0d1117")))
+        for name, hx, hy in handles:
+            rect = QRectF(hx - hs, hy - hs, hs * 2, hs * 2)
+            # generous hit area, tight visual
+            self._gizmo_handle_rects.append(
+                (name, rect.adjusted(-3, -3, 3, 3))
+            )
+            painter.drawRect(rect)
 
         painter.setPen(QPen(QColor("#f5a623"), 1.2))
         painter.setBrush(QBrush(QColor("#3a2b16")))
@@ -982,6 +1003,7 @@ class CanvasRenderer:
         if not self._sel or self._mode != "select":
             self._gizmo_scale_rect = None
             self._gizmo_rotate_rect = None
+            self._gizmo_handle_rects = []
             return
         sel_pts = [
             pt
@@ -992,6 +1014,7 @@ class CanvasRenderer:
         if not sel_pts:
             self._gizmo_scale_rect = None
             self._gizmo_rotate_rect = None
+            self._gizmo_handle_rects = []
             return
         xs, ys = zip(*sel_pts)
         bx0, by0 = self._w2c(min(xs), max(ys))

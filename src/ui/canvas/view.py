@@ -472,6 +472,11 @@ class PolylineView(
         # Transform gizmo (select mode)
         self._gizmo_scale_rect: QRectF | None = None
         self._gizmo_rotate_rect: QRectF | None = None
+        # 8-handle selection frame: [(handle name, hit rect), ...] where the
+        # name is a compass direction ("nw", "n", …) in world orientation.
+        self._gizmo_handle_rects: list[tuple[str, QRectF]] = []
+        self._gizmo_anchor_w: tuple[float, float] | None = None
+        self._gizmo_handle_w: tuple[float, float] | None = None
         self._gizmo_drag_mode: str | None = None  # "scale" | "rotate"
         self._gizmo_center_w: tuple[float, float] | None = None
         self._gizmo_start_vec: tuple[float, float] | None = None
@@ -2145,18 +2150,46 @@ class PolylineView(
         self._paint_chrome_rulers(painter)
         painter.end()
 
-    def _start_gizmo_drag(self, mode: str, wx: float, wy: float) -> bool:
+    _HANDLE_ANCHORS = {
+        # handle → (anchor position, handle position) as bbox fractions
+        "nw": ((1.0, 0.0), (0.0, 1.0)),
+        "n": ((0.5, 0.0), (0.5, 1.0)),
+        "ne": ((0.0, 0.0), (1.0, 1.0)),
+        "e": ((0.0, 0.5), (1.0, 0.5)),
+        "se": ((0.0, 1.0), (1.0, 0.0)),
+        "s": ((0.5, 1.0), (0.5, 0.0)),
+        "sw": ((1.0, 1.0), (0.0, 0.0)),
+        "w": ((1.0, 0.5), (0.0, 0.5)),
+    }
+
+    def _start_gizmo_drag(
+        self, mode: str, wx: float, wy: float, *, from_center: bool = False
+    ) -> bool:
         bounds = self._selection_bounds()
         if bounds is None or not self._sel:
             return False
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
-        vec = (wx - cx, wy - cy)
-        if math.hypot(vec[0], vec[1]) < 1e-9:
-            return False
+        if mode.startswith("scale-"):
+            frac_a, frac_h = self._HANDLE_ANCHORS[mode[6:]]
+            if from_center:
+                frac_a = (0.5, 0.5)
+            x0, y0, x1, y1 = bounds
+            self._gizmo_anchor_w = (
+                x0 + (x1 - x0) * frac_a[0],
+                y0 + (y1 - y0) * frac_a[1],
+            )
+            self._gizmo_handle_w = (
+                x0 + (x1 - x0) * frac_h[0],
+                y0 + (y1 - y0) * frac_h[1],
+            )
+        else:
+            vec = (wx - cx, wy - cy)
+            if math.hypot(vec[0], vec[1]) < 1e-9:
+                return False
+            self._gizmo_start_vec = vec
         self._gizmo_drag_mode = mode
         self._gizmo_center_w = (cx, cy)
-        self._gizmo_start_vec = vec
         self._gizmo_snapshot = {
             idx: list(self._entities[idx].points) for idx in self._mutable_selected_indices()
         }
@@ -2164,13 +2197,53 @@ class PolylineView(
         self._gizmo_undo_pushed = False
         return bool(self._gizmo_snapshot)
 
+    def _apply_handle_scale(self, wx: float, wy: float) -> None:
+        """Resize the selection by dragging a frame handle. Corners scale
+        uniformly (Shift = free), edges scale one axis; holding Alt at
+        press scales from the center."""
+        if self._gizmo_anchor_w is None or self._gizmo_handle_w is None:
+            return
+        handle = (self._gizmo_drag_mode or "")[6:]
+        ax, ay = self._gizmo_anchor_w
+        hx, hy = self._gizmo_handle_w
+
+        def _factor(cur: float, a: float, h: float) -> float:
+            span = h - a
+            if abs(span) < 1e-9:
+                return 1.0
+            return max(0.05, min(20.0, (cur - a) / span))
+
+        sx = _factor(wx, ax, hx)
+        sy = _factor(wy, ay, hy)
+        if handle in ("n", "s"):
+            sx = 1.0
+        elif handle in ("e", "w"):
+            sy = 1.0
+        else:
+            shift = bool(
+                QApplication.keyboardModifiers()
+                & Qt.KeyboardModifier.ShiftModifier
+            )
+            if not shift:
+                s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy
+                sx = sy = s
+        if abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4:
+            self._gizmo_drag_moved = True
+        if not self._gizmo_undo_pushed:
+            self._push_undo()
+            self._gizmo_undo_pushed = True
+        for idx, src_poly in self._gizmo_snapshot.items():
+            self._entities[idx].points = [
+                (ax + (x - ax) * sx, ay + (y - ay) * sy) for x, y in src_poly
+            ]
+
     def _apply_gizmo_drag(self, wx: float, wy: float) -> None:
-        if (
-            self._gizmo_drag_mode is None
-            or self._gizmo_center_w is None
-            or self._gizmo_start_vec is None
-            or not self._gizmo_snapshot
-        ):
+        if self._gizmo_drag_mode is None or not self._gizmo_snapshot:
+            return
+        if self._gizmo_drag_mode.startswith("scale-"):
+            self._apply_handle_scale(wx, wy)
+            return
+        if self._gizmo_center_w is None or self._gizmo_start_vec is None:
             return
 
         if not self._gizmo_undo_pushed:
@@ -2213,6 +2286,8 @@ class PolylineView(
         self._gizmo_drag_mode = None
         self._gizmo_center_w = None
         self._gizmo_start_vec = None
+        self._gizmo_anchor_w = None
+        self._gizmo_handle_w = None
         self._gizmo_snapshot = {}
         self._gizmo_drag_moved = False
         self._gizmo_undo_pushed = False
