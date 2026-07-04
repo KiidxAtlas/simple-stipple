@@ -52,6 +52,7 @@ from src.ui.core.factories import (
     content_splitter,
     section_label,
     sidebar_panel,
+    static_section,
     surface_frame,
     clear_line_edit_error,
     parse_float_field_with_feedback,
@@ -913,18 +914,26 @@ class PatternPage(BasePage):
         self._on_fill_mode_changed()
 
     def _build_export_section(self, layout: QVBoxLayout) -> None:
-        section_label(layout, "Export")
+        # Export options live in a card matching Shape/Pattern/Fill/Zones —
+        # previously a bare caption label, the odd one out on this sidebar.
+        # The action button/progress/status stay outside and unwrapped
+        # below it, since a primary CTA should never be hidden behind a
+        # collapsible header.
+        card_content = QWidget()
+        card_layout = QVBoxLayout(card_content)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(4)
         self._include_border_cb = QCheckBox("Border on separate layer")
         self._include_border_cb.setToolTip(
             "Writes pattern fill to 'background' and each outline to\n'outline', 'outline_1', … layers (CAM-friendly)."
         )
         self._include_border_cb.setChecked(True)
         self._include_border_cb.stateChanged.connect(self._schedule_preview)
-        layout.addWidget(self._include_border_cb)
+        card_layout.addWidget(self._include_border_cb)
         self._export_open_paths_cb = QCheckBox("Export as Open Paths")
         self._export_open_paths_cb.setToolTip("Write pattern strokes as open polylines (no forced closure).")
         self._export_open_paths_cb.setChecked(False)
-        layout.addWidget(self._export_open_paths_cb)
+        card_layout.addWidget(self._export_open_paths_cb)
         self._summary_chip = QLabel("")
         self._summary_chip.setProperty("role", "summary-banner")
         self._summary_chip.setProperty("tone", "neutral")
@@ -932,7 +941,8 @@ class PatternPage(BasePage):
         self._summary_chip.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
-        layout.addWidget(self._summary_chip)
+        card_layout.addWidget(self._summary_chip)
+        layout.addWidget(static_section("Export", card_content))
         self._gen_btn = QPushButton("Export DXF")
         self._gen_btn.setMinimumHeight(38)
         self._gen_btn.setToolTip("Generate the pattern fill and save as a DXF  (⌘E)")

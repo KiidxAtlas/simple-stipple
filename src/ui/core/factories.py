@@ -30,6 +30,28 @@ def section_label(parent_layout, text: str) -> QLabel:
     return lb
 
 
+def static_section(title: str, content: QWidget) -> QFrame:
+    """Non-collapsible sidebar section card matching CollapsibleSection's
+    chrome (card background, bold title). For content that must always
+    stay visible — e.g. a primary action button shouldn't be hidden
+    behind a collapse toggle — but that otherwise sits at the same visual
+    level as the page's collapsible sections and looked out of place as
+    a bare caption label.
+    """
+    frame = QFrame()
+    frame.setFrameShape(QFrame.Shape.NoFrame)
+    frame.setProperty("surface", "panel")
+    frame.setProperty("role", "collapsible")
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(8, 6, 8, 8)
+    layout.setSpacing(2)
+    title_label = QLabel(title)
+    title_label.setProperty("role", "collapsible-toggle-static")
+    layout.addWidget(title_label)
+    layout.addWidget(content)
+    return frame
+
+
 def sep(parent_layout) -> QFrame:
     """Hairline horizontal separator."""
     line = QFrame()

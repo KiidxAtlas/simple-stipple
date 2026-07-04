@@ -333,6 +333,15 @@ QToolButton[role="collapsible-toggle"]:hover {
     background: rgba(88, 166, 255, 0.07);
     color: #e6edf3;
 }
+/* Static (non-collapsible) section card title — same weight as the
+   collapsible toggle text, no chevron, not clickable. */
+QLabel[role="collapsible-toggle-static"] {
+    padding: 5px 2px;
+    color: #c9d1d9;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+}
 
 /* Browse / clear buttons in settings rows */
 QPushButton[role="browse-btn"] {
