@@ -3244,6 +3244,116 @@ class PolylineView(
         self._fire_poly_change()
         return True
 
+    def selection_geometry(self) -> dict[str, Any] | None:
+        """Bbox + single-entity parameters for the properties panel."""
+        indices = self._selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None:
+            return None
+        info: dict[str, Any] = {
+            "x": bounds[0],
+            "y": bounds[1],
+            "w": bounds[2] - bounds[0],
+            "h": bounds[3] - bounds[1],
+            "count": len(indices),
+        }
+        if len(indices) == 1:
+            e = self._entities[indices[0]]
+            info["kind"] = e.kind
+            info["meta"] = deepcopy(e.meta) if e.meta else {}
+            info["index"] = indices[0]
+        return info
+
+    def move_selection_to(self, x: float | None, y: float | None) -> bool:
+        """Place the selection bbox's bottom-left corner at (x, y)."""
+        indices = self._mutable_selected_indices()
+        bounds = self._selection_bounds(indices)
+        if not indices or bounds is None:
+            return False
+        dx = (x - bounds[0]) if x is not None else 0.0
+        dy = (y - bounds[1]) if y is not None else 0.0
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            return False
+        self._push_undo()
+        for idx in indices:
+            self._entities[idx].points = [
+                (px + dx, py + dy) for px, py in self._entities[idx].points
+            ]
+            self._transform_entity_meta(
+                idx,
+                center=(0.0, 0.0),
+                kind=self._entities[idx].kind,
+                meta=self._entities[idx].meta,
+                transform="translate",
+                dx=dx,
+                dy=dy,
+            )
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def set_shape_param(self, idx: int, key: str, value: float) -> bool:
+        """Edit a parametric entity's defining parameter and rebuild its
+        geometry (circle radius, polygon radius/sides, ellipse rx/ry,
+        arc radius). Returns False for non-parametric entities."""
+        if not (0 <= idx < len(self._entities)):
+            return False
+        e = self._entities[idx]
+        meta = dict(e.meta or {})
+        center = meta.get("center")
+        if center is None or len(center) < 2:
+            return False
+        cx, cy = float(center[0]), float(center[1])
+        kind = e.kind
+        new_points: list[tuple[float, float]] | None = None
+        if kind == "circle" and key == "radius" and value > 0:
+            meta["radius"] = float(value)
+            new_points = build_circle_poly(cx, cy, float(value))
+        elif kind == "polygon" and key == "radius" and value > 0:
+            meta["radius"] = float(value)
+            new_points = build_polygon_poly(
+                cx, cy, float(value), int(meta.get("sides", 6))
+            )
+        elif kind == "polygon" and key == "sides" and 3 <= int(value) <= 64:
+            meta["sides"] = int(value)
+            new_points = build_polygon_poly(
+                cx, cy, float(meta.get("radius", 1.0)), int(value)
+            )
+        elif kind == "ellipse" and key in ("rx", "ry") and value > 0:
+            meta[key] = float(value)
+            new_points = build_ellipse_poly(
+                cx,
+                cy,
+                float(meta.get("rx", 1.0)),
+                float(meta.get("ry", 1.0)),
+                rotation=float(meta.get("rotation", 0.0)),
+            )
+        elif kind == "arc" and key == "radius" and value > 0:
+            meta["radius"] = float(value)
+            a0 = math.radians(float(meta.get("start_angle", 0.0)))
+            a1 = math.radians(float(meta.get("end_angle", 360.0)))
+            if a1 <= a0:
+                a1 += 2 * math.pi
+            r = float(value)
+            new_points = [
+                (
+                    cx + r * math.cos(a0 + (a1 - a0) * i / 24),
+                    cy + r * math.sin(a0 + (a1 - a0) * i / 24),
+                )
+                for i in range(25)
+            ]
+        if new_points is None:
+            return False
+        self._push_undo()
+        e.points = new_points
+        e.meta = meta
+        self._sync_shape_storage_from_entities()
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
     def align_selected(self, mode: str) -> bool:
         indices = self._mutable_selected_indices()
         bounds = self._selection_bounds(indices)

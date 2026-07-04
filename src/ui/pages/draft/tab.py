@@ -45,6 +45,7 @@ from src.ui.pages.draft.session import (
 )
 from src.ui.util.dialog_paths import pick_open_file, pick_save_file
 from src.ui.util.recent_files import KIND_DXF, record_recent
+from src.ui.widgets.properties_panel import CanvasPropertiesPanel
 from src.ui.widgets.recent_files_button import RecentFilesButton
 from src.ui.widgets.status_strip import CanvasStatusStrip
 
@@ -217,6 +218,9 @@ class DraftPage(BasePage):
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
 
+        self._props_panel = CanvasPropertiesPanel(self._canvas)
+        side_layout.addWidget(self._props_panel)
+
         self._layer_module = CanvasLayerTreeModule(
             canvas=self._canvas,
             title="Layers",
@@ -381,6 +385,8 @@ class DraftPage(BasePage):
 
     def _on_canvas_edit(self) -> None:
         self._rt().on_canvas_edit()
+        if hasattr(self, "_props_panel"):
+            self._props_panel.refresh()
         self._refresh_status()
         self._emit_state_changed()
 

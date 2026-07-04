@@ -1,0 +1,78 @@
+"""Properties panel: numeric selection editing."""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+from tests.test_canvas_behavior import bbox, make_canvas, square  # noqa: E402
+
+
+def make_panel(qapp, polys):
+    from src.ui.widgets.properties_panel import CanvasPropertiesPanel
+
+    canvas = make_canvas(qapp, polys)
+    panel = CanvasPropertiesPanel(canvas)
+    return canvas, panel
+
+
+def test_panel_reflects_selection(qapp):
+    canvas, panel = make_panel(qapp, [square(10, 20)])
+    assert panel._summary.text() == "No selection"
+    canvas.set_selection([0])
+    assert panel._x.text() == "10.00"
+    assert panel._y.text() == "20.00"
+    assert panel._w.text() == "10.00"
+
+
+def test_panel_moves_selection(qapp):
+    canvas, panel = make_panel(qapp, [square(0, 0)])
+    canvas.set_selection([0])
+    panel._x.setText("25")
+    panel._commit_pos()
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x0 == pytest.approx(25.0)
+    assert canvas.undo()
+
+
+def test_panel_resizes_selection(qapp):
+    canvas, panel = make_panel(qapp, [square(0, 0)])
+    canvas.set_selection([0])
+    panel._w.setText("40")
+    panel._commit_size("w")
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(40.0)
+
+
+def test_panel_edits_circle_radius(qapp):
+    canvas, panel = make_panel(qapp, [])
+    from tests.test_canvas_behavior import click_world
+
+    canvas.set_mode("draw")
+    canvas._set_draw_primitive("circle")
+    click_world(canvas, 50.0, 50.0)
+    click_world(canvas, 60.0, 50.0)
+    canvas.set_mode("select")
+    canvas.set_selection([0])
+    panel.refresh()
+    assert panel._param_edits and "radius" in panel._param_edits
+    panel._param_edits["radius"].setText("20")
+    panel._commit_param("radius")
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(40.0, abs=0.2)
+    assert canvas._entities[0].meta["radius"] == pytest.approx(20.0)
+    assert canvas.undo()
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(20.0, abs=0.2)
+
+
+def test_panel_rotate_via_field(qapp):
+    canvas, panel = make_panel(qapp, [square(0, 0)])
+    canvas.set_selection([0])
+    panel._rot.setText("45")
+    panel._commit_rotation()
+    import math
+
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(10 * math.sqrt(2), abs=1e-6)
