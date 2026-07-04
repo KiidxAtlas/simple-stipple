@@ -60,6 +60,19 @@ class CanvasPropertiesPanel(QWidget):
         self._summary.setStyleSheet("color: #8b949e;")
         root.addWidget(self._summary)
 
+        self._empty_hint = QLabel(
+            "Select a shape to edit its position, size, or\nshape-specific properties."
+        )
+        self._empty_hint.setStyleSheet("color: #484f58; font-size: 11px;")
+        self._empty_hint.setWordWrap(True)
+        root.addWidget(self._empty_hint)
+
+        self._fields_container = QWidget()
+        fields_root = QVBoxLayout(self._fields_container)
+        fields_root.setContentsMargins(0, 0, 0, 0)
+        fields_root.setSpacing(4)
+        root.addWidget(self._fields_container)
+
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(6)
@@ -79,7 +92,7 @@ class CanvasPropertiesPanel(QWidget):
         # across the panel width
         grid.setColumnStretch(4, 1)
         grid.setColumnMinimumWidth(2, 18)
-        root.addLayout(grid)
+        fields_root.addLayout(grid)
 
         actions = QHBoxLayout()
         actions.setSpacing(4)
@@ -102,7 +115,7 @@ class CanvasPropertiesPanel(QWidget):
         self._rot.setMaximumWidth(56)
         actions.addWidget(self._rot)
         actions.addStretch(1)
-        root.addLayout(actions)
+        fields_root.addLayout(actions)
 
         # Shape-parameter rows (built per selection kind)
         self._param_grid = QGridLayout()
@@ -110,7 +123,7 @@ class CanvasPropertiesPanel(QWidget):
         self._param_grid.setHorizontalSpacing(6)
         self._param_grid.setVerticalSpacing(3)
         self._param_grid.setColumnStretch(2, 1)
-        root.addLayout(self._param_grid)
+        fields_root.addLayout(self._param_grid)
         self._param_edits: dict[str, QLineEdit] = {}
         self._param_index: int | None = None
         self._param_kind: str | None = None
@@ -125,6 +138,8 @@ class CanvasPropertiesPanel(QWidget):
         try:
             info = self._canvas.selection_geometry()
             enabled = info is not None
+            self._fields_container.setVisible(enabled)
+            self._empty_hint.setVisible(not enabled)
             for edit in (self._x, self._y, self._w, self._h, self._rot):
                 edit.setEnabled(enabled)
             if info is None:
