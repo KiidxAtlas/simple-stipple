@@ -1240,18 +1240,26 @@ class CanvasRenderer:
                 snap_type=self._hover_snap_type,
             )
 
-        # Rubber-band
+        # Rubber-band. Window select (left→right) draws solid blue;
+        # crossing select (right→left) draws dashed green — CAD convention.
         if self._shift_drag and self._band_start and self._lmb_prev:
-            pen = QPen(QColor("#ff8800"), 1, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
             bx, by = self._band_start.x(), self._band_start.y()
+            window = self._lmb_prev.x() >= bx
+            if window:
+                pen = QPen(QColor("#2f81f7"), 1, Qt.PenStyle.SolidLine)
+                fill = QColor(47, 129, 247, 26)
+            else:
+                pen = QPen(QColor("#3fb950"), 1, Qt.PenStyle.DashLine)
+                fill = QColor(63, 185, 80, 26)
+            painter.setPen(pen)
+            painter.setBrush(fill)
             painter.drawRect(
                 QRectF(
                     QPointF(bx, by),
                     QPointF(self._lmb_prev.x(), self._lmb_prev.y()),
                 )
             )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
 
         # Measure overlay
         if self._measure_mode and self._measure_anchor and self._measure_hover:

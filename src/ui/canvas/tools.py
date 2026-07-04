@@ -55,6 +55,42 @@ class CanvasTool:
         """Draw tool-specific overlays on top of the rendered canvas."""
 
 
+def _seg_hits_rect(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    rx1: float,
+    ry1: float,
+    rx2: float,
+    ry2: float,
+) -> bool:
+    """Liang-Barsky segment/rect intersection (canvas coordinates)."""
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    t0, t1 = 0.0, 1.0
+    for p, q in (
+        (-dx, p1[0] - rx1),
+        (dx, rx2 - p1[0]),
+        (-dy, p1[1] - ry1),
+        (dy, ry2 - p1[1]),
+    ):
+        if p == 0:
+            if q < 0:
+                return False
+        else:
+            r = q / p
+            if p < 0:
+                if r > t1:
+                    return False
+                if r > t0:
+                    t0 = r
+            else:
+                if r < t1:
+                    t1 = r
+                if r < t0:
+                    return False
+    return True
+
+
 def apply_edit_drag(v: "PolylineView", event: QMouseEvent) -> bool:
     """Shared vertex-drag update used by both Edit mode and select-mode
     direct vertex editing. Returns True when a drag consumed the event."""
@@ -801,14 +837,45 @@ class SelectTool(CanvasTool):
             bx, by = v._band_start.x(), v._band_start.y()
             x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
             y1c, y2c = min(by, pos.y()), max(by, pos.y())
+            # CAD marquee semantics: dragging left→right selects only fully
+            # enclosed shapes (window); right→left selects anything the box
+            # touches (crossing).
+            window = pos.x() >= bx
             if not v._band_additive:
                 v._sel.clear()
-            for idx, poly in enumerate(e.points for e in v._entities):
+            picked: set[int] = set()
+            for idx, e in enumerate(v._entities):
                 if not v._entity_selectable(idx):
                     continue
+                poly = e.points
+                if not poly:
+                    continue
                 pts_c = [v._w2c(x, y) for x, y in poly]
-                if any(x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c):
-                    v._sel.add(idx)
+                inside = [
+                    x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c
+                ]
+                if window:
+                    if all(inside):
+                        picked.add(idx)
+                    continue
+                if any(inside):
+                    picked.add(idx)
+                    continue
+                n = len(pts_c)
+                seg_count = n if v._is_poly_closed(poly) else n - 1
+                for i in range(seg_count):
+                    if _seg_hits_rect(
+                        pts_c[i], pts_c[(i + 1) % n], x1c, y1c, x2c, y2c
+                    ):
+                        picked.add(idx)
+                        break
+            # A marquee that catches part of a group selects the whole group.
+            gids = {v._entities[i].group for i in picked} - {None}
+            if gids:
+                for i, e in enumerate(v._entities):
+                    if e.group in gids and v._entity_selectable(i):
+                        picked.add(i)
+            v._sel |= picked
             v._redraw()
             v._notify()
             v._shift_drag = False

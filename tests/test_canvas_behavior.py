@@ -646,3 +646,46 @@ def test_snap_engine_vertex_and_guides(qapp):
     res = v._resolve_snap(cx, cy, 20.05, 30.0)
     assert res is not None and res[2] == "guide"
     assert res[0] == pytest.approx(20.0)
+
+
+# ── marquee semantics (window vs crossing) ───────────────────────────────────
+
+
+def test_marquee_no_shift_on_empty_space(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    drag_world(v, -5.0, -5.0, 15.0, 15.0)  # plain drag, no Shift
+    assert v.get_selection_indices() == [0]
+
+
+def test_marquee_window_requires_full_enclosure(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    # left→right drag covering all of square 0 but only half of square 1
+    drag_world(v, -5.0, -5.0, 36.0, 15.0)
+    assert v.get_selection_indices() == [0]
+
+
+def test_marquee_crossing_selects_touched(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    # right→left drag covering all of square 0 and part of square 1
+    drag_world(v, 36.0, 15.0, -5.0, -5.0)
+    assert v.get_selection_indices() == [0, 1]
+
+
+def test_marquee_crossing_hits_segment_without_vertices(qapp):
+    # long horizontal line; marquee crosses its middle, no endpoint inside
+    v = make_view(qapp, [[(0.0, 0.0), (100.0, 0.0)]])
+    drag_world(v, 55.0, 10.0, 45.0, -10.0)  # right→left box over the middle
+    assert v.get_selection_indices() == [0]
+    v.deselect_all()
+    # window drag over the middle must NOT select (not fully enclosed)
+    drag_world(v, 45.0, -10.0, 55.0, 10.0)
+    assert v.get_selection_indices() == []
+
+
+def test_marquee_pulls_whole_group(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_selection([1, 2])
+    v._group_selected()
+    v.deselect_all()
+    drag_world(v, 45.0, 15.0, 25.0, -5.0)  # crossing box over square 1 only
+    assert v.get_selection_indices() == [1, 2]
