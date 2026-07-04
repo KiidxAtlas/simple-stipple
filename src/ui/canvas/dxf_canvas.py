@@ -14,6 +14,7 @@ from src.backend.geometry.shapes import (
     shape_rect,
     shape_slot,
 )
+from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas.view import PolylineView
 
 
@@ -337,7 +338,9 @@ class DxfCanvas(PolylineView):
 
         if self._sel:
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
-            menu.addAction("Duplicate  [⌘D]", self.duplicate_selected)
+            menu.addAction(
+                canvas_commands.menu_text("edit.duplicate"), self.duplicate_selected
+            )
             open_count = sum(
                 1
                 for i in self._sel
@@ -350,9 +353,13 @@ class DxfCanvas(PolylineView):
                 menu.addAction(label, self.close_selection_as_path)
             menu.addAction("Fit selection", self.fit_selection)
             if len(self._sel) >= 2:
-                menu.addAction("Group  [⌘G]", self._group_selected)
+                menu.addAction(
+                    canvas_commands.menu_text("group.create"), self._group_selected
+                )
             if any(self._group_of(i) is not None for i in self._sel):
-                menu.addAction("Ungroup  [⌘⇧G]", self._ungroup_selected)
+                menu.addAction(
+                    canvas_commands.menu_text("group.dissolve"), self._ungroup_selected
+                )
         else:
             menu.addAction("Select all", self.select_all)
 
@@ -416,7 +423,7 @@ class DxfCanvas(PolylineView):
         )
         transform_menu.addSeparator()
         transform_menu.addAction(
-            "Edit width + height…  [⌘⇧D]", lambda: _run_transform(self._show_size_hud)
+            "Edit width + height…", lambda: _run_transform(self._show_size_hud)
         )
         transform_menu.addAction(
             "Set line length…",
@@ -453,10 +460,13 @@ class DxfCanvas(PolylineView):
         )
 
         wx_txt, wy_txt = self._c2w(cx, cy)
-        menu.addAction("Add text…  [T]", lambda: self.prompt_add_text(wx_txt, wy_txt))
+        menu.addAction(
+            canvas_commands.menu_text("text.add", "Add text…"),
+            lambda: self.prompt_add_text(wx_txt, wy_txt),
+        )
 
         menu.addSeparator()
-        menu.addAction("Fit view [F]", self.fit)
+        menu.addAction(canvas_commands.menu_text("view.fit", "Fit view"), self.fit)
         grid_action = menu.addAction("Show grid")
         grid_action.setCheckable(True)
         grid_action.setChecked(self._grid_visible)
@@ -467,8 +477,14 @@ class DxfCanvas(PolylineView):
         snap_action.triggered.connect(self.set_grid_snap)
         mode_menu = menu.addMenu("Mode")
         mode_menu.addAction("Select [Esc]", lambda: self.set_mode("select"))
-        mode_menu.addAction("Draw [D]", lambda: self.set_mode("draw"))
-        mode_menu.addAction("Edit [E]", lambda: self.set_mode("edit"))
+        mode_menu.addAction(
+            canvas_commands.menu_text("mode.draw", "Draw"),
+            lambda: self.set_mode("draw"),
+        )
+        mode_menu.addAction(
+            canvas_commands.menu_text("mode.edit", "Edit"),
+            lambda: self.set_mode("edit"),
+        )
         menu.popup(self.mapToGlobal(QPoint(int(cx), int(cy))))
 
     def _show_size_hud(self) -> None:

@@ -33,6 +33,7 @@ from src.backend.document.state import (
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
+from src.ui.canvas import commands as canvas_commands
 from src.ui.core.factories import info_chip, surface_frame
 from src.ui.shell.registry import PageSpec, default_page_specs
 from src.ui.shell.runtime import PageRuntime
@@ -523,12 +524,17 @@ class App(QMainWindow):
         add(edit_menu, "Cut", self._menu_cut, QKeySequence.StandardKey.Cut)
         add(edit_menu, "Copy", self._menu_copy, QKeySequence.StandardKey.Copy)
         add(edit_menu, "Paste", self._menu_paste, QKeySequence.StandardKey.Paste)
-        add(
-            edit_menu,
-            "Duplicate",
-            lambda: self._canvas_call("_duplicate_selected"),
-            QKeySequence("Ctrl+D"),
-        )
+
+        def add_cmd(menu, cmd_id, *, label=None):
+            cmd = canvas_commands.get(cmd_id)
+            return add(
+                menu,
+                label or cmd.label,
+                lambda: self._run_canvas_command(cmd_id),
+                QKeySequence(cmd.shortcut) if cmd.shortcut else None,
+            )
+
+        add_cmd(edit_menu, "edit.duplicate")
         # Delete intentionally has no global shortcut: Backspace must keep
         # working in text fields; the canvas handles it when focused.
         add(edit_menu, "Delete Selected", lambda: self._canvas_call("delete_selected"))
@@ -539,27 +545,22 @@ class App(QMainWindow):
             self._menu_select_all,
             QKeySequence.StandardKey.SelectAll,
         )
-        add(
-            edit_menu,
-            "Deselect All",
-            lambda: self._canvas_call("deselect_all"),
-            QKeySequence("Ctrl+Shift+A"),
-        )
+        add_cmd(edit_menu, "select.none")
 
         view_menu = self.menuBar().addMenu("View")
         # Single-letter canvas keys (F/S/D/E/M) stay widget-local; the menu
         # spells them out instead of registering global shortcuts.
-        add(view_menu, "Fit View (F)", lambda: self._canvas_call("fit"))
+        add(view_menu, "Fit View (F)", lambda: self._run_canvas_command("view.fit"))
         add(
             view_menu,
             "Zoom In",
-            lambda: self._canvas_zoom(1.15),
+            lambda: self._run_canvas_command("view.zoom_in"),
             QKeySequence.StandardKey.ZoomIn,
         )
         add(
             view_menu,
             "Zoom Out",
-            lambda: self._canvas_zoom(1 / 1.15),
+            lambda: self._run_canvas_command("view.zoom_out"),
             QKeySequence.StandardKey.ZoomOut,
         )
         view_menu.addSeparator()
@@ -588,8 +589,10 @@ class App(QMainWindow):
         if callable(fn):
             fn(*args)
 
-    def _canvas_zoom(self, factor: float) -> None:
-        self._canvas_call("_zoom_by", factor)
+    def _run_canvas_command(self, cmd_id: str) -> None:
+        canvas = self._active_canvas()
+        if canvas is not None:
+            canvas_commands.run(canvas, cmd_id)
 
     def _focused_text_widget(self):
         widget = QApplication.focusWidget()
@@ -602,42 +605,42 @@ class App(QMainWindow):
         if text is not None:
             text.undo()
         else:
-            self._canvas_call("undo")
+            self._run_canvas_command("edit.undo")
 
     def _menu_redo(self) -> None:
         text = self._focused_text_widget()
         if text is not None:
             text.redo()
         else:
-            self._canvas_call("redo")
+            self._run_canvas_command("edit.redo")
 
     def _menu_cut(self) -> None:
         text = self._focused_text_widget()
         if text is not None:
             text.cut()
         else:
-            self._canvas_call("_cut_selected")
+            self._run_canvas_command("clipboard.cut")
 
     def _menu_copy(self) -> None:
         text = self._focused_text_widget()
         if text is not None:
             text.copy()
         else:
-            self._canvas_call("_copy_selected")
+            self._run_canvas_command("clipboard.copy")
 
     def _menu_paste(self) -> None:
         text = self._focused_text_widget()
         if text is not None:
             text.paste()
         else:
-            self._canvas_call("_paste_clipboard")
+            self._run_canvas_command("clipboard.paste")
 
     def _menu_select_all(self) -> None:
         text = self._focused_text_widget()
         if text is not None:
             text.selectAll()
         else:
-            self._canvas_call("select_all")
+            self._run_canvas_command("select.all")
 
     def _sync_view_menu_state(self) -> None:
         canvas = self._active_canvas()
@@ -656,19 +659,17 @@ class App(QMainWindow):
             ("Settings", self._shortcut("app.settings")),
             ("Switch tabs", "Alt+1 … Alt+5"),
             ("", ""),
-            ("Canvas", ""),
-            ("Select / Draw / Edit mode", "S / D / E"),
-            ("Fit view", "F"),
-            ("Measure", "M"),
+        ]
+        # Canvas commands come straight from the registry so this dialog
+        # can never drift from the actual keymap.
+        rows += canvas_commands.shortcut_reference_rows()
+        rows += [
+            ("Canvas interaction", ""),
             ("Pan", "Space-drag or middle mouse"),
             ("Zoom", "Mouse wheel, ⌘+ / ⌘-"),
-            ("Undo / Redo", "⌘Z / ⇧⌘Z"),
-            ("Cut / Copy / Paste", "⌘X / ⌘C / ⌘V"),
-            ("Duplicate", "⌘D"),
-            ("Delete selected", "Backspace"),
-            ("Select all / Deselect", "⌘A / ⇧⌘A"),
-            ("Close / Open polyline", "⇧C / ⇧O"),
-            ("Quick shape (select mode)", "Q radial menu · ⇧R/⇧C/⇧S"),
+            ("Nudge selection", "Arrows (⇧ = 1 mm)"),
+            ("Delete selected", "Backspace / Del"),
+            ("Quick shape (select mode)", "Q radial menu · ⇧R/⇧C/⇧S/⇧P"),
         ]
         lines = []
         for label, keys in rows:

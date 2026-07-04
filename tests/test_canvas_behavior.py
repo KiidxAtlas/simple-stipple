@@ -510,3 +510,70 @@ def test_text_entity_add_and_records(qapp):
         assert len(gids) == 1 and None not in gids
     assert v.undo()
     assert v.poly_count == 0
+
+
+# ── command registry ─────────────────────────────────────────────────────────
+
+
+def test_command_registry_keymap_matches_events(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_selection([0])
+    key(v, Qt.Key.Key_Delete)
+    assert v.poly_count == 2
+    key(v, Qt.Key.Key_Z, mods=Qt.KeyboardModifier.ControlModifier)
+    assert v.poly_count == 3
+    key(
+        v,
+        Qt.Key.Key_Z,
+        mods=Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert v.poly_count == 2
+
+
+def test_command_registry_single_letter_commands(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    assert not v._grid_visible
+    key(v, Qt.Key.Key_G)
+    assert v._grid_visible
+    key(v, Qt.Key.Key_M)
+    assert v._measure_mode
+    key(v, Qt.Key.Key_M)
+    key(v, Qt.Key.Key_D)
+    assert v.get_mode() == "draw"
+    key(v, Qt.Key.Key_D)
+    assert v.get_mode() == "select"
+
+
+def test_command_registry_group_shortcut(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_selection([0, 1])
+    key(v, Qt.Key.Key_G, mods=Qt.KeyboardModifier.ControlModifier)
+    assert v._entities[0].group is not None
+    key(
+        v,
+        Qt.Key.Key_G,
+        mods=Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert all(e.group is None for e in v._entities)
+
+
+def test_command_registry_no_duplicate_shortcuts(qapp):
+    from src.ui.canvas import commands
+
+    seen = {}
+    for c in commands.COMMANDS:
+        for spec in (c.shortcut, *c.aliases):
+            if not spec:
+                continue
+            combo = commands._combo(spec)
+            assert combo not in seen, f"{c.id} and {seen[combo]} share {spec}"
+            seen[combo] = c.id
+
+
+def test_shortcut_reference_rows_nonempty(qapp):
+    from src.ui.canvas import commands
+
+    rows = commands.shortcut_reference_rows()
+    labels = [r[0] for r in rows]
+    assert "Edit" in labels and "View" in labels
+    assert any("Undo" in r[0] and r[1] for r in rows)

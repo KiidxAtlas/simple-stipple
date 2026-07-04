@@ -61,6 +61,7 @@ from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
+from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas.entities import EntityRecord
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
@@ -2314,7 +2315,6 @@ class PolylineView(
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
         mods = event.modifiers()
-        ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift_mod = bool(mods & Qt.KeyboardModifier.ShiftModifier)
 
         if key == Qt.Key.Key_Space and not event.isAutoRepeat():
@@ -2323,50 +2323,6 @@ class PolylineView(
             self._update_cursor()
             event.accept()
             return
-
-        # Standard keyboard shortcuts
-        if ctrl and self._selectable:
-            if key == Qt.Key.Key_Z:
-                if shift_mod:
-                    self.redo()
-                else:
-                    self.undo()
-                return
-            elif key == Qt.Key.Key_Y:
-                self.redo()
-                return
-            elif key == Qt.Key.Key_A:
-                if shift_mod:
-                    self.deselect_all()
-                else:
-                    self.select_all()
-                return
-            elif key == Qt.Key.Key_G:
-                if shift_mod:
-                    self._ungroup_selected()
-                else:
-                    self._group_selected()
-                return
-            elif key == Qt.Key.Key_I:
-                # Ctrl+I: Invert selection
-                self._invert_selection()
-                return
-            elif key == Qt.Key.Key_C:
-                self._copy_selected()
-                return
-            elif key == Qt.Key.Key_V:
-                self._paste_clipboard()
-                return
-            elif key == Qt.Key.Key_D and shift_mod:
-                # Ctrl+Shift+D: Duplicate with offset (smarter placement)
-                self._duplicate_selected_with_offset()
-                return
-            elif key == Qt.Key.Key_D:
-                self._duplicate_selected()
-                return
-            elif key == Qt.Key.Key_X:
-                self._cut_selected()
-                return
 
         # Arrow key nudge
         if (
@@ -2388,56 +2344,7 @@ class PolylineView(
             self._nudge_selected(dx, dy)
             return
 
-        if key == Qt.Key.Key_F:
-            self.fit()
-        elif key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
-            self._zoom_by(1.15)
-        elif key == Qt.Key.Key_Minus:
-            self._zoom_by(1 / 1.15)
-        elif key == Qt.Key.Key_G:
-            self._grid_visible = not self._grid_visible
-            self._redraw()
-        elif key == Qt.Key.Key_M:
-            self.toggle_measure()
-        elif key == Qt.Key.Key_C and shift_mod and not ctrl:
-            if self._mode in ("select", "edit"):
-                n_closed = self._close_selected_polylines()
-                if n_closed:
-                    self._show_flash(f"Closed {n_closed} polyline(s)", 900)
-                else:
-                    self._show_flash("No open polyline selected", 900)
-                return
-        elif key == Qt.Key.Key_O and not ctrl and not shift_mod:
-            if self._mode in ("select", "edit"):
-                self._prompt_offset_selected()
-                return
-        elif key == Qt.Key.Key_O and shift_mod and not ctrl:
-            if self._mode in ("select", "edit"):
-                n_opened = self._open_selected_polylines()
-                if n_opened:
-                    self._show_flash(f"Opened {n_opened} polyline(s)", 900)
-                else:
-                    self._show_flash("No closed polyline selected", 900)
-                return
-        elif key == Qt.Key.Key_X and not ctrl:
-            if self._sel and self._mode in ("select", "edit"):
-                self._toggle_selected_construction()
-                self._show_flash("Toggled construction for selection", 900)
-                return
-            self._draw_construction_mode = not self._draw_construction_mode
-            if self._mode != "draw":
-                self.set_mode("draw")
-            else:
-                self._redraw()
-            self._show_flash(
-                "Construction draw: ON"
-                if self._draw_construction_mode
-                else "Construction draw: OFF",
-                900,
-            )
-            self._refresh_draw_sidebar_state()
-            return
-        elif key == Qt.Key.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             fw = QApplication.focusWidget()
             if isinstance(fw, QLineEdit) and bool(fw.property("shape_hud_temp")):
                 self._dismiss_shape_dim_inputs()
@@ -2458,24 +2365,9 @@ class PolylineView(
                 self.deselect_all()
                 return
             self._escape_cb()
-        elif key == Qt.Key.Key_BracketRight and not ctrl:
-            # ] = increase grid spacing (Feature 13)
-            new_spacing = min(100.0, self._grid_spacing * 2.0)
-            self._grid_spacing = new_spacing
-            self._show_flash(f"Grid: {self._grid_spacing:g} mm")
             return
-        elif key == Qt.Key.Key_BracketLeft and not ctrl:
-            # [ = decrease grid spacing (Feature 13)
-            new_spacing = max(0.1, self._grid_spacing / 2.0)
-            self._grid_spacing = new_spacing
-            self._show_flash(f"Grid: {self._grid_spacing:g} mm")
-            return
-        elif key == Qt.Key.Key_S and not ctrl:
-            # S = toggle grid snap (Feature 14)
-            self._grid_snap = not self._grid_snap
-            self._show_flash("Snap: ON" if self._grid_snap else "Snap: OFF")
-            return
-        elif self._selectable:
+
+        if self._selectable:
             # B. Dimension HUD key interception — digits/period/minus go to distance field
             if self._dim_distance_edit is not None and key in (
                 Qt.Key.Key_0,
@@ -2507,9 +2399,7 @@ class PolylineView(
                 target.insert(event.text())
                 event.accept()
                 return
-            if key == Qt.Key.Key_Delete:
-                self._key_delete()
-            elif key == Qt.Key.Key_Backspace:
+            if key == Qt.Key.Key_Backspace:
                 # If a dim field is focused and dirty, let backspace work on the field
                 if (
                     self._dim_distance_edit is not None
@@ -2532,17 +2422,8 @@ class PolylineView(
                         event.accept()
                         return
                 self._key_backspace()
-            elif key == Qt.Key.Key_D:
-                self.set_mode("draw" if self._mode != "draw" else "select")
-            elif key == Qt.Key.Key_E:
-                self.set_mode("edit" if self._mode != "edit" else "select")
-            elif key == Qt.Key.Key_T and self._mode == "select":
-                wx = self._cursor_wx
-                wy = self._cursor_wy
-                if wx is None or wy is None:
-                    wx, wy = self._c2w(self.width() / 2.0, self.height() / 2.0)
-                self.prompt_add_text(wx, wy)
-            elif (
+                return
+            if (
                 key == Qt.Key.Key_A
                 and self._mode == "draw"
                 and self._draw_pts
@@ -2556,7 +2437,7 @@ class PolylineView(
                     self._dim_angle_edit.selectAll()
                 event.accept()
                 return
-            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 if (
                     self._mode == "draw"
                     and self._draw_shape_preview_active
@@ -2579,7 +2460,8 @@ class PolylineView(
                     self._apply_dim_input()
                 else:
                     self._finish_draw()
-            elif key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                return
+            if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
                 reverse = key == Qt.Key.Key_Backtab
                 if self._mode == "select" and self._sel:
                     # Tab cycles through the available selection badges
@@ -2665,13 +2547,18 @@ class PolylineView(
                             self._dim_distance_edit.selectAll()
                 event.accept()
                 return
-            else:
-                super().keyPressEvent(event)
         elif key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             event.accept()
             return
-        else:
-            super().keyPressEvent(event)
+
+        # Declarative command shortcuts — see src/ui/canvas/commands.py.
+        cmd = canvas_commands.match_key(key, mods)
+        if cmd is not None and canvas_commands.can_run(self, cmd):
+            cmd.run(self)
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
