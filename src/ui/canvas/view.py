@@ -21,7 +21,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QKeyEvent,
     QMouseEvent,
-    QPainter,
     QPixmap,
     QWheelEvent,
 )
@@ -44,17 +43,13 @@ from shapely.geometry import (
 )
 from shapely.ops import split as shapely_split
 
-from src.backend.geometry.arc import (
-    arc_from_center_start_end,
-    arc_from_three_points,
-)
 from src.backend.geometry.primitives import (
     build_circle_poly,
     build_ellipse_poly,
     build_polygon_poly,
     build_rect_poly,
 )
-from src.constants import DRAG_THRESH, Q_BG
+from src.constants import DRAG_THRESH
 from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
 from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
@@ -62,6 +57,7 @@ from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
 from src.ui.canvas import commands as canvas_commands
+from src.ui.canvas import tools as canvas_tools
 from src.ui.canvas.entities import EntityRecord
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
@@ -376,6 +372,16 @@ class PolylineView(
 
         # Mode: "select" | "draw" | "edit"
         self._mode: str = "select"
+
+        # Interaction tools (src/ui/canvas/tools.py): per-mode strategy
+        # objects dispatched by the mouse event handlers. All interaction
+        # state stays on the view; tools are stateless.
+        self._tools: dict[str, canvas_tools.CanvasTool] = {
+            "select": canvas_tools.SelectTool(self),
+            "draw": canvas_tools.DrawTool(self),
+            "edit": canvas_tools.EditTool(self),
+        }
+        self._measure_tool = canvas_tools.MeasureTool(self)
 
         # Draw mode state
         self._draw_pts: list[tuple[float, float]] = []
@@ -2610,323 +2616,21 @@ class PolylineView(
             self.toggle_measure()
             return
 
-        # Clicking directly on a selection badge (W/H, or L/∠ for a single
-        # line) opens the inline dimension editor
-        if self._mode == "select" and self._sel:
-            pt = QPointF(pos.x(), pos.y())
-            for axis, rect in self._sel_badge_axes():
-                if rect.contains(pt):
-                    self._show_sel_dim_editor(axis, rect)
-                    return
-            wx0, wy0 = self._c2w(pos.x(), pos.y())
-            if (
-                self._gizmo_rotate_rect is not None
-                and self._gizmo_rotate_rect.contains(pt)
-                and self._start_gizmo_drag("rotate", wx0, wy0)
-            ):
-                self._redraw()
-                return
-            if (
-                self._gizmo_scale_rect is not None
-                and self._gizmo_scale_rect.contains(pt)
-                and self._start_gizmo_drag("scale", wx0, wy0)
-            ):
-                self._redraw()
-                return
+        # Selection badges / transform gizmo take priority over tools.
+        if (
+            self._mode == "select"
+            and self._sel
+            and self._tools["select"].press_overlays(event)
+        ):
+            return
 
         if self._measure_mode:
-            if self._measure_locked:
-                # Click again to reset measurement
-                self._measure_locked = False
-                self._measure_anchor = None
-                self._measure_hover = None
-                self._measure_end = None
-                self._measure_snapped_a = False
-                self._measure_snapped_b = False
-                self._dismiss_measure_edit()
-                self._redraw()
-                return
-            wx, wy = self._c2w(pos.x(), pos.y())
-            allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
-            snap_result = self._resolve_snap(
-                pos.x(),
-                pos.y(),
-                wx,
-                wy,
-                allow_polyline=allow_snap,
-                allow_grid=allow_snap,
-                reference_point=self._measure_anchor,
-            )
-            snapped = snap_result is not None
-            if snapped:
-                wx, wy = snap_result[0], snap_result[1]
-            # Angle snap with Shift
-            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            if shift and self._measure_anchor is not None:
-                wx, wy = self._angle_snap(*self._measure_anchor, wx, wy)
-            if self._measure_anchor is None:
-                self._measure_anchor = (wx, wy)
-                self._measure_hover = (wx, wy)
-                self._measure_snapped_a = snapped
-            else:
-                self._measure_end = (wx, wy)
-                self._measure_hover = (wx, wy)
-                self._measure_snapped_b = snapped
-                self._measure_locked = True
-                self._show_measure_edit()
-            self._redraw()
+            self._measure_tool.press(event)
             return
 
-        if self._mode == "edit":
-            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            hit = self._find_nearest_vertex(pos.x(), pos.y())
-
-            if shift:
-                if hit is not None:
-                    if hit in self._edit_selected_verts:
-                        self._edit_selected_verts.discard(hit)
-                    else:
-                        self._edit_selected_verts.add(hit)
-                    self._redraw()
-                    return
-                self._shift_drag = True
-                self._band_start = pos
-                self._lmb_prev = pos
-                self._lmb_press = None
-                return
-
-            if hit is not None:
-                pi, vi = hit
-                if self._is_locked(pi):
-                    return
-                if pi < 0 or pi >= len(self._entities):
-                    return
-                if vi < 0 or vi >= len(self._entities[pi].points):
-                    return
-                self._edit_poly = pi
-                self._edit_vert = vi
-                self._edit_dragging = True
-                self._edit_drag_moved = False
-                self._edit_undo_pushed = False
-                self._edit_drag_anchor = self._entities[pi].points[vi]
-                if (
-                    hit in self._edit_selected_verts
-                    and len(self._edit_selected_verts) > 1
-                ):
-                    self._edit_drag_targets = set(self._edit_selected_verts)
-                else:
-                    self._edit_selected_verts = {hit}
-                    self._edit_drag_targets = self._linked_vertices(pi, vi)
-                self._edit_linked_verts = set(self._edit_drag_targets)
-                self._redraw()
-                return
-
-            if self._edit_selected_verts:
-                self._edit_selected_verts.clear()
-                self._redraw()
-            self._lmb_press = pos
-            self._lmb_prev = pos
-            return
-
-        if self._mode == "draw":
-            wx, wy = self._c2w(pos.x(), pos.y())
-
-            if self._draw_snap is not None:
-                wx, wy = self._draw_snap
-
-            if self._draw_primitive == "text":
-                # Click chooses the anchor; the dialog does the rest.
-                self.prompt_add_text(wx, wy)
-                self.set_mode("select")
-                return
-
-            if self._draw_primitive in {"rectangle", "circle", "ellipse", "polygon"}:
-                if not self._draw_shape_preview_active:
-                    self._draw_shape_preview_active = True
-                    self._draw_shape_anchor_w = (wx, wy)
-                    self._draw_shape_cursor_w = (wx, wy)
-                    if self._draw_shape_w_edit is not None:
-                        self._draw_shape_w_edit.setFocus()
-                        self._draw_shape_w_edit.selectAll()
-                else:
-                    self._draw_shape_cursor_w = (wx, wy)
-                    self._commit_shape_preview()
-                self._refresh_draw_sidebar_state()
-                self._redraw()
-                return
-
-            if self._draw_primitive == "line":
-                if not self._draw_pts:
-                    self._draw_pts = [(wx, wy)]
-                    self._draw_point_snap_types = [self._draw_snap_type or None]
-                    self._refresh_draw_sidebar_state()
-                    self._redraw()
-                    return
-                p0 = self._draw_pts[0]
-                self._draw_pts = [p0, (wx, wy)]
-                first_snap = (
-                    self._draw_point_snap_types[0]
-                    if self._draw_point_snap_types
-                    else None
-                )
-                self._draw_point_snap_types = [first_snap, self._draw_snap_type or None]
-                self._finish_draw(close=False)
-                self._draw_pts.clear()
-                self._draw_point_snap_types.clear()
-                self._refresh_draw_sidebar_state()
-                return
-
-            if self._draw_primitive == "arc":
-                self._draw_arc_pts.append((wx, wy))
-                if len(self._draw_arc_pts) >= 3:
-                    p0, p1, p2 = self._draw_arc_pts[:3]
-                    if self._draw_arc_mode == "center-start-end":
-                        arc_poly = arc_from_center_start_end(p0, p1, p2, 24)
-                    else:
-                        arc_poly = arc_from_three_points(p0, p1, p2, 24)
-                    self._commit_drawn_polyline(
-                        arc_poly,
-                        primitive="arc",
-                        created_flash="Arc created",
-                    )
-                    self._draw_arc_pts.clear()
-                self._refresh_draw_sidebar_state()
-                self._redraw()
-                return
-
-            if self._draw_primitive == "spline":
-                self._draw_pts.append((wx, wy))
-                self._draw_point_snap_types.append(self._draw_snap_type or None)
-                if len(self._draw_pts) == 1:
-                    self._show_dim_inputs()
-                self._dim_distance_dirty = False
-                self._dim_angle_dirty = False
-                self._refresh_draw_sidebar_state()
-                self._redraw()
-                return
-
-            # B. If dim inputs have user-typed values, compute point from those
-            if self._draw_pts and (self._dim_distance_dirty or self._dim_angle_dirty):
-                self._apply_dim_input()
-                # Show dim inputs again for the next segment
-                self._show_dim_inputs()
-                return
-            # Apply H/V constraint to the placed point
-            if self._draw_constraint == "H" and self._draw_pts:
-                wy = self._draw_pts[-1][1]
-            elif self._draw_constraint == "V" and self._draw_pts:
-                wx = self._draw_pts[-1][0]
-            # Close polygon when clicking near start point
-            if self._is_near_start():
-                self._finish_draw(close=True)
-                return
-            # Connect to existing polyline endpoint when starting a new draw
-            if not self._draw_pts:
-                endpoint_snap = self._find_nearest_endpoint(pos.x(), pos.y())
-                if endpoint_snap is not None:
-                    wx, wy = endpoint_snap
-                    self._draw_snap_type = "vertex"
-            self._draw_pts.append((wx, wy))
-            self._draw_point_snap_types.append(self._draw_snap_type or None)
-            # B. Show dim inputs after first point is placed
-            if len(self._draw_pts) == 1:
-                self._show_dim_inputs()
-            # Reset dirty flags for the new segment
-            self._dim_distance_dirty = False
-            self._dim_angle_dirty = False
-            self._refresh_draw_sidebar_state()
-            self._redraw()
-            return
-
-        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        self._shift_drag = False
-        self._band_start = None
-        self._band_additive = False
-        self._lmb_press = pos
-        self._lmb_prev = pos
-        target = self._find_poly_at(pos.x(), pos.y())
-        was_selected_before = target in self._sel if target is not None else False
-        self._lmb_target = target
-
-        if self._mode == "select" and self._selectable and target is None:
-            # Default drag behavior in select mode is box selection.
-            self._shift_drag = True
-            self._band_start = pos
-            self._band_additive = shift
-            self._lmb_press = None
-            self._lmb_prev = pos
-            self._lmb_target = None
-            return
-
-        # Select-mode direct vertex editing: single-click selects the segment,
-        # shows its points, and allows immediate vertex drag.
-        if self._mode == "select" and target is not None:
-            ctrl = bool(
-                event.modifiers()
-                & (
-                    Qt.KeyboardModifier.ControlModifier
-                    | Qt.KeyboardModifier.MetaModifier
-                )
-            )
-            shift_toggle = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            gid = self._group_of(target)
-            if gid is not None:
-                members = {
-                    i
-                    for i, e in enumerate(self._entities)
-                    if e.group == gid and not e.hidden
-                }
-                if ctrl or shift_toggle:
-                    # Toggle the whole group as one unit.
-                    if members <= self._sel:
-                        self._sel -= members
-                    else:
-                        self._sel |= members
-                elif target not in self._sel:
-                    self._sel = members
-                # else: already selected — preserve current selection for group move
-            elif ctrl or shift_toggle:
-                self._sel.add(target)
-            elif target not in self._sel:
-                self._sel = {target}
-            self._notify()
-            hit = self._find_nearest_vertex(pos.x(), pos.y())
-            target_kind = (
-                self._entities[target].kind
-            )
-            if (
-                hit is not None
-                and hit[0] == target
-                and (
-                    was_selected_before
-                    or target_kind in {"arc", "circle", "ellipse", "rectangle"}
-                )
-                and not self._is_locked(target)
-            ):
-                pi, vi = hit
-                if pi < 0 or pi >= len(self._entities):
-                    return
-                if vi < 0 or vi >= len(self._entities[pi].points):
-                    return
-                self._edit_poly = pi
-                self._edit_vert = vi
-                self._edit_dragging = True
-                self._edit_drag_moved = False
-                self._edit_undo_pushed = False
-                self._edit_drag_anchor = self._entities[pi].points[vi]
-                self._edit_selected_verts = {hit}
-                self._edit_drag_targets = self._linked_vertices(pi, vi)
-                self._edit_linked_verts = set(self._edit_drag_targets)
-                self._redraw()
-                return
-        # Prepare for move if clicking on an already-selected poly
-        if target is not None and target in self._sel:
-            wx, wy = self._c2w(pos.x(), pos.y())
-            self._move_origin = (wx, wy)
-            self._move_dragging = False
-            self._move_undo_pushed = False
-            self._move_snap_exclude_vertices = set()
-            self._move_snap_exclude_segments = set()
+        tool = self._tools.get(self._mode)
+        if tool is not None:
+            tool.press(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
         pos = event.position()
@@ -2963,321 +2667,12 @@ class PolylineView(
             return
 
         if self._measure_mode:
-            if self._measure_locked:
-                return
-            allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
-            snap_result = self._resolve_snap(
-                pos.x(),
-                pos.y(),
-                wx,
-                wy,
-                allow_polyline=allow_snap,
-                allow_grid=allow_snap,
-            )
-            if self._measure_anchor is None:
-                # Pre-first-click: just track snap indicator
-                self._measure_hover_pre = (
-                    (snap_result[0], snap_result[1]) if snap_result else None
-                )
-                if snap_result is not None:
-                    self._cursor_wx, self._cursor_wy = snap_result[0], snap_result[1]
-                    self._hover_snap = (snap_result[0], snap_result[1])
-                    self._hover_snap_type = snap_result[2]
-                self._redraw()
-                return
-            # After anchor placed — compute hover with snap + optional angle snap
-            if snap_result is not None:
-                mx, my = snap_result[0], snap_result[1]
-                self._hover_snap = (mx, my)
-                self._hover_snap_type = snap_result[2]
-            else:
-                mx, my = wx, wy
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                mx, my = self._angle_snap(*self._measure_anchor, mx, my)
-            self._measure_hover = (mx, my)
-            self._cursor_wx, self._cursor_wy = mx, my
-            self._redraw()
+            self._measure_tool.move(event)
             return
 
-        if (
-            self._mode in ("edit", "select")
-            and self._edit_dragging
-            and self._edit_poly is not None
-            and self._edit_vert is not None
-        ):
-            if self._shift_drag and self._band_start:
-                self._lmb_prev = pos
-                self._redraw()
-                return
-            allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
-            drag_snap_result = self._resolve_drag_snap(
-                pos.x(),
-                pos.y(),
-                wx,
-                wy,
-                allow_polyline=allow_snap,
-                allow_grid=allow_snap,
-                exclude_vertices=self._edit_drag_targets,
-                exclude_segments=self._immediate_segments_for_vertices(
-                    self._edit_drag_targets
-                ),
-                reference_point=self._entities[self._edit_poly].points[self._edit_vert],
-            )
-            snap_wx, snap_wy = wx, wy
-            snap_type = ""
-            if drag_snap_result is not None:
-                snap_wx, snap_wy, snap_type = drag_snap_result
-
-            anchor_for_constraint = self._edit_drag_anchor
-
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                anchor_pt = anchor_for_constraint
-                if anchor_pt is not None:
-                    dx = snap_wx - anchor_pt[0]
-                    dy = snap_wy - anchor_pt[1]
-                    if abs(dx) >= abs(dy):
-                        snap_wy = anchor_pt[1]
-                        snap_type = "horizontal"
-                    else:
-                        snap_wx = anchor_pt[0]
-                        snap_type = "vertical"
-
-            cur_pt = self._entities[self._edit_poly].points[self._edit_vert]
-            if abs(cur_pt[0] - snap_wx) > 1e-9 or abs(cur_pt[1] - snap_wy) > 1e-9:
-                if not self._edit_undo_pushed:
-                    self._push_undo()
-                    self._edit_undo_pushed = True
-                self._edit_drag_moved = True
-
-            self._apply_edit_vertex_position(snap_wx, snap_wy)
-            self._cursor_wx, self._cursor_wy = snap_wx, snap_wy
-            if snap_type:
-                self._hover_snap = (snap_wx, snap_wy)
-                self._hover_snap_type = snap_type
-            self._redraw()
-            return
-
-        if self._mode == "edit":
-            if self._shift_drag and self._band_start:
-                self._lmb_prev = pos
-                self._redraw()
-                return
-            old_hover = self._hover_vert
-            self._hover_vert = self._find_nearest_vertex(pos.x(), pos.y())
-            if self._hover_vert != old_hover:
-                self._update_cursor()
-                self._redraw()
-            return
-
-        if self._mode == "select" and self._sel:
-            old_hover = self._hover_vert
-            hit = self._find_nearest_vertex(pos.x(), pos.y())
-            if hit is not None and hit[0] in self._sel:
-                self._hover_vert = hit
-            else:
-                self._hover_vert = None
-            if self._hover_vert != old_hover:
-                self._update_cursor()
-                self._redraw()
-                return
-        elif self._mode == "select" and self._hover_vert is not None:
-            self._hover_vert = None
-            self._update_cursor()
-
-        if self._mode == "draw":
-            if self._draw_shape_preview_active:
-                self._draw_shape_cursor_w = (wx, wy)
-                self._cursor_wx = wx
-                self._cursor_wy = wy
-                self._update_shape_size_fields_from_preview()
-                self._redraw()
-                return
-            # 1. Resolve snap target
-            allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
-            snap_result = self._resolve_snap(
-                pos.x(),
-                pos.y(),
-                wx,
-                wy,
-                allow_polyline=allow_snap,
-                allow_grid=allow_snap,
-            )
-            if snap_result is not None:
-                self._draw_snap = (snap_result[0], snap_result[1])
-                self._draw_snap_type = snap_result[2]
-            else:
-                self._draw_snap = None
-                self._draw_snap_type = None
-
-            # 2. Determine effective position (snap or raw cursor)
-            eff_x = self._draw_snap[0] if self._draw_snap else wx
-            eff_y = self._draw_snap[1] if self._draw_snap else wy
-
-            # 3. Angle snap with Shift
-            shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            if shift_held and self._draw_pts:
-                anchor = self._draw_pts[-1]
-                eff_x, eff_y = self._angle_snap(anchor[0], anchor[1], eff_x, eff_y)
-                self._draw_snap = (eff_x, eff_y)
-                self._angle_snap_active = True
-            else:
-                self._angle_snap_active = False
-
-            # 4. Explicit draw constraint locks, then fallback auto-detection.
-            #    A user-typed angle takes highest precedence: the segment locks
-            #    to that ray with live feedback, and the pointer sets the length.
-            self._draw_constraint = None
-            typed_angle = self._typed_draw_angle()
-            if self._draw_pts and typed_angle is not None:
-                last_wx, last_wy = self._draw_pts[-1]
-                ar = math.radians(typed_angle)
-                dirx, diry = math.cos(ar), math.sin(ar)
-                typed_dist = self._typed_draw_distance()
-                if typed_dist is not None:
-                    length = typed_dist
-                else:
-                    proj = (eff_x - last_wx) * dirx + (eff_y - last_wy) * diry
-                    length = max(0.0, proj)
-                eff_x = last_wx + dirx * length
-                eff_y = last_wy + diry * length
-                self._draw_snap = (eff_x, eff_y)
-                self._angle_snap_active = True
-                self._draw_constraint = f"∠{typed_angle:g}°"
-            elif self._draw_pts:
-                last_wx, last_wy = self._draw_pts[-1]
-                if self._draw_constraint_lock == "H":
-                    self._draw_constraint = "H"
-                    eff_y = last_wy
-                    if self._draw_snap is not None:
-                        self._draw_snap = (self._draw_snap[0], last_wy)
-                elif self._draw_constraint_lock == "V":
-                    self._draw_constraint = "V"
-                    eff_x = last_wx
-                    if self._draw_snap is not None:
-                        self._draw_snap = (last_wx, self._draw_snap[1])
-                elif self._draw_constraint_lock == "45":
-                    self._draw_constraint = "45"
-                    eff_x, eff_y = self._angle_snap(last_wx, last_wy, eff_x, eff_y)
-                    self._draw_snap = (eff_x, eff_y)
-                    self._angle_snap_active = True
-                else:
-                    seg_dx = eff_x - last_wx
-                    seg_dy = eff_y - last_wy
-                    seg_dist = math.hypot(seg_dx, seg_dy)
-                    if seg_dist > 1e-9:
-                        seg_angle = math.degrees(math.atan2(seg_dy, seg_dx)) % 360
-                        if seg_angle < 3 or seg_angle > 357 or (177 < seg_angle < 183):
-                            self._draw_constraint = "H"
-                            eff_y = last_wy
-                            if self._draw_snap is not None:
-                                self._draw_snap = (self._draw_snap[0], last_wy)
-                        elif 87 < seg_angle < 93 or 267 < seg_angle < 273:
-                            self._draw_constraint = "V"
-                            eff_x = last_wx
-                            if self._draw_snap is not None:
-                                self._draw_snap = (last_wx, self._draw_snap[1])
-
-            # 5. Update cursor to final effective position (all modifications applied)
-            self._cursor_wx = eff_x
-            self._cursor_wy = eff_y
-
-            # 6. Update dimension HUD position and values
-            if self._draw_pts:
-                last_wx, last_wy = self._draw_pts[-1]
-                eff_wx = self._cursor_wx if self._cursor_wx is not None else wx
-                eff_wy = self._cursor_wy if self._cursor_wy is not None else wy
-                seg_dist = math.hypot(eff_wx - last_wx, eff_wy - last_wy)
-                seg_angle = math.degrees(math.atan2(eff_wy - last_wy, eff_wx - last_wx))
-                cur_cx, cur_cy = self._w2c(eff_wx, eff_wy)
-                self._update_dim_positions(cur_cx, cur_cy)
-                self._update_dim_values(seg_dist, seg_angle)
-
-            self._redraw()
-            return
-
-        if event.buttons() & Qt.MouseButton.LeftButton:
-            if self._shift_drag and self._band_start:
-                self._lmb_prev = pos
-                self._redraw()
-                return
-            # Move selected shapes
-            if self._move_origin is not None and self._lmb_press is not None:
-                dx_px = pos.x() - self._lmb_press.x()
-                dy_px = pos.y() - self._lmb_press.y()
-                if not self._move_dragging and (
-                    abs(dx_px) > DRAG_THRESH or abs(dy_px) > DRAG_THRESH
-                ):
-                    self._move_dragging = True
-                    self._nudge_undo_pushed = False
-                    self._move_snap_exclude_vertices = self._vertices_for_polylines(
-                        set(self._sel)
-                    )
-                    self._move_snap_exclude_segments = self._segments_for_polylines(
-                        set(self._sel)
-                    )
-                if self._move_dragging:
-                    if not self._move_undo_pushed:
-                        self._push_undo()
-                        self._move_undo_pushed = True
-                    new_wx, new_wy = self._c2w(pos.x(), pos.y())
-                    move_snap_type = ""
-                    allow_snap = not bool(
-                        event.modifiers() & Qt.KeyboardModifier.AltModifier
-                    )
-                    if allow_snap:
-                        move_snap = self._resolve_drag_snap(
-                            pos.x(),
-                            pos.y(),
-                            new_wx,
-                            new_wy,
-                            allow_polyline=True,
-                            allow_grid=True,
-                            exclude_vertices=self._move_snap_exclude_vertices,
-                            exclude_segments=self._move_snap_exclude_segments,
-                        )
-                        if move_snap is not None:
-                            new_wx, new_wy, move_snap_type = move_snap
-                    dx_w = new_wx - self._move_origin[0]
-                    dy_w = new_wy - self._move_origin[1]
-                    for idx in self._sel:
-                        if self._is_locked(idx):
-                            continue
-                        if idx < 0 or idx >= len(self._entities):
-                            continue
-                        self._entities[idx].points = [
-                            (x + dx_w, y + dy_w) for x, y in self._entities[idx].points
-                        ]
-                        self._transform_entity_meta(
-                            idx,
-                            center=(0.0, 0.0),
-                            kind=self._entities[idx].kind,
-                            meta=self._entities[idx].meta,
-                            transform="translate",
-                            dx=dx_w,
-                            dy=dy_w,
-                        )
-                    self._move_origin = (new_wx, new_wy)
-                    self._cursor_wx, self._cursor_wy = new_wx, new_wy
-                    if move_snap_type:
-                        self._hover_snap = (new_wx, new_wy)
-                        self._hover_snap_type = move_snap_type
-                    self._redraw()
-                    return
-            if self._lmb_prev:
-                self._ox += pos.x() - self._lmb_prev.x()
-                self._oy += pos.y() - self._lmb_prev.y()
-                self._lmb_prev = pos
-                self._redraw()
-        else:
-            # Passive hover in select mode: only repaint if the displayed
-            # cursor-position text (2 decimal places) actually changed.
-            if self._mode == "select":
-                _prev_cx = getattr(self, "_prev_cursor_display", None)
-                _cur_cx = (round(wx, 2), round(wy, 2))
-                if _prev_cx == _cur_cx:
-                    return
-                self._prev_cursor_display = _cur_cx
-            self._redraw()
+        tool = self._tools.get(self._mode)
+        if tool is not None:
+            tool.move(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         pos = event.position()
@@ -3307,66 +2702,14 @@ class PolylineView(
             return
 
         if self._mode in ("edit", "select") and self._edit_dragging:
-            self._edit_dragging = False
-            self._edit_linked_verts = set()
-            self._edit_drag_targets = set()
-            self._edit_drag_anchor = None
-            self._redraw()
-            self._notify()
-            if self._edit_drag_moved:
-                self._fire_poly_change()
-            self._edit_drag_moved = False
-            self._edit_undo_pushed = False
+            canvas_tools.release_edit_drag(self)
             return
 
-        if self._mode == "edit" and self._shift_drag and self._band_start:
-            bx, by = self._band_start.x(), self._band_start.y()
-            x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
-            y1c, y2c = min(by, pos.y()), max(by, pos.y())
-            self._select_edit_vertices_in_rect(x1c, y1c, x2c, y2c, additive=True)
-            self._shift_drag = False
-            self._band_start = None
-            self._lmb_prev = None
-            self._redraw()
+        tool = self._tools.get(self._mode)
+        if tool is not None and tool.release(event):
             return
 
-        if self._mode == "draw":
-            return
-
-        if self._shift_drag and self._band_start and self._selectable:
-            bx, by = self._band_start.x(), self._band_start.y()
-            x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
-            y1c, y2c = min(by, pos.y()), max(by, pos.y())
-            if not self._band_additive:
-                self._sel.clear()
-            for idx, poly in enumerate(e.points for e in self._entities):
-                if not self._entity_selectable(idx):
-                    continue
-                pts_c = [self._w2c(x, y) for x, y in poly]
-                if any(x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c):
-                    self._sel.add(idx)
-            self._redraw()
-            self._notify()
-            self._shift_drag = False
-            self._band_start = None
-            self._band_additive = False
-            return
-
-        if self._move_dragging:
-            # Move completed — already applied incrementally
-            self._move_dragging = False
-            self._move_origin = None
-            self._move_undo_pushed = False
-            self._move_snap_exclude_vertices = set()
-            self._move_snap_exclude_segments = set()
-            self._lmb_press = None
-            self._lmb_prev = None
-            self._lmb_target = None
-            self._redraw()
-            self._notify()
-            self._fire_poly_change()
-            return
-
+        # Click select / deselect fall-through (no tool consumed the release).
         if (
             self._selectable
             and self._mode != "select"
@@ -3414,40 +2757,9 @@ class PolylineView(
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        pos = event.position()
-        if self._mode == "select" and self._selectable:
-            hit = self._find_poly_at(pos.x(), pos.y())
-            if hit is not None:
-                shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-                if shift:
-                    self._sel = self._connected_poly_indices(hit)
-                    self._show_flash(f"Object selected ({len(self._sel)})", 800)
-                else:
-                    self._sel = {hit}
-                self._redraw()
-                self._notify()
-            return
-        if self._mode == "draw":
-            # Double-click finishes and closes the polygon (Fusion 360 behavior)
-            if len(self._draw_pts) >= 3:
-                self._finish_draw(close=True)
-            else:
-                self._finish_draw()
-            return
-        if self._mode == "edit":
-            hit = self._find_nearest_edge(pos.x(), pos.y())
-            if hit is not None:
-                pi, seg_idx, pt = hit
-                if pi < 0 or pi >= len(self._entities):
-                    return
-                poly = self._entities[pi].points
-                if seg_idx + 1 > len(poly):
-                    return
-                self._push_undo()
-                poly.insert(seg_idx + 1, pt)
-                self._redraw()
-                self._notify()
-                self._fire_poly_change()
+        tool = self._tools.get(self._mode)
+        if tool is not None:
+            tool.double_click(event)
 
     @staticmethod
     def _is_poly_closed(poly: list[tuple[float, float]]) -> bool:
