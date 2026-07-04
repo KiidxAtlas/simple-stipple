@@ -15,7 +15,111 @@ from src.backend.geometry.shapes import (
     shape_slot,
 )
 from src.ui.canvas import commands as canvas_commands
+from src.ui.canvas import tools as canvas_tools
 from src.ui.canvas.view import PolylineView
+
+
+class DxfSelectTool(canvas_tools.SelectTool):
+    """Select tool with DxfCanvas extras: radial menu, quick-shape drag,
+    and click-to-activate for shapes on non-active layers."""
+
+    def press(self, event: QMouseEvent) -> bool:
+        c = self.v
+        pos = event.position()
+        if c._selectable and c._radial_active:
+            idx = c._radial_index_at(pos.x(), pos.y())
+            c._radial_active = False
+            c._redraw()
+            if idx is not None:
+                c._execute_radial_action(idx)
+            return True
+        if c._selectable and not (
+            event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        ):
+            hit = c._find_poly_at(pos.x(), pos.y())
+            if hit is None:
+                # Clicking a shape on a non-active layer activates that layer
+                # and selects the shape (entity index passed to the callback).
+                inactive_hit = c._find_inactive_poly_at(pos.x(), pos.y())
+                if inactive_hit is not None and callable(c._on_ghost_click):
+                    c._on_ghost_click(inactive_hit)
+                    return True
+                if c._quick_shape_enabled:
+                    mode = c._shape_mode_from_modifiers(event.modifiers())
+                    c._start_shape_drag(mode, pos)
+                    return True
+        return super().press(event)
+
+    def move(self, event: QMouseEvent) -> bool:
+        c = self.v
+        if (
+            c._selectable
+            and c._shape_drag_active
+            and (event.buttons() & Qt.MouseButton.LeftButton)
+        ):
+            pos = event.position().toPoint()
+            c._shape_end_c = pos
+            wx, wy = c._c2w(event.position().x(), event.position().y())
+            c._cursor_wx = wx
+            c._cursor_wy = wy
+            c._redraw()
+            return True
+        return super().move(event)
+
+    def release(self, event: QMouseEvent) -> bool:
+        c = self.v
+        if (
+            c._selectable
+            and c._shape_drag_active
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            c._finish_shape_drag(event.position().toPoint())
+            return True
+        return super().release(event)
+
+    def key(self, event: QKeyEvent) -> bool:
+        c = self.v
+        if not c._selectable:
+            return False
+        key = event.key()
+        shift_mod = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if key == Qt.Key.Key_Q:
+            c._toggle_radial_menu()
+            return True
+        if shift_mod and key == Qt.Key.Key_R:
+            c.set_quick_shape_mode("rectangle")
+            return True
+        if shift_mod and key == Qt.Key.Key_C:
+            c.set_quick_shape_mode("circle")
+            return True
+        if shift_mod and key == Qt.Key.Key_S:
+            c.set_quick_shape_mode("slot")
+            return True
+        if shift_mod and key == Qt.Key.Key_P:
+            c.set_quick_shape_mode("hexagon")
+            return True
+        return False
+
+    def paint_overlay(self, painter: QPainter) -> None:
+        c = self.v
+        if (
+            c._selectable
+            and c._shape_drag_active
+            and c._shape_start_w is not None
+            and c._shape_end_c is not None
+        ):
+            sx, sy = c._shape_start_w
+            ex, ey = c._c2w(float(c._shape_end_c.x()), float(c._shape_end_c.y()))
+            preview = c._build_drag_shape(c._shape_drag_mode, sx, sy, ex, ey)
+            if len(preview) >= 2:
+                pen = QPen(QColor("#f85149"), 1.5, Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                for i in range(1, len(preview)):
+                    x0, y0 = c._w2c(*preview[i - 1])
+                    x1, y1 = c._w2c(*preview[i])
+                    painter.drawLine(int(x0), int(y0), int(x1), int(y1))
+        if c._selectable and c._radial_active:
+            c._paint_radial_menu(painter)
 
 
 class DxfCanvas(PolylineView):
@@ -69,6 +173,9 @@ class DxfCanvas(PolylineView):
         self._size_w_edit: QLineEdit | None = None
         self._size_h_edit: QLineEdit | None = None
 
+        # Quick shapes / radial menu / layer-activation live in the tool.
+        self._tools["select"] = DxfSelectTool(self)
+
         if self._draft_profile:
             self.set_grid_visible(True)
             self.set_grid_snap(False)
@@ -106,73 +213,17 @@ class DxfCanvas(PolylineView):
         self.set_accent_polys({idx: self._CUTOUT_COLOR for idx in indices})
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if self._selectable and self._radial_active:
-            if event.button() == Qt.MouseButton.LeftButton:
-                idx = self._radial_index_at(event.position().x(), event.position().y())
-                self._radial_active = False
-                self._redraw()
-                if idx is not None:
-                    self._execute_radial_action(idx)
-                return
-            if event.button() in (
-                Qt.MouseButton.RightButton,
-                Qt.MouseButton.MiddleButton,
-            ):
-                self._radial_active = False
-                self._redraw()
-                return
-
+        # Any non-left press dismisses the radial menu (left presses are
+        # handled by DxfSelectTool so slice clicks execute).
         if (
             self._selectable
-            and event.button() == Qt.MouseButton.LeftButton
-            and self._mode == "select"
-            and not self._measure_mode
+            and self._radial_active
+            and event.button() != Qt.MouseButton.LeftButton
         ):
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                super().mousePressEvent(event)
-                return
-            pos = event.position()
-            hit = self._find_poly_at(pos.x(), pos.y())
-            if hit is None:
-                # Clicking a shape on a non-active layer activates that layer
-                # and selects the shape (entity index passed to the callback).
-                inactive_hit = self._find_inactive_poly_at(pos.x(), pos.y())
-                if inactive_hit is not None and callable(self._on_ghost_click):
-                    self._on_ghost_click(inactive_hit)
-                    return
-                if self._quick_shape_enabled:
-                    mode = self._shape_mode_from_modifiers(event.modifiers())
-                    self._start_shape_drag(mode, pos)
-                    return
-                super().mousePressEvent(event)
-                return
-
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._selectable
-            and self._shape_drag_active
-            and (event.buttons() & Qt.MouseButton.LeftButton)
-        ):
-            pos = event.position().toPoint()
-            self._shape_end_c = pos
-            wx, wy = self._c2w(event.position().x(), event.position().y())
-            self._cursor_wx = wx
-            self._cursor_wy = wy
+            self._radial_active = False
             self._redraw()
             return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._selectable
-            and self._shape_drag_active
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
-            self._finish_shape_drag(event.position().toPoint())
-            return
-        super().mouseReleaseEvent(event)
+        super().mousePressEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if self._selectable and event.key() == Qt.Key.Key_Escape:
@@ -189,60 +240,13 @@ class DxfCanvas(PolylineView):
         ):
             self._apply_size_hud()
             return
-
-        if self._selectable and self._mode == "select":
-            key = event.key()
-            shift_mod = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            if key == Qt.Key.Key_Q:
-                self._toggle_radial_menu()
-                return
-            if shift_mod and key == Qt.Key.Key_R:
-                self.set_quick_shape_mode("rectangle")
-                return
-            if shift_mod and key == Qt.Key.Key_C:
-                self.set_quick_shape_mode("circle")
-                return
-            if shift_mod and key == Qt.Key.Key_S:
-                self.set_quick_shape_mode("slot")
-                return
-            if shift_mod and key == Qt.Key.Key_P:
-                self.set_quick_shape_mode("hexagon")
-                return
-
         super().keyPressEvent(event)
 
-    def paintEvent(self, event):
-        super().paintEvent(event)
-
-        if (
-            self._selectable
-            and self._shape_drag_active
-            and self._shape_start_w is not None
-            and self._shape_end_c is not None
-        ):
-            sx, sy = self._shape_start_w
-            ex, ey = self._c2w(
-                float(self._shape_end_c.x()), float(self._shape_end_c.y())
-            )
-            preview = self._build_drag_shape(self._shape_drag_mode, sx, sy, ex, ey)
-            if len(preview) >= 2:
-                painter_preview = QPainter(self)
-                painter_preview.setRenderHint(QPainter.RenderHint.Antialiasing)
-                pen = QPen(QColor("#f85149"), 1.5, Qt.PenStyle.DashLine)
-                painter_preview.setPen(pen)
-                for i in range(1, len(preview)):
-                    x0, y0 = self._w2c(*preview[i - 1])
-                    x1, y1 = self._w2c(*preview[i])
-                    painter_preview.drawLine(int(x0), int(y0), int(x1), int(y1))
-                painter_preview.end()
-
-            if self._mode == "select" and self._radial_active:
-                painter = QPainter(self)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                self._paint_radial_menu(painter)
-                painter.end()
-
     def _rightclick_cb(self, cx: float, cy: float) -> None:
+        if self._radial_active:
+            self._radial_active = False
+            self._redraw()
+            return
         if not self._selectable or self._mode in ("draw", "edit"):
             super()._rightclick_cb(cx, cy)
             return

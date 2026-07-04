@@ -577,3 +577,17 @@ def test_shortcut_reference_rows_nonempty(qapp):
     labels = [r[0] for r in rows]
     assert "Edit" in labels and "View" in labels
     assert any("Undo" in r[0] and r[1] for r in rows)
+
+
+def test_quick_shape_keys_and_radial_toggle(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    key(c, Qt.Key.Key_R, mods=SHIFT)
+    assert c.quick_shape_mode == "rectangle" and c.quick_shape_enabled
+    key(c, Qt.Key.Key_C, mods=SHIFT)
+    assert c.quick_shape_mode == "circle"
+    key(c, Qt.Key.Key_Q)
+    assert c._radial_active
+    key(c, Qt.Key.Key_Q)
+    assert not c._radial_active
+    key(c, Qt.Key.Key_Escape)
+    assert not c.quick_shape_enabled

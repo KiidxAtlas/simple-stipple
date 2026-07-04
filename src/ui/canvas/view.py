@@ -21,6 +21,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QKeyEvent,
     QMouseEvent,
+    QPainter,
     QPixmap,
     QWheelEvent,
 )
@@ -2122,6 +2123,14 @@ class PolylineView(
     def paintEvent(self, event) -> None:
         """Bridge Qt paint dispatch to CanvasRenderer mixin implementation."""
         CanvasRenderer.paintEvent(self, event)
+        tool = (
+            self._measure_tool if self._measure_mode else self._tools.get(self._mode)
+        )
+        if tool is not None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            tool.paint_overlay(painter)
+            painter.end()
 
     def _start_gizmo_drag(self, mode: str, wx: float, wy: float) -> bool:
         bounds = self._selection_bounds()
@@ -2327,6 +2336,12 @@ class PolylineView(
             self._space_pan_active = True
             self._space_pan_dragging = False
             self._update_cursor()
+            event.accept()
+            return
+
+        # Tool-specific keys (e.g. quick-shape letters) beat the registry.
+        _tool = self._tools.get(self._mode)
+        if _tool is not None and _tool.key(event):
             event.accept()
             return
 

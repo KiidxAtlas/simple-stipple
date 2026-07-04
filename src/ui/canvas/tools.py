@@ -47,6 +47,13 @@ class CanvasTool:
     def double_click(self, event: QMouseEvent) -> bool:
         return False
 
+    def key(self, event) -> bool:
+        """Tool-specific key handling; runs before the command registry."""
+        return False
+
+    def paint_overlay(self, painter) -> None:
+        """Draw tool-specific overlays on top of the rendered canvas."""
+
 
 def apply_edit_drag(v: "PolylineView", event: QMouseEvent) -> bool:
     """Shared vertex-drag update used by both Edit mode and select-mode
