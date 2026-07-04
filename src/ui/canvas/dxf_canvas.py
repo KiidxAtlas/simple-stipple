@@ -6,7 +6,7 @@ import math
 
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen
-from PySide6.QtWidgets import QInputDialog, QLineEdit, QMenu
+from PySide6.QtWidgets import QLineEdit, QMenu
 
 from src.backend.geometry.shapes import (
     shape_circle,
@@ -329,17 +329,7 @@ class DxfCanvas(PolylineView):
             minimum: float,
             callback,
         ) -> None:
-            value, ok = QInputDialog.getDouble(
-                self,
-                title,
-                label,
-                default,
-                minimum,
-                1_000_000.0,
-                3,
-            )
-            if ok:
-                callback(value)
+            self._show_hud_prompt(label, default, callback, minimum=minimum)
 
         if self._sel:
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)

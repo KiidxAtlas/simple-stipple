@@ -787,3 +787,18 @@ def test_handle_scale_corner_keeps_anchor(qapp):
     assert y1 == pytest.approx(10.0, abs=0.3)
     assert x1 - x0 == pytest.approx(20.0, abs=0.5)
     assert y1 - y0 == pytest.approx(20.0, abs=0.5)
+
+
+def test_hud_prompt_offset_inline(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    v._prompt_offset_selected()
+    assert v._hud_prompt_edit is not None
+    v._hud_prompt_edit.setText("2")
+    v._hud_prompt_edit.returnPressed.emit()
+    assert v._hud_prompt_edit is None
+    assert v.poly_count >= 2  # offset ring created without any dialog
+    # Escape dismisses a fresh prompt without running the action
+    v._prompt_offset_selected()
+    key(v, Qt.Key.Key_Escape)
+    assert v._hud_prompt_edit is None

@@ -27,7 +27,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QInputDialog,
     QLineEdit,
     QMenu,
     QWidget,
@@ -1564,12 +1563,9 @@ class PolylineView(
         if not self._sel:
             self._show_flash("Select shape(s) first", 1000)
             return
-        from PySide6.QtWidgets import QInputDialog
-        value, ok = QInputDialog.getDouble(
-            self, "Offset Geometry", "Offset distance (mm):", 1.0, -1_000_000.0, 1_000_000.0, 3
+        self._show_hud_prompt(
+            "Offset distance (mm)", 1.0, self.offset_selected
         )
-        if ok:
-            self.offset_selected(value)
 
     def set_construction_mode(self, enabled: bool) -> None:
         self._draw_construction_mode = bool(enabled)
@@ -1864,6 +1860,7 @@ class PolylineView(
 
     def _escape_cb(self) -> None:
         # Hard reset interaction states.
+        self._dismiss_hud_prompt()
         self._draw_pts.clear()
         self._draw_point_snap_types.clear()
         self._dismiss_shape_dim_inputs()
@@ -2458,6 +2455,7 @@ class PolylineView(
             return
 
         if key == Qt.Key.Key_Escape:
+            self._dismiss_hud_prompt()
             fw = QApplication.focusWidget()
             if isinstance(fw, QLineEdit) and bool(fw.property("shape_hud_temp")):
                 self._dismiss_shape_dim_inputs()
@@ -4796,30 +4794,20 @@ class PolylineView(
                 menu = QMenu()
 
                 def _prompt_round_corner() -> None:
-                    radius, ok = QInputDialog.getDouble(
-                        self,
-                        "Round Corner",
-                        "Radius (mm):",
+                    self._show_hud_prompt(
+                        "Round radius (mm)",
                         1.0,
-                        0.01,
-                        1000000.0,
-                        3,
+                        lambda r: self._round_vertex(pi, vi, r),
+                        minimum=0.01,
                     )
-                    if ok:
-                        self._round_vertex(pi, vi, radius)
 
                 def _prompt_chamfer_corner() -> None:
-                    distance, ok = QInputDialog.getDouble(
-                        self,
-                        "Chamfer Corner",
-                        "Distance (mm):",
+                    self._show_hud_prompt(
+                        "Chamfer distance (mm)",
                         1.0,
-                        0.01,
-                        1000000.0,
-                        3,
+                        lambda d: self._chamfer_vertex(pi, vi, d),
+                        minimum=0.01,
                     )
-                    if ok:
-                        self._chamfer_vertex(pi, vi, distance)
 
                 poly = self._entities[pi].points
                 is_closed = (

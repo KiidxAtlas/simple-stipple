@@ -1539,6 +1539,46 @@ class CanvasRenderer:
         edit.show()
         return edit
 
+    def _show_hud_prompt(
+        self,
+        label: str,
+        default: float,
+        callback,
+        *,
+        minimum: float | None = None,
+    ) -> None:
+        """Inline numeric prompt near the canvas center: Enter commits,
+        Escape dismisses. Replaces modal QInputDialog for canvas ops."""
+        self._dismiss_hud_prompt()
+        edit = self._make_hud_edit(placeholder=label, width=120, height=22)
+        edit.setText(f"{default:g}")
+        edit.selectAll()
+        edit.setToolTip(label)
+        edit.move(int(self.width() / 2 - 60), int(self.height() / 2 - 11))
+        self._hud_prompt_edit = edit
+        self._show_flash(label, 1600)
+
+        def _commit() -> None:
+            try:
+                value = float(edit.text())
+            except (TypeError, ValueError):
+                self._dismiss_hud_prompt()
+                return
+            if minimum is not None and value < minimum:
+                self._dismiss_hud_prompt()
+                return
+            self._dismiss_hud_prompt()
+            callback(value)
+
+        edit.returnPressed.connect(_commit)
+        edit.setFocus()
+
+    def _dismiss_hud_prompt(self) -> None:
+        edit = getattr(self, "_hud_prompt_edit", None)
+        if edit is not None:
+            edit.deleteLater()
+        self._hud_prompt_edit = None
+
     def _show_dim_inputs(self) -> None:
         """Create both distance and angle QLineEdits that float near the cursor."""
         self._dismiss_dim_inputs()
