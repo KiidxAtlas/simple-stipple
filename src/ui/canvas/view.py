@@ -173,6 +173,7 @@ class PolylineView(
     def add_layer(self, name: str, *, activate: bool = False) -> None:
         name = str(name)
         if name not in self._layer_order:
+            self._push_undo()
             self._layer_order.append(name)
         if activate:
             self.set_active_layer(name)
@@ -183,6 +184,7 @@ class PolylineView(
         old, new = str(old), str(new).strip()
         if not new or old == new or new in self._layer_order:
             return
+        self._push_undo()
         self._layer_order = [new if n == old else n for n in self._layer_order]
         for e in self._entities:
             if e.layer == old:
@@ -192,11 +194,11 @@ class PolylineView(
         self._redraw()
 
     def delete_layer(self, name: str) -> None:
-        """Delete a layer and every entity on it."""
+        """Delete a layer and every entity on it (undoable)."""
         name = str(name)
+        self._push_undo()
         drop = {i for i, e in enumerate(self._entities) if e.layer == name}
         if drop:
-            self._push_undo()
             self._compact_entities(drop)
             self._sel = set()
         self._layer_order = [n for n in self._layer_order if n != name]
@@ -216,6 +218,7 @@ class PolylineView(
         names = self.layer_names()
         if name not in names:
             return
+        self._push_undo()
         names.remove(name)
         names.insert(max(0, min(int(new_index), len(names))), name)
         self._layer_order = names
@@ -671,10 +674,19 @@ class PolylineView(
         return len(self._entities) - 1
 
     def _restore_history_state(
-        self, entities: list[EntityRecord], sel: set[int]
+        self,
+        entities: list[EntityRecord],
+        sel: set[int],
+        layers: tuple[tuple[str, ...], str | None] | None = None,
     ) -> None:
         self._entities = entities
-        self._sel = {i for i in sel if i < len(self._entities)}
+        if layers is not None:
+            order, active = layers
+            self._layer_order = list(order)
+            self._active_layer = active
+        self._sel = {
+            i for i in sel if i < len(self._entities) and self._entity_selectable(i)
+        }
         self._sync_shape_storage_from_entities()
 
     def _reset_edit_interaction_state(self) -> None:
@@ -811,6 +823,25 @@ class PolylineView(
         for e in self._entities:
             if e.group is not None and counts[e.group] < 2:
                 e.group = None
+    def delete_indices(self, indices: list[int]) -> int:
+        """Delete specific entities regardless of the active layer (used by
+        the layer tree); locked entities survive."""
+        drop = {
+            i
+            for i in indices
+            if 0 <= i < len(self._entities) and not self._entities[i].locked
+        }
+        if not drop:
+            return 0
+        self._push_undo()
+        self._compact_entities(drop)
+        self._sel -= drop
+        self._sel = {i - sum(1 for d in drop if d < i) for i in self._sel}
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(drop)
+
     def delete_selected(self) -> int:
         delete_set = {idx for idx in self._sel if not self._is_locked(idx)}
         n = len(delete_set)
@@ -825,7 +856,9 @@ class PolylineView(
         return n
 
     def undo(self) -> bool:
-        result = self._undo_store.undo(self._entities, self._sel)
+        result = self._undo_store.undo(
+            self._entities, self._sel, self._layer_state()
+        )
         if result is None:
             return False
         self._restore_history_state(*result)
@@ -836,7 +869,9 @@ class PolylineView(
         return True
 
     def redo(self) -> bool:
-        result = self._undo_store.redo(self._entities, self._sel)
+        result = self._undo_store.redo(
+            self._entities, self._sel, self._layer_state()
+        )
         if result is None:
             return False
         self._restore_history_state(*result)
@@ -1721,9 +1756,17 @@ class PolylineView(
         else:
             self.unsetCursor()
 
+    def _layer_state(self) -> tuple[tuple[str, ...], str | None]:
+        return (tuple(self._layer_order), self._active_layer)
+
     def _push_undo(self, coalesce: str | None = None) -> None:
         """Record the pre-state of an operation (call before mutating)."""
-        self._undo_store.mark(self._entities, self._sel, coalesce=coalesce)
+        self._undo_store.mark(
+            self._entities,
+            self._sel,
+            coalesce=coalesce,
+            layers=self._layer_state(),
+        )
 
     def get_entity_records(self) -> list[dict[str, Any]]:
         """Serialize entities (geometry + kind/meta/flags/group) for layer

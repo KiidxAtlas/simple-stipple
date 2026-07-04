@@ -206,3 +206,68 @@ def test_drag_move_ignores_inactive_entities(qapp):
     before = [tuple(p) for p in canvas._entities[1].points]
     drag_world(canvas, 35.0, 0.0, 50.0, 20.0)  # try to drag Layer 2's square
     assert [tuple(p) for p in canvas._entities[1].points] == before
+
+
+# ── layer tree regressions (post-overhaul report) ────────────────────────────
+
+
+def test_undo_restores_layer_model(qapp):
+    """Undoing past a layer rename/delete must restore the layer list too —
+    previously the order desynced, leaving ghost empty layers."""
+    canvas, rt = make_rig(qapp)
+    rt.layer_renamed("Layer 2", "Engrave")
+    assert canvas.layer_names() == ["Layer 1", "Engrave"]
+    assert canvas.undo()
+    assert canvas.layer_names() == ["Layer 1", "Layer 2"]
+    assert canvas._entities[1].layer == "Layer 2"
+    assert canvas.redo()
+    assert canvas.layer_names() == ["Layer 1", "Engrave"]
+
+    rt.layer_deleted("Engrave")
+    assert canvas.layer_names() == ["Layer 1"]
+    assert canvas.undo()
+    assert canvas.layer_names() == ["Layer 1", "Engrave"]
+    assert canvas.poly_count == 2
+
+
+def test_undo_restores_layer_order(qapp):
+    canvas, rt = make_rig(qapp)
+    rt.layer_moved("Layer 2", 0)
+    assert canvas.layer_names() == ["Layer 2", "Layer 1"]
+    assert canvas.undo()
+    assert canvas.layer_names() == ["Layer 1", "Layer 2"]
+
+
+def test_add_layer_is_undoable(qapp):
+    canvas, rt = make_rig(qapp)
+    rt.add_layer_and_activate("Score")
+    assert "Score" in canvas.layer_names()
+    assert canvas.undo()
+    assert "Score" not in canvas.layer_names()
+
+
+def test_tree_selection_activates_shape_layer(qapp):
+    canvas, rt = make_rig(qapp)
+    assert canvas.active_layer == "Layer 1"
+    rt.on_tree_selection_requested([1])  # shape on Layer 2
+    assert canvas.active_layer == "Layer 2"
+    assert canvas.get_selection_indices() == [1]
+
+
+def test_tree_rows_number_per_layer(qapp):
+    canvas, rt = make_rig(qapp)
+    canvas.set_active_layer("Layer 2")
+    canvas._push_undo()
+    canvas._append_entity(square(60, 0))
+    rows = rt.build_layer_tree_rows()
+    labels = {r["name"]: [s["label"][:2] for s in r["shapes"]] for r in rows}
+    assert labels["Layer 1"] == ["01"]
+    assert labels["Layer 2"] == ["01", "02"]  # per-layer, not global indices
+
+
+def test_delete_indices_works_across_layers(qapp):
+    canvas, rt = make_rig(qapp)
+    assert canvas.delete_indices([1]) == 1  # Layer 2's shape, Layer 1 active
+    assert canvas.poly_count == 1
+    assert canvas.undo()
+    assert canvas.poly_count == 2

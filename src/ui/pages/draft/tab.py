@@ -386,10 +386,12 @@ class DraftPage(BasePage):
         from src.ui.widgets.layer_tree import flatten_shape_keys
 
         indices = flatten_shape_keys(keys)
-        if not indices or layer != self._current_layer_name():
+        if not indices:
             return
-        self._canvas.set_selection(indices)
-        self._canvas.delete_selected()
+        # Keys are entity indices, so rows from any layer can be deleted.
+        if self._canvas.delete_indices(indices):
+            self._refresh_status()
+            self._emit_state_changed()
 
     def _on_canvas_edit(self) -> None:
         self._rt().on_canvas_edit()

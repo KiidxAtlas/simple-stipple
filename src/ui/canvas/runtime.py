@@ -33,7 +33,17 @@ class CanvasRuntime:
         return self._canvas.active_layer or self.default_layer
 
     def on_tree_selection_requested(self, indices: list[int]) -> None:
-        self._canvas.set_selection(flatten_shape_keys(indices))
+        idxs = flatten_shape_keys(indices)
+        canvas = self._canvas
+        # Clicking a shape row that lives on a non-active layer activates
+        # that layer first, so tree selection always works.
+        for i in idxs:
+            if 0 <= i < len(canvas._entities):
+                layer = canvas._entities[i].layer
+                if layer and layer != canvas.active_layer:
+                    canvas.set_active_layer(layer)
+                break
+        canvas.set_selection(idxs)
 
     def reload_active_layer(self, *, fit: bool = False) -> None:
         """Kept for API compatibility — entities never leave the canvas."""
@@ -151,8 +161,10 @@ class CanvasRuntime:
 
     # ── Layer tree rows ───────────────────────────────────────────────────
 
-    def _shape_label(self, idx: int, e: Any) -> str:
-        geo = describe_polyline(idx, e.points)
+    def _shape_label(self, ordinal: int, e: Any) -> str:
+        """Row label. ``ordinal`` is the shape's position within its layer
+        (stable, human-friendly numbering — not the entity index)."""
+        geo = describe_polyline(ordinal, e.points)
         custom = (e.meta or {}).get("label")
         if not custom:
             return geo
@@ -175,18 +187,20 @@ class CanvasRuntime:
 
         rows: list[dict[str, Any]] = []
         emitted: set[int] = set()
+        ordinal = 0
         for i, e in pairs:
             gid = e.group
             if gid is None or len(members_by_gid.get(gid, [])) < 2:
                 rows.append(
                     {
                         "key": i,
-                        "label": self._shape_label(i, e),
+                        "label": self._shape_label(ordinal, e),
                         "visible": not e.hidden,
                         "editable": True,
                         "draggable": True,
                     }
                 )
+                ordinal += 1
                 continue
             if gid in emitted:
                 continue
@@ -196,7 +210,9 @@ class CanvasRuntime:
             rows.append(
                 {
                     "key": tuple(members),
-                    "label": f"{title}  ·  {len(members)} shapes",
+                    "label": (
+                        f"{ordinal + 1:02d}  {title}  ·  {len(members)} shapes"
+                    ),
                     "visible": any(
                         not canvas._entities[m].hidden for m in members
                     ),
@@ -204,6 +220,7 @@ class CanvasRuntime:
                     "draggable": True,
                 }
             )
+            ordinal += 1
         return rows
 
     def build_layer_tree_rows(

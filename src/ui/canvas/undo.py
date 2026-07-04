@@ -23,6 +23,9 @@ from dataclasses import dataclass
 from src.ui.canvas.entities import EntityRecord
 
 
+LayerState = tuple[tuple[str, ...], str | None]  # (layer order, active layer)
+
+
 @dataclass
 class _Delta:
     """One undo step: how to move between the before and after states."""
@@ -35,6 +38,8 @@ class _Delta:
     fwd_len: int
     sel_back: set[int]
     sel_fwd: set[int]
+    layers_back: LayerState | None = None  # None = layer model unchanged
+    layers_fwd: LayerState | None = None
 
     def vertex_cost(self) -> int:
         return sum(
@@ -53,6 +58,8 @@ def _diff(
     before_sel: set[int],
     after: list[EntityRecord],
     after_sel: set[int],
+    layers_before: LayerState | None = None,
+    layers_after: LayerState | None = None,
 ) -> _Delta | None:
     """Element-wise diff. Middle insertions/deletions degrade to storing the
     shifted suffix — never wrong, just less compact for those operations."""
@@ -65,8 +72,11 @@ def _diff(
             fwd_changed.append((i, deepcopy(after[i])))
     back_tail = list(before[len(after) :])
     fwd_tail = [deepcopy(e) for e in after[len(before) :]]
-    if not back_changed and not back_tail and not fwd_tail:
-        return None  # geometry unchanged; selection-only diffs are not steps
+    layers_changed = (
+        layers_before is not None and layers_before != layers_after
+    )
+    if not back_changed and not back_tail and not fwd_tail and not layers_changed:
+        return None  # nothing observable changed; selection-only ≠ a step
     return _Delta(
         back_changed=back_changed,
         fwd_changed=fwd_changed,
@@ -76,6 +86,8 @@ def _diff(
         fwd_len=len(after),
         sel_back=set(before_sel),
         sel_fwd=set(after_sel),
+        layers_back=layers_before if layers_changed else None,
+        layers_fwd=layers_after if layers_changed else None,
     )
 
 
@@ -90,6 +102,7 @@ class UndoStore:
         self._redo: list[_Delta] = []
         self._shadow: list[EntityRecord] | None = None
         self._shadow_sel: set[int] = set()
+        self._shadow_layers: LayerState | None = None
         self._pending_key: str | None = None
 
     # ── Recording ─────────────────────────────────────────────────────────
@@ -100,6 +113,7 @@ class UndoStore:
         sel: set[int],
         *,
         coalesce: str | None = None,
+        layers: LayerState | None = None,
     ) -> None:
         """Snapshot the pre-state of an operation (call before mutating).
 
@@ -113,9 +127,10 @@ class UndoStore:
             and coalesce == self._pending_key
         ):
             return  # keep the original pre-state; the ops merge
-        self._finalize(entities, sel)
+        self._finalize(entities, sel, layers)
         self._shadow = deepcopy(list(entities))
         self._shadow_sel = set(sel)
+        self._shadow_layers = layers
         self._pending_key = coalesce
 
     def break_coalescing(self) -> None:
@@ -126,16 +141,30 @@ class UndoStore:
         self._undo.clear()
         self._redo.clear()
         self._shadow = None
+        self._shadow_layers = None
         self._pending_key = None
 
-    def _finalize(self, entities: list[EntityRecord], sel: set[int]) -> None:
+    def _finalize(
+        self,
+        entities: list[EntityRecord],
+        sel: set[int],
+        layers: LayerState | None = None,
+    ) -> None:
         if self._shadow is None:
             return
-        delta = _diff(self._shadow, self._shadow_sel, entities, sel)
+        delta = _diff(
+            self._shadow,
+            self._shadow_sel,
+            entities,
+            sel,
+            self._shadow_layers,
+            layers,
+        )
         if delta is not None:
             self._undo.append(delta)
             self._cap()
         self._shadow = None
+        self._shadow_layers = None
         self._pending_key = None
 
     def _cap(self) -> None:
@@ -165,9 +194,12 @@ class UndoStore:
         return lst
 
     def undo(
-        self, entities: list[EntityRecord], sel: set[int]
-    ) -> tuple[list[EntityRecord], set[int]] | None:
-        self._finalize(entities, sel)
+        self,
+        entities: list[EntityRecord],
+        sel: set[int],
+        layers: LayerState | None = None,
+    ) -> tuple[list[EntityRecord], set[int], LayerState | None] | None:
+        self._finalize(entities, sel, layers)
         if not self._undo:
             return None
         d = self._undo.pop()
@@ -175,12 +207,16 @@ class UndoStore:
         return (
             self._apply(entities, d.back_len, d.back_tail, d.back_changed),
             set(d.sel_back),
+            d.layers_back,
         )
 
     def redo(
-        self, entities: list[EntityRecord], sel: set[int]
-    ) -> tuple[list[EntityRecord], set[int]] | None:
-        self._finalize(entities, sel)
+        self,
+        entities: list[EntityRecord],
+        sel: set[int],
+        layers: LayerState | None = None,
+    ) -> tuple[list[EntityRecord], set[int], LayerState | None] | None:
+        self._finalize(entities, sel, layers)
         if not self._redo:
             return None
         d = self._redo.pop()
@@ -188,4 +224,5 @@ class UndoStore:
         return (
             self._apply(entities, d.fwd_len, d.fwd_tail, d.fwd_changed),
             set(d.sel_fwd),
+            d.layers_fwd,
         )
