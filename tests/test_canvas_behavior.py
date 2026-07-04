@@ -151,7 +151,7 @@ def test_view_state_round_trip(qapp):
     v2.set_view_state(st)
     assert v2._scale == pytest.approx(3.5)
     assert (v2._ox, v2._oy) == (pytest.approx(12.0), pytest.approx(34.0))
-    assert sorted(v2._hidden_polys) == [1]
+    assert [e.hidden for e in v2._entities] == [False, True, False]
 
 
 # ── selection ────────────────────────────────────────────────────────────────

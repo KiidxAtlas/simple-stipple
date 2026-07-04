@@ -160,7 +160,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         """Persist a custom display label for an outline shape."""
         if isinstance(shape_key, (tuple, list)) and shape_key:
             first = shape_key[0]
-            gid = self._canvas._groups.get(first) if isinstance(first, int) else None
+            gid = self._canvas._group_of(first) if isinstance(first, int) else None
             if gid is not None:
                 self._canvas.set_group_label(gid, new_label)
             return
@@ -196,7 +196,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         label_fn = (
             self._shape_label_builder(layer_name) if is_outline else describe_polyline
         )
-        groups = dict(self._canvas._groups.items()) if is_outline else None
+        groups = self._canvas._group_map() if is_outline else None
         return build_shape_rows(
             polylines,
             hidden,

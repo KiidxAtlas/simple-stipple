@@ -147,8 +147,9 @@ class CanvasRenderer:
             painter.drawPath(gpath)
 
     def _paint_main_polys(self, painter: QPainter, visible: QRectF) -> None:
-        for idx, poly in enumerate(e.points for e in self._entities):
-            if idx in self._hidden_polys:
+        for idx, ent in enumerate(self._entities):
+            poly = ent.points
+            if ent.hidden:
                 continue
             if len(poly) < 2:
                 continue
@@ -156,8 +157,8 @@ class CanvasRenderer:
             if not visible.intersects(_poly_rect):
                 continue
             sel = idx in self._sel
-            is_construction = idx in self._construction_polys
-            is_locked = idx in self._locked_polys
+            is_construction = ent.construction
+            is_locked = ent.locked
             if sel:
                 color = QColor(SEL)
             elif idx in self._accent_polys:

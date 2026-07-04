@@ -250,7 +250,7 @@ class CanvasRuntime:
         """Persist a custom display label for a shape (or name a group)."""
         if isinstance(shape_key, (tuple, list)) and shape_key:
             first = shape_key[0]
-            gid = self._canvas._groups.get(first) if isinstance(first, int) else None
+            gid = self._canvas._group_of(first) if isinstance(first, int) else None
             if gid is not None:
                 self._canvas.set_group_label(gid, new_label)
             return
@@ -286,7 +286,7 @@ class CanvasRuntime:
         groups: dict[int, int] | None = None
         if layer_name == self.current_layer_name():
             # Grouped shapes collapse into a single row (like an SVG <g>).
-            groups = dict(self._canvas._groups.items())
+            groups = self._canvas._group_map()
         return build_shape_rows(
             polylines,
             hidden,

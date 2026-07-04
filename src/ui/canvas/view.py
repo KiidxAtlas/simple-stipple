@@ -61,11 +61,7 @@ from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
-from src.ui.canvas.entities import (
-    EntityRecord,
-    FlagSetView,
-    GroupsView,
-)
+from src.ui.canvas.entities import EntityRecord
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
 from src.ui.core.focus_policy import blur_focused_line_edit
@@ -119,49 +115,26 @@ class PolylineView(
     selectionChanged = Signal(int)  # type: ignore[assignment]
     modeChanged = Signal(str)
 
-    @property
-    def _construction_polys(self) -> FlagSetView:
-        view = self.__dict__.get("_construction_view")
-        if view is None:
-            view = self.__dict__["_construction_view"] = FlagSetView(self, "construction")
-        return view
+    def _flagged(self, attr: str) -> set[int]:
+        """Indices of entities whose boolean ``attr`` is set."""
+        return {i for i, e in enumerate(self._entities) if getattr(e, attr)}
 
-    @_construction_polys.setter
-    def _construction_polys(self, indices) -> None:
-        self._construction_polys.replace(indices)
+    def _set_flagged(self, attr: str, indices) -> None:
+        """Set boolean ``attr`` to exactly ``indices`` (wholesale assignment)."""
+        wanted = {i for i in indices if isinstance(i, int)}
+        for i, e in enumerate(self._entities):
+            setattr(e, attr, i in wanted)
 
-    @property
-    def _hidden_polys(self) -> FlagSetView:
-        view = self.__dict__.get("_hidden_view")
-        if view is None:
-            view = self.__dict__["_hidden_view"] = FlagSetView(self, "hidden")
-        return view
+    def _is_locked(self, idx: int) -> bool:
+        return 0 <= idx < len(self._entities) and self._entities[idx].locked
 
-    @_hidden_polys.setter
-    def _hidden_polys(self, indices) -> None:
-        self._hidden_polys.replace(indices)
+    def _group_of(self, idx: int) -> int | None:
+        ents = self._entities
+        return ents[idx].group if 0 <= idx < len(ents) else None
 
-    @property
-    def _locked_polys(self) -> FlagSetView:
-        view = self.__dict__.get("_locked_view")
-        if view is None:
-            view = self.__dict__["_locked_view"] = FlagSetView(self, "locked")
-        return view
-
-    @_locked_polys.setter
-    def _locked_polys(self, indices) -> None:
-        self._locked_polys.replace(indices)
-
-    @property
-    def _groups(self) -> GroupsView:
-        view = self.__dict__.get("_groups_view")
-        if view is None:
-            view = self.__dict__["_groups_view"] = GroupsView(self)
-        return view
-
-    @_groups.setter
-    def _groups(self, mapping) -> None:
-        self._groups.replace(mapping)
+    def _group_map(self) -> dict[int, int]:
+        """{entity index: group id} for grouped entities."""
+        return {i: e.group for i, e in enumerate(self._entities) if e.group is not None}
 
     @staticmethod
     def _clone_polys(
@@ -189,9 +162,7 @@ class PolylineView(
         if on_mode_change:
             self.modeChanged.connect(on_mode_change)
 
-        # Single source of truth for drawable entities. The legacy names
-        # (_polys / _entity_kinds / _entity_meta) are live views over this
-        # list — see src/ui/canvas/entities.py.
+        # Single source of truth for drawable entities.
         self._entities: list[EntityRecord] = []
         self._sel: set[int] = set()
 
@@ -199,9 +170,7 @@ class PolylineView(
         # any structural/geometry change).
         self._snap_shapes_cache: list | None = None
 
-        # construction/hidden/locked/group flags live on EntityRecord;
-        # _construction_polys/_hidden_polys/_locked_polys/_groups are live
-        # views (see the properties above).
+        # construction/hidden/locked/group flags live on EntityRecord.
         self._accent_polys: dict[int, str] = {}  # index → color hex for role overlays
         self._next_group_id: int = 0
         self._group_labels: dict[int, str] = {}  # gid → custom name
@@ -377,11 +346,7 @@ class PolylineView(
     def load(self, polys: list[list[tuple[float, float]]]) -> None:
         self._entities = [EntityRecord(points=list(p)) for p in polys]
         self._sel.clear()
-        self._hidden_polys.clear()
-        self._locked_polys.clear()
-        self._groups.clear()
         self._group_labels.clear()
-        self._construction_polys.clear()
 
         self._sync_shape_storage_from_entities()
 
@@ -405,10 +370,6 @@ class PolylineView(
     ) -> None:
         self._entities = [EntityRecord(points=list(p)) for p in polys]
         self._sel.clear()
-        self._construction_polys.clear()
-        self._hidden_polys.clear()
-        self._locked_polys.clear()
-        self._groups.clear()
         self._group_labels.clear()
 
         self._sync_shape_storage_from_entities()
@@ -432,9 +393,9 @@ class PolylineView(
             "grid_visible": self._grid_visible,
             "grid_snap": self._grid_snap,
             "grid_spacing": self._grid_spacing,
-            "hidden_indices": sorted(self._hidden_polys),
-            "locked_indices": sorted(self._locked_polys),
-            "groups": {str(k): v for k, v in self._groups.items()},
+            "hidden_indices": sorted(self._flagged("hidden")),
+            "locked_indices": sorted(self._flagged("locked")),
+            "groups": {str(i): g for i, g in self._group_map().items()},
             "group_labels": {str(k): v for k, v in self._group_labels.items()},
         }
 
@@ -471,22 +432,20 @@ class PolylineView(
         locked_state = state.get("locked_indices", [])
         if not isinstance(locked_state, list):
             locked_state = []
-        self._hidden_polys = {
-            i for i in hidden_state if isinstance(i, int) and 0 <= i < len(self._entities)
-        }
-        self._locked_polys = {
-            i for i in locked_state if isinstance(i, int) and 0 <= i < len(self._entities)
-        }
+        self._set_flagged("hidden", hidden_state)
+        self._set_flagged("locked", locked_state)
         raw_groups = state.get("groups", {})
         if isinstance(raw_groups, dict):
-            self._groups = {
+            parsed = {
                 int(k): int(v)
                 for k, v in raw_groups.items()
                 if str(k).lstrip("-").isdigit()
                 and str(v).lstrip("-").isdigit()
                 and 0 <= int(k) < len(self._entities)
             }
-            self._next_group_id = max(self._groups.values(), default=0) + 1
+            for i, e in enumerate(self._entities):
+                e.group = parsed.get(i)
+            self._next_group_id = max(parsed.values(), default=0) + 1
         raw_labels = state.get("group_labels", {})
         if isinstance(raw_labels, dict):
             self._group_labels = {
@@ -494,7 +453,7 @@ class PolylineView(
                 for k, v in raw_labels.items()
                 if str(k).lstrip("-").isdigit() and str(v).strip()
             }
-        self._sel -= self._hidden_polys
+        self._sel -= self._flagged("hidden")
         self._redraw()
 
     def get_selected(self) -> list[list[tuple[float, float]]]:
@@ -564,7 +523,7 @@ class PolylineView(
         new_sel = {
             idx
             for idx in indices
-            if 0 <= idx < len(self._entities) and idx not in self._hidden_polys
+            if 0 <= idx < len(self._entities) and not self._entities[idx].hidden
         }
         if new_sel == self._sel:
             return
@@ -575,18 +534,18 @@ class PolylineView(
     def set_hidden_indices(self, indices: list[int]) -> None:
         new_hidden = {idx for idx in indices if 0 <= idx < len(self._entities)}
         new_sel = self._sel - new_hidden
-        if new_hidden == self._hidden_polys and new_sel == self._sel:
+        if new_hidden == self._flagged("hidden") and new_sel == self._sel:
             return
-        self._hidden_polys = new_hidden
+        self._set_flagged("hidden", new_hidden)
         self._sel = new_sel
         self._redraw()
         self._notify()
 
     def set_locked_indices(self, indices: list[int]) -> None:
         new_locked = {idx for idx in indices if 0 <= idx < len(self._entities)}
-        if new_locked == self._locked_polys:
+        if new_locked == self._flagged("locked"):
             return
-        self._locked_polys = new_locked
+        self._set_flagged("locked", new_locked)
         self._redraw()
 
     def set_ghost_polylines(
@@ -672,7 +631,7 @@ class PolylineView(
             if e.group is not None and counts[e.group] < 2:
                 e.group = None
     def delete_selected(self) -> int:
-        delete_set = {idx for idx in self._sel if idx not in self._locked_polys}
+        delete_set = {idx for idx in self._sel if not self._is_locked(idx)}
         n = len(delete_set)
         if n:
             self._push_undo()
@@ -707,7 +666,7 @@ class PolylineView(
         return True
 
     def select_all(self) -> None:
-        self._sel = set(range(len(self._entities))) - self._hidden_polys
+        self._sel = set(range(len(self._entities))) - self._flagged("hidden")
         self._redraw()
         self._notify()
 
@@ -718,7 +677,7 @@ class PolylineView(
 
     def _invert_selection(self) -> None:
         """Invert selection: select all unselected, deselect all selected."""
-        all_indices = set(range(len(self._entities))) - self._hidden_polys
+        all_indices = set(range(len(self._entities))) - self._flagged("hidden")
         self._sel = all_indices - self._sel
         self._redraw()
         self._notify()
@@ -983,7 +942,7 @@ class PolylineView(
             or {(self._edit_poly, self._edit_vert)}
         )
         for pi, vi in targets:
-            if pi in self._locked_polys:
+            if self._is_locked(pi):
                 continue
             if 0 <= pi < len(self._entities) and 0 <= vi < len(self._entities[pi].points):
                 self._entities[pi].points[vi] = (wx, wy)
@@ -1020,7 +979,7 @@ class PolylineView(
                 "polyline": list(self._entities[i].points),
                 "kind": self._entities[i].kind,
                 "meta": deepcopy(self._entities[i].meta) if self._entities[i].meta is not None else None,
-                "construction": i in getattr(self, "_construction_polys", set()),
+                "construction": self._entities[i].construction,
                 "group": self._entities[i].group,
             })
 
@@ -1036,7 +995,7 @@ class PolylineView(
             meta = self._translated_entity_meta(kind, record.get("meta"), offset, offset)
             new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
             if record.get("construction"):
-                self._construction_polys.add(new_idx)
+                self._entities[new_idx].construction = True
             src_gid = record.get("group")
             if src_gid is not None:
                 if src_gid not in gid_map:
@@ -1092,7 +1051,7 @@ class PolylineView(
     def _cut_selected(self) -> None:
         if not self._sel:
             return
-        cut_set = {idx for idx in self._sel if idx not in getattr(self, "_locked_polys", set())}
+        cut_set = {idx for idx in self._sel if not self._is_locked(idx)}
         if not cut_set:
             return
         self._copy_selected()
@@ -1106,7 +1065,7 @@ class PolylineView(
     def _nudge_selected(self, dx: float, dy: float) -> None:
         if not self._sel:
             return
-        mutable = [idx for idx in self._sel if idx not in getattr(self, "_locked_polys", set())]
+        mutable = [idx for idx in self._sel if not self._is_locked(idx)]
         if not mutable:
             return
         if not getattr(self, "_nudge_undo_pushed", False):
@@ -1194,7 +1153,7 @@ class PolylineView(
         self._entities.append(EntityRecord(points=list(poly), kind=kind, meta=meta))
         new_idx = len(self._entities) - 1
         if getattr(self, "_draw_construction_mode", False):
-            self._construction_polys.add(new_idx)
+            self._entities[new_idx].construction = True
 
         merged_idx: int | None = None
         if (primitive in {"line", "polyline"} and not getattr(self, "_draw_construction_mode", False) and not split_happened and any(snap_type == "vertex" for snap_type in getattr(self, "_draw_point_snap_types", []))):
@@ -1276,7 +1235,7 @@ class PolylineView(
             gid = self._next_group_id
             self._next_group_id += 1
             for idx in new_indices:
-                self._groups[idx] = gid
+                self._entities[idx].group = gid
         self._sel = set(new_indices)
         self._show_flash(f"Text placed ({len(new_indices)} contours)", 900)
         self._redraw()
@@ -1333,10 +1292,9 @@ class PolylineView(
             return
         self._push_undo()
         for idx in list(self._sel):
-            if idx in getattr(self, "_construction_polys", set()):
-                self._construction_polys.discard(idx)
-            else:
-                self._construction_polys.add(idx)
+            if 0 <= idx < len(self._entities):
+                e = self._entities[idx]
+                e.construction = not e.construction
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1376,22 +1334,16 @@ class PolylineView(
                     merged = list(reversed(poly))[:-1] + survivor
                 if merged is None:
                     continue
-                popped_was_construction = i in getattr(self, "_construction_polys", set())
-                survivor_was_construction = survivor_idx in getattr(self, "_construction_polys", set())
+                popped_was_construction = self._entities[i].construction
+                survivor_was_construction = self._entities[survivor_idx].construction
                 self._entities[survivor_idx].points = merged
                 self._entities[survivor_idx].kind = "polyline"
                 self._entities[survivor_idx].meta = None
                 del self._entities[i]
-                remapped: set[int] = set()
-                for ci in getattr(self, "_construction_polys", set()):
-                    if ci == i:
-                        continue
-                    remapped.add(ci - 1 if ci > i else ci)
-                self._construction_polys = remapped
                 if i < survivor_idx:
                     survivor_idx -= 1
                 if popped_was_construction or survivor_was_construction:
-                    self._construction_polys.add(survivor_idx)
+                    self._entities[survivor_idx].construction = True
                 merged_any = True
                 changed = True
                 break
@@ -1402,7 +1354,7 @@ class PolylineView(
             return 0
         grouped: dict[int, set[int]] = {}
         for pi, vi in verts:
-            if pi in getattr(self, "_locked_polys", set()):
+            if self._is_locked(pi):
                 continue
             poly = self._entities[pi].points
             if not (0 <= vi < len(poly)):
@@ -1598,7 +1550,7 @@ class PolylineView(
         self._sync_shape_storage_from_entities()
         result: list[dict[str, Any]] = []
         for idx, poly in enumerate(e.points for e in self._entities):
-            if idx in self._construction_polys:
+            if self._entities[idx].construction:
                 continue
             kind = (
                 self._entities[idx].kind
@@ -1607,7 +1559,7 @@ class PolylineView(
             # Grouped shapes share one layer name so downstream laser
             # software runs the whole group as a single job; ungrouped
             # shapes keep their own per-shape layer.
-            gid = self._groups.get(idx)
+            gid = self._entities[idx].group
             if gid is not None:
                 default_name = self._group_labels.get(gid) or f"group_{gid + 1}"
             else:
@@ -1674,12 +1626,12 @@ class PolylineView(
         return [
             idx
             for idx in sorted(self._sel)
-            if idx < len(self._entities) and idx not in self._hidden_polys
+            if idx < len(self._entities) and not self._entities[idx].hidden
         ]
 
     def _mutable_selected_indices(self) -> list[int]:
         return [
-            idx for idx in self._selected_indices() if idx not in self._locked_polys
+            idx for idx in self._selected_indices() if not self._entities[idx].locked
         ]
 
     def _selection_bounds(
@@ -1856,7 +1808,7 @@ class PolylineView(
         best_dist = _SNAP_DIST
         best_pt: tuple[float, float] | None = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if pi in self._hidden_polys:
+            if self._entities[pi].hidden:
                 continue
             if len(poly) < 2:
                 continue
@@ -1872,7 +1824,7 @@ class PolylineView(
         best_dist = _VERT_HIT
         best = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if pi in self._hidden_polys:
+            if self._entities[pi].hidden:
                 continue
             for vi, pt in enumerate(poly):
                 sx, sy = self._w2c(*pt)
@@ -1946,7 +1898,7 @@ class PolylineView(
         wx, wy = self._c2w(cx, cy)
         best: tuple[int, int, tuple[float, float]] | None = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if pi in self._hidden_polys:
+            if self._entities[pi].hidden:
                 continue
             dist, result = self._closest_point_on_poly(
                 poly, wx, wy, cx, cy, return_segment=True
@@ -1962,7 +1914,7 @@ class PolylineView(
         wx, wy = self._c2w(cx, cy)
         best: int | None = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if pi in self._hidden_polys:
+            if self._entities[pi].hidden:
                 continue
             dist = self._closest_point_on_poly(poly, wx, wy, cx, cy)
             if dist is not None and dist < best_dist:
@@ -2687,7 +2639,7 @@ class PolylineView(
 
             if hit is not None:
                 pi, vi = hit
-                if pi in self._locked_polys:
+                if self._is_locked(pi):
                     return
                 if pi < 0 or pi >= len(self._entities):
                     return
@@ -2859,14 +2811,12 @@ class PolylineView(
                 )
             )
             shift_toggle = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            if target in self._groups:
-                gid = self._groups[target]
+            gid = self._group_of(target)
+            if gid is not None:
                 members = {
                     i
-                    for i, g in self._groups.items()
-                    if g == gid
-                    and i < len(self._entities)
-                    and i not in self._hidden_polys
+                    for i, e in enumerate(self._entities)
+                    if e.group == gid and not e.hidden
                 }
                 if ctrl or shift_toggle:
                     # Toggle the whole group as one unit.
@@ -2893,7 +2843,7 @@ class PolylineView(
                     was_selected_before
                     or target_kind in {"arc", "circle", "ellipse", "rectangle"}
                 )
-                and target not in self._locked_polys
+                and not self._is_locked(target)
             ):
                 pi, vi = hit
                 if pi < 0 or pi >= len(self._entities):
@@ -3232,7 +3182,7 @@ class PolylineView(
                     dx_w = new_wx - self._move_origin[0]
                     dy_w = new_wy - self._move_origin[1]
                     for idx in self._sel:
-                        if idx in self._locked_polys:
+                        if self._is_locked(idx):
                             continue
                         if idx < 0 or idx >= len(self._entities):
                             continue
@@ -3479,11 +3429,12 @@ class PolylineView(
         new_groups: dict[int, int] = {}
 
         def _carry_flags(src_idx: int, ni: int) -> None:
-            if src_idx in self._construction_polys:
+            src = self._entities[src_idx]
+            if src.construction:
                 new_construction.add(ni)
-            if src_idx in self._hidden_polys:
+            if src.hidden:
                 new_hidden.add(ni)
-            if src_idx in self._locked_polys:
+            if src.locked:
                 new_locked.add(ni)
 
         def _keep(src_idx: int, p: list[tuple[float, float]]) -> None:
@@ -3496,8 +3447,9 @@ class PolylineView(
             m = self._entities[src_idx].meta
             result_meta.append(deepcopy(m) if m is not None else None)
             _carry_flags(src_idx, ni)
-            if src_idx in self._groups:
-                new_groups[ni] = self._groups[src_idx]
+            src_gid = self._entities[src_idx].group
+            if src_gid is not None:
+                new_groups[ni] = src_gid
 
         def _emit(src_idx: int, p: list[tuple[float, float]]) -> None:
             """Emit a split piece: geometry changed, so it demotes to a plain
@@ -3638,13 +3590,19 @@ class PolylineView(
                     _keep(src_idx, poly)
 
         self._entities = [
-            EntityRecord(points=p, kind=k, meta=m)
-            for p, k, m in zip(result_polys, result_kinds, result_meta)
+            EntityRecord(
+                points=p,
+                kind=k,
+                meta=m,
+                construction=i in new_construction,
+                hidden=i in new_hidden,
+                locked=i in new_locked,
+                group=new_groups.get(i),
+            )
+            for i, (p, k, m) in enumerate(
+                zip(result_polys, result_kinds, result_meta)
+            )
         ]
-        self._construction_polys = new_construction
-        self._hidden_polys = new_hidden
-        self._locked_polys = new_locked
-        self._groups = new_groups
         return any_split, closed_splits, open_splits
 
     @staticmethod
@@ -3710,7 +3668,7 @@ class PolylineView(
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
         return _legacy_snap_to_polyline(
-            cx, cy, [e.points for e in self._entities], self._hidden_polys, self._scale,
+            cx, cy, [e.points for e in self._entities], self._flagged("hidden"), self._scale,
             self._w2c, self._c2w, self._poly_bounds,
             self._is_poly_closed, self._segment_intersection_point,
             reference_point=reference_point, draw_points=self._draw_pts, mode=self._mode,
@@ -3726,7 +3684,7 @@ class PolylineView(
         legacy = _legacy_resolve_snap(
             cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
             grid_snap_enabled=self._grid_snap, grid_spacing=self._grid_spacing,
-            polylines=[e.points for e in self._entities], hidden_polys=self._hidden_polys, scale=self._scale,
+            polylines=[e.points for e in self._entities], hidden_polys=self._flagged("hidden"), scale=self._scale,
             w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
             is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
             mode=self._mode, reference_point=reference_point, draw_points=self._draw_pts,
@@ -3746,7 +3704,7 @@ class PolylineView(
         legacy = _legacy_resolve_drag_snap(
             cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
             allow_vertex=allow_vertex, grid_snap_enabled=self._grid_snap,
-            grid_spacing=self._grid_spacing, polylines=[e.points for e in self._entities], hidden_polys=self._hidden_polys,
+            grid_spacing=self._grid_spacing, polylines=[e.points for e in self._entities], hidden_polys=self._flagged("hidden"),
             scale=self._scale, w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
             is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
             mode=self._mode, exclude_vertices=exclude_vertices, exclude_segments=exclude_segments,
@@ -3774,7 +3732,7 @@ class PolylineView(
             offset_poly = self._offset_polyline(poly, distance)
             if offset_poly is None or len(offset_poly) < 2:
                 continue
-            created.append((offset_poly, idx in self._construction_polys))
+            created.append((offset_poly, self._entities[idx].construction))
         if not created:
             return 0
 
@@ -3785,7 +3743,7 @@ class PolylineView(
             # _polys.append desyncs them and corrupts later DXF export.
             new_idx = self._append_entity(poly)
             if is_construction:
-                self._construction_polys.add(new_idx)
+                self._entities[new_idx].construction = True
             new_sel.add(new_idx)
         self._sel = new_sel
         self._redraw()
@@ -3817,7 +3775,7 @@ class PolylineView(
         self._push_undo()
         new_idx = self._append_entity(list(poly), kind=kind, meta=meta)
         if self._draw_construction_mode:
-            self._construction_polys.add(new_idx)
+            self._entities[new_idx].construction = True
         self._sel = {new_idx}
         self._notify()
         self._fire_poly_change()
@@ -4338,7 +4296,7 @@ class PolylineView(
             offset_poly = self._offset_polyline(poly, distance)
             if offset_poly is None or len(offset_poly) < 2:
                 continue
-            created.append((offset_poly, idx in self._construction_polys))
+            created.append((offset_poly, self._entities[idx].construction))
         if not created:
             return 0
 
@@ -4349,7 +4307,7 @@ class PolylineView(
             # _polys.append desyncs them and corrupts later DXF export.
             new_idx = self._append_entity(poly)
             if is_construction:
-                self._construction_polys.add(new_idx)
+                self._entities[new_idx].construction = True
             new_sel.add(new_idx)
         self._sel = new_sel
         self._redraw()
@@ -4735,7 +4693,7 @@ class PolylineView(
         gid = self._next_group_id
         self._next_group_id += 1
         for idx in self._sel:
-            self._groups[idx] = gid
+            self._entities[idx].group = gid
         self._show_flash(f"Grouped {len(self._sel)} shapes", 900)
         self._notify()
         self._fire_poly_change()
@@ -4750,13 +4708,18 @@ class PolylineView(
         self._fire_poly_change()
 
     def _ungroup_selected(self) -> None:
-        ungrouped = {self._groups.pop(idx) for idx in self._sel if idx in self._groups}
+        ungrouped: set[int] = set()
+        for idx in self._sel:
+            gid = self._group_of(idx)
+            if gid is not None:
+                ungrouped.add(gid)
+                self._entities[idx].group = None
         if not ungrouped:
             return
         # Also remove other group members if their whole group is being dissolved
-        stale = {idx for idx, gid in list(self._groups.items()) if gid in ungrouped}
-        for idx in stale:
-            self._groups.pop(idx, None)
+        for e in self._entities:
+            if e.group in ungrouped:
+                e.group = None
         for gid in ungrouped:
             self._group_labels.pop(gid, None)
         self._show_flash("Ungrouped", 700)
@@ -4818,7 +4781,7 @@ class PolylineView(
         new_meta: list[dict[str, Any] | None] = []
         new_sel: set[int] = set()
         for i, poly in enumerate(e.points for e in self._entities):
-            is_construction = i in self._construction_polys
+            is_construction = self._entities[i].construction
             kind = self._entities[i].kind
             meta = self._entities[i].meta
             if i in to_explode:
@@ -4850,10 +4813,9 @@ class PolylineView(
                 if is_construction:
                     new_construction.add(ni)
         self._entities = [
-            EntityRecord(points=p, kind=k, meta=m)
-            for p, k, m in zip(new_polys, new_kinds, new_meta)
+            EntityRecord(points=p, kind=k, meta=m, construction=i in new_construction)
+            for i, (p, k, m) in enumerate(zip(new_polys, new_kinds, new_meta))
         ]
-        self._construction_polys = new_construction
         self._sel = new_sel
         self._redraw()
         self._notify()
@@ -4885,7 +4847,7 @@ class PolylineView(
             poly = self._entities[i].points
             if len(poly) < 2:
                 continue
-            is_construction = i in self._construction_polys
+            is_construction = self._entities[i].construction
             pts = list(poly)
             is_closed = False
             if (
@@ -4962,7 +4924,7 @@ class PolylineView(
             ni = self._append_entity(poly)
             new_sel.add(ni)
             if is_construction:
-                self._construction_polys.add(ni)
+                self._entities[ni].construction = True
         self._sel = new_sel
         self._redraw()
         self._notify()
