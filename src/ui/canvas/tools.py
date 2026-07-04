@@ -788,7 +788,9 @@ class SelectTool(CanvasTool):
                 v._lmb_prev = pos
                 v._redraw()
                 return True
-            # Move selected shapes
+            # Move selected shapes. Snapping works on the selection's own
+            # geometry: the shape's vertices snap to static vertices/edges/
+            # grid/guides regardless of where the user grabbed it.
             if v._move_origin is not None and v._lmb_press is not None:
                 dx_px = pos.x() - v._lmb_press.x()
                 dy_px = pos.y() - v._lmb_press.y()
@@ -796,57 +798,53 @@ class SelectTool(CanvasTool):
                     abs(dx_px) > DRAG_THRESH or abs(dy_px) > DRAG_THRESH
                 ):
                     v._move_dragging = True
-                    v._move_snap_exclude_vertices = v._vertices_for_polylines(
-                        set(v._sel)
-                    )
-                    v._move_snap_exclude_segments = v._segments_for_polylines(
-                        set(v._sel)
-                    )
+                    v._move_anchor_w = v._move_origin
+                    v._move_applied_w = (0.0, 0.0)
+                    v._move_start_pts = v._moving_sample_points()
                 if v._move_dragging:
                     if not v._move_undo_pushed:
                         v._push_undo()
                         v._move_undo_pushed = True
                     new_wx, new_wy = v._c2w(pos.x(), pos.y())
+                    raw_dx = new_wx - v._move_anchor_w[0]
+                    raw_dy = new_wy - v._move_anchor_w[1]
                     move_snap_type = ""
+                    snap_pos: tuple[float, float] | None = None
                     allow_snap = not bool(
                         event.modifiers() & Qt.KeyboardModifier.AltModifier
                     )
                     if allow_snap:
-                        move_snap = v._resolve_drag_snap(
-                            pos.x(),
-                            pos.y(),
-                            new_wx,
-                            new_wy,
-                            allow_polyline=True,
-                            allow_grid=True,
-                            exclude_vertices=v._move_snap_exclude_vertices,
-                            exclude_segments=v._move_snap_exclude_segments,
-                        )
-                        if move_snap is not None:
-                            new_wx, new_wy, move_snap_type = move_snap
-                    dx_w = new_wx - v._move_origin[0]
-                    dy_w = new_wy - v._move_origin[1]
-                    for idx in v._sel:
-                        if v._is_locked(idx):
-                            continue
-                        if idx < 0 or idx >= len(v._entities):
-                            continue
-                        v._entities[idx].points = [
-                            (x + dx_w, y + dy_w) for x, y in v._entities[idx].points
-                        ]
-                        v._transform_entity_meta(
-                            idx,
-                            center=(0.0, 0.0),
-                            kind=v._entities[idx].kind,
-                            meta=v._entities[idx].meta,
-                            transform="translate",
-                            dx=dx_w,
-                            dy=dy_w,
-                        )
-                    v._move_origin = (new_wx, new_wy)
+                        adj = v._object_snap_adjust(raw_dx, raw_dy)
+                        if adj is not None:
+                            raw_dx += adj[0]
+                            raw_dy += adj[1]
+                            snap_pos = adj[2]
+                            move_snap_type = adj[3]
+                    step_dx = raw_dx - v._move_applied_w[0]
+                    step_dy = raw_dy - v._move_applied_w[1]
+                    if abs(step_dx) > 1e-12 or abs(step_dy) > 1e-12:
+                        for idx in v._sel:
+                            if v._is_locked(idx):
+                                continue
+                            if idx < 0 or idx >= len(v._entities):
+                                continue
+                            v._entities[idx].points = [
+                                (x + step_dx, y + step_dy)
+                                for x, y in v._entities[idx].points
+                            ]
+                            v._transform_entity_meta(
+                                idx,
+                                center=(0.0, 0.0),
+                                kind=v._entities[idx].kind,
+                                meta=v._entities[idx].meta,
+                                transform="translate",
+                                dx=step_dx,
+                                dy=step_dy,
+                            )
+                        v._move_applied_w = (raw_dx, raw_dy)
                     v._cursor_wx, v._cursor_wy = new_wx, new_wy
-                    if move_snap_type:
-                        v._hover_snap = (new_wx, new_wy)
+                    if move_snap_type and snap_pos is not None:
+                        v._hover_snap = snap_pos
                         v._hover_snap_type = move_snap_type
                     v._redraw()
                     return True

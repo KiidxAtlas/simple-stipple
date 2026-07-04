@@ -878,3 +878,59 @@ def test_selected_circle_drags_as_move_not_vertex_edit(qapp):
     assert after[2] - after[0] == pytest.approx(before[2] - before[0], abs=1e-6)
     assert after[3] - after[1] == pytest.approx(before[3] - before[1], abs=1e-6)
     assert after[0] != pytest.approx(before[0])
+
+
+def test_handle_corner_free_resize(qapp):
+    """Corners resize X and Y independently by default."""
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    _paint_once(v)
+    rect = dict(v._gizmo_handle_rects)["se"]
+    cx, cy = rect.center().x(), rect.center().y()
+    tx, ty = v._w2c(30.0, -5.0)  # 3x in X, 1.5x in Y from anchor (0, 10)
+    press(v, cx, cy)
+    move(v, tx, ty)
+    release(v, tx, ty)
+    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    assert x1 - x0 == pytest.approx(30.0, abs=0.5)
+    assert y1 - y0 == pytest.approx(15.0, abs=0.5)
+
+
+def test_handle_corner_shift_keeps_aspect(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    _paint_once(v)
+    rect = dict(v._gizmo_handle_rects)["se"]
+    cx, cy = rect.center().x(), rect.center().y()
+    tx, ty = v._w2c(30.0, -5.0)
+    press(v, cx, cy)
+    move(v, tx, ty, mods=SHIFT)
+    release(v, tx, ty, mods=SHIFT)
+    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    assert x1 - x0 == pytest.approx(30.0, abs=0.5)  # dominant axis
+    assert y1 - y0 == pytest.approx(30.0, abs=0.5)  # aspect locked
+
+
+def test_move_drag_snaps_by_shape_vertices(qapp):
+    """Dragging by the shape's interior still snaps its corners to other
+    shapes' vertices."""
+    v = make_view(qapp, [square(0, 0), square(30, 0)])
+    v.set_selection([0])
+    # grab the first square's bottom edge midpoint (not a corner) and drag
+    # near the second square: the dragged square's own corners find the
+    # nearest static candidate (here: an edge) even though the grab point
+    # is nowhere near it
+    drag_world(v, 5.0, 0.0, 24.8, -0.3, steps=8)
+    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    assert x1 == pytest.approx(30.0, abs=1e-6)  # snapped flush exactly
+    assert abs(y0 + 0.3) < 0.35  # y stays within drag tolerance
+
+
+def test_move_drag_snaps_to_guides_by_geometry(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v._guides.append(("v", 50.0))
+    v.set_selection([0])
+    drag_world(v, 5.0, 0.0, 44.8, 3.0, steps=6)  # left edge near guide x=50... 
+    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    # one of the square's edges landed exactly on the guide
+    assert any(abs(edge - 50.0) < 1e-6 for edge in (x0, x1))

@@ -420,10 +420,16 @@ class PolylineView(
         # Select-mode hover pre-highlight: which polyline a click would pick
         self._hover_poly: int | None = None
 
-        # Move state (select mode drag-to-move)
+        # Move state (select mode drag-to-move). Object snapping works on
+        # absolute deltas from the drag anchor: the selection's own vertices
+        # (sampled at drag start) snap against static vertices/edges/grid/
+        # guides regardless of where the user grabbed the shape.
         self._move_dragging: bool = False
         self._move_origin: tuple[float, float] | None = None
         self._move_undo_pushed: bool = False
+        self._move_anchor_w: tuple[float, float] | None = None
+        self._move_applied_w: tuple[float, float] = (0.0, 0.0)
+        self._move_start_pts: list[tuple[float, float]] = []
         self._move_snap_exclude_vertices: set[tuple[int, int]] = set()
         self._move_snap_exclude_segments: set[tuple[int, int]] = set()
 
@@ -2169,6 +2175,115 @@ class PolylineView(
         self._rulers_visible = bool(visible)
         self._redraw()
 
+    _MOVE_SNAP_SAMPLE = 64  # max moving vertices considered per drag event
+
+    def _moving_sample_points(self) -> list[tuple[float, float]]:
+        """Sampled vertices of the selection at drag start (for object snap)."""
+        pts: list[tuple[float, float]] = []
+        for idx in self._sel:
+            if 0 <= idx < len(self._entities) and not self._is_locked(idx):
+                pts.extend(self._entities[idx].points)
+        if len(pts) > self._MOVE_SNAP_SAMPLE:
+            step = len(pts) / self._MOVE_SNAP_SAMPLE
+            pts = [pts[int(i * step)] for i in range(self._MOVE_SNAP_SAMPLE)]
+        return pts
+
+    def _object_snap_adjust(
+        self, dx: float, dy: float
+    ) -> tuple[float, float, tuple[float, float], str] | None:
+        """Best (adj_dx, adj_dy, snap_pos, type) aligning any moved vertex of
+        the selection with static vertices/edges/grid/guides — so drags snap
+        by the shape's own geometry, not by the cursor."""
+        pts = self._move_start_pts
+        if not pts:
+            return None
+        scale = max(self._scale, _MIN_SCALE)
+        thresh = _SNAP_DIST
+        world_r = thresh / scale
+
+        static_pts: list[tuple[float, float]] = []
+        static_segs: list[
+            tuple[tuple[float, float], tuple[float, float]]
+        ] = []
+        for i, e in enumerate(self._entities):
+            if i in self._sel or not self._entity_selectable(i):
+                continue
+            poly = e.points
+            static_pts.extend(poly)
+            for k in range(len(poly) - 1):
+                static_segs.append((poly[k], poly[k + 1]))
+        if len(static_segs) > 4000:
+            static_segs = []  # keep drags responsive on huge documents
+
+        best: tuple[float, float, float, tuple[float, float], str] | None = None
+
+        def consider(
+            d_screen: float,
+            adj: tuple[float, float],
+            pos: tuple[float, float],
+            kind: str,
+        ) -> None:
+            nonlocal best
+            if d_screen <= thresh and (best is None or d_screen < best[0]):
+                best = (d_screen, adj[0], adj[1], pos, kind)
+
+        for px, py in pts:
+            mx, my = px + dx, py + dy
+            for qx, qy in static_pts:
+                if abs(qx - mx) > world_r or abs(qy - my) > world_r:
+                    continue
+                consider(
+                    math.hypot(qx - mx, qy - my) * scale,
+                    (qx - mx, qy - my),
+                    (qx, qy),
+                    "vertex",
+                )
+            for (ax, ay), (bx, by) in static_segs:
+                sdx, sdy = bx - ax, by - ay
+                seg_len_sq = sdx * sdx + sdy * sdy
+                if seg_len_sq < 1e-12:
+                    continue
+                t = max(
+                    0.0,
+                    min(1.0, ((mx - ax) * sdx + (my - ay) * sdy) / seg_len_sq),
+                )
+                cxp, cyp = ax + t * sdx, ay + t * sdy
+                if abs(cxp - mx) > world_r or abs(cyp - my) > world_r:
+                    continue
+                consider(
+                    math.hypot(cxp - mx, cyp - my) * scale,
+                    (cxp - mx, cyp - my),
+                    (cxp, cyp),
+                    "edge",
+                )
+            if self._grid_snap:
+                gx = round(mx / self._grid_spacing) * self._grid_spacing
+                gy = round(my / self._grid_spacing) * self._grid_spacing
+                consider(
+                    math.hypot(gx - mx, gy - my) * scale,
+                    (gx - mx, gy - my),
+                    (gx, gy),
+                    "grid",
+                )
+            for orient, coord in self._guides:
+                if orient == "v":
+                    consider(
+                        abs(coord - mx) * scale,
+                        (coord - mx, 0.0),
+                        (coord, my),
+                        "guide",
+                    )
+                else:
+                    consider(
+                        abs(coord - my) * scale,
+                        (0.0, coord - my),
+                        (mx, coord),
+                        "guide",
+                    )
+        if best is None:
+            return None
+        return best[1], best[2], best[3], best[4]
+
     def _find_guide_at(self, cx: float, cy: float) -> int | None:
         """Guide index within grab distance of the cursor (screen px)."""
         best: int | None = None
@@ -2280,10 +2395,12 @@ class PolylineView(
         self._gizmo_undo_pushed = False
         return bool(self._gizmo_snapshot)
 
-    def _apply_handle_scale(self, wx: float, wy: float) -> None:
-        """Resize the selection by dragging a frame handle. Corners scale
-        uniformly (Shift = free), edges scale one axis; holding Alt at
-        press scales from the center."""
+    def _apply_handle_scale(
+        self, wx: float, wy: float, mods: Qt.KeyboardModifier | None = None
+    ) -> None:
+        """Resize the selection by dragging a frame handle. Corners resize
+        X and Y independently (Shift = keep aspect), edges scale one axis;
+        holding Alt at press scales from the center."""
         if self._gizmo_anchor_w is None or self._gizmo_handle_w is None:
             return
         handle = (self._gizmo_drag_mode or "")[6:]
@@ -2303,11 +2420,10 @@ class PolylineView(
         elif handle in ("e", "w"):
             sy = 1.0
         else:
-            shift = bool(
-                QApplication.keyboardModifiers()
-                & Qt.KeyboardModifier.ShiftModifier
-            )
-            if not shift:
+            if mods is None:
+                mods = QApplication.keyboardModifiers()
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                # Shift = keep aspect (uniform, dominant axis wins)
                 s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy
                 sx = sy = s
         if abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4:
@@ -2320,11 +2436,13 @@ class PolylineView(
                 (ax + (x - ax) * sx, ay + (y - ay) * sy) for x, y in src_poly
             ]
 
-    def _apply_gizmo_drag(self, wx: float, wy: float) -> None:
+    def _apply_gizmo_drag(
+        self, wx: float, wy: float, mods: Qt.KeyboardModifier | None = None
+    ) -> None:
         if self._gizmo_drag_mode is None or not self._gizmo_snapshot:
             return
         if self._gizmo_drag_mode.startswith("scale-"):
-            self._apply_handle_scale(wx, wy)
+            self._apply_handle_scale(wx, wy, mods)
             return
         if self._gizmo_center_w is None or self._gizmo_start_vec is None:
             return
@@ -2928,7 +3046,7 @@ class PolylineView(
             self._gizmo_drag_mode is not None
             and event.buttons() & Qt.MouseButton.LeftButton
         ):
-            self._apply_gizmo_drag(wx, wy)
+            self._apply_gizmo_drag(wx, wy, event.modifiers())
             self._redraw()
             return
 
@@ -3036,6 +3154,9 @@ class PolylineView(
         self._band_additive = False
         self._move_origin = None
         self._move_undo_pushed = False
+        self._move_anchor_w = None
+        self._move_applied_w = (0.0, 0.0)
+        self._move_start_pts = []
         self._move_snap_exclude_vertices = set()
         self._move_snap_exclude_segments = set()
 
