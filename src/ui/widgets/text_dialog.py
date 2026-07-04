@@ -47,6 +47,7 @@ class AddTextDialog(QDialog):
         self._text_edit = QLineEdit()
         self._text_edit.setPlaceholderText("Text to place…")
         form.addRow("Text", self._text_edit)
+        # (see set_values for prefilled editing of existing text)
 
         font_row = QHBoxLayout()
         self._font_combo = QFontComboBox()
@@ -112,6 +113,22 @@ class AddTextDialog(QDialog):
             f"font-weight: {weight}; font-style: {style};"
         )
         self._preview.setText(self._text_edit.text() or "Preview")
+
+    def set_values(self, values: dict) -> None:
+        """Prefill the dialog for editing an existing text entity."""
+        self.setWindowTitle("Edit Text")
+        self._text_edit.setText(str(values.get("text", "")))
+        family = str(values.get("family", ""))
+        if family:
+            from PySide6.QtGui import QFont
+
+            self._font_combo.setCurrentFont(QFont(family))
+        try:
+            self._height_spin.setValue(float(values.get("height_mm", 10.0)))
+        except (TypeError, ValueError):
+            pass
+        self._bold_cb.setChecked(bool(values.get("bold", False)))
+        self._italic_cb.setChecked(bool(values.get("italic", False)))
 
     def _import_font(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

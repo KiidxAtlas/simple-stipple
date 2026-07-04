@@ -1394,9 +1394,38 @@ class PolylineView(
         if not polys:
             return 0
         self._push_undo()
+        new_indices = self._place_text_contours(
+            polys,
+            wx,
+            wy,
+            {
+                "text": text,
+                "family": family,
+                "height_mm": float(height_mm),
+                "bold": bool(bold),
+                "italic": bool(italic),
+            },
+        )
+        self._sel = set(new_indices)
+        self._show_flash(f"Text placed ({len(new_indices)} contours)", 900)
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return len(new_indices)
+
+    def _place_text_contours(
+        self,
+        polys: list[list[tuple[float, float]]],
+        wx: float,
+        wy: float,
+        params: dict[str, Any],
+    ) -> list[int]:
+        """Append text glyph contours at (wx, wy), grouped, each carrying
+        the text parameters in meta so the text stays editable."""
         new_indices: list[int] = []
         for poly in polys:
             idx = self._append_entity([(x + wx, y + wy) for x, y in poly])
+            self._entities[idx].meta = {"text_params": dict(params)}
             new_indices.append(idx)
         # Group the glyph contours so the text behaves as one object in the
         # canvas and shows as a single row in the layer tree.
@@ -1405,12 +1434,67 @@ class PolylineView(
             self._next_group_id += 1
             for idx in new_indices:
                 self._entities[idx].group = gid
+        return new_indices
+
+    def text_params_at(self, idx: int) -> dict[str, Any] | None:
+        if not (0 <= idx < len(self._entities)):
+            return None
+        params = (self._entities[idx].meta or {}).get("text_params")
+        return dict(params) if isinstance(params, dict) else None
+
+    def _text_member_indices(self, idx: int) -> list[int]:
+        gid = self._entities[idx].group
+        if gid is None:
+            return [idx]
+        return [i for i, e in enumerate(self._entities) if e.group == gid]
+
+    def rebuild_text(self, idx: int, values: dict[str, Any]) -> bool:
+        """Replace a text entity's contours with newly rendered ones (same
+        bottom-left anchor)."""
+        from src.ui.canvas.text_shapes import text_to_polylines
+
+        members = self._text_member_indices(idx)
+        pts = [pt for i in members for pt in self._entities[i].points]
+        if not pts:
+            return False
+        anchor_x = min(x for x, _ in pts)
+        anchor_y = min(y for _, y in pts)
+        polys = text_to_polylines(
+            values["text"],
+            family=values["family"],
+            height_mm=float(values["height_mm"]),
+            bold=bool(values.get("bold", False)),
+            italic=bool(values.get("italic", False)),
+        )
+        if not polys:
+            self._show_flash("Text rendered no contours", 1000)
+            return False
+        self._push_undo()
+        self._compact_entities(set(members))
+        new_indices = self._place_text_contours(polys, anchor_x, anchor_y, values)
         self._sel = set(new_indices)
-        self._show_flash(f"Text placed ({len(new_indices)} contours)", 900)
+        self._sync_shape_storage_from_entities()
         self._redraw()
         self._notify()
         self._fire_poly_change()
-        return len(new_indices)
+        self._show_flash("Text updated", 800)
+        return True
+
+    def prompt_edit_text(self, idx: int) -> None:
+        """Reopen the text dialog prefilled with an entity's parameters."""
+        params = self.text_params_at(idx)
+        if params is None:
+            return
+        from src.ui.widgets.text_dialog import AddTextDialog
+
+        dlg = AddTextDialog(self)
+        dlg.set_values(params)
+        if dlg.exec() != AddTextDialog.DialogCode.Accepted:
+            return
+        vals = dlg.values()
+        if not vals["text"].strip():
+            return
+        self.rebuild_text(idx, vals)
 
     def prompt_add_text(self, wx: float, wy: float) -> None:
         """Open the Add Text dialog and place the result at world (wx, wy)."""

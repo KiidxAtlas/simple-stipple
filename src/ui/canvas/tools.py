@@ -944,6 +944,9 @@ class SelectTool(CanvasTool):
         if not v._selectable:
             return True
         hit = v._find_poly_at(pos.x(), pos.y())
+        if hit is not None and v.text_params_at(hit) is not None:
+            v.prompt_edit_text(hit)
+            return True
         if hit is not None:
             shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             if shift:

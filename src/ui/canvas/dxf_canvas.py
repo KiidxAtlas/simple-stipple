@@ -276,6 +276,10 @@ class DxfCanvas(PolylineView):
         poly_hit = poly_hit_early
         if poly_hit is not None:
             idx = poly_hit
+            if self.text_params_at(idx) is not None:
+                menu.addAction(
+                    "Edit text…", lambda _i=idx: self.prompt_edit_text(_i)
+                )
             if idx in self._sel:
                 menu.addAction("Deselect", lambda: self._ctx_deselect(idx))
             else:

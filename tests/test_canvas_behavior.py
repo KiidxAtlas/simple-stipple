@@ -826,3 +826,35 @@ def test_double_click_empty_fits(qapp):
     ev = _mouse_event(QEvent.Type.MouseButtonDblClick, 5.0, 5.0)
     v.mouseDoubleClickEvent(ev)
     assert v.get_zoom_percent() < z
+
+
+# ── parametric text ──────────────────────────────────────────────────────────
+
+
+def test_text_carries_params_and_rebuilds(qapp):
+    from PySide6.QtGui import QFontDatabase
+
+    v = make_view(qapp, [])
+    family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+    n = v.add_text_at(10.0, 20.0, text="Hi", family=family, height_mm=8.0)
+    if n == 0:
+        pytest.skip("no usable font on offscreen platform")
+    params = v.text_params_at(0)
+    assert params == {
+        "text": "Hi",
+        "family": family,
+        "height_mm": 8.0,
+        "bold": False,
+        "italic": False,
+    }
+    # anchor stays put across a rebuild with different content
+    old_min_x = min(x for e in v._entities for x, _ in e.points)
+    old_min_y = min(y for e in v._entities for _, y in e.points)
+    assert v.rebuild_text(0, {**params, "text": "Hello", "height_mm": 8.0})
+    assert v.text_params_at(0)["text"] == "Hello"
+    new_min_x = min(x for e in v._entities for x, _ in e.points)
+    new_min_y = min(y for e in v._entities for _, y in e.points)
+    assert new_min_x == pytest.approx(old_min_x, abs=0.5)
+    assert new_min_y == pytest.approx(old_min_y, abs=0.5)
+    assert v.undo()
+    assert v.text_params_at(0)["text"] == "Hi"
