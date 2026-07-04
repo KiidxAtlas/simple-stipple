@@ -44,7 +44,13 @@ def load_app_qss() -> str:
 
     for qss_path in candidates:
         if qss_path.exists():
-            return qss_path.read_text(encoding="utf-8")
+            icons_dir = qss_path.with_name("icons").as_posix()
+            # Qt's QSS url() needs forward slashes even on Windows, and the
+            # icon dir must be resolved at load time since it differs
+            # between a dev checkout and a PyInstaller-bundled _MEIPASS root.
+            return qss_path.read_text(encoding="utf-8").replace(
+                "{ICONS_DIR}", icons_dir
+            )
 
     logging.warning(
         "Theme stylesheet not found in expected locations: %s",

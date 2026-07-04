@@ -241,6 +241,7 @@ class CanvasRuntime:
                     visible=visible,
                     editable=True,
                     shapes=shapes,
+                    color=canvas.layer_color(name),
                 )
             )
         if not rows:

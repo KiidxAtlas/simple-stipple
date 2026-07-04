@@ -633,6 +633,60 @@ QLabel[role="empty-hint"] {
     font-size: 11px;
 }
 
+/* ── Tree widgets (layer tree) ────────────────────────── */
+/* A fully-opaque selection highlight swallowed the branch expand/collapse
+   arrow and made the row checkbox tick nearly invisible. A translucent tint
+   keeps both legible while still reading clearly as "selected". */
+QTreeWidget {
+    background: transparent;
+    border: none;
+    outline: none;
+    alternate-background-color: rgba(255, 255, 255, 6);
+}
+QTreeWidget::item {
+    padding: 3px 2px;
+    border-radius: 4px;
+}
+QTreeWidget::item:hover:!selected {
+    background: rgba(255, 255, 255, 18);
+}
+QTreeWidget::item:selected {
+    background: rgba(47, 129, 247, 70);
+    color: #ffffff;
+}
+QTreeWidget::item:selected:!active {
+    background: rgba(47, 129, 247, 45);
+}
+QTreeWidget::branch {
+    background: transparent;
+}
+/* The row-visibility checkbox is an item-view indicator, not a QCheckBox,
+   so it needs its own rule — without it Fusion fills its cell with an
+   opaque selection-highlight square that reads as a stray color swatch. */
+QTreeView::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    background: #0d1117;
+}
+QTreeView::indicator:checked {
+    background: #2f81f7;
+    border-color: #2f81f7;
+    image: url({ICONS_DIR}/check.svg);
+}
+QTreeView::indicator:unchecked:hover {
+    border-color: #58a6ff;
+}
+QTreeWidget::branch:has-children:!has-siblings:closed,
+QTreeWidget::branch:closed:has-children:has-siblings {
+    image: url({ICONS_DIR}/chevron_right.svg);
+}
+QTreeWidget::branch:open:has-children:!has-siblings,
+QTreeWidget::branch:open:has-children:has-siblings {
+    image: url({ICONS_DIR}/chevron_down.svg);
+}
+
 /* ── QTextEdit (git log) ─────────────────────────────── */
 QTextEdit {
     border: 1px solid #2b3440;

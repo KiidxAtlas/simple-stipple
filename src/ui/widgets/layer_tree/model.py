@@ -114,6 +114,7 @@ def build_layer_row(
     visible: bool,
     editable: bool,
     shapes: list[LayerTreeRow],
+    color: str | None = None,
 ) -> LayerTreeRow:
     return {
         "name": name,
@@ -123,6 +124,7 @@ def build_layer_row(
         "active": active,
         "editable": editable,
         "shapes": shapes,
+        "color": color,
     }
 
 

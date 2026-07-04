@@ -32,6 +32,10 @@ def main() -> int:
         "--add-data",
         _add_data_arg(ROOT / "src" / "ui" / "style" / "theme.qss", "src/ui/style"),
         "--add-data",
+        _add_data_arg(
+            ROOT / "src" / "ui" / "style" / "icons", "src/ui/style/icons"
+        ),
+        "--add-data",
         _add_data_arg(ROOT / "assets" / "icon.png", "assets"),
         str(entry),
     ]

@@ -271,3 +271,49 @@ def test_delete_indices_works_across_layers(qapp):
     assert canvas.poly_count == 1
     assert canvas.undo()
     assert canvas.poly_count == 2
+
+
+# ── per-layer color ──────────────────────────────────────────────────────────
+
+
+def test_set_and_clear_layer_color(qapp):
+    canvas, rt = make_rig(qapp)
+    assert canvas.layer_color("Layer 1") is None
+    canvas.set_layer_color("Layer 1", "#f0883e")
+    assert canvas.layer_color("Layer 1") == "#f0883e"
+    canvas.set_layer_color("Layer 1", None)
+    assert canvas.layer_color("Layer 1") is None
+
+
+def test_layer_color_persists_through_view_state(qapp):
+    canvas, rt = make_rig(qapp)
+    canvas.set_layer_color("Cut", "#3fb950")
+    state = canvas.get_view_state()
+    from src.ui.canvas.dxf_canvas import DxfCanvas
+    from src.ui.canvas.runtime import CanvasRuntime
+
+    c2 = DxfCanvas()
+    c2.resize(800, 600)
+    CanvasRuntime(canvas=c2, default_layer="Layer 1")
+    c2.set_layer_model(["Layer 1", "Cut"], "Layer 1")
+    c2.set_view_state(state)
+    assert c2.layer_color("Cut") == "#3fb950"
+
+
+def test_layer_color_carries_across_rename_and_clears_on_delete(qapp):
+    canvas, rt = make_rig(qapp)
+    canvas.set_layer_color("Cut", "#3fb950")
+    rt.layer_renamed("Cut", "Engrave")
+    assert canvas.layer_color("Engrave") == "#3fb950"
+    assert canvas.layer_color("Cut") is None
+    rt.layer_deleted("Engrave")
+    assert canvas.layer_color("Engrave") is None
+
+
+def test_layer_tree_rows_include_color(qapp):
+    canvas, rt = make_rig(qapp)
+    canvas.set_layer_color("Layer 1", "#f0883e")
+    rows = rt.build_layer_tree_rows()
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["Layer 1"]["color"] == "#f0883e"
+    assert by_name["Layer 2"]["color"] is None

@@ -157,8 +157,15 @@ class CanvasRenderer:
             if not visible.intersects(_poly_rect):
                 continue
             if not self._on_active_layer(ent):
-                # Non-active layer: dimmed dashed outline, no handles.
-                ghost_color = QColor(POLY)
+                # Non-active layer: dimmed dashed outline, no handles. Uses
+                # the layer's assigned color (dimmed) when set, so switching
+                # the active layer doesn't lose the multi-layer color context.
+                layer_hex = (
+                    self._layer_colors.get(ent.layer)
+                    if ent.layer is not None
+                    else None
+                )
+                ghost_color = QColor(layer_hex) if layer_hex else QColor(POLY)
                 ghost_color.setAlpha(70)
                 ghost_pen = QPen(ghost_color, 1.0)
                 ghost_pen.setStyle(Qt.PenStyle.DashLine)
@@ -183,12 +190,17 @@ class CanvasRenderer:
             sel = idx in self._sel
             is_construction = ent.construction
             is_locked = ent.locked
+            layer_color = (
+                self._layer_colors.get(ent.layer) if ent.layer is not None else None
+            )
             if sel:
                 color = QColor(SEL)
             elif idx in self._accent_polys:
                 color = QColor(self._accent_polys[idx])
             elif is_construction:
                 color = QColor(_GUIDE_COLOR)
+            elif layer_color:
+                color = QColor(layer_color)
             else:
                 color = QColor(POLY)
             if is_locked:

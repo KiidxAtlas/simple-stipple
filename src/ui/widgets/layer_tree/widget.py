@@ -6,10 +6,11 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDrag, QKeySequence, QShortcut
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QDrag, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QColorDialog,
     QFrame,
     QHBoxLayout,
     QInputDialog,
@@ -23,6 +24,35 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.core.focus_policy import blur_focused_line_edit
+
+_SWATCH_PALETTE = [
+    "#f85149",  # red
+    "#f0883e",  # orange
+    "#d29922",  # amber
+    "#3fb950",  # green
+    "#39c5cf",  # teal
+    "#58a6ff",  # blue
+    "#a371f7",  # purple
+    "#db61a2",  # pink
+]
+
+
+def _swatch_icon(color: str | None, *, size: int = 12) -> QIcon:
+    """Small filled circle for a layer's color, or an empty/outline circle
+    when no color is assigned (keeps row heights identical either way)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    if color:
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.PenStyle.NoPen)
+    else:
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QColor("#30363d"))
+    painter.drawEllipse(1, 1, size - 2, size - 2)
+    painter.end()
+    return QIcon(pm)
 
 
 class DxfLayersTree(QFrame):
@@ -44,6 +74,7 @@ class DxfLayersTree(QFrame):
     shapesMoveRequested = Signal(str, list, str)
     moveSelectedRequested = Signal(str)
     shapeRenamed = Signal(str, object, str)  # layer, key, new_label
+    layerColorChangeRequested = Signal(str, object)  # layer, hex str | None
 
     _ROLE_KIND = int(Qt.ItemDataRole.UserRole)
     _ROLE_INTERNAL_NAME = int(Qt.ItemDataRole.UserRole + 1)
@@ -52,6 +83,7 @@ class DxfLayersTree(QFrame):
     _ROLE_EDITABLE = int(Qt.ItemDataRole.UserRole + 4)
     _ROLE_SHAPE_KEY = int(Qt.ItemDataRole.UserRole + 5)
     _ROLE_SOURCE_LAYER = int(Qt.ItemDataRole.UserRole + 6)
+    _ROLE_COLOR = int(Qt.ItemDataRole.UserRole + 7)
 
     class _LayerTreeWidget(QTreeWidget):
         def __init__(self, owner: DxfLayersTree) -> None:
@@ -254,6 +286,7 @@ class DxfLayersTree(QFrame):
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setUniformRowHeights(True)
         self._tree.setIndentation(14)
+        self._tree.setIconSize(QSize(12, 12))
         self._tree.setDragEnabled(self._editable)
         self._tree.setAcceptDrops(self._editable)
         self._tree.setDropIndicatorShown(self._editable)
@@ -378,6 +411,7 @@ class DxfLayersTree(QFrame):
                 is_active = bool(row.get("active", False))
                 editable = bool(row.get("editable", self._editable))
                 shapes = list(row.get("shapes", []))
+                layer_color = row.get("color")
             else:
                 internal_name = str(row[0])
                 display_name = "Layer 1" if internal_name == "geometry" else str(row[0])
@@ -385,6 +419,7 @@ class DxfLayersTree(QFrame):
                 is_active = bool(row[3]) if len(row) > 3 else False
                 editable = bool(row[4]) if len(row) > 4 else self._editable
                 shapes = []
+                layer_color = None
 
             self._layer_order.append(internal_name)
             self._shape_keys_by_layer[internal_name] = []
@@ -398,7 +433,12 @@ class DxfLayersTree(QFrame):
             layer_item.setData(0, self._ROLE_DISPLAY_NAME, display_name)
             layer_item.setData(0, self._ROLE_VISIBLE, visible)
             layer_item.setData(0, self._ROLE_EDITABLE, editable)
-            layer_item.setToolTip(0, f"{internal_name} ({len(shapes)} shapes)")
+            layer_item.setData(0, self._ROLE_COLOR, layer_color)
+            layer_item.setIcon(0, _swatch_icon(layer_color))
+            tip = f"{internal_name} ({len(shapes)} shapes)"
+            if layer_color:
+                tip += f" — right-click to change color"
+            layer_item.setToolTip(0, tip)
             layer_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             layer_flags |= Qt.ItemFlag.ItemIsUserCheckable
             if self._editable:
@@ -504,6 +544,11 @@ class DxfLayersTree(QFrame):
         if not ok:
             return
         self.layerAdded.emit(self._unique_layer_name(name))
+
+    def _prompt_custom_layer_color(self, layer_name: str) -> None:
+        color = QColorDialog.getColor(QColor("#2f81f7"), self, "Layer Color")
+        if color.isValid():
+            self.layerColorChangeRequested.emit(layer_name, color.name())
 
     def _emit_current_item_change(
         self,
@@ -649,6 +694,25 @@ class DxfLayersTree(QFrame):
                 "Activate layer", lambda: self.layerActivated.emit(layer_name)
             )
             menu.addAction("Rename layer\tF2", lambda: self._tree.editItem(item, 0))
+            color_menu = menu.addMenu("Set color")
+            for hex_color in _SWATCH_PALETTE:
+                swatch_action = color_menu.addAction(
+                    "   " + hex_color,
+                    lambda _c=hex_color: self.layerColorChangeRequested.emit(
+                        layer_name, _c
+                    ),
+                )
+                swatch_action.setIcon(_swatch_icon(hex_color, size=14))
+            color_menu.addSeparator()
+            color_menu.addAction(
+                "Custom…", lambda: self._prompt_custom_layer_color(layer_name)
+            )
+            current_color = item.data(0, self._ROLE_COLOR)
+            clear_action = color_menu.addAction(
+                "No color",
+                lambda: self.layerColorChangeRequested.emit(layer_name, None),
+            )
+            clear_action.setEnabled(bool(current_color))
             del_action = menu.addAction(
                 "Delete layer\tDel", lambda: self.layerDeleted.emit(layer_name)
             )

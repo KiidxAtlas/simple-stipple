@@ -188,6 +188,9 @@ class PolylineView(
                 e.layer = new
         if self._active_layer == old:
             self._active_layer = new
+        old_color = self._layer_colors.pop(old, None)
+        if old_color is not None:
+            self._layer_colors[new] = old_color
         self._redraw()
 
     def delete_layer(self, name: str) -> None:
@@ -205,10 +208,23 @@ class PolylineView(
             ]
         if self._active_layer == name:
             self._active_layer = self._layer_order[0]
+        self._layer_colors.pop(name, None)
         self._redraw()
         self._notify()
         if drop:
             self._fire_poly_change()
+
+    def layer_color(self, name: str) -> str | None:
+        return self._layer_colors.get(str(name))
+
+    def set_layer_color(self, name: str, color: str | None) -> None:
+        """Assign (or clear, with ``color=None``) a layer's display color."""
+        name = str(name)
+        if color is None:
+            self._layer_colors.pop(name, None)
+        else:
+            self._layer_colors[name] = str(color)
+        self._redraw()
 
     def move_layer(self, name: str, new_index: int) -> None:
         name = str(name)
@@ -310,6 +326,9 @@ class PolylineView(
         # selectable/editable until their layer is activated.
         self._layer_order: list[str] = []
         self._active_layer: str | None = None
+        # Optional per-layer color (hex string), shown in the layer tree
+        # swatch and tinting that layer's canvas outlines.
+        self._layer_colors: dict[str, str] = {}
 
         # Lazily-built Shape objects for the snap engine (invalidated on
         # any structural/geometry change).
@@ -577,6 +596,7 @@ class PolylineView(
             "grid_spacing": self._grid_spacing,
             "guides": [[o, c] for o, c in self._guides],
             "rulers_visible": self._rulers_visible,
+            "layer_colors": dict(self._layer_colors),
             "hidden_indices": sorted(self._flagged("hidden")),
             "locked_indices": sorted(self._flagged("locked")),
             "groups": {str(i): g for i, g in self._group_map().items()},
@@ -625,6 +645,11 @@ class PolylineView(
             ]
         if "rulers_visible" in state:
             self._rulers_visible = bool(state.get("rulers_visible"))
+        raw_colors = state.get("layer_colors", {})
+        if isinstance(raw_colors, dict):
+            self._layer_colors = {
+                str(k): str(v) for k, v in raw_colors.items() if v
+            }
         self._set_flagged("hidden", hidden_state)
         self._set_flagged("locked", locked_state)
         raw_groups = state.get("groups", {})
@@ -1881,6 +1906,12 @@ class PolylineView(
             })
         return result
 
+    # Default work-area shown before anything is drawn — without this, the
+    # canvas keeps its raw __init__ scale (1 px/mm) until the first fit,
+    # so an empty document's rulers show a meaningless 0-800mm span instead
+    # of a plausible small work area.
+    _EMPTY_BBOX = (0.0, 0.0, 100.0, 100.0)
+
     def _bbox(self) -> tuple[float, float, float, float]:
         pts = [pt for p in (e.points for e in self._entities) for pt in p]
         if self._img_bounds:
@@ -1888,7 +1919,7 @@ class PolylineView(
             bw, bh = self._img_bounds
             pts.extend([(0.0, 0.0), (bw, bh)])
         if not pts:
-            return 0.0, 0.0, 1.0, 1.0
+            return self._EMPTY_BBOX
         xs, ys = zip(*pts)
         return min(xs), min(ys), max(xs), max(ys)
 
@@ -2657,8 +2688,9 @@ class PolylineView(
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._layout_draw_sidebar()
-        if self._needs_fit and self._entities:
-            self._needs_fit = False
+        if self._needs_fit:
+            if self._entities:
+                self._needs_fit = False
             self._fit()
         else:
             self._redraw()

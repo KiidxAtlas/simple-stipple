@@ -248,6 +248,9 @@ class DraftPage(BasePage):
         self._layers_tree.shapesDeleteRequested.connect(
             self._on_shapes_delete_requested
         )
+        self._layers_tree.layerColorChangeRequested.connect(
+            self._on_layer_color_change_requested
+        )
         side_layout.addWidget(self._layer_module, stretch=1)
 
         splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
@@ -338,6 +341,13 @@ class DraftPage(BasePage):
 
     def _on_layer_renamed(self, old_name: str, new_name: str) -> None:
         self._rt().layer_renamed(old_name, new_name)
+        self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_layer_color_change_requested(
+        self, layer: str, color: str | None
+    ) -> None:
+        self._canvas.set_layer_color(layer, color)
         self._refresh_status()
         self._emit_state_changed()
 
