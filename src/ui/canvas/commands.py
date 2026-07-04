@@ -86,6 +86,39 @@ def _grid_finer(v: Any) -> None:
     v._show_flash(f"Grid: {v._grid_spacing:g} mm")
 
 
+def _toggle_trim(v: Any) -> None:
+    if v.get_mode() != "trim":
+        v.set_mode("trim")
+        v._show_flash("Trim: click the part of a shape to remove · Esc exits", 2000)
+    else:
+        v.set_mode("select")
+
+
+def _toggle_extend(v: Any) -> None:
+    if v.get_mode() != "extend":
+        v.set_mode("extend")
+        v._show_flash(
+            "Extend: click an open shape to lengthen it to the next one · Esc exits",
+            2000,
+        )
+    else:
+        v.set_mode("select")
+
+
+def _round_corner(v: Any) -> None:
+    hv = v._hover_vert
+    if hv is None:
+        v._show_flash("Hover a corner first, then press R to round it", 1400)
+        return
+    pi, vi = hv
+    v._show_hud_prompt(
+        "Round radius (mm)",
+        1.0,
+        lambda r: v._round_vertex(pi, vi, r),
+        minimum=0.01,
+    )
+
+
 def _add_text_at_cursor(v: Any) -> None:
     wx, wy = v._cursor_wx, v._cursor_wy
     if wx is None or wy is None:
@@ -203,6 +236,14 @@ COMMANDS: tuple[Command, ...] = (
         category="Path",
     ),
     Command(
+        "vertex.round",
+        "Round Corner…",
+        _round_corner,
+        "R",
+        category="Path",
+        when=lambda v: v.get_mode() == "edit",
+    ),
+    Command(
         "text.add",
         "Add Text…",
         _add_text_at_cursor,
@@ -259,14 +300,14 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         "mode.trim",
         "Trim Tool",
-        lambda v: v.set_mode("trim" if v.get_mode() != "trim" else "select"),
+        _toggle_trim,
         "K",
         category="Modes",
     ),
     Command(
         "mode.extend",
         "Extend Tool",
-        lambda v: v.set_mode("extend" if v.get_mode() != "extend" else "select"),
+        _toggle_extend,
         "L",
         category="Modes",
     ),
@@ -308,7 +349,7 @@ COMMANDS: tuple[Command, ...] = (
         "view.rulers",
         "Show Rulers",
         lambda v: v.set_rulers_visible(not v._rulers_visible),
-        "R",
+        "Ctrl+R",
         category="View",
         requires_selectable=False,
     ),

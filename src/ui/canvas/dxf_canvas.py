@@ -464,11 +464,11 @@ class DxfCanvas(PolylineView):
         transform_menu.addSeparator()
         transform_menu.addAction(
             canvas_commands.menu_text("mode.trim", "Trim segments…"),
-            lambda: self.set_mode("trim"),
+            lambda: canvas_commands.run(self, "mode.trim"),
         )
         transform_menu.addAction(
             canvas_commands.menu_text("mode.extend", "Extend to meet…"),
-            lambda: self.set_mode("extend"),
+            lambda: canvas_commands.run(self, "mode.extend"),
         )
         transform_menu.addSeparator()
         transform_menu.addAction(

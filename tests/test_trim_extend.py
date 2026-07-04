@@ -65,3 +65,38 @@ def test_trim_mode_shortcut_and_escape(qapp):
     assert v.get_mode() == "select"
     key(v, Qt.Key.Key_L)
     assert v.get_mode() == "extend"
+
+
+def test_extend_works_clicking_anywhere_on_line(qapp):
+    """Clicking the middle of an open polyline extends its nearer end."""
+    v = make_view(
+        qapp,
+        [[(20.0, 0.0), (30.0, 0.0)], [(50.0, -10.0), (50.0, 10.0)]],
+    )
+    v.set_mode("extend")
+    click_world(v, 27.0, 0.0)  # mid-line, closer to the right end
+    assert v._entities[0].points[-1][0] == pytest.approx(50.0, abs=1e-6)
+
+
+def test_r_rounds_hovered_corner_in_edit_mode(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_mode("edit")
+    cx, cy = v._w2c(10.0, 0.0)
+    from tests.test_canvas_behavior import move as move_ev
+
+    move_ev(v, cx, cy, button=Qt.MouseButton.NoButton)
+    assert v._hover_vert is not None
+    key(v, Qt.Key.Key_R)
+    assert v._hud_prompt_edit is not None  # inline radius prompt opened
+    v._hud_prompt_edit.setText("2")
+    v._hud_prompt_edit.returnPressed.emit()
+    assert len(v._entities[0].points) > 5  # corner replaced by an arc
+
+
+def test_rulers_toggle_moved_off_plain_r(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_rulers_visible(False)
+    key(v, Qt.Key.Key_R)  # select mode: R no longer flips rulers
+    assert not v._rulers_visible
+    key(v, Qt.Key.Key_R, mods=Qt.KeyboardModifier.ControlModifier)
+    assert v._rulers_visible

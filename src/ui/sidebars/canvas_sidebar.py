@@ -80,9 +80,29 @@ class DrawSidebar(QFrame):
                 border-color: #2f81f7;
                 color: #79c0ff;
             }
+            QFrame#draw-side-panel QScrollBar:vertical {
+                width: 8px;
+                background: transparent;
+                margin: 0;
+            }
+            QFrame#draw-side-panel QScrollBar::handle:vertical {
+                background: #303a47;
+                border-radius: 4px;
+                min-height: 24px;
+            }
+            QFrame#draw-side-panel QScrollBar::add-line:vertical,
+            QFrame#draw-side-panel QScrollBar::sub-line:vertical {
+                height: 0;
+            }
+            QFrame#draw-side-panel QScrollBar::add-page:vertical,
+            QFrame#draw-side-panel QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
             """
         )
-        self.setFixedWidth(74)
+        # 74px clipped the labels once the scroll bar appeared; 92 fits the
+        # 48px buttons + styled 8px scroll bar with breathing room.
+        self.setFixedWidth(92)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)

@@ -10,13 +10,13 @@ from PIL import Image as PILImage
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
-    QVariantAnimation,
     QPoint,
     QPointF,
     QPropertyAnimation,
     QRectF,
     Qt,
     QTimer,
+    QVariantAnimation,
     Signal,
 )
 from PySide6.QtGui import (
@@ -56,24 +56,21 @@ from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
 from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
-from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
-from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
-
+from src.backend.behaviors.snapping import (
+    snap_to_polyline as _snap_to_polyline_candidates,
+)
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
 from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas import tools as canvas_tools
+from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
+from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 from src.ui.canvas.entities import EntityRecord
 from src.ui.canvas.render import CanvasRenderer
 from src.ui.canvas.snap import SnapEngine
 from src.ui.canvas.undo import UndoStore
 from src.ui.core.focus_policy import blur_focused_line_edit
-from src.backend.behaviors.snapping import (
-    snap_to_polyline as _snap_to_polyline_candidates,
-)
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
-
-
 
 
 def _rehydrate_meta(meta: dict) -> dict:
@@ -1349,7 +1346,10 @@ class PolylineView(
             kind = "line"
             meta = {"start": tuple(poly[0]), "end": tuple(poly[-1])}
         elif primitive == "arc" and len(poly) >= 3:
-            from src.backend.geometry.arc import arc_spec_from_center_start_end, arc_spec_from_three_points
+            from src.backend.geometry.arc import (
+                arc_spec_from_center_start_end,
+                arc_spec_from_three_points,
+            )
             if getattr(self, "_draw_arc_mode", "center-start-end") == "center-start-end":
                 spec = arc_spec_from_center_start_end(poly[0], poly[1], poly[2])
             else:
@@ -1360,7 +1360,10 @@ class PolylineView(
             kind = "spline"
             meta = {"segments": 24, "closed": close, "control_points": [tuple(pt) for pt in poly], "degree": 3}
 
-        self._entities.append(EntityRecord(points=list(poly), kind=kind, meta=meta))
+        rec = EntityRecord(
+            points=list(poly), kind=kind, meta=meta, layer=self._active_layer
+        )
+        self._entities.append(rec)
         new_idx = len(self._entities) - 1
         if getattr(self, "_draw_construction_mode", False):
             self._entities[new_idx].construction = True
@@ -1749,7 +1752,7 @@ class PolylineView(
                 else Qt.CursorShape.OpenHandCursor
             )
             return
-        if self._measure_mode or self._mode in ("draw", "edit"):
+        if self._measure_mode or self._mode in ("draw", "edit", "trim", "extend"):
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._mode == "select" and self._hover_vert is not None and self._sel:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -2216,6 +2219,7 @@ class PolylineView(
 
     def set_rulers_visible(self, visible: bool) -> None:
         self._rulers_visible = bool(visible)
+        self._layout_draw_sidebar()
         self._redraw()
 
     _MOVE_SNAP_SAMPLE = 64  # max moving vertices considered per drag event
@@ -2945,7 +2949,7 @@ class PolylineView(
         self._oy = cy + wy * self._scale
         self._redraw()
 
-    def event(self, ev) -> bool:  # noqa: N802 — Qt naming
+    def event(self, ev) -> bool:
         # macOS trackpad pinch zoom.
         if ev.type() == QEvent.Type.NativeGesture:
             if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
@@ -3419,10 +3423,9 @@ class PolylineView(
                 hidden=i in new_hidden,
                 locked=i in new_locked,
                 group=new_groups.get(i),
+                layer=self._active_layer,
             )
-            for i, (p, k, m) in enumerate(
-                zip(result_polys, result_kinds, result_meta)
-            )
+            for i, (p, k, m) in enumerate(zip(result_polys, result_kinds, result_meta))
         ]
         return any_split, closed_splits, open_splits
 
@@ -3794,7 +3797,22 @@ class PolylineView(
                     best_d = d
                     best = (i, endsel)
         if best is None:
-            self._show_flash("Click near an open end to extend", 1100)
+            # Fall back to the polyline under the cursor: extend whichever
+            # open end is closer to the click.
+            poly_hit = self._find_poly_at(cx, cy)
+            if (
+                poly_hit is not None
+                and not self._is_locked(poly_hit)
+                and len(self._entities[poly_hit].points) >= 2
+                and not self._is_poly_closed(self._entities[poly_hit].points)
+            ):
+                wx, wy = self._c2w(cx, cy)
+                pts_hit = self._entities[poly_hit].points
+                d_start = math.hypot(pts_hit[0][0] - wx, pts_hit[0][1] - wy)
+                d_end = math.hypot(pts_hit[-1][0] - wx, pts_hit[-1][1] - wy)
+                best = (poly_hit, 0 if d_start <= d_end else -1)
+        if best is None:
+            self._show_flash("Click an open polyline to extend", 1100)
             return False
         idx, endsel = best
         pts = self._entities[idx].points
@@ -4590,10 +4608,16 @@ class PolylineView(
     def _layout_draw_sidebar(self) -> None:
         if self._draw_sidebar is None:
             return
-        y = 8
-        target_h = max(260, self.height() - 16)
+        left = self._chrome_left()
+        top = self._chrome_top()
+        y = top + 8
+        target_h = max(260, self.height() - y - 8)
         self._draw_sidebar.setFixedHeight(min(430, target_h))
-        x = 8 if self._draw_sidebar_visible else -self._draw_sidebar.width() + 20
+        x = (
+            left + 8
+            if self._draw_sidebar_visible
+            else left - self._draw_sidebar.width() + 20
+        )
         self._draw_sidebar.move(x, y)
 
     def _set_draw_sidebar_visible(self, visible: bool, *, animate: bool = True) -> None:
@@ -4605,11 +4629,12 @@ class PolylineView(
 
         self._draw_sidebar_visible = visible
         self._refresh_draw_sidebar_state()
-        y = 8
-        hidden_x = -self._draw_sidebar.width() + 20
-        shown_x = 8
+        left = self._chrome_left()
+        y = self._chrome_top() + 8
+        hidden_x = left - self._draw_sidebar.width() + 20
+        shown_x = left + 8
         self._draw_sidebar.setFixedHeight(
-            min(430, max(260, self.height() - 16))
+            min(430, max(260, self.height() - y - 8))
         )
 
         if not animate:
@@ -4717,11 +4742,10 @@ class PolylineView(
         if (
             hasattr(self, "_tool_picker_dialog")
             and self._tool_picker_dialog is not None
-        ):
-            if self._tool_picker_dialog.exec() == 1:  # QDialog.Accepted
-                tool = self._tool_picker_dialog.get_selected_tool()
-                if tool is not None:
-                    self._set_draw_primitive(tool)
+        ) and self._tool_picker_dialog.exec() == 1:  # QDialog.Accepted
+            tool = self._tool_picker_dialog.get_selected_tool()
+            if tool is not None:
+                self._set_draw_primitive(tool)
 
     def _toggle_sidebar_snap(self) -> None:
         self._grid_snap = not self._grid_snap
@@ -4941,7 +4965,13 @@ class PolylineView(
                 if is_construction:
                     new_construction.add(ni)
         self._entities = [
-            EntityRecord(points=p, kind=k, meta=m, construction=i in new_construction)
+            EntityRecord(
+                points=p,
+                kind=k,
+                meta=m,
+                construction=i in new_construction,
+                layer=self._active_layer,
+            )
             for i, (p, k, m) in enumerate(zip(new_polys, new_kinds, new_meta))
         ]
         self._sel = new_sel

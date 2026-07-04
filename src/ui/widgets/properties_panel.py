@@ -75,6 +75,10 @@ class CanvasPropertiesPanel(QWidget):
             lbl.setStyleSheet("color: #8b949e;")
             grid.addWidget(lbl, row // 2, (row % 2) * 2)
             grid.addWidget(edit, row // 2, (row % 2) * 2 + 1)
+        # keep the label/field pairs packed to the left instead of spreading
+        # across the panel width
+        grid.setColumnStretch(4, 1)
+        grid.setColumnMinimumWidth(2, 18)
         root.addLayout(grid)
 
         actions = QHBoxLayout()
@@ -105,6 +109,7 @@ class CanvasPropertiesPanel(QWidget):
         self._param_grid.setContentsMargins(0, 2, 0, 0)
         self._param_grid.setHorizontalSpacing(6)
         self._param_grid.setVerticalSpacing(3)
+        self._param_grid.setColumnStretch(2, 1)
         root.addLayout(self._param_grid)
         self._param_edits: dict[str, QLineEdit] = {}
         self._param_index: int | None = None

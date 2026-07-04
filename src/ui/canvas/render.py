@@ -234,6 +234,14 @@ class CanvasRenderer:
         1000.0,
     )
 
+    def _chrome_left(self) -> int:
+        """Pixels reserved by the left ruler (0 when rulers are hidden)."""
+        return self.RULER_PX if self._rulers_visible else 0
+
+    def _chrome_top(self) -> int:
+        """Pixels reserved by the top ruler (0 when rulers are hidden)."""
+        return self.RULER_PX if self._rulers_visible else 0
+
     def _paint_guides(self, painter: QPainter, w: int, h: int) -> None:
         if not self._guides:
             return
@@ -1099,8 +1107,9 @@ class CanvasRenderer:
         label = "\u2715 Measure [M]" if self._measure_mode else "\u2295 Measure [M]"
         color = _MEASURE_COLOR if self._measure_mode else QColor(DIM)
         bg = QColor("#002233") if self._measure_mode else QColor("#14141e")
-        x1, y1 = canvas_w - bw - pad, pad
-        x2, y2 = canvas_w - pad, pad + bh
+        top = pad + self._chrome_top()
+        x1, y1 = canvas_w - bw - pad, top
+        x2, y2 = canvas_w - pad, top + bh
         painter.setPen(QPen(color, 1))
         painter.setBrush(QBrush(bg))
         painter.drawRect(QRectF(x1, y1, bw, bh))
@@ -1418,7 +1427,11 @@ class CanvasRenderer:
 
         painter.setPen(QColor(DIM))
         painter.setFont(QFont("Helvetica", 10))
-        painter.drawText(8, 18, info)
+        info_x = self._chrome_left() + 8
+        sidebar = getattr(self, "_draw_sidebar", None)
+        if getattr(self, "_draw_sidebar_visible", False) and sidebar is not None:
+            info_x = sidebar.x() + sidebar.width() + 12
+        painter.drawText(info_x, self._chrome_top() + 18, info)
 
         zoom_pct = round(self._scale / max(self._fit_scale, 1e-9) * 100)
         if self._mode == "draw":
@@ -1435,7 +1448,7 @@ class CanvasRenderer:
         if precision:
             hint += "  ·  " + " / ".join(precision)
         painter.setFont(QFont("Helvetica", 9))
-        painter.drawText(8, h - 8, f"{zoom_pct}%  {hint}")
+        painter.drawText(self._chrome_left() + 8, h - 8, f"{zoom_pct}%  {hint}")
 
         if not self._entities and not self._draw_pts:
             message = getattr(self, "_empty_message", "No polylines loaded")
@@ -1474,7 +1487,7 @@ class CanvasRenderer:
             fth = fm.height()
             fpad = 8
             frx = w / 2 - ftw / 2 - fpad
-            fry = 40
+            fry = 40 + self._chrome_top()
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(20, 24, 36, 220)))
             painter.drawRoundedRect(QRectF(frx, fry, ftw + 2 * fpad, fth + fpad), 4, 4)
