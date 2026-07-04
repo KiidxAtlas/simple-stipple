@@ -926,10 +926,12 @@ class PatternPage(BasePage):
         self._export_open_paths_cb.setChecked(False)
         layout.addWidget(self._export_open_paths_cb)
         self._summary_chip = QLabel("")
-        self._summary_chip.setProperty("role", "chip")
+        self._summary_chip.setProperty("role", "summary-banner")
         self._summary_chip.setProperty("tone", "neutral")
         self._summary_chip.setWordWrap(True)
-        self._summary_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._summary_chip.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         layout.addWidget(self._summary_chip)
         self._gen_btn = QPushButton("Export DXF")
         self._gen_btn.setMinimumHeight(38)
@@ -1066,6 +1068,11 @@ class PatternPage(BasePage):
             if hasattr(self, "_include_border_cb") and self._include_border_cb.isChecked():
                 parts.append("border layer")
             self._summary_chip.setText(" · ".join(parts) if parts else "Empty output")
+            # Any settings change supersedes a prior export's success banner.
+            if self._summary_chip.property("tone") != "neutral":
+                self._summary_chip.setProperty("tone", "neutral")
+                self._summary_chip.style().unpolish(self._summary_chip)
+                self._summary_chip.style().polish(self._summary_chip)
 
     def _install_pattern_shortcuts(self) -> None:
         modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
@@ -1474,10 +1481,9 @@ class PatternPage(BasePage):
         if hasattr(self, "_summary_chip"):
             fname = Path(out_path).name
             self._summary_chip.setText(f"✓ {count} shapes exported → {fname}")
-            self._summary_chip.setStyleSheet(
-                "background: #0f2a17; color: #3fb950; border: 1px solid #1f6f3a;"
-                "border-radius: 4px; padding: 4px 6px; font-size: 10px;"
-            )
+            self._summary_chip.setProperty("tone", "success")
+            self._summary_chip.style().unpolish(self._summary_chip)
+            self._summary_chip.style().polish(self._summary_chip)
         self._refresh_canvas_panels()
 
     def _handle_gen_error(self, payload: tuple) -> None:

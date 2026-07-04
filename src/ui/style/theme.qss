@@ -105,6 +105,24 @@ QLabel[role="chip"][tone="danger"] {
     color: #ffb4ab;
 }
 
+/* A "chip" is a small tag; this is a full-width status line summarizing an
+   export/action outcome, so it gets its own left-aligned, roomier style
+   instead of squeezing sentence-length text into a pill shape. */
+QLabel[role="summary-banner"] {
+    padding: 5px 8px;
+    border-radius: 5px;
+    border: 1px solid #2b3440;
+    background: rgba(31, 42, 56, 0.9);
+    color: #c9d1d9;
+    font-size: 10px;
+    font-weight: 600;
+}
+QLabel[role="summary-banner"][tone="success"] {
+    background: rgba(63, 185, 80, 0.14);
+    border-color: rgba(63, 185, 80, 0.45);
+    color: #7ee787;
+}
+
 /* ── Section labels & subtitles ──────────────────────── */
 QLabel[role="section-label"] {
     color: #484f58;
