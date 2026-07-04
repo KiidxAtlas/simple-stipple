@@ -284,3 +284,20 @@ def _fill_crosshatch(
     lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0)
     lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0)
     return lines_1 + lines_2
+
+
+def _fill_crosshatch(
+    region_geom: Any,
+    spacing: float,
+    angle_deg: float,
+) -> list[list[tuple[float, float]]]:
+    """Crosshatch fill: two sets of parallel lines at ±45° to the base angle.
+
+    The crosshatch pattern is created by generating two sets of parallel
+    hatch lines — one rotated +45° and one rotated -45° from the base
+    ``angle_deg`` — and combining them.  This gives the classic diagonal
+    crosshatch look used in many laser-engraving applications.
+    """
+    lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0)
+    lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0)
+    return lines_1 + lines_2
