@@ -129,6 +129,7 @@ class CanvasLayerTreeModule(QWidget):
         on_selection_requested: Callable[[list[int]], None] | None = None,
         on_fit_requested: Callable[[], None] | None = None,
         on_visibility_changed: Callable[[], None] | None = None,
+        visibility_adapter: Any | None = None,
     ) -> None:
         super().__init__()
         self._canvas = canvas
@@ -154,6 +155,7 @@ class CanvasLayerTreeModule(QWidget):
             on_selection_requested=selection_handler,
             on_fit_requested=fit_handler,
             on_visibility_changed=visibility_handler,
+            visibility_adapter=visibility_adapter,
         )
 
         self.tree = tree

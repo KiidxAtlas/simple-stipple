@@ -211,7 +211,6 @@ class DraftPage(BasePage):
             canvas=self._canvas,
             default_layer=self.DEFAULT_LAYER,
         )
-        self._runtime.graph_adapter.load_to_canvas(self._canvas, fit=False)
 
         side_panel = QWidget()
         side_layout = QVBoxLayout(side_panel)
@@ -227,6 +226,7 @@ class DraftPage(BasePage):
             on_selection_requested=self._on_tree_selection_requested,
             on_fit_requested=self._fit_selection,
             on_visibility_changed=self._refresh_status,
+            visibility_adapter=self._runtime,
         )
         self._layers_tree = self._layer_module.tree
         self._layer_sidebar = self._layer_module.controller
@@ -384,16 +384,15 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
 
-    def _on_ghost_poly_click(self, ghost_idx: int) -> None:
+    def _on_ghost_poly_click(self, entity_idx: int) -> None:
         """Clicking a shape from another layer activates that layer and selects the shape."""
-        result = self._rt().layer_for_ghost_index(ghost_idx)
-        if result is None:
+        canvas = self._canvas
+        if not (0 <= entity_idx < len(canvas._entities)):
             return
-        layer_name, local_idx = result
-        # Switch to the target layer (loads its polys into the canvas).
-        self._switch_active_layer(layer_name, fit=False)
-        # Now select the shape by its local index within the newly active layer.
-        self._canvas.set_selection([local_idx])
+        layer_name = canvas._entities[entity_idx].layer
+        if layer_name:
+            self._switch_active_layer(layer_name, fit=False)
+        canvas.set_selection([entity_idx])
         self._refresh_status()
 
     def _on_send_selected_to_pattern(
@@ -437,71 +436,36 @@ class DraftPage(BasePage):
             return
 
         try:
-            # Capture in-canvas edits back into the active layer of the
-            # document graph so the export sees the latest state of every
-            # layer rather than just whatever happens to live in self._polys.
-            rt = self._rt()
-            try:
-                rt.graph_adapter.capture_from_canvas(self._canvas)
-            except (AttributeError, ValueError, TypeError):
-                pass
+            # Group export records by document layer, preserving layer order.
+            # Entities carry their layer, so no graph capture is needed.
+            active_name = self._rt().current_layer_name()
+            by_layer: dict[str, list[dict[str, Any]]] = {}
+            for r in records:
+                by_layer.setdefault(str(r.get("layer") or active_name), []).append(r)
+            order = [n for n in self._canvas.layer_names() if n in by_layer]
+            if not order:
+                order = list(by_layer)
 
-            active_name = rt.current_layer_name()
-            active_polys = [list(r["polyline"]) for r in records]
-            active_kinds = [str(r.get("kind", "polyline")) for r in records]
-            active_metas = [r.get("meta") for r in records]
-
-            # Build {layer_name: polys} preserving layer_order. Skip the
-            # "geometry" sentinel (it's the legacy single-layer fallback).
-            layered: dict[str, list[list[tuple[float, float]]]] = {}
-            for name, layer in rt.doc_graph.iter_layers():
-                if name == "geometry":
-                    continue
-                if name == active_name:
-                    polys = active_polys
-                else:
-                    polys = [list(p) for p in layer.polylines]
-                if polys:
-                    layered[name] = polys
-
-            if not layered:
-                # No graph layers populated — fall back to flat export so
-                # we never lose the user's work. Emit onto a named layer
-                # (instead of the AutoCAD default "0") so downstream CAM
-                # tools assign it a real color and can fill it; layer "0"
-                # is locked to color 7 which many laser apps treat as
-                # "BYBLOCK / no color set" and refuse to fill.
-                fallback_layer = active_name or "Layer"
-                write_polylines_dxf(
-                    active_polys,
-                    out_path,
-                    close=True,
-                    pattern_layer=fallback_layer,
-                    entity_kinds=active_kinds,
-                    entity_meta=active_metas,
-                )
-            else:
-                # First layer in iter order becomes the "main" entity stream
-                # so it can carry kind/meta info (lines, circles, ellipses,
-                # arcs). Remaining layers are emitted as additional DXF
-                # layers via extra_layers.
-                first_name = next(iter(layered))
-                first_polys = layered.pop(first_name)
-                if first_name == active_name:
-                    main_kinds: list[str] | None = active_kinds
-                    main_metas: list[dict[str, Any] | None] | None = active_metas
-                else:
-                    main_kinds = None
-                    main_metas = None
-                write_polylines_dxf(
-                    first_polys,
-                    out_path,
-                    close=True,
-                    pattern_layer=first_name,
-                    entity_kinds=main_kinds,
-                    entity_meta=main_metas,
-                    extra_layers=layered or None,
-                )
+            # The first layer becomes the main entity stream so it can carry
+            # kind/meta info (lines, circles, ellipses, arcs); remaining
+            # layers are emitted as additional DXF layers. Emit onto a named
+            # layer (instead of the AutoCAD default "0") so downstream CAM
+            # tools assign it a real color and can fill it.
+            first_name = order[0] if order else (active_name or "Layer")
+            first = by_layer.get(first_name, [])
+            extra = {
+                name: [list(r["polyline"]) for r in by_layer[name]]
+                for name in order[1:]
+            }
+            write_polylines_dxf(
+                [list(r["polyline"]) for r in first],
+                out_path,
+                close=True,
+                pattern_layer=first_name,
+                entity_kinds=[str(r.get("kind", "polyline")) for r in first],
+                entity_meta=[r.get("meta") for r in first],
+                extra_layers=extra or None,
+            )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
@@ -554,7 +518,6 @@ class DraftPage(BasePage):
 
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
-            self._rt()._update_ghost_layers()
 
     def _build_layer_tree_rows(
         self,

@@ -156,6 +156,30 @@ class CanvasRenderer:
             _poly_rect = self._poly_rect_for_culling(poly)
             if not visible.intersects(_poly_rect):
                 continue
+            if not self._on_active_layer(ent):
+                # Non-active layer: dimmed dashed outline, no handles.
+                ghost_color = QColor(POLY)
+                ghost_color.setAlpha(70)
+                ghost_pen = QPen(ghost_color, 1.0)
+                ghost_pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(ghost_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                gpath = QPainterPath()
+                gx, gy = self._w2c(*poly[0])
+                gpath.moveTo(gx, gy)
+                for pt in poly[1:]:
+                    px, py_ = self._w2c(*pt)
+                    gpath.lineTo(px, py_)
+                if (
+                    len(poly) >= 3
+                    and math.hypot(
+                        poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]
+                    )
+                    < 0.5
+                ):
+                    gpath.closeSubpath()
+                painter.drawPath(gpath)
+                continue
             sel = idx in self._sel
             is_construction = ent.construction
             is_locked = ent.locked

@@ -133,10 +133,11 @@ class DxfCanvas(PolylineView):
             pos = event.position()
             hit = self._find_poly_at(pos.x(), pos.y())
             if hit is None:
-                # Check if the user clicked on a ghost (other-layer) poly.
-                ghost_hit = self._find_ghost_poly_at(pos.x(), pos.y())
-                if ghost_hit is not None and callable(self._on_ghost_click):
-                    self._on_ghost_click(ghost_hit)
+                # Clicking a shape on a non-active layer activates that layer
+                # and selects the shape (entity index passed to the callback).
+                inactive_hit = self._find_inactive_poly_at(pos.x(), pos.y())
+                if inactive_hit is not None and callable(self._on_ghost_click):
+                    self._on_ghost_click(inactive_hit)
                     return
                 if self._quick_shape_enabled:
                     mode = self._shape_mode_from_modifiers(event.modifiers())

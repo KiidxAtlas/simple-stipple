@@ -25,3 +25,6 @@ class EntityRecord:
     hidden: bool = False
     locked: bool = False
     group: int | None = None
+    # Layer name; None = the canvas's single/default layer. Multi-layer
+    # canvases (Draft) stamp a concrete name on every entity.
+    layer: str | None = None

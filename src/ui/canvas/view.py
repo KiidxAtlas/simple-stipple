@@ -136,6 +136,147 @@ class PolylineView(
         """{entity index: group id} for grouped entities."""
         return {i: e.group for i, e in enumerate(self._entities) if e.group is not None}
 
+    # ── Layer model ───────────────────────────────────────────────────────────
+
+    @property
+    def active_layer(self) -> str | None:
+        return self._active_layer
+
+    def layer_names(self) -> list[str]:
+        names = list(self._layer_order)
+        for e in self._entities:
+            if e.layer is not None and e.layer not in names:
+                names.append(e.layer)
+        return names
+
+    def set_layer_model(self, order: list[str], active: str | None) -> None:
+        """Install the layer list + active layer (used on load/restore)."""
+        self._layer_order = [str(n) for n in order if str(n)]
+        if active is not None and str(active) not in self._layer_order:
+            self._layer_order.append(str(active))
+        self._active_layer = str(active) if active is not None else None
+        if self._active_layer is not None:
+            for e in self._entities:
+                if e.layer is None:
+                    e.layer = self._active_layer
+        self._drop_inactive_selection()
+        self._redraw()
+
+    def set_active_layer(self, name: str) -> None:
+        name = str(name)
+        if name not in self._layer_order:
+            self._layer_order.append(name)
+        if self._active_layer == name:
+            return
+        self._active_layer = name
+        self._drop_inactive_selection()
+        self._reset_edit_interaction_state()
+        self._redraw()
+        self._notify()
+
+    def add_layer(self, name: str, *, activate: bool = False) -> None:
+        name = str(name)
+        if name not in self._layer_order:
+            self._layer_order.append(name)
+        if activate:
+            self.set_active_layer(name)
+        else:
+            self._redraw()
+
+    def rename_layer(self, old: str, new: str) -> None:
+        old, new = str(old), str(new).strip()
+        if not new or old == new or new in self._layer_order:
+            return
+        self._layer_order = [new if n == old else n for n in self._layer_order]
+        for e in self._entities:
+            if e.layer == old:
+                e.layer = new
+        if self._active_layer == old:
+            self._active_layer = new
+        self._redraw()
+
+    def delete_layer(self, name: str) -> None:
+        """Delete a layer and every entity on it."""
+        name = str(name)
+        drop = {i for i, e in enumerate(self._entities) if e.layer == name}
+        if drop:
+            self._push_undo()
+            self._compact_entities(drop)
+            self._sel = set()
+        self._layer_order = [n for n in self._layer_order if n != name]
+        if not self._layer_order:
+            self._layer_order = [
+                self._active_layer if self._active_layer != name else "Layer 1"
+            ]
+        if self._active_layer == name:
+            self._active_layer = self._layer_order[0]
+        self._redraw()
+        self._notify()
+        if drop:
+            self._fire_poly_change()
+
+    def move_layer(self, name: str, new_index: int) -> None:
+        name = str(name)
+        names = self.layer_names()
+        if name not in names:
+            return
+        names.remove(name)
+        names.insert(max(0, min(int(new_index), len(names))), name)
+        self._layer_order = names
+        self._redraw()
+
+    def move_indices_to_layer(self, indices: list[int], layer: str) -> int:
+        """Reassign entities to ``layer``; returns how many moved."""
+        layer = str(layer)
+        if layer not in self._layer_order:
+            self._layer_order.append(layer)
+        moved = 0
+        pushed = False
+        for idx in indices:
+            if not (0 <= idx < len(self._entities)):
+                continue
+            e = self._entities[idx]
+            if e.layer == layer:
+                continue
+            if not pushed:
+                self._push_undo()
+                pushed = True
+            e.layer = layer
+            moved += 1
+        if moved:
+            self._drop_inactive_selection()
+            self._redraw()
+            self._notify()
+            self._fire_poly_change()
+        return moved
+
+    def _on_active_layer(self, e: EntityRecord) -> bool:
+        return (
+            self._active_layer is None
+            or e.layer is None
+            or e.layer == self._active_layer
+        )
+
+    def _entity_selectable(self, idx: int) -> bool:
+        if not (0 <= idx < len(self._entities)):
+            return False
+        e = self._entities[idx]
+        return not e.hidden and self._on_active_layer(e)
+
+    def _noninteractive_indices(self) -> set[int]:
+        """Hidden entities plus entities on non-active layers."""
+        return {
+            i
+            for i, e in enumerate(self._entities)
+            if e.hidden or not self._on_active_layer(e)
+        }
+
+    def _drop_inactive_selection(self) -> None:
+        keep = {i for i in self._sel if self._entity_selectable(i)}
+        if keep != self._sel:
+            self._sel = keep
+            self._notify()
+
     @staticmethod
     def _clone_polys(
         polys: list[list[tuple[float, float]]],
@@ -165,6 +306,14 @@ class PolylineView(
         # Single source of truth for drawable entities.
         self._entities: list[EntityRecord] = []
         self._sel: set[int] = set()
+
+        # Layer model. ``_active_layer is None`` = single-layer mode: every
+        # entity is interactive and ``EntityRecord.layer`` is ignored.
+        # Multi-layer pages (Draft) install an ordered layer list + active
+        # layer; entities on non-active layers render dimmed and are not
+        # selectable/editable until their layer is activated.
+        self._layer_order: list[str] = []
+        self._active_layer: str | None = None
 
         # Lazily-built Shape objects for the snap engine (invalidated on
         # any structural/geometry change).
@@ -344,7 +493,9 @@ class PolylineView(
     # ── Public API ────────────────────────────────────────────────────────────
 
     def load(self, polys: list[list[tuple[float, float]]]) -> None:
-        self._entities = [EntityRecord(points=list(p)) for p in polys]
+        self._entities = [
+            EntityRecord(points=list(p), layer=self._active_layer) for p in polys
+        ]
         self._sel.clear()
         self._group_labels.clear()
 
@@ -368,7 +519,9 @@ class PolylineView(
     def set_polylines_state(
         self, polys: list[list[tuple[float, float]]], fit: bool = False
     ) -> None:
-        self._entities = [EntityRecord(points=list(p)) for p in polys]
+        self._entities = [
+            EntityRecord(points=list(p), layer=self._active_layer) for p in polys
+        ]
         self._sel.clear()
         self._group_labels.clear()
 
@@ -471,6 +624,7 @@ class PolylineView(
                 points=list(poly),
                 kind=kind,
                 meta=deepcopy(meta) if meta is not None else None,
+                layer=self._active_layer,
             )
         )
         self._sync_shape_storage_from_entities()
@@ -520,11 +674,7 @@ class PolylineView(
         return self._selected_indices()
 
     def set_selection(self, indices: list[int]) -> None:
-        new_sel = {
-            idx
-            for idx in indices
-            if 0 <= idx < len(self._entities) and not self._entities[idx].hidden
-        }
+        new_sel = {idx for idx in indices if self._entity_selectable(idx)}
         if new_sel == self._sel:
             return
         self._sel = new_sel
@@ -666,7 +816,7 @@ class PolylineView(
         return True
 
     def select_all(self) -> None:
-        self._sel = set(range(len(self._entities))) - self._flagged("hidden")
+        self._sel = set(range(len(self._entities))) - self._noninteractive_indices()
         self._redraw()
         self._notify()
 
@@ -677,7 +827,7 @@ class PolylineView(
 
     def _invert_selection(self) -> None:
         """Invert selection: select all unselected, deselect all selected."""
-        all_indices = set(range(len(self._entities))) - self._flagged("hidden")
+        all_indices = set(range(len(self._entities))) - self._noninteractive_indices()
         self._sel = all_indices - self._sel
         self._redraw()
         self._notify()
@@ -1494,6 +1644,7 @@ class PolylineView(
                     "hidden": e.hidden,
                     "locked": e.locked,
                     "group": e.group,
+                    "layer": e.layer,
                     "group_label": (
                         self._group_labels.get(e.group)
                         if e.group is not None
@@ -1527,6 +1678,9 @@ class PolylineView(
                     hidden=bool(r.get("hidden", False)),
                     locked=bool(r.get("locked", False)),
                     group=gid,
+                    layer=(
+                        str(r["layer"]) if r.get("layer") is not None else None
+                    ),
                 )
             )
         self._entities = ents
@@ -1581,6 +1735,7 @@ class PolylineView(
                 "polyline": list(poly),
                 "kind": kind,
                 "meta": export_meta,
+                "layer": self._entities[idx].layer,
             })
         return result
 
@@ -1808,7 +1963,7 @@ class PolylineView(
         best_dist = _SNAP_DIST
         best_pt: tuple[float, float] | None = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if self._entities[pi].hidden:
+            if not self._entity_selectable(pi):
                 continue
             if len(poly) < 2:
                 continue
@@ -1824,7 +1979,7 @@ class PolylineView(
         best_dist = _VERT_HIT
         best = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if self._entities[pi].hidden:
+            if not self._entity_selectable(pi):
                 continue
             for vi, pt in enumerate(poly):
                 sx, sy = self._w2c(*pt)
@@ -1898,7 +2053,7 @@ class PolylineView(
         wx, wy = self._c2w(cx, cy)
         best: tuple[int, int, tuple[float, float]] | None = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if self._entities[pi].hidden:
+            if not self._entity_selectable(pi):
                 continue
             dist, result = self._closest_point_on_poly(
                 poly, wx, wy, cx, cy, return_segment=True
@@ -1914,9 +2069,25 @@ class PolylineView(
         wx, wy = self._c2w(cx, cy)
         best: int | None = None
         for pi, poly in enumerate(e.points for e in self._entities):
-            if self._entities[pi].hidden:
+            if not self._entity_selectable(pi):
                 continue
             dist = self._closest_point_on_poly(poly, wx, wy, cx, cy)
+            if dist is not None and dist < best_dist:
+                best_dist = dist
+                best = pi
+        return best
+
+    def _find_inactive_poly_at(self, cx: float, cy: float) -> int | None:
+        """Hit-test entities on non-active layers; returns entity index."""
+        if self._active_layer is None:
+            return None
+        best_dist = 8.0
+        wx, wy = self._c2w(cx, cy)
+        best: int | None = None
+        for pi, e in enumerate(self._entities):
+            if e.hidden or self._on_active_layer(e):
+                continue
+            dist = self._closest_point_on_poly(e.points, wx, wy, cx, cy)
             if dist is not None and dist < best_dist:
                 best_dist = dist
                 best = pi
@@ -3282,6 +3453,8 @@ class PolylineView(
             if not self._band_additive:
                 self._sel.clear()
             for idx, poly in enumerate(e.points for e in self._entities):
+                if not self._entity_selectable(idx):
+                    continue
                 pts_c = [self._w2c(x, y) for x, y in poly]
                 if any(x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c):
                     self._sel.add(idx)
@@ -3668,7 +3841,7 @@ class PolylineView(
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
         return _legacy_snap_to_polyline(
-            cx, cy, [e.points for e in self._entities], self._flagged("hidden"), self._scale,
+            cx, cy, [e.points for e in self._entities], self._noninteractive_indices(), self._scale,
             self._w2c, self._c2w, self._poly_bounds,
             self._is_poly_closed, self._segment_intersection_point,
             reference_point=reference_point, draw_points=self._draw_pts, mode=self._mode,
@@ -3684,7 +3857,7 @@ class PolylineView(
         legacy = _legacy_resolve_snap(
             cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
             grid_snap_enabled=self._grid_snap, grid_spacing=self._grid_spacing,
-            polylines=[e.points for e in self._entities], hidden_polys=self._flagged("hidden"), scale=self._scale,
+            polylines=[e.points for e in self._entities], hidden_polys=self._noninteractive_indices(), scale=self._scale,
             w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
             is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
             mode=self._mode, reference_point=reference_point, draw_points=self._draw_pts,
@@ -3704,7 +3877,7 @@ class PolylineView(
         legacy = _legacy_resolve_drag_snap(
             cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
             allow_vertex=allow_vertex, grid_snap_enabled=self._grid_snap,
-            grid_spacing=self._grid_spacing, polylines=[e.points for e in self._entities], hidden_polys=self._flagged("hidden"),
+            grid_spacing=self._grid_spacing, polylines=[e.points for e in self._entities], hidden_polys=self._noninteractive_indices(),
             scale=self._scale, w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
             is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
             mode=self._mode, exclude_vertices=exclude_vertices, exclude_segments=exclude_segments,
