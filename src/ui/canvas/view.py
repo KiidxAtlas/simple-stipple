@@ -42,8 +42,8 @@ from shapely.geometry import (
     Point,
     Polygon,
 )
+from shapely.ops import linemerge, unary_union
 from shapely.ops import split as shapely_split
-from shapely.ops import unary_union
 
 from src.backend.geometry.primitives import (
     build_circle_poly,
@@ -381,10 +381,13 @@ class PolylineView(
         # Interaction tools (src/ui/canvas/tools.py): per-mode strategy
         # objects dispatched by the mouse event handlers. All interaction
         # state stays on the view; tools are stateless.
+        trim_tool = canvas_tools.TrimExtendTool(self)
         self._tools: dict[str, canvas_tools.CanvasTool] = {
             "select": canvas_tools.SelectTool(self),
             "draw": canvas_tools.DrawTool(self),
             "edit": canvas_tools.EditTool(self),
+            "trim": trim_tool,
+            "extend": trim_tool,
         }
         self._measure_tool = canvas_tools.MeasureTool(self)
 
@@ -3403,6 +3406,152 @@ class PolylineView(
         self._redraw()
         self._notify()
         self._fire_poly_change()
+        return True
+
+    def _other_linework(self, exclude_idx: int):
+        """Union of every other visible entity's linework (for trim/extend)."""
+        lines = []
+        for i, e in enumerate(self._entities):
+            if i == exclude_idx or not self._entity_selectable(i):
+                continue
+            if len(e.points) >= 2:
+                lines.append(LineString(e.points))
+        if not lines:
+            return None
+        return unary_union(lines)
+
+    def trim_at(self, cx: float, cy: float) -> bool:
+        """Remove the clicked portion of a polyline up to its nearest
+        intersections with other shapes."""
+        idx = self._find_poly_at(cx, cy)
+        if idx is None:
+            self._show_flash("Click a segment to trim", 1000)
+            return False
+        if self._is_locked(idx):
+            self._show_flash("Shape is locked", 1000)
+            return False
+        wx, wy = self._c2w(cx, cy)
+        pts = self._entities[idx].points
+        if len(pts) < 2:
+            return False
+        cutters = self._other_linework(idx)
+        if cutters is None or cutters.is_empty:
+            self._show_flash("Nothing to trim against", 1100)
+            return False
+        target = LineString(pts)
+        try:
+            pieces = [
+                g
+                for g in shapely_split(target, cutters).geoms
+                if isinstance(g, LineString) and len(g.coords) >= 2
+            ]
+        except GEOSException:
+            self._show_flash("Trim failed", 1100)
+            return False
+        if len(pieces) < 2:
+            self._show_flash("No intersection to trim to", 1100)
+            return False
+        click = Point(wx, wy)
+        drop = min(pieces, key=lambda g: g.distance(click))
+        kept = [g for g in pieces if g is not drop]
+        merged = linemerge(kept) if len(kept) > 1 else kept[0]
+        out = (
+            list(merged.geoms)
+            if isinstance(merged, MultiLineString)
+            else [merged]
+        )
+        self._push_undo()
+        first, *rest = out
+        e = self._entities[idx]
+        e.points = [(float(x), float(y)) for x, y in first.coords]
+        e.kind = "polyline"
+        e.meta = None
+        new_sel = {idx}
+        for piece in rest:
+            new_sel.add(
+                self._append_entity(
+                    [(float(x), float(y)) for x, y in piece.coords]
+                )
+            )
+        self._sel = new_sel
+        self._sync_shape_storage_from_entities()
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        self._show_flash("Trimmed", 800)
+        return True
+
+    def extend_at(self, cx: float, cy: float) -> bool:
+        """Lengthen the nearest open polyline end to its first intersection
+        with another shape."""
+        best: tuple[int, int] | None = None  # (entity idx, 0=start / -1=end)
+        best_d = 12.0
+        for i, e in enumerate(self._entities):
+            if not self._entity_selectable(i) or self._is_locked(i):
+                continue
+            pts = e.points
+            if len(pts) < 2 or self._is_poly_closed(pts):
+                continue
+            for endsel in (0, -1):
+                ex, ey = self._w2c(*pts[endsel])
+                d = math.hypot(cx - ex, cy - ey)
+                if d < best_d:
+                    best_d = d
+                    best = (i, endsel)
+        if best is None:
+            self._show_flash("Click near an open end to extend", 1100)
+            return False
+        idx, endsel = best
+        pts = self._entities[idx].points
+        tip = pts[endsel]
+        neighbor = pts[1] if endsel == 0 else pts[-2]
+        dx, dy = tip[0] - neighbor[0], tip[1] - neighbor[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            return False
+        dx, dy = dx / length, dy / length
+        bx0, by0, bx1, by1 = self._bbox()
+        reach = max(bx1 - bx0, by1 - by0, 1.0) * 3.0
+        ray = LineString(
+            [tip, (tip[0] + dx * reach, tip[1] + dy * reach)]
+        )
+        others = self._other_linework(idx)
+        if others is None or others.is_empty:
+            self._show_flash("Nothing to extend to", 1100)
+            return False
+        try:
+            inter = ray.intersection(others)
+        except GEOSException:
+            return False
+        candidates: list[tuple[float, tuple[float, float]]] = []
+        for g in getattr(inter, "geoms", [inter]):
+            if isinstance(g, Point):
+                t = math.hypot(g.x - tip[0], g.y - tip[1])
+                if t > 1e-6:
+                    candidates.append((t, (float(g.x), float(g.y))))
+            elif isinstance(g, LineString):
+                for x, y in g.coords:
+                    t = math.hypot(x - tip[0], y - tip[1])
+                    if t > 1e-6:
+                        candidates.append((t, (float(x), float(y))))
+        if not candidates:
+            self._show_flash("No shape in that direction", 1100)
+            return False
+        _, hit = min(candidates, key=lambda item: item[0])
+        self._push_undo()
+        e = self._entities[idx]
+        if endsel == 0:
+            e.points = [hit] + list(pts)
+        else:
+            e.points = list(pts) + [hit]
+        e.kind = "polyline"
+        e.meta = None
+        self._sel = {idx}
+        self._sync_shape_storage_from_entities()
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        self._show_flash("Extended", 800)
         return True
 
     def boolean_selected(self, op: str) -> int:

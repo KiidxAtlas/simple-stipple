@@ -1,0 +1,67 @@
+"""Trim and extend tools."""
+
+from __future__ import annotations
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+from PySide6.QtCore import Qt  # noqa: E402
+
+from tests.test_canvas_behavior import click_world, key, make_view, square  # noqa: E402
+
+
+def cross():
+    # horizontal + vertical line crossing at (0, 0)
+    return [[(-10.0, 0.0), (10.0, 0.0)], [(0.0, -10.0), (0.0, 10.0)]]
+
+
+def test_trim_removes_clicked_piece(qapp):
+    v = make_view(qapp, cross())
+    v.set_mode("trim")
+    click_world(v, 5.0, 0.0)  # right half of the horizontal line
+    # horizontal line now ends at the intersection (0,0)
+    pts = v._entities[0].points
+    xs = sorted(x for x, _ in pts)
+    assert xs[0] == pytest.approx(-10.0)
+    assert xs[-1] == pytest.approx(0.0, abs=1e-6)
+    assert v.undo()
+    xs = sorted(x for x, _ in v._entities[0].points)
+    assert xs[-1] == pytest.approx(10.0)
+
+
+def test_trim_middle_piece_leaves_two(qapp):
+    polys = cross() + [[(4.0, -10.0), (4.0, 10.0)]]  # second vertical at x=4
+    v = make_view(qapp, polys)
+    v.set_mode("trim")
+    click_world(v, 2.0, 0.0)  # piece between x=0 and x=4
+    assert v.poly_count == 4  # horizontal became two pieces
+    lengths = sorted(
+        abs(v._entities[i].points[-1][0] - v._entities[i].points[0][0])
+        for i in (0, 3)
+    )
+    assert lengths[0] == pytest.approx(6.0, abs=1e-6)  # x=4..10
+    assert lengths[1] == pytest.approx(10.0, abs=1e-6)  # x=-10..0
+
+
+def test_extend_reaches_next_shape(qapp):
+    v = make_view(
+        qapp,
+        [[(0.0, 0.0), (5.0, 0.0)], [(20.0, -10.0), (20.0, 10.0)]],
+    )
+    v.set_mode("extend")
+    click_world(v, 5.0, 0.0)  # near the open end at (5, 0)
+    pts = v._entities[0].points
+    assert pts[-1][0] == pytest.approx(20.0, abs=1e-6)
+    assert v.undo()
+    assert v._entities[0].points[-1][0] == pytest.approx(5.0)
+
+
+def test_trim_mode_shortcut_and_escape(qapp):
+    v = make_view(qapp, cross())
+    key(v, Qt.Key.Key_K)
+    assert v.get_mode() == "trim"
+    key(v, Qt.Key.Key_Escape)
+    assert v.get_mode() == "select"
+    key(v, Qt.Key.Key_L)
+    assert v.get_mode() == "extend"

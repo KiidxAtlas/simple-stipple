@@ -257,6 +257,20 @@ COMMANDS: tuple[Command, ...] = (
         category="Modes",
     ),
     Command(
+        "mode.trim",
+        "Trim Tool",
+        lambda v: v.set_mode("trim" if v.get_mode() != "trim" else "select"),
+        "K",
+        category="Modes",
+    ),
+    Command(
+        "mode.extend",
+        "Extend Tool",
+        lambda v: v.set_mode("extend" if v.get_mode() != "extend" else "select"),
+        "L",
+        category="Modes",
+    ),
+    Command(
         "measure.toggle",
         "Measure",
         lambda v: v.toggle_measure(),

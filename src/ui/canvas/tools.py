@@ -600,6 +600,32 @@ class DrawTool(CanvasTool):
         return True
 
 
+class TrimExtendTool(CanvasTool):
+    """Trim (click the portion to remove) / Extend (click near an open
+    end). Both cut/extend to the nearest intersection with other shapes."""
+
+    def press(self, event: QMouseEvent) -> bool:
+        v = self.v
+        pos = event.position()
+        if v._mode == "trim":
+            v.trim_at(pos.x(), pos.y())
+        else:
+            v.extend_at(pos.x(), pos.y())
+        return True
+
+    def move(self, event: QMouseEvent) -> bool:
+        v = self.v
+        pos = event.position()
+        hover = v._find_poly_at(pos.x(), pos.y())
+        if hover != v._hover_poly:
+            v._hover_poly = hover
+            v._redraw()
+        return True
+
+    def release(self, event: QMouseEvent) -> bool:
+        return True
+
+
 class SelectTool(CanvasTool):
     """Selection, box select, drag-move, direct vertex editing, gizmos."""
 
