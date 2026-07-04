@@ -591,3 +591,41 @@ def test_quick_shape_keys_and_radial_toggle(qapp):
     assert not c._radial_active
     key(c, Qt.Key.Key_Escape)
     assert not c.quick_shape_enabled
+
+
+def test_undo_store_deltas_only_touch_changed_entities(qapp):
+    """Delta undo: a move records only the moved entity, not the document."""
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_selection([0])
+    v._nudge_selected(1.0, 0.0)
+    store = v._undo_store
+    # finalize by starting a different (non-coalescing) op
+    v.set_selection([1])
+    v.rotate_selected(90.0)
+    assert len(store._undo) >= 1
+    first = store._undo[0]
+    assert len(first.back_changed) == 1  # only square 0 stored
+    assert first.back_len == 3 and first.fwd_len == 3
+
+
+def test_undo_after_load_is_unavailable(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_selection([0])
+    v.delete_selected()
+    v.load([square(0, 0)])
+    assert not v.undo()  # fresh document, fresh history
+
+
+def test_undo_redo_deep_sequence(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    for i in range(5):
+        v.set_selection([0])
+        v._duplicate_selected()
+    assert v.poly_count == 6
+    for _ in range(5):
+        assert v.undo()
+    assert v.poly_count == 1
+    for _ in range(5):
+        assert v.redo()
+    assert v.poly_count == 6
+    assert not v.redo()

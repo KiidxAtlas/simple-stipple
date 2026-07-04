@@ -724,7 +724,6 @@ class SelectTool(CanvasTool):
                     abs(dx_px) > DRAG_THRESH or abs(dy_px) > DRAG_THRESH
                 ):
                     v._move_dragging = True
-                    v._nudge_undo_pushed = False
                     v._move_snap_exclude_vertices = v._vertices_for_polylines(
                         set(v._sel)
                     )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from copy import deepcopy
-from typing import Any, TypeAlias
+from typing import Any
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
@@ -61,6 +61,7 @@ from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas import tools as canvas_tools
 from src.ui.canvas.entities import EntityRecord
 from src.ui.canvas.render import CanvasRenderer
+from src.ui.canvas.undo import UndoStore
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
 from src.ui.core.focus_policy import blur_focused_line_edit
 from src.backend.behaviors.snapping import (
@@ -72,9 +73,6 @@ from src.backend.behaviors.snapping import (
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
 
-# Undo snapshot: the full entity list (geometry, kind, meta, and all flags —
-# the old 5-tuple silently dropped hidden/locked/group state) + selection.
-CanvasState: TypeAlias = tuple[list[EntityRecord], set[int]]
 
 
 
@@ -354,9 +352,8 @@ class PolylineView(
         self._band_start: QPointF | None = None
         self._band_additive: bool = False
 
-        # Undo / redo stacks
-        self._undo_stack: list[CanvasState] = []
-        self._redo_stack: list[CanvasState] = []
+        # Undo / redo history (delta-based; see src/ui/canvas/undo.py)
+        self._undo_store = UndoStore()
 
         # Fit scale for zoom-% display
         self._fit_scale: float = 1.0
@@ -418,9 +415,6 @@ class PolylineView(
 
         # Clipboard
         self._clipboard: list[dict[str, Any]] = []
-
-        # Nudge undo debounce
-        self._nudge_undo_pushed: bool = False
 
         # Image bounds reference rectangle
         self._img_bounds: tuple[float, float] | None = None
@@ -506,6 +500,7 @@ class PolylineView(
         ]
         self._sel.clear()
         self._group_labels.clear()
+        self._undo_store.clear()
 
         self._sync_shape_storage_from_entities()
 
@@ -532,6 +527,7 @@ class PolylineView(
         ]
         self._sel.clear()
         self._group_labels.clear()
+        self._undo_store.clear()
 
         self._sync_shape_storage_from_entities()
 
@@ -638,14 +634,10 @@ class PolylineView(
         self._sync_shape_storage_from_entities()
         return len(self._entities) - 1
 
-    def _snapshot_state(self) -> CanvasState:
-        return (deepcopy(self._entities), set(self._sel))
-
-    def _restore_state_snapshot(self, snapshot: CanvasState) -> None:
-        entities, sel = snapshot
-        # The snapshot was popped off its stack, so we can install the
-        # records directly without another copy.
-        self._entities = list(entities)
+    def _restore_history_state(
+        self, entities: list[EntityRecord], sel: set[int]
+    ) -> None:
+        self._entities = entities
         self._sel = {i for i in sel if i < len(self._entities)}
         self._sync_shape_storage_from_entities()
 
@@ -657,12 +649,6 @@ class PolylineView(
         self._edit_selected_verts = set()
         self._edit_drag_targets = set()
         self._hover_vert = None
-
-    @staticmethod
-    def _push_stack_capped(stack: list[CanvasState], snapshot: CanvasState) -> None:
-        stack.append(snapshot)
-        if len(stack) > 30:
-            stack.pop(0)
 
     def _sync_shape_storage_from_entities(self) -> None:
         """Invalidate the lazily-built snap-shape cache."""
@@ -802,10 +788,10 @@ class PolylineView(
         return n
 
     def undo(self) -> bool:
-        if not self._undo_stack:
+        result = self._undo_store.undo(self._entities, self._sel)
+        if result is None:
             return False
-        self._push_stack_capped(self._redo_stack, self._snapshot_state())
-        self._restore_state_snapshot(self._undo_stack.pop())
+        self._restore_history_state(*result)
         self._reset_edit_interaction_state()
         self._redraw()
         self._notify()
@@ -813,10 +799,10 @@ class PolylineView(
         return True
 
     def redo(self) -> bool:
-        if not self._redo_stack:
+        result = self._undo_store.redo(self._entities, self._sel)
+        if result is None:
             return False
-        self._push_stack_capped(self._undo_stack, self._snapshot_state())
-        self._restore_state_snapshot(self._redo_stack.pop())
+        self._restore_history_state(*result)
         self._reset_edit_interaction_state()
         self._redraw()
         self._notify()
@@ -1226,11 +1212,8 @@ class PolylineView(
         mutable = [idx for idx in self._sel if not self._is_locked(idx)]
         if not mutable:
             return
-        if not getattr(self, "_nudge_undo_pushed", False):
-            self._push_undo()
-            object.__setattr__(self, "_nudge_undo_pushed", True)
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(500, self._reset_nudge_undo)
+        self._push_undo(coalesce="nudge")
+        QTimer.singleShot(500, self._undo_store.break_coalescing)
         for idx in mutable:
             if idx < len(self._entities):
                 self._entities[idx].points = [(x + dx, y + dy) for x, y in self._entities[idx].points]
@@ -1244,9 +1227,6 @@ class PolylineView(
         self._redraw()
         self._notify()
         self._fire_poly_change()
-
-    def _reset_nudge_undo(self) -> None:
-        object.__setattr__(self, "_nudge_undo_pushed", False)
 
     def _shape_primitive_active(self) -> bool:
         return getattr(self, "_draw_primitive", "polyline") in {"rectangle", "circle", "ellipse", "polygon"}
@@ -1623,20 +1603,9 @@ class PolylineView(
         else:
             self.unsetCursor()
 
-    def _push_undo(self) -> None:
-        self._push_stack_capped(self._undo_stack, self._snapshot_state())
-        # Soft cap on total vertices retained across the stack so a few
-        # huge snapshots do not balloon process memory. A scene with
-        # ~200k vertices roughly equals ~3 MB of float pairs; we keep
-        # the budget generous but bounded.
-        _UNDO_VERTEX_BUDGET = 200_000
-        total = sum(
-            sum(len(e.points) for e in entry[0]) for entry in self._undo_stack
-        )
-        while total > _UNDO_VERTEX_BUDGET and len(self._undo_stack) > 1:
-            dropped = self._undo_stack.pop(0)
-            total -= sum(len(e.points) for e in dropped[0])
-        self._redo_stack.clear()
+    def _push_undo(self, coalesce: str | None = None) -> None:
+        """Record the pre-state of an operation (call before mutating)."""
+        self._undo_store.mark(self._entities, self._sel, coalesce=coalesce)
 
     def get_entity_records(self) -> list[dict[str, Any]]:
         """Serialize entities (geometry + kind/meta/flags/group) for layer
@@ -1700,6 +1669,7 @@ class PolylineView(
                 self._group_labels[int(g)] = str(lbl)
         self._next_group_id = max(self._next_group_id, max_gid + 1)
         self._sel.clear()
+        self._undo_store.clear()
         self._sync_shape_storage_from_entities()
         if fit:
             self._needs_fit = True
