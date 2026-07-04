@@ -356,6 +356,10 @@ class PolylineView(
         # (("h", y_world) or ("v", x_world)); guides participate in snapping.
         self._snap_engine = SnapEngine(self)
         self._guides: list[tuple[str, float]] = []
+        self._guide_drag: int | None = None
+        # mm rulers along the top/left edges; drag out of a ruler to create
+        # a guide, drop a guide back onto a ruler to delete it.
+        self._rulers_visible: bool = False
 
         # Fit scale for zoom-% display
         self._fit_scale: float = 1.0
@@ -554,6 +558,8 @@ class PolylineView(
             "grid_visible": self._grid_visible,
             "grid_snap": self._grid_snap,
             "grid_spacing": self._grid_spacing,
+            "guides": [[o, c] for o, c in self._guides],
+            "rulers_visible": self._rulers_visible,
             "hidden_indices": sorted(self._flagged("hidden")),
             "locked_indices": sorted(self._flagged("locked")),
             "groups": {str(i): g for i, g in self._group_map().items()},
@@ -593,6 +599,15 @@ class PolylineView(
         locked_state = state.get("locked_indices", [])
         if not isinstance(locked_state, list):
             locked_state = []
+        raw_guides = state.get("guides", [])
+        if isinstance(raw_guides, list):
+            self._guides = [
+                (str(o), float(c))
+                for o, c in raw_guides
+                if str(o) in ("h", "v")
+            ]
+        if "rulers_visible" in state:
+            self._rulers_visible = bool(state.get("rulers_visible"))
         self._set_flagged("hidden", hidden_state)
         self._set_flagged("locked", locked_state)
         raw_groups = state.get("groups", {})
@@ -2060,6 +2075,28 @@ class PolylineView(
                 best = pi
         return best
 
+    RULER_PX = 22
+
+    def set_rulers_visible(self, visible: bool) -> None:
+        self._rulers_visible = bool(visible)
+        self._redraw()
+
+    def _find_guide_at(self, cx: float, cy: float) -> int | None:
+        """Guide index within grab distance of the cursor (screen px)."""
+        best: int | None = None
+        best_d = 4.0
+        for i, (orient, coord) in enumerate(self._guides):
+            if orient == "v":
+                gx, _ = self._w2c(coord, 0.0)
+                d = abs(cx - gx)
+            else:
+                _, gy = self._w2c(0.0, coord)
+                d = abs(cy - gy)
+            if d < best_d:
+                best_d = d
+                best = i
+        return best
+
     def _find_inactive_poly_at(self, cx: float, cy: float) -> int | None:
         """Hit-test entities on non-active layers; returns entity index."""
         if self._active_layer is None:
@@ -2101,11 +2138,12 @@ class PolylineView(
         tool = (
             self._measure_tool if self._measure_mode else self._tools.get(self._mode)
         )
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if tool is not None:
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             tool.paint_overlay(painter)
-            painter.end()
+        self._paint_chrome_rulers(painter)
+        painter.end()
 
     def _start_gizmo_drag(self, mode: str, wx: float, wy: float) -> bool:
         bounds = self._selection_bounds()
@@ -2606,6 +2644,34 @@ class PolylineView(
             self.toggle_measure()
             return
 
+        # Rulers: press inside a ruler strip drags out a new guide.
+        if self._rulers_visible and self._selectable:
+            r = self.RULER_PX
+            wx0, wy0 = self._c2w(pos.x(), pos.y())
+            if pos.x() <= r and pos.y() <= r:
+                return  # corner box
+            if pos.y() <= r:
+                self._guides.append(("h", wy0))
+                self._guide_drag = len(self._guides) - 1
+                self._redraw()
+                return
+            if pos.x() <= r:
+                self._guides.append(("v", wx0))
+                self._guide_drag = len(self._guides) - 1
+                self._redraw()
+                return
+        # Grab an existing guide (only when not over a shape).
+        if (
+            self._selectable
+            and self._mode == "select"
+            and self._guides
+            and self._find_poly_at(pos.x(), pos.y()) is None
+        ):
+            gi = self._find_guide_at(pos.x(), pos.y())
+            if gi is not None:
+                self._guide_drag = gi
+                return
+
         # Selection badges / transform gizmo take priority over tools.
         if (
             self._mode == "select"
@@ -2656,6 +2722,18 @@ class PolylineView(
             self._redraw()
             return
 
+        if (
+            self._guide_drag is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            orient, _ = self._guides[self._guide_drag]
+            self._guides[self._guide_drag] = (
+                orient,
+                wy if orient == "h" else wx,
+            )
+            self._redraw()
+            return
+
         if self._measure_mode:
             self._measure_tool.move(event)
             return
@@ -2686,6 +2764,13 @@ class PolylineView(
             self._notify()
             if moved:
                 self._fire_poly_change()
+            return
+
+        if self._guide_drag is not None:
+            if pos.x() <= self.RULER_PX or pos.y() <= self.RULER_PX:
+                del self._guides[self._guide_drag]
+            self._guide_drag = None
+            self._redraw()
             return
 
         if self._measure_mode:

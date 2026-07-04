@@ -229,6 +229,110 @@ class CanvasRenderer:
                 path.closeSubpath()
             painter.drawPath(path)
 
+    _RULER_STEPS = (
+        0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0,
+        1000.0,
+    )
+
+    def _paint_guides(self, painter: QPainter, w: int, h: int) -> None:
+        if not self._guides:
+            return
+        pen = QPen(QColor("#39c5cf"), 1.0, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        for i, (orient, coord) in enumerate(self._guides):
+            dragging = i == getattr(self, "_guide_drag", None)
+            if dragging:
+                painter.setPen(QPen(QColor("#56d4dd"), 1.6))
+            if orient == "v":
+                gx, _ = self._w2c(coord, 0.0)
+                painter.drawLine(QPointF(gx, 0.0), QPointF(gx, float(h)))
+                if dragging:
+                    painter.drawText(QPointF(gx + 4, 34), f"x = {coord:.2f} mm")
+            else:
+                _, gy = self._w2c(0.0, coord)
+                painter.drawLine(QPointF(0.0, gy), QPointF(float(w), gy))
+                if dragging:
+                    painter.drawText(QPointF(28, gy - 4), f"y = {coord:.2f} mm")
+            if dragging:
+                painter.setPen(pen)
+
+    def _ruler_step(self) -> float:
+        """Smallest nice step that keeps major ticks ≥ ~55 px apart."""
+        for step in self._RULER_STEPS:
+            if step * self._scale >= 55.0:
+                return step
+        return self._RULER_STEPS[-1]
+
+    def _paint_rulers(self, painter: QPainter, w: int, h: int) -> None:
+        if not self._rulers_visible:
+            return
+        r = self.RULER_PX
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(13, 17, 23, 235))
+        painter.drawRect(QRectF(0, 0, w, r))
+        painter.drawRect(QRectF(0, 0, r, h))
+        edge_pen = QPen(QColor("#30363d"), 1.0)
+        painter.setPen(edge_pen)
+        painter.drawLine(QPointF(0, r), QPointF(float(w), r))
+        painter.drawLine(QPointF(r, 0), QPointF(r, float(h)))
+
+        step = self._ruler_step()
+        minor = step / 5.0
+        tick_pen = QPen(QColor("#484f58"), 1.0)
+        text_pen = QPen(QColor("#8b949e"), 1.0)
+        font = painter.font()
+        font.setPointSizeF(8.0)
+        painter.setFont(font)
+
+        # Top ruler (world X)
+        wx0, _ = self._c2w(float(r), 0.0)
+        wx1, _ = self._c2w(float(w), 0.0)
+        start = math.floor(min(wx0, wx1) / minor) * minor
+        x = start
+        while x <= max(wx0, wx1) + minor:
+            cx, _ = self._w2c(x, 0.0)
+            if cx >= r:
+                is_major = abs(x / step - round(x / step)) < 1e-6
+                painter.setPen(tick_pen)
+                painter.drawLine(
+                    QPointF(cx, r - (10 if is_major else 5)), QPointF(cx, float(r))
+                )
+                if is_major:
+                    painter.setPen(text_pen)
+                    painter.drawText(QPointF(cx + 2, r - 11), f"{x:g}")
+            x += minor
+
+        # Left ruler (world Y)
+        _, wy0 = self._c2w(0.0, float(r))
+        _, wy1 = self._c2w(0.0, float(h))
+        start = math.floor(min(wy0, wy1) / minor) * minor
+        y = start
+        while y <= max(wy0, wy1) + minor:
+            _, cy = self._w2c(0.0, y)
+            if cy >= r:
+                is_major = abs(y / step - round(y / step)) < 1e-6
+                painter.setPen(tick_pen)
+                painter.drawLine(
+                    QPointF(r - (10 if is_major else 5), cy), QPointF(float(r), cy)
+                )
+                if is_major:
+                    painter.setPen(text_pen)
+                    painter.save()
+                    painter.translate(r - 12, cy - 2)
+                    painter.rotate(-90)
+                    painter.drawText(QPointF(0, 0), f"{y:g}")
+                    painter.restore()
+            y += minor
+
+        # Cursor position markers
+        if self._cursor_wx is not None and self._cursor_wy is not None:
+            mcx, mcy = self._w2c(self._cursor_wx, self._cursor_wy)
+            painter.setPen(QPen(QColor("#79c0ff"), 1.0))
+            if mcx > r:
+                painter.drawLine(QPointF(mcx, 0.0), QPointF(mcx, float(r)))
+            if mcy > r:
+                painter.drawLine(QPointF(0.0, mcy), QPointF(float(r), mcy))
+
     def _paint_grid(self, painter: QPainter, canvas_w: int, canvas_h: int) -> None:
         spacing = max(self._grid_spacing, 0.001)
         if spacing * self._scale < 6:
@@ -1111,6 +1215,7 @@ class CanvasRenderer:
             QPointF(max(_tl_wx, _br_wx), max(_tl_wy, _br_wy)),
         )
 
+        self._paint_guides(painter, w, h)
         self._paint_ghost_polys(painter, _visible_world)
         self._paint_main_polys(painter, _visible_world)
 
@@ -1361,6 +1466,12 @@ class CanvasRenderer:
         self._paint_measure_button(painter, w)
 
         painter.end()
+
+    def _paint_chrome_rulers(self, painter: QPainter) -> None:
+        """Rulers paint over everything else (chrome layer)."""
+        self._paint_rulers(
+            painter, max(self.width(), 100), max(self.height(), 100)
+        )
 
     def _show_flash(self, text: str, duration_ms: int = 1200) -> None:
         """Show a brief flash indicator on the canvas."""

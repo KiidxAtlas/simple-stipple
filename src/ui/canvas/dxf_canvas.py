@@ -177,6 +177,7 @@ class DxfCanvas(PolylineView):
         self._tools["select"] = DxfSelectTool(self)
 
         if self._draft_profile:
+            self.set_rulers_visible(True)
             self.set_grid_visible(True)
             self.set_grid_snap(False)
             self.set_grid_spacing(1.0)

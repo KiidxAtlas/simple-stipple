@@ -260,6 +260,14 @@ COMMANDS: tuple[Command, ...] = (
         requires_selectable=False,
     ),
     Command(
+        "view.rulers",
+        "Show Rulers",
+        lambda v: v.set_rulers_visible(not v._rulers_visible),
+        "R",
+        category="View",
+        requires_selectable=False,
+    ),
+    Command(
         "grid.toggle",
         "Show Grid",
         _toggle_grid,

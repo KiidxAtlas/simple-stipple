@@ -20,6 +20,7 @@ def make_rig(qapp):
 
     canvas = DxfCanvas()
     canvas.resize(800, 600)
+    canvas.set_rulers_visible(False)  # keep edge clicks out of the rulers
     rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
     rt.load_polys_by_layer(
         {"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True
@@ -51,6 +52,7 @@ def test_click_inactive_shape_activates_its_layer(qapp):
     clicked = []
     canvas = DxfCanvas(on_ghost_click=lambda idx: clicked.append(idx))
     canvas.resize(800, 600)
+    canvas.set_rulers_visible(False)
     rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
     rt.load_polys_by_layer(
         {"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True

@@ -37,6 +37,10 @@ def make_canvas(qapp, polys=None, size=(800, 600)):
 
     c = DxfCanvas()
     c.resize(*size)
+    # Rulers eat clicks along the top/left edges (guide creation); most
+    # tests use world coordinates that can land there, so keep them off
+    # except in the dedicated ruler/guide tests.
+    c.set_rulers_visible(False)
     if polys is not None:
         c.load(polys)
         c.fit()
@@ -699,3 +703,43 @@ def test_hover_pre_highlight_tracks_target(qapp):
     cx, cy = v._w2c(45.0, -20.0)  # empty space
     move(v, cx, cy, button=Qt.MouseButton.NoButton)
     assert v._hover_poly is None
+
+
+# ── rulers and guides ────────────────────────────────────────────────────────
+
+
+def test_drag_guide_from_ruler_and_delete(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_rulers_visible(True)
+    # press inside the top ruler, drag down into the canvas
+    press(c, 300.0, 10.0)
+    move(c, 300.0, 200.0)
+    release(c, 300.0, 200.0)
+    assert len(c._guides) == 1
+    orient, coord = c._guides[0]
+    assert orient == "h"
+    _, wy = c._c2w(300.0, 200.0)
+    assert coord == pytest.approx(wy, abs=1e-6)
+
+    # guides persist through view state
+    st = c.get_view_state()
+    c2 = make_canvas(qapp, THREE_SQUARES)
+    c2.set_view_state(st)
+    assert c2._guides == c._guides
+
+    # drag the guide back onto the ruler to delete it
+    gy = c._w2c(0.0, coord)[1]
+    press(c, 300.0, gy)
+    move(c, 300.0, 8.0)
+    release(c, 300.0, 8.0)
+    assert c._guides == []
+
+
+def test_vertical_guide_from_left_ruler(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_rulers_visible(True)
+    press(c, 10.0, 300.0)
+    move(c, 250.0, 300.0)
+    release(c, 250.0, 300.0)
+    assert len(c._guides) == 1
+    assert c._guides[0][0] == "v"
