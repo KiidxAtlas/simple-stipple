@@ -35,8 +35,3 @@ That single tag push builds and publishes:
 - macOS disk image: `SimpleStipple-macOS.dmg`
 
 If you prefer manual steps, do the equivalent:
-
-```bash
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-```

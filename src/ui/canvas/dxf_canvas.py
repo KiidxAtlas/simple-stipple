@@ -351,6 +351,19 @@ class DxfCanvas(PolylineView):
                     label = f"Close path (join {len(self._sel)} into one)"
                 menu.addAction(label, self.close_selection_as_path)
             menu.addAction("Fit selection", self.fit_selection)
+            menu.addAction("Smooth", lambda: _run_transform(self.smooth_selected))
+            menu.addAction(
+                "Simplify…",
+                lambda: _run_transform(
+                    lambda: _run_prompted_transform(
+                        "Simplify",
+                        "Tolerance (mm):",
+                        0.2,
+                        0.001,
+                        self.simplify_selected,
+                    )
+                ),
+            )
             if len(self._sel) >= 2:
                 menu.addAction(
                     canvas_commands.menu_text("group.create"), self._group_selected

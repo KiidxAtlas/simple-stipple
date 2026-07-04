@@ -101,6 +101,8 @@ class CanvasPropertiesPanel(QWidget):
             ("⟳ 90°", "Rotate 90° CW", lambda: self._rotate(-90.0)),
             ("⇋", "Mirror horizontally", lambda: self._mirror("horizontal")),
             ("⇵", "Mirror vertically", lambda: self._mirror("vertical")),
+            ("〰", "Smooth jagged corners (Chaikin)", self._smooth),
+            ("⤳", "Simplify — reduce vertex count", self._simplify),
         ):
             btn = QPushButton(text)
             btn.setToolTip(tip)
@@ -254,6 +256,14 @@ class CanvasPropertiesPanel(QWidget):
 
     def _mirror(self, axis: str) -> None:
         self._canvas.mirror_selected(axis)
+        self.refresh()
+
+    def _smooth(self) -> None:
+        self._canvas.smooth_selected()
+        self.refresh()
+
+    def _simplify(self) -> None:
+        self._canvas.simplify_selected()
         self.refresh()
 
     def _commit_param(self, key: str) -> None:

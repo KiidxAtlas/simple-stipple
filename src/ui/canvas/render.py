@@ -36,24 +36,62 @@ from src.backend.geometry.spline import build_spline_poly
 from src.constants import DIM, POLY, Q_BG, SEL
 from src.ui.canvas._constants import (
     BADGE_BG as _BADGE_BG,
+)
+from src.ui.canvas._constants import (
     BADGE_DIM as _BADGE_DIM,
+)
+from src.ui.canvas._constants import (
     BADGE_TEXT as _BADGE_TEXT,
+)
+from src.ui.canvas._constants import (
     DRAW_COLOR as _DRAW_COLOR,
+)
+from src.ui.canvas._constants import (
     DRAW_LINE_W as _DRAW_LINE_W,
+)
+from src.ui.canvas._constants import (
     DRAW_VERT_R as _DRAW_VERT_R,
+)
+from src.ui.canvas._constants import (
     GRID_AXIS as _GRID_AXIS,
+)
+from src.ui.canvas._constants import (
     GRID_MAJOR as _GRID_MAJOR,
+)
+from src.ui.canvas._constants import (
     GRID_MINOR as _GRID_MINOR,
+)
+from src.ui.canvas._constants import (
     GUIDE_COLOR as _GUIDE_COLOR,
+)
+from src.ui.canvas._constants import (
     HANDLE as _HANDLE,
+)
+from src.ui.canvas._constants import (
     HANDLE_ACTIVE as _HANDLE_ACTIVE,
+)
+from src.ui.canvas._constants import (
     HANDLE_HOVER as _HANDLE_HOVER,
+)
+from src.ui.canvas._constants import (
     HANDLE_R as _HANDLE_R,
+)
+from src.ui.canvas._constants import (
     MEASURE_COLOR as _MEASURE_COLOR,
+)
+from src.ui.canvas._constants import (
     ORTHO_COLOR as _ORTHO_COLOR,
+)
+from src.ui.canvas._constants import (
     RUBBER_W as _RUBBER_W,
+)
+from src.ui.canvas._constants import (
     SELECT_PT as _SELECT_PT,
+)
+from src.ui.canvas._constants import (
     SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE,
+)
+from src.ui.canvas._constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
 
@@ -166,8 +204,8 @@ class CanvasRenderer:
                     else None
                 )
                 ghost_color = QColor(layer_hex) if layer_hex else QColor(POLY)
-                ghost_color.setAlpha(70)
-                ghost_pen = QPen(ghost_color, 1.0)
+                ghost_color.setAlpha(140)  # doubled from 70 for better visibility
+                ghost_pen = QPen(ghost_color, 1.2)  # was 1.0 — slightly thicker
                 ghost_pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(ghost_pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -261,8 +299,11 @@ class CanvasRenderer:
         painter.setPen(pen)
         for i, (orient, coord) in enumerate(self._guides):
             dragging = i == getattr(self, "_guide_drag", None)
+            selected = i == getattr(self, "_selected_guide", None)
             if dragging:
                 painter.setPen(QPen(QColor("#56d4dd"), 1.6))
+            elif selected:
+                painter.setPen(QPen(QColor("#f5a623"), 1.8, Qt.PenStyle.DashLine))
             if orient == "v":
                 gx, _ = self._w2c(coord, 0.0)
                 painter.drawLine(QPointF(gx, 0.0), QPointF(gx, float(h)))
@@ -273,7 +314,7 @@ class CanvasRenderer:
                 painter.drawLine(QPointF(0.0, gy), QPointF(float(w), gy))
                 if dragging:
                     painter.drawText(QPointF(28, gy - 4), f"y = {coord:.2f} mm")
-            if dragging:
+            if dragging or selected:
                 painter.setPen(pen)
 
     def _ruler_step(self) -> float:
@@ -881,10 +922,13 @@ class CanvasRenderer:
             painter.setBrush(QBrush(_SNAP_CLOSE))
             painter.drawEllipse(QPointF(_dsx, _dsy), 2, 2)
 
-        # Snap label pill — above the snap point
-        mode = getattr(self, "_mode", "")
+        # Snap label pill — above the snap point. Always "Vertex" regardless
+        # of mode — it used to say "Endpoint" while drawing and "Vertex"
+        # everywhere else for the exact same snap_t=="vertex" hit (including
+        # interior polyline vertices, not just line endpoints), which read
+        # as inconsistent/buggy.
         if snap_t == "vertex":
-            _label = "Endpoint" if mode == "draw" else "Vertex"
+            _label = "Vertex"
         elif snap_t == "midpoint":
             _label = "Midpoint"
         elif snap_t == "edge":
@@ -963,7 +1007,14 @@ class CanvasRenderer:
         bx1: float,
         by1: float,
     ) -> None:
-        """Paint lightweight rotate/scale gizmo handles around selection bounds."""
+        """Paint lightweight rotate/scale gizmo handles around selection bounds.
+
+        Redesigned for better visibility and usability:
+        - Larger, more visible handles (8px visual, 12px hit area)
+        - Clearer rotate handle with rotation icon
+        - Improved color scheme matching GitHub dark theme
+        - Dashed connection line from selection to rotate handle
+        """
         top = min(by0, by1)
         bottom = max(by0, by1)
         right = max(bx0, bx1)
@@ -971,24 +1022,24 @@ class CanvasRenderer:
 
         left = min(bx0, bx1)
         mid_y = (by0 + by1) / 2.0
-        rotate_center = QPointF(mid_x, top - 34.0)
+        rotate_center = QPointF(mid_x, top - 48.0)  # Moved further up for clarity
 
         self._gizmo_scale_rect = None
         self._gizmo_rotate_rect = QRectF(
-            rotate_center.x() - 8,
-            rotate_center.y() - 8,
-            16,
-            16,
+            rotate_center.x() - 10,
+            rotate_center.y() - 10,
+            20,
+            20,
         )
 
-        # Selection frame + 8 resize handles. Canvas y grows downward while
-        # world y grows upward, so the screen top edge is world "n".
-        frame_pen = QPen(QColor("#79c0ff"), 1.0)
+        # Selection frame with improved styling.
+        frame_pen = QPen(QColor("#58a6ff"), 1.2)
         painter.setPen(frame_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(QRectF(QPointF(left, top), QPointF(right, bottom)))
 
-        hs = 4.0
+        # Larger handles with better hit areas (12px visual, 16px hit).
+        hs = 6.0
         handles = [
             ("nw", left, top),
             ("n", mid_x, top),
@@ -1000,29 +1051,71 @@ class CanvasRenderer:
             ("w", left, mid_y),
         ]
         self._gizmo_handle_rects = []
-        painter.setPen(QPen(QColor("#79c0ff"), 1.2))
-        painter.setBrush(QBrush(QColor("#0d1117")))
+        
+        # Handle styling: filled circles with blue border.
+        handle_pen = QPen(QColor("#79c0ff"), 1.5)
+        handle_brush = QBrush(QColor("#0d1117"))
+        painter.setPen(handle_pen)
+        painter.setBrush(handle_brush)
+        
         for name, hx, hy in handles:
             rect = QRectF(hx - hs, hy - hs, hs * 2, hs * 2)
-            # generous hit area, tight visual
+            # Generous hit area (16px), tight visual (12px).
             self._gizmo_handle_rects.append(
-                (name, rect.adjusted(-3, -3, 3, 3))
+                (name, rect.adjusted(-4, -4, 4, 4))
             )
-            painter.drawRect(rect)
+            painter.drawEllipse(int(rect.x() - 2), int(rect.y() - 2), int(rect.width() + 4), int(rect.height() + 4))
 
-        painter.setPen(QPen(QColor("#f5a623"), 1.2))
-        painter.setBrush(QBrush(QColor("#3a2b16")))
+        # Rotate handle: orange circle with rotation icon.
+        rotate_pen = QPen(QColor("#f5a623"), 1.5)
+        rotate_brush = QBrush(QColor("#3a2b16"))
+        painter.setPen(rotate_pen)
+        painter.setBrush(rotate_brush)
         painter.drawEllipse(self._gizmo_rotate_rect)
 
+        # Dashed line from selection top-center to rotate handle.
         painter.setPen(QPen(QColor("#4a9eff"), 1.0, Qt.PenStyle.DashLine))
         painter.drawLine(
             QPointF(mid_x, top), QPointF(rotate_center.x(), rotate_center.y())
         )
 
+        # Move handle: a small 4-way arrow icon at the selection's center,
+        # offering an unambiguous "grab here to drag" target distinct from
+        # clicking the shape body (useful for thin/overlapping shapes).
+        move_size = 11.0
+        self._gizmo_move_rect = QRectF(
+            mid_x - move_size, mid_y - move_size, move_size * 2, move_size * 2
+        )
+        move_pen = QPen(QColor("#79c0ff"), 1.5)
+        move_brush = QBrush(QColor(13, 17, 23, 235))
+        painter.setPen(move_pen)
+        painter.setBrush(move_brush)
+        painter.drawEllipse(
+            QPointF(mid_x, mid_y), move_size, move_size
+        )
+        painter.setPen(QPen(QColor("#79c0ff"), 1.6))
+        arm = move_size * 0.62
+        head = move_size * 0.3
+        # Four short arrow arms pointing N/E/S/W from the center.
+        for ddx, ddy in ((0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)):
+            tip_x, tip_y = mid_x + ddx * arm, mid_y + ddy * arm
+            painter.drawLine(QPointF(mid_x, mid_y), QPointF(tip_x, tip_y))
+            # Perpendicular arrowhead ticks.
+            perp_x, perp_y = -ddy, ddx
+            painter.drawLine(
+                QPointF(tip_x, tip_y),
+                QPointF(tip_x - ddx * head + perp_x * head, tip_y - ddy * head + perp_y * head),
+            )
+            painter.drawLine(
+                QPointF(tip_x, tip_y),
+                QPointF(tip_x - ddx * head - perp_x * head, tip_y - ddy * head - perp_y * head),
+            )
+
     def _paint_selection_bbox(self, painter: QPainter, visible: QRectF) -> None:
         if not self._sel or self._mode != "select":
             self._gizmo_scale_rect = None
             self._gizmo_rotate_rect = None
+            self._gizmo_move_rect = None
             self._gizmo_handle_rects = []
             return
         sel_pts = [
@@ -1034,6 +1127,7 @@ class CanvasRenderer:
         if not sel_pts:
             self._gizmo_scale_rect = None
             self._gizmo_rotate_rect = None
+            self._gizmo_move_rect = None
             self._gizmo_handle_rects = []
             return
         xs, ys = zip(*sel_pts)
@@ -1385,6 +1479,29 @@ class CanvasRenderer:
         # Snap indicator — drawn LAST so it's always visible on top
         if self._mode == "draw" and self._draw_snap is not None:
             self._paint_snap_overlay(painter)
+        elif self._hover_snap_multi:
+            # Multi-touch snaps from a whole-shape drag (see
+            # _object_snap_adjust): each entry's `dragged_point` is that
+            # vertex's ACTUAL final position once release applies the
+            # combined (adj_dx, adj_dy) — which can differ from this
+            # match's own `snap_point` when a DIFFERENT match supplied the
+            # other axis's adjustment. The ring MUST be drawn at
+            # dragged_point (what you actually get), not snap_point (what
+            # this one match alone implied) — drawing it at snap_point
+            # made the indicator look right during the drag but land
+            # somewhere else entirely once you released the mouse. The
+            # dashed line still connects to the real target so the
+            # alignment reference stays visible.
+            guide_pen = QPen(QColor(0, 200, 170, 150), 1.0, Qt.PenStyle.DashLine)
+            for snap_point, snap_type, dragged_point in self._hover_snap_multi:
+                tx, ty = self._w2c(*snap_point)
+                fx, fy = self._w2c(*dragged_point)
+                if abs(tx - fx) > 0.5 or abs(ty - fy) > 0.5:
+                    painter.setPen(guide_pen)
+                    painter.drawLine(QPointF(fx, fy), QPointF(tx, ty))
+                self._paint_snap_overlay(
+                    painter, snap_point=dragged_point, snap_type=snap_type
+                )
         elif self._hover_snap is not None and self._hover_snap_type is not None:
             self._paint_snap_overlay(
                 painter,
@@ -1540,24 +1657,39 @@ class CanvasRenderer:
     # ── Auto-dimension HUD (Fusion 360 style) ──────────────────────────────
 
     _DIM_STYLE = (
-        "background: #1a1f2e; color: #ffffff; border: 1px solid #4a9eff;"
-        "border-radius: 2px; font-size: 11px; font-family: 'Menlo';"
-        "padding: 2px 4px;"
+        "background: #161b22; color: #f0f6fc; border: 1px solid #30363d;"
+        "border-radius: 6px; font-size: 12px; font-family: 'SF Mono', 'Menlo';"
+        "padding: 3px 6px;"
+    )
+    _DIM_STYLE_HOVER = (
+        "background: #1c2128; color: #f0f6fc; border: 1px solid #58a6ff;"
+        "border-radius: 6px; font-size: 12px; font-family: 'SF Mono', 'Menlo';"
+        "padding: 3px 6px;"
     )
 
     def _make_hud_edit(
         self,
         placeholder: str = "",
-        width: int = 70,
-        height: int = 20,
-        align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignRight,
+        width: int = 80,
+        height: int = 26,
+        align: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignCenter,
     ) -> QLineEdit:
-        """Create a styled HUD QLineEdit parented to the canvas."""
+        """Create a styled HUD QLineEdit parented to the canvas.
+
+        Redesigned for better visibility and usability:
+        - Larger, more touchable targets (26px height)
+        - Modern dark theme with subtle borders
+        - Monospace font for precise number reading
+        """
         edit = QLineEdit(self)
-        edit.setFixedWidth(width)
+        edit.setFixedWidth(max(width, 60))
         edit.setFixedHeight(height)
         edit.setAlignment(align)
         edit.setStyleSheet(self._DIM_STYLE)
+        
+        # Store hover style for focus events.
+        edit.setProperty("_dim_hover_style", self._DIM_STYLE_HOVER)
+        
         if placeholder:
             edit.setPlaceholderText(placeholder)
         edit.installEventFilter(self)

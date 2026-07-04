@@ -7,15 +7,17 @@ from typing import Any, cast
 
 from shapely import prepared  # type: ignore[import-untyped]
 from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
+from shapely.ops import unary_union  # type: ignore[import-untyped]
 
 from src.backend.generators._shared import (
     _PIL_OK,
-    LOGGER,
     _clip_to_outline,
     _collect_lines,
-    _extract_polys,
+    _extract_all_rings,
     _hex_verts,
     _PIL_Image,
+    merge_and_classify_outlines,
+    nested_polygon_region,
 )
 
 
@@ -128,11 +130,22 @@ def gen_custom_tile(
     angle_deg: float = 0.0,
     interlock: bool = False,
 ) -> list[list[tuple[float, float]]]:
-    """Tile an arbitrary DXF shape across the outline, clipped to it."""
+    """Tile an arbitrary DXF shape across the outline, clipped to it.
+
+    Multiple CLOSED pieces among ``tile_polys`` nest via even-odd rules
+    (a ring fully inside another becomes a hole, same convention as the
+    main outline's fill region) rather than being drawn as independent
+    overlapping solids. Any OPEN piece (e.g. a shape Exploded into
+    individual segments, or a deliberately-opened outline) additionally
+    acts as a cutout inside the tile — its area is punched out at every
+    repetition, instead of being silently dropped for not being a valid
+    >=3-point closed ring on its own.
+    """
     if not tile_polys:
         return []
+    closed_tile_polys, open_tile_cutouts = merge_and_classify_outlines(tile_polys)
     valid_tiles: list[list[tuple[float, float]]] = []
-    for tp in tile_polys:
+    for tp in closed_tile_polys:
         if len(tp) < 3:
             continue
         try:
@@ -168,31 +181,46 @@ def gen_custom_tile(
         x = minx - pad + off
         while x <= maxx + pad:
             flip_row = interlock and (row & 1)
-            for tile_pts in tile_polys:
-                if len(tile_pts) < 3:
-                    continue
-                transformed = [
-                    (
-                        x
-                        + (
-                            (-(px - t_cx) if flip_row else (px - t_cx)) * ca
-                            - (py - t_cy) * sa
-                        ),
-                        y
-                        + (
-                            (-(px - t_cx) if flip_row else (px - t_cx)) * sa
-                            + (py - t_cy) * ca
-                        ),
-                    )
-                    for px, py in tile_pts
-                ]
+
+            def _place(px: float, py: float) -> tuple[float, float]:
+                dx = -(px - t_cx) if flip_row else (px - t_cx)
+                dy = py - t_cy
+                return (x + dx * ca - dy * sa, y + dx * sa + dy * ca)
+
+            transformed_tiles = [
+                [_place(px, py) for px, py in tile_pts] for tile_pts in tile_polys
+            ]
+            tile_region = nested_polygon_region(transformed_tiles)
+            if tile_region is None or tile_region.is_empty:
+                x += col_step
+                continue
+
+            cutout_shapes: list[Polygon] = []
+            for cut_pts in open_tile_cutouts:
                 try:
-                    shape = Polygon(transformed)
-                    if not shape.is_valid or shape.is_empty:
-                        continue
+                    cut_shape = Polygon([_place(px, py) for px, py in cut_pts])
+                    if cut_shape.is_valid and not cut_shape.is_empty:
+                        cutout_shapes.append(cut_shape)
                 except (TypeError, ValueError):
                     continue
-                _clip_to_outline(shape, outline_poly, prep, result)
+            if cutout_shapes:
+                tile_region = tile_region.difference(unary_union(cutout_shapes))
+                if tile_region.is_empty:
+                    x += col_step
+                    continue
+
+            # Use _extract_all_rings (not _clip_to_outline's own _extract_polys)
+            # so a hole punched by nesting/cutouts above is preserved as its
+            # own separate closed polyline in the output — _extract_polys only
+            # keeps each polygon's EXTERIOR ring, which would silently discard
+            # every hole we just took care to compute.
+            if not prep.intersects(tile_region):
+                x += col_step
+                continue
+            if prep.contains(tile_region):
+                _extract_all_rings(tile_region, result)
+            else:
+                _extract_all_rings(outline_poly.intersection(tile_region), result)
             x += col_step
         y += row_step
         row += 1

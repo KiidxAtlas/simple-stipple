@@ -240,6 +240,10 @@ class DraftPage(BasePage):
         self._layers_tree.layerAdded.connect(self._on_layer_added)
         self._layers_tree.layerRenamed.connect(self._on_layer_renamed)
         self._layers_tree.layerDeleted.connect(self._on_layer_deleted)
+        self._layers_tree.layersDeleteRequested.connect(self._on_layers_deleted)
+        self._layers_tree.layersConsolidateRequested.connect(
+            self._on_layers_consolidate_requested
+        )
         self._layers_tree.layerMoved.connect(self._on_layer_moved)
         self._layers_tree.shapeMoveRequested.connect(self._on_shape_move_requested)
         self._layers_tree.shapesMoveRequested.connect(self._on_shapes_move_requested)
@@ -362,6 +366,61 @@ class DraftPage(BasePage):
         if reply != QMessageBox.StandardButton.Yes:
             return
         self._rt().layer_deleted(layer)
+        self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_layers_deleted(self, layers: list[str]) -> None:
+        """Batch layer delete (multi-selected layer rows) — one confirmation
+        for the whole set instead of one dialog per layer."""
+        names = [str(n) for n in layers if n and n != "geometry"]
+        if not names:
+            return
+        if len(names) == 1:
+            self._on_layer_deleted(names[0])
+            return
+        reply = QMessageBox.question(
+            self,
+            "Delete Layers",
+            "Delete {} layers and all of their contents?\n\n{}".format(
+                len(names), ", ".join(names)
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        rt = self._rt()
+        for name in names:
+            rt.layer_deleted(name)
+        self._refresh_status()
+        self._emit_state_changed()
+
+    def _on_layers_consolidate_requested(
+        self, source_layers: list[str], target_layer: str
+    ) -> None:
+        """Move every shape from the given source layers onto target_layer
+        and remove the (now-empty) source layers, in one undo step."""
+        sources = [str(n) for n in source_layers if n and n != target_layer]
+        if not sources:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Consolidate Layers",
+            "Move all shapes from {} layer(s) into '{}' and remove the "
+            "empty layers?\n\n{}".format(
+                len(sources), target_layer, ", ".join(sources)
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        moved = self._canvas.consolidate_layers(sources, target_layer)
+        self._canvas._show_flash(
+            f"Consolidated {len(sources)} layer(s) into '{target_layer}' "
+            f"({moved} shape{'s' if moved != 1 else ''})",
+            1400,
+        )
         self._refresh_status()
         self._emit_state_changed()
 

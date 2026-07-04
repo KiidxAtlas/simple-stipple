@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QDrag, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QDrag,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QColorDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -66,6 +74,8 @@ class DxfLayersTree(QFrame):
     layerAdded = Signal(str)
     layerRenamed = Signal(str, str)
     layerDeleted = Signal(str)
+    layersDeleteRequested = Signal(list)  # batch layer delete (multi-select)
+    layersConsolidateRequested = Signal(list, str)  # source layers, target layer
     layerMoved = Signal(str, int)
     layerSoloRequested = Signal(str)
     bulkVisibilityRequested = Signal(bool)
@@ -75,6 +85,14 @@ class DxfLayersTree(QFrame):
     moveSelectedRequested = Signal(str)
     shapeRenamed = Signal(str, object, str)  # layer, key, new_label
     layerColorChangeRequested = Signal(str, object)  # layer, hex str | None
+
+    # New signals for shape operations from layer tree context menu.
+    shapesGroupRequested = Signal(str, list)  # layer, shape keys → group
+    shapesUngroupRequested = Signal(
+        str, list
+    )  # layer, shape keys (group tuples) → ungroup
+    shapesMergeRequested = Signal(str, list)  # layer, shape keys → merge (union)
+    shapesCopyRequested = Signal(str, list)  # layer, shape keys → copy to clipboard
 
     _ROLE_KIND = int(Qt.ItemDataRole.UserRole)
     _ROLE_INTERNAL_NAME = int(Qt.ItemDataRole.UserRole + 1)
@@ -89,6 +107,22 @@ class DxfLayersTree(QFrame):
         def __init__(self, owner: DxfLayersTree) -> None:
             super().__init__()
             self._owner = owner
+
+        def mousePressEvent(self, event) -> None:  # type: ignore[override]
+            # Track whether this click is an additive multi-select (Ctrl/
+            # Shift/Meta) so currentItemChanged can avoid treating it as
+            # "activate this layer" — activating rebuilds the whole tree,
+            # which wiped out the multi-selection the user was building.
+            mods = event.modifiers()
+            self._owner._multi_select_click = bool(
+                mods
+                & (
+                    Qt.KeyboardModifier.ControlModifier
+                    | Qt.KeyboardModifier.ShiftModifier
+                    | Qt.KeyboardModifier.MetaModifier
+                )
+            )
+            super().mousePressEvent(event)
 
         def startDrag(self, supportedActions) -> None:  # type: ignore[override]
             if not self._owner._editable:
@@ -233,6 +267,7 @@ class DxfLayersTree(QFrame):
         self.setProperty("role", "layer-tree")
         self._editable = editable
         self._syncing = False
+        self._multi_select_click = False
         self._layer_order: list[str] = []
         self._shape_keys_by_layer: dict[str, list[Any]] = {}
         self._filter_text: str = ""
@@ -383,6 +418,18 @@ class DxfLayersTree(QFrame):
 
     def set_layers(self, layers: Sequence[tuple[Any, ...] | dict[str, Any]]) -> None:
         self._syncing = True
+        # Remember which layers are currently collapsed BEFORE the rebuild —
+        # `_tree.clear()` destroys all QTreeWidgetItems (and their expand
+        # state) below, and this method runs on nearly every canvas
+        # interaction (refresh_tree()), so without this a collapsed layer
+        # would silently re-expand the next time anything else changed.
+        collapsed_layers: set[str] = set()
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            if item is not None and not item.isExpanded():
+                name = str(item.data(0, self._ROLE_INTERNAL_NAME) or "")
+                if name:
+                    collapsed_layers.add(name)
         self._tree.clear()
         self._layer_order = []
         self._shape_keys_by_layer = {}
@@ -437,7 +484,7 @@ class DxfLayersTree(QFrame):
             layer_item.setIcon(0, _swatch_icon(layer_color))
             tip = f"{internal_name} ({len(shapes)} shapes)"
             if layer_color:
-                tip += f" — right-click to change color"
+                tip += " — right-click to change color"
             layer_item.setToolTip(0, tip)
             layer_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             layer_flags |= Qt.ItemFlag.ItemIsUserCheckable
@@ -503,7 +550,16 @@ class DxfLayersTree(QFrame):
         self._summary.setText(f"{len(self._layer_order)} layers")
         if active_item is not None:
             self._tree.setCurrentItem(active_item)
-        self._tree.expandAll()
+        # Restore each layer's previous expand state instead of blanket
+        # expandAll() — only layers that were explicitly collapsed before
+        # this rebuild stay collapsed; any layer new to this rebuild (never
+        # seen collapsed) defaults to expanded, matching prior behavior.
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            if item is None:
+                continue
+            name = str(item.data(0, self._ROLE_INTERNAL_NAME) or "")
+            item.setExpanded(name not in collapsed_layers)
         # Re-apply any active filter so newly rebuilt rows obey it.
         self._apply_filter()
         self._syncing = False
@@ -523,27 +579,51 @@ class DxfLayersTree(QFrame):
             return None
         return item.data(0, self._ROLE_SHAPE_KEY)
 
+    def _item_source_layer(self, item: QTreeWidgetItem | None) -> str:
+        """Return the layer name a shape item belongs to."""
+        if item is None:
+            return ""
+        return str(item.data(0, self._ROLE_SOURCE_LAYER) or "")
+
     def _unique_layer_name(self, base_name: str) -> str:
+        """Next unused, always-numbered name ("Layer 1", "Layer 2", …).
+
+        A bare candidate (no number) used to be returned whenever it wasn't
+        an EXACT string match for an existing name — but "Layer" != "Layer 1",
+        so right after the default "Layer 1" existed, the next new layer was
+        named plain "Layer" (no number), and only the one after that finally
+        picked up numbering again. Always keeping the numeric suffix avoids
+        that inconsistent, confusing sequence.
+        """
         candidate = base_name.strip() or "Layer"
         if candidate == "geometry":
             candidate = "Layer"
-        if candidate not in self._layer_order:
-            return candidate
-        suffix = 2
-        while f"{candidate} {suffix}" in self._layer_order:
-            suffix += 1
-        return f"{candidate} {suffix}"
+        pattern = re.compile(rf"^{re.escape(candidate)}\s+(\d+)$")
+        used_numbers: set[int] = set()
+        for name in self._layer_order:
+            if name == candidate:
+                used_numbers.add(1)
+                continue
+            m = pattern.match(name)
+            if m:
+                used_numbers.add(int(m.group(1)))
+        n = 1
+        while n in used_numbers or f"{candidate} {n}" in self._layer_order:
+            n += 1
+        return f"{candidate} {n}"
 
     def _prompt_add_layer(self) -> None:
+        """Add a new layer with an auto-incremented name and a distinct
+        default color — no naming popup. Right-click (or double-click) the
+        new layer row to rename it or change its color later."""
         if not self._editable:
             return
-        default_name = self._unique_layer_name("Layer")
-        name, ok = QInputDialog.getText(
-            self, "Add Layer", "Layer name:", text=default_name
-        )
-        if not ok:
-            return
-        self.layerAdded.emit(self._unique_layer_name(name))
+        # Cycle the swatch palette by current layer count so each new layer
+        # starts visually distinct instead of colorless/default.
+        color = _SWATCH_PALETTE[len(self._layer_order) % len(_SWATCH_PALETTE)]
+        name = self._unique_layer_name("Layer")
+        self.layerAdded.emit(name)
+        self.layerColorChangeRequested.emit(name, color)
 
     def _prompt_custom_layer_color(self, layer_name: str) -> None:
         color = QColorDialog.getColor(QColor("#2f81f7"), self, "Layer Color")
@@ -556,6 +636,10 @@ class DxfLayersTree(QFrame):
         _previous: QTreeWidgetItem | None,
     ) -> None:
         if self._syncing or current is None:
+            return
+        if self._multi_select_click:
+            # Ctrl/Shift/Meta multi-select shouldn't activate (and thereby
+            # rebuild + wipe) the tree's just-made multi-selection.
             return
         if self._item_kind(current) == "layer":
             self.layerActivated.emit(self._item_internal_name(current))
@@ -573,6 +657,32 @@ class DxfLayersTree(QFrame):
             self._tree.editItem(item, 0)
         else:
             self.fitRequested.emit()
+
+    def select_shape_keys(self, indices: Sequence[int]) -> None:
+        """Highlight tree rows matching the given entity indices (canvas
+        selection -> tree sync). A group row is highlighted when any of its
+        members is in *indices*. Does not re-emit ``selectionRequested``."""
+        target = set(indices)
+        self._syncing = True
+        try:
+            self._tree.clearSelection()
+            first: QTreeWidgetItem | None = None
+            for i in range(self._tree.topLevelItemCount()):
+                layer_item = self._tree.topLevelItem(i)
+                if layer_item is None:
+                    continue
+                for c in range(layer_item.childCount()):
+                    child = layer_item.child(c)
+                    key = self._item_shape_key(child)
+                    members = key if isinstance(key, (tuple, list)) else (key,)
+                    if any(m in target for m in members if isinstance(m, int)):
+                        child.setSelected(True)
+                        if first is None:
+                            first = child
+            if first is not None:
+                self._tree.scrollToItem(first)
+        finally:
+            self._syncing = False
 
     def _emit_selection_request(self) -> None:
         if self._syncing:
@@ -713,11 +823,41 @@ class DxfLayersTree(QFrame):
                 lambda: self.layerColorChangeRequested.emit(layer_name, None),
             )
             clear_action.setEnabled(bool(current_color))
-            del_action = menu.addAction(
-                "Delete layer\tDel", lambda: self.layerDeleted.emit(layer_name)
-            )
-            if layer_name == "geometry":
-                del_action.setEnabled(False)
+
+            # Collect all selected layer names for batch delete — falls back
+            # to just the right-clicked layer when nothing else is selected.
+            selected_layer_names = [
+                self._item_internal_name(it)
+                for it in self._tree.selectedItems()
+                if self._item_kind(it) == "layer"
+            ]
+            if layer_name not in selected_layer_names:
+                selected_layer_names = [layer_name]
+            deletable_layers = [n for n in selected_layer_names if n != "geometry"]
+
+            if len(selected_layer_names) > 1:
+                del_action = menu.addAction(
+                    f"Delete {len(deletable_layers)} layers\tDel",
+                    lambda: self.layersDeleteRequested.emit(deletable_layers),
+                )
+                del_action.setEnabled(bool(deletable_layers))
+                other_selected = [n for n in selected_layer_names if n != layer_name]
+                menu.addAction(
+                    f"Consolidate {len(selected_layer_names)} layers into "
+                    f"'{layer_name}'",
+                    lambda: self.layersConsolidateRequested.emit(
+                        other_selected, layer_name
+                    ),
+                ).setToolTip(
+                    "Move every shape from the other selected layers onto\n"
+                    f"'{layer_name}' and remove the now-empty layers."
+                )
+            else:
+                del_action = menu.addAction(
+                    "Delete layer\tDel", lambda: self.layerDeleted.emit(layer_name)
+                )
+                if layer_name == "geometry":
+                    del_action.setEnabled(False)
             menu.addSeparator()
             menu.addAction(
                 "Solo (isolate)",
@@ -753,6 +893,89 @@ class DxfLayersTree(QFrame):
             )
         elif kind == "shape":
             shape_key = self._item_shape_key(item)
+            menu.addAction("Rename shape\tF2", lambda: self._tree.editItem(item, 0))
+
+            # Shape operations section.
+            menu.addSeparator()
+            # Collect all selected shape keys on this layer for batch ops that
+            # require same-layer shapes (Group/Ungroup/Merge).
+            selected_shape_keys = [
+                self._item_shape_key(it)
+                for it in self._tree.selectedItems()
+                if self._item_kind(it) == "shape"
+                and str(self._item_source_layer(it)) == layer_name
+            ]
+            if not selected_shape_keys:
+                selected_shape_keys = [shape_key]
+
+            # Delete/Copy have no same-layer requirement — use the FULL
+            # cross-layer selection so multi-selecting shapes across
+            # different layers and choosing Delete/Copy actually acts on
+            # all of them, not just the ones on the right-clicked row's
+            # layer (the downstream handlers already work off global entity
+            # indices, so there's no reason to filter by layer here).
+            all_selected_shape_keys = [
+                self._item_shape_key(it)
+                for it in self._tree.selectedItems()
+                if self._item_kind(it) == "shape"
+            ]
+            if not all_selected_shape_keys:
+                all_selected_shape_keys = [shape_key]
+
+            has_groups = any(isinstance(k, (tuple, list)) for k in selected_shape_keys)
+
+            group_action = menu.addAction(
+                "Group shapes\tCtrl+G",
+                lambda: self.shapesGroupRequested.emit(layer_name, selected_shape_keys),
+            )
+            if has_groups:
+                group_action.setEnabled(False)
+                group_action.setToolTip(
+                    "Group shapes\tCtrl+G\nAlready in a group — ungroup first."
+                )
+
+            ungroup_action = menu.addAction(
+                "Ungroup shapes\tShift+Ctrl+G",
+                lambda: self.shapesUngroupRequested.emit(
+                    layer_name, selected_shape_keys
+                ),
+            )
+            if not has_groups:
+                ungroup_action.setEnabled(False)
+
+            menu.addAction(
+                "Merge selected\tCtrl+M",
+                lambda: self.shapesMergeRequested.emit(layer_name, selected_shape_keys),
+            ).setToolTip(
+                "Merge selected shapes into a single object using boolean union.\n"
+                "Shapes must overlap or touch to produce visible results."
+            )
+
+            menu.addSeparator()
+
+            # Delete and copy actions.
+            delete_action = menu.addAction(
+                "Delete shapes\tDel",
+                lambda: self.shapesDeleteRequested.emit(
+                    layer_name, all_selected_shape_keys
+                ),
+            )
+            delete_action.setToolTip(
+                "Delete shapes\tDel\n"
+                "Removes selected shapes. Locked shapes are skipped."
+            )
+
+            copy_action = menu.addAction(
+                "Copy shapes\tCtrl+C",
+                lambda: self.shapesCopyRequested.emit(
+                    layer_name, all_selected_shape_keys
+                ),
+            )
+            copy_action.setToolTip(
+                "Copy shapes\tCtrl+C\n"
+                "Copies selected shapes to the clipboard for pasting on the canvas."
+            )
+
             menu.addSeparator()
             menu.addAction("Rename shape\tF2", lambda: self._tree.editItem(item, 0))
             menu.addAction(
@@ -767,17 +990,37 @@ class DxfLayersTree(QFrame):
                     layer_name, self._item_shape_key(item), True
                 ),
             )
-            # "Move to Layer" submenu — lists every other layer as a target.
+            # "Move to Layer" submenu — collects the FULL selection across
+            # every layer (not just shapes on the right-clicked row's
+            # layer), grouped by each shape's real source layer, so a
+            # cross-layer multi-selection still moves everything at once.
+            keys_by_source_layer: dict[str, list[Any]] = {}
+            for it in self._tree.selectedItems():
+                if self._item_kind(it) != "shape":
+                    continue
+                src = self._item_source_layer(it) or layer_name
+                keys_by_source_layer.setdefault(src, []).append(
+                    self._item_shape_key(it)
+                )
+            if not keys_by_source_layer:
+                keys_by_source_layer = {layer_name: [shape_key]}
+            total_selected = sum(len(v) for v in keys_by_source_layer.values())
+
             other_layers = [n for n in self._layer_order if n != layer_name]
             if other_layers:
-                move_menu = menu.addMenu("Move to Layer")
+                move_menu = menu.addMenu(
+                    f"Move {total_selected} shape(s) to Layer"
+                    if total_selected > 1
+                    else "Move to Layer"
+                )
                 for target in other_layers:
-                    move_menu.addAction(
-                        target,
-                        lambda _lname=layer_name, _key=shape_key, _t=target: (
-                            self.shapeMoveRequested.emit(_lname, _key, _t)
-                        ),
-                    )
+
+                    def _move_all(_by_layer=keys_by_source_layer, _t=target) -> None:
+                        for src_layer, keys in _by_layer.items():
+                            if src_layer != _t and keys:
+                                self.shapesMoveRequested.emit(src_layer, keys, _t)
+
+                    move_menu.addAction(target, _move_all)
             menu.addAction(
                 "Move selected here",
                 lambda: self.moveSelectedRequested.emit(layer_name),

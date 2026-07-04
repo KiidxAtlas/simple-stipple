@@ -114,13 +114,18 @@ def sidebar_panel(
 def content_splitter(
     left: QWidget, right: QWidget, *, sizes: tuple[int, int]
 ) -> QSplitter:
-    """Create a collapsible horizontal splitter with sensible defaults."""
+    """Create a collapsible horizontal splitter with sensible defaults.
+
+    The left pane (canvas) absorbs all extra space on resize/fullscreen;
+    the right pane (sidebar) keeps its configured width instead of growing
+    to fill the window.
+    """
     splitter = QSplitter(Qt.Orientation.Horizontal)
     splitter.setChildrenCollapsible(True)
     splitter.addWidget(left)
     splitter.addWidget(right)
-    splitter.setStretchFactor(0, 0)
-    splitter.setStretchFactor(1, 1)
+    splitter.setStretchFactor(0, 1)
+    splitter.setStretchFactor(1, 0)
     splitter.setSizes(list(sizes))
     return splitter
 
@@ -133,10 +138,52 @@ def canvas_toolbar(
     show_fit: bool = True,
     secondary_actions=None,
 ):
-    """Compact canvas toolbar with mode toggles and optional actions."""
+    """Compact canvas toolbar with mode toggles and optional actions.
+
+    Redesigned: larger buttons, clearer visual hierarchy, subtle styling
+    that matches GitHub's dark theme while being more polished.
+    """
     shell = QWidget()
+    shell.setObjectName("canvas-toolbar")
+    shell.setStyleSheet(
+        """
+        QFrame#canvas-toolbar {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+        }
+        QFrame#canvas-toolbar QPushButton {
+            min-height: 30px;
+            max-height: 32px;
+            padding: 0px 14px;
+            border-radius: 6px;
+            background: #21262d;
+            border: 1px solid #30363d;
+            color: #c9d1d9;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        QFrame#canvas-toolbar QPushButton:hover {
+            background: #30363d;
+            border-color: #484f58;
+        }
+        QFrame#canvas-toolbar QPushButton[active="true"] {
+            background: #1f3a6e;
+            border-color: #2f81f7;
+            color: #79c0ff;
+            font-weight: 600;
+        }
+        QFrame#canvas-toolbar QPushButton[active="true"]:hover {
+            background: #264078;
+            border-color: #58a6ff;
+        }
+        QFrame#canvas-toolbar QLabel[role='toolbar-sep'] {
+            color: #484f58;
+            font-size: 12px;
+        }
+        """
+    )
     shell_layout = QHBoxLayout(shell)
-    shell_layout.setContentsMargins(0, 0, 0, 0)
+    shell_layout.setContentsMargins(6, 3, 6, 3)
     shell_layout.setSpacing(4)
 
     mode_buttons: dict[str, QPushButton] = {}
@@ -147,7 +194,7 @@ def canvas_toolbar(
     }
     for mode in modes:
         btn = QPushButton(mode)
-        btn.setMinimumHeight(28)
+        btn.setMinimumHeight(30)
         btn.setProperty("active", mode == modes[0])
         if mode in mode_hints:
             btn.setToolTip(mode_hints[mode])
@@ -161,7 +208,7 @@ def canvas_toolbar(
         shell_layout.addWidget(sep)
 
         fit_btn = QPushButton("Fit")
-        fit_btn.setMinimumHeight(28)
+        fit_btn.setMinimumHeight(30)
         fit_btn.setToolTip("Fit view to content (Shortcut: F)")
         fit_btn.clicked.connect(on_fit)
         shell_layout.addWidget(fit_btn)
@@ -181,7 +228,7 @@ def canvas_toolbar(
         for spec in secondary_actions:
             label, slot, role = spec if len(spec) == 3 else (*spec, None)
             btn = QPushButton(label)
-            btn.setMinimumHeight(28)
+            btn.setMinimumHeight(30)
             if label in secondary_hints:
                 btn.setToolTip(secondary_hints[label])
             if role:

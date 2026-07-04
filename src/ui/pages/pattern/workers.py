@@ -118,8 +118,15 @@ def run_generate_zones(
     on_done: Callable,
     on_error: Callable,
     fill_options: dict | None = None,
+    canvas_polys: list[list[tuple[float, float]]] | None = None,
 ) -> None:
-    """Worker: generate all zone patterns and write to a single DXF."""
+    """Worker: generate all zone patterns and write to a single DXF.
+
+    ``canvas_polys`` is the FULL set of outlines on the canvas (not just
+    those assigned to a zone) — needed so an open shape that was never
+    explicitly assigned to any zone can still act as an automatic cutout
+    for whichever zone's fill region happens to contain it.
+    """
     try:
         fill_polys: list[list[tuple[float, float]]] = []
         all_polys, border_polys = pattern_service.build_zone_pattern_polys(
@@ -127,6 +134,7 @@ def run_generate_zones(
             include_border=include_border,
             orig_w=orig_w,
             orig_h=orig_h,
+            all_polys=canvas_polys,
             invert_fill=invert_fill,
             mirror_v=mirror_v,
             mirror_h=mirror_h,

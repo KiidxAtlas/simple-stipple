@@ -56,6 +56,7 @@ from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
 from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
+from src.backend.behaviors.snapping import polygon_centroid as _polygon_centroid
 from src.backend.behaviors.snapping import (
     snap_to_polyline as _snap_to_polyline_candidates,
 )
@@ -216,6 +217,37 @@ class PolylineView(
 
     def layer_color(self, name: str) -> str | None:
         return self._layer_colors.get(str(name))
+
+    def consolidate_layers(self, source_layers: list[str], target_layer: str) -> int:
+        """Move every shape on ``source_layers`` onto ``target_layer``, then
+        remove those (now-empty) source layers. Single undo step. Returns
+        the number of entities moved."""
+        target_layer = str(target_layer)
+        sources = [str(s) for s in source_layers if str(s) and str(s) != target_layer]
+        if not sources:
+            return 0
+        src_set = set(sources)
+        self._push_undo()
+        moved = 0
+        if target_layer not in self._layer_order:
+            self._layer_order.append(target_layer)
+        for e in self._entities:
+            if e.layer in src_set:
+                e.layer = target_layer
+                moved += 1
+        self._layer_order = [n for n in self._layer_order if n not in src_set]
+        if not self._layer_order:
+            self._layer_order = [target_layer]
+        if self._active_layer in src_set:
+            self._active_layer = target_layer
+        for name in sources:
+            self._layer_colors.pop(name, None)
+        self._drop_inactive_selection()
+        self._redraw()
+        self._notify()
+        if moved:
+            self._fire_poly_change()
+        return moved
 
     def set_layer_color(self, name: str, color: str | None) -> None:
         """Assign (or clear, with ``color=None``) a layer's display color."""
@@ -379,6 +411,8 @@ class PolylineView(
         self._snap_engine = SnapEngine(self)
         self._guides: list[tuple[str, float]] = []
         self._guide_drag: int | None = None
+        self._guide_drag_moved: bool = False
+        self._selected_guide: int | None = None
         # mm rulers along the top/left edges; drag out of a ruler to create
         # a guide, drop a guide back onto a ruler to delete it.
         self._rulers_visible: bool = False
@@ -474,6 +508,16 @@ class PolylineView(
         # Cross-mode hover snap indicator (select/edit/move/measure)
         self._hover_snap: tuple[float, float] | None = None
         self._hover_snap_type: str | None = None
+        # Independent X/Y axis snap indicators for whole-shape drag (up to
+        # two entries — lets one axis align to a different feature than the
+        # other, e.g. left edge to shape A while top edge aligns to shape B).
+        # Each entry is (target_point, kind, dragged_point) so the renderer
+        # can draw a dashed guide line connecting the two — without it, a
+        # match that's only aligned on one axis can appear at a point that's
+        # visually far from the shape, looking like a snapping glitch.
+        self._hover_snap_multi: list[
+            tuple[tuple[float, float], str, tuple[float, float]]
+        ] = []
         # Measure pre-anchor hover snap point
         self._measure_hover_pre: tuple[float, float] | None = None
 
@@ -503,6 +547,7 @@ class PolylineView(
         # Transform gizmo (select mode)
         self._gizmo_scale_rect: QRectF | None = None
         self._gizmo_rotate_rect: QRectF | None = None
+        self._gizmo_move_rect: QRectF | None = None
         # 8-handle selection frame: [(handle name, hit rect), ...] where the
         # name is a compass direction ("nw", "n", …) in world orientation.
         self._gizmo_handle_rects: list[tuple[str, QRectF]] = []
@@ -512,6 +557,11 @@ class PolylineView(
         self._gizmo_center_w: tuple[float, float] | None = None
         self._gizmo_start_vec: tuple[float, float] | None = None
         self._gizmo_snapshot: dict[int, list[tuple[float, float]]] = {}
+        # Parallel snapshot of each entity's meta ("center" etc.) at drag
+        # start — needed so scale/rotate can recompute e.g. a circle's true
+        # center from its ORIGINAL (pre-drag) value every mouse-move event,
+        # instead of compounding the transform onto an already-updated value.
+        self._gizmo_meta_snapshot: dict[int, dict[str, Any] | None] = {}
         self._gizmo_drag_moved: bool = False
         self._gizmo_undo_pushed: bool = False
 
@@ -1103,6 +1153,9 @@ class PolylineView(
         return point
 
     def _key_delete(self) -> None:
+        if self._selected_guide is not None:
+            self._delete_selected_guide()
+            return
         if self._mode == "edit":
             if getattr(self, "_edit_selected_verts", None):
                 self._delete_edit_vertices(set(getattr(self, "_edit_selected_verts", set())))
@@ -1113,7 +1166,22 @@ class PolylineView(
         if self._mode == "select":
             self.delete_selected()
 
+    def _delete_selected_guide(self) -> None:
+        """Remove the currently selected ruler guide (Delete/Backspace)."""
+        gi = self._selected_guide
+        if gi is None or not (0 <= gi < len(self._guides)):
+            self._selected_guide = None
+            return
+        del self._guides[gi]
+        self._selected_guide = None
+        self._guide_drag = None
+        self._redraw()
+        self._notify()
+
     def _key_backspace(self) -> None:
+        if self._selected_guide is not None:
+            self._delete_selected_guide()
+            return
         if getattr(self, "_mode", None) == "draw" and getattr(self, "_draw_pts", []):
             self._draw_pts.pop()
             if getattr(self, "_draw_point_snap_types", []):
@@ -1877,18 +1945,23 @@ class PolylineView(
                 self._entities[idx].kind
             )
             meta = self._entities[idx].meta
-            # Grouped shapes share one layer name so downstream laser
-            # software runs the whole group as a single job; ungrouped
-            # shapes keep their own per-shape layer.
+            # Only shapes the user actually named (custom label, or a named
+            # group) get their own DXF layer on export — auto-generating a
+            # "shape_N"/"group_N" name for every ordinary shape used to force
+            # each one onto its own layer, silently fragmenting a document
+            # the user had deliberately organized onto a single app layer.
+            # Un-named shapes simply follow their real `layer` assignment,
+            # which _export() already groups correctly.
             gid = self._entities[idx].group
             if gid is not None:
-                default_name = self._group_labels.get(gid) or f"group_{gid + 1}"
+                default_name = self._group_labels.get(gid)
             else:
-                default_name = f"shape_{idx + 1}"
+                default_name = (meta or {}).get("label")
             if meta is None:
-                export_meta: dict[str, Any] = {"name": default_name}
+                export_meta: dict[str, Any] = {}
             else:
                 export_meta = deepcopy(meta)
+            if default_name:
                 export_meta.setdefault("name", default_name)
             if kind == "line" and len(poly) >= 2:
                 export_meta["start"] = tuple(poly[0])
@@ -2039,6 +2112,7 @@ class PolylineView(
         self._draw_snap_type = None
         self._hover_snap = None
         self._hover_snap_type = None
+        self._hover_snap_multi = []
         self._angle_snap_active = False
         self._draw_shape_preview_active = False
         self._draw_shape_anchor_w = None
@@ -2255,23 +2329,229 @@ class PolylineView(
 
     _MOVE_SNAP_SAMPLE = 64  # max moving vertices considered per drag event
 
+    def _entity_center(self, idx: int) -> tuple[float, float] | None:
+        """An entity's true center point, if it has one: the exact
+        meta-defined center for parametric shapes (circle/arc/ellipse —
+        precise even for coarse tessellation or open arcs), else the
+        area-weighted centroid for any other closed polygon. Returns None
+        for open polylines/lines, which have no meaningful "center".
+        """
+        if not (0 <= idx < len(self._entities)):
+            return None
+        e = self._entities[idx]
+        meta = e.meta
+        if isinstance(meta, dict):
+            center = meta.get("center")
+            if isinstance(center, (tuple, list)) and len(center) == 2:
+                return (float(center[0]), float(center[1]))
+        poly = e.points
+        if len(poly) >= 3 and self._is_poly_closed(poly):
+            return _polygon_centroid(poly)
+        return None
+
     def _moving_sample_points(self) -> list[tuple[float, float]]:
-        """Sampled vertices of the selection at drag start (for object snap)."""
-        pts: list[tuple[float, float]] = []
+        """Sampled vertices of the selection at drag start (for object snap).
+
+        Includes each selected shape's own CENTER (circle/arc/ellipse exact
+        center, or polygon centroid) as an extra sample point — otherwise
+        only the shape's rim/vertex points are tested against other shapes'
+        snap targets, so dragging one circle's center onto another circle's
+        center (object-centroid snapping) would never actually trigger.
+
+        Centers are collected SEPARATELY from rim points and appended AFTER
+        the rim-point subsampling below, rather than being appended to the
+        same list before subsampling — a rim tessellated with >=64 points
+        (e.g. the default 64-segment circle) plus one appended center
+        already exceeds `_MOVE_SNAP_SAMPLE`, and the naive stride subsample
+        `pts[int(i * step)]` for i in range(64) never actually lands on the
+        last (center) index, silently dropping it every time. That's why
+        circle-to-circle center snapping could appear to simply not work.
+        """
+        rim_pts: list[tuple[float, float]] = []
+        center_pts: list[tuple[float, float]] = []
         for idx in self._sel:
             if 0 <= idx < len(self._entities) and not self._is_locked(idx):
-                pts.extend(self._entities[idx].points)
-        if len(pts) > self._MOVE_SNAP_SAMPLE:
-            step = len(pts) / self._MOVE_SNAP_SAMPLE
-            pts = [pts[int(i * step)] for i in range(self._MOVE_SNAP_SAMPLE)]
-        return pts
+                rim_pts.extend(self._entities[idx].points)
+                center = self._entity_center(idx)
+                if center is not None:
+                    center_pts.append(center)
+        if len(rim_pts) > self._MOVE_SNAP_SAMPLE:
+            step = len(rim_pts) / self._MOVE_SNAP_SAMPLE
+            rim_pts = [rim_pts[int(i * step)] for i in range(self._MOVE_SNAP_SAMPLE)]
+        return rim_pts + center_pts
+
+    def _static_snap_geometry(
+        self, *, exclude: set[int] | None = None
+    ) -> tuple[
+        list[tuple[float, float]],
+        list[tuple[tuple[float, float], tuple[float, float]]],
+        list[tuple[float, float]],
+    ]:
+        """Vertices, edge segments, and shape centers of every entity NOT
+        excluded — the universal snap-target set for drag/resize. Centers
+        use the exact meta-defined center for circle/arc/ellipse shapes
+        (so an open arc's center is still a valid target, not just closed
+        polygons) or the centroid for other closed polygons. Shapes on
+        non-active layers are included; only the excluded (usually the
+        selection being manipulated) and hidden entities are skipped.
+        """
+        excluded = exclude or set()
+        pts: list[tuple[float, float]] = []
+        segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        centers: list[tuple[float, float]] = []
+        for i, e in enumerate(self._entities):
+            if i in excluded or e.hidden:
+                continue
+            poly = e.points
+            pts.extend(poly)
+            n = len(poly)
+            closed = self._is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            for k in range(seg_count):
+                segs.append((poly[k], poly[(k + 1) % n]))
+            center = self._entity_center(i)
+            if center is not None:
+                centers.append(center)
+        if len(segs) > 4000:
+            segs = []  # keep drags/resizes responsive on huge documents
+        return pts, segs, centers
+
+    _EDGE_AXIS_EPS = 1e-6
+
+    @classmethod
+    def _edge_axis_lock(cls, ax: float, ay: float, bx: float, by: float) -> str | None:
+        """Which axis of a segment's "closest point" is stable/independent
+        of the other axis — i.e. safe to combine with an unrelated match's
+        other-axis correction during multi-touch snapping.
+
+        A horizontal segment's Y is constant along its whole length, so
+        Y is meaningful on its own (returns "y"); a vertical segment's X is
+        likewise stable (returns "x"). A DIAGONAL segment's closest point
+        has both X and Y depend on the projection of the incoming (mx, my),
+        so neither coordinate means anything if paired with a different Y/X
+        from another match — returns None ("coupled": only usable as a full
+        2D touch from this same segment, never split across two matches).
+        """
+        if abs(by - ay) <= cls._EDGE_AXIS_EPS:
+            return "y"
+        if abs(bx - ax) <= cls._EDGE_AXIS_EPS:
+            return "x"
+        return None
+
+    @staticmethod
+    def _nearest_snap_candidate(
+        mx: float,
+        my: float,
+        pts: list[tuple[float, float]],
+        segs: list[tuple[tuple[float, float], tuple[float, float]]],
+        centers: list[tuple[float, float]],
+        *,
+        world_r: float,
+        scale: float,
+        thresh: float,
+    ) -> tuple[float, tuple[float, float], str, str | None] | None:
+        """Best (dist_px, pos, kind, axis_lock) among vertex/midpoint/edge/
+        center candidates near (mx, my). Priority: vertex > midpoint > edge >
+        center.
+
+        ``axis_lock`` is only meaningful for kind == "edge": "x"/"y" means
+        only that coordinate of the returned point is stable independent of
+        the other axis (vertical/horizontal segment); None means the point
+        is only valid as a full 2D touch (diagonal segment) and must not be
+        split across two independently-chosen matches — see
+        ``_edge_axis_lock``. All other kinds are literal fixed points, so
+        their axis_lock is always None but they ARE freely decomposable
+        (unlike a diagonal edge's None, which means the opposite).
+
+        Midpoint gets a small preference window (like draw-mode snapping):
+        the generic "closest point on edge" is by definition always at least
+        as close as the exact midpoint, so without a bias midpoint would
+        only ever win at the single infinitesimal point where they tie —
+        effectively unreachable with a mouse.
+        """
+        best_vertex: tuple[float, tuple[float, float]] | None = None
+        best_midpoint: tuple[float, tuple[float, float]] | None = None
+        best_edge: tuple[float, tuple[float, float], str | None] | None = None
+        best_center: tuple[float, tuple[float, float]] | None = None
+
+        for qx, qy in pts:
+            if abs(qx - mx) > world_r or abs(qy - my) > world_r:
+                continue
+            d = math.hypot(qx - mx, qy - my) * scale
+            if d <= thresh and (best_vertex is None or d < best_vertex[0]):
+                best_vertex = (d, (qx, qy))
+
+        for (ax, ay), (bx, by) in segs:
+            mxm, mym = (ax + bx) / 2.0, (ay + by) / 2.0
+            if abs(mxm - mx) <= world_r and abs(mym - my) <= world_r:
+                d = math.hypot(mxm - mx, mym - my) * scale
+                if d <= thresh and (best_midpoint is None or d < best_midpoint[0]):
+                    best_midpoint = (d, (mxm, mym))
+            sdx, sdy = bx - ax, by - ay
+            seg_len_sq = sdx * sdx + sdy * sdy
+            if seg_len_sq < 1e-12:
+                continue
+            t = max(0.0, min(1.0, ((mx - ax) * sdx + (my - ay) * sdy) / seg_len_sq))
+            cxp, cyp = ax + t * sdx, ay + t * sdy
+            if abs(cxp - mx) > world_r or abs(cyp - my) > world_r:
+                continue
+            d = math.hypot(cxp - mx, cyp - my) * scale
+            if d <= thresh and (best_edge is None or d < best_edge[0]):
+                lock = PolylineView._edge_axis_lock(ax, ay, bx, by)
+                best_edge = (d, (cxp, cyp), lock)
+
+        for cx_, cy_ in centers:
+            if abs(cx_ - mx) > world_r or abs(cy_ - my) > world_r:
+                continue
+            d = math.hypot(cx_ - mx, cy_ - my) * scale
+            if d <= thresh and (best_center is None or d < best_center[0]):
+                best_center = (d, (cx_, cy_))
+
+        if best_vertex is not None:
+            return (best_vertex[0], best_vertex[1], "vertex", None)
+
+        others: list[tuple[float, tuple[float, float], str, str | None]] = []
+        if best_edge is not None:
+            others.append((best_edge[0], best_edge[1], "edge", best_edge[2]))
+        if best_center is not None:
+            others.append((best_center[0], best_center[1], "center", None))
+
+        MIDPOINT_BIAS = 4.0
+        if best_midpoint is not None:
+            other_best = min((d for d, _, _, _ in others), default=None)
+            if other_best is None or best_midpoint[0] <= other_best + MIDPOINT_BIAS:
+                return (best_midpoint[0], best_midpoint[1], "midpoint", None)
+            others.append((best_midpoint[0], best_midpoint[1], "midpoint", None))
+
+        if not others:
+            return None
+        return min(others, key=lambda c: c[0])
 
     def _object_snap_adjust(
         self, dx: float, dy: float
-    ) -> tuple[float, float, tuple[float, float], str] | None:
-        """Best (adj_dx, adj_dy, snap_pos, type) aligning any moved vertex of
-        the selection with static vertices/edges/grid/guides — so drags snap
-        by the shape's own geometry, not by the cursor."""
+    ) -> (
+        tuple[float, float, list[tuple[tuple[float, float], str, tuple[float, float]]]]
+        | None
+    ):
+        """Snap for a whole-selection drag, allowing MULTIPLE simultaneous
+        touches — e.g. the shape's bottom can be touching one thing while
+        its right side independently touches something else, and both
+        should be visible, not just whichever is closest overall.
+
+        Every candidate considered here is a genuine 2D-proximity match
+        (full distance to a real vertex/midpoint/edge/center/grid-point/
+        guide is within the snap threshold) — unlike the old "smart guide"
+        approach, a feature can never qualify just because it happens to
+        share an X or Y coordinate from far away. Among all the qualifying
+        touches (one candidate per moved point), the closest X-correcting
+        one and the closest Y-correcting one are applied independently —
+        which is what lets two different real touches (e.g. bottom edge to
+        one shape, right edge to another) both take effect at once.
+
+        Returns (adj_dx, adj_dy, indicators) — indicators has zero, one, or
+        two (target_point, kind, dragged_point) entries (deduplicated when
+        the same match supplies both axes) for the caller to render.
+        """
         pts = self._move_start_pts
         if not pts:
             return None
@@ -2279,93 +2559,215 @@ class PolylineView(
         thresh = _SNAP_DIST
         world_r = thresh / scale
 
-        static_pts: list[tuple[float, float]] = []
-        static_segs: list[
-            tuple[tuple[float, float], tuple[float, float]]
+        static_pts, static_segs, static_centers = self._static_snap_geometry(
+            exclude=self._sel
+        )
+
+        # Every entry is a genuinely-nearby (real 2D distance <= thresh)
+        # touch: (d_screen, adj_dx, adj_dy, target_point, origin_point, kind).
+        # adj_dx/adj_dy is None when that match doesn't actually constrain
+        # that axis (a horizontal guide only constrains Y, for instance) —
+        # using 0.0 as a placeholder there would make guides look like the
+        # "best" (smallest) possible X-correction and wrongly win every time.
+        #
+        # A diagonal edge's "closest point" is only valid as a FULL 2D touch
+        # (both dx and dy from the same match) — its X and Y both depend on
+        # the projection of the incoming point, so pairing just one of its
+        # coordinates with a different match's other axis lands nowhere near
+        # the edge. Such matches go into `coupled_matches` instead of
+        # `matches`, and are only used (as a whole) when nothing axis-safe
+        # (vertex/midpoint/center/grid/guide/horizontal-or-vertical edge) was
+        # found for EITHER axis.
+        matches: list[
+            tuple[
+                float,
+                float | None,
+                float | None,
+                tuple[float, float],
+                tuple[float, float],
+                str,
+            ]
         ] = []
-        for i, e in enumerate(self._entities):
-            if i in self._sel or not self._entity_selectable(i):
-                continue
-            poly = e.points
-            static_pts.extend(poly)
-            for k in range(len(poly) - 1):
-                static_segs.append((poly[k], poly[k + 1]))
-        if len(static_segs) > 4000:
-            static_segs = []  # keep drags responsive on huge documents
-
-        best: tuple[float, float, float, tuple[float, float], str] | None = None
-
-        def consider(
-            d_screen: float,
-            adj: tuple[float, float],
-            pos: tuple[float, float],
-            kind: str,
-        ) -> None:
-            nonlocal best
-            if d_screen <= thresh and (best is None or d_screen < best[0]):
-                best = (d_screen, adj[0], adj[1], pos, kind)
+        coupled_matches: list[
+            tuple[
+                float,
+                float,
+                float,
+                tuple[float, float],
+                tuple[float, float],
+                str,
+            ]
+        ] = []
 
         for px, py in pts:
             mx, my = px + dx, py + dy
-            for qx, qy in static_pts:
-                if abs(qx - mx) > world_r or abs(qy - my) > world_r:
-                    continue
-                consider(
-                    math.hypot(qx - mx, qy - my) * scale,
-                    (qx - mx, qy - my),
-                    (qx, qy),
-                    "vertex",
-                )
-            for (ax, ay), (bx, by) in static_segs:
-                sdx, sdy = bx - ax, by - ay
-                seg_len_sq = sdx * sdx + sdy * sdy
-                if seg_len_sq < 1e-12:
-                    continue
-                t = max(
-                    0.0,
-                    min(1.0, ((mx - ax) * sdx + (my - ay) * sdy) / seg_len_sq),
-                )
-                cxp, cyp = ax + t * sdx, ay + t * sdy
-                if abs(cxp - mx) > world_r or abs(cyp - my) > world_r:
-                    continue
-                consider(
-                    math.hypot(cxp - mx, cyp - my) * scale,
-                    (cxp - mx, cyp - my),
-                    (cxp, cyp),
-                    "edge",
-                )
+            # NOTE: `origin` here is the point's CURRENT (raw-dragged, i.e.
+            # (px, py) + dx/dy) position, NOT its drag-start position — the
+            # final dragged_pt computed below is `origin + adj_dx/adj_dy`,
+            # so using drag-start (px, py) instead would silently drop the
+            # raw drag delta and show the indicator ring in the wrong place
+            # (this was a real bug: fixed by using (mx, my) here).
+            origin = (mx, my)
+
+            candidate = self._nearest_snap_candidate(
+                mx,
+                my,
+                static_pts,
+                static_segs,
+                static_centers,
+                world_r=world_r,
+                scale=scale,
+                thresh=thresh,
+            )
+            if candidate is not None:
+                d_screen, (qx, qy), kind, axis_lock = candidate
+                if kind == "edge" and axis_lock is None:
+                    coupled_matches.append((
+                        d_screen,
+                        qx - mx,
+                        qy - my,
+                        (qx, qy),
+                        origin,
+                        kind,
+                    ))
+                elif kind == "edge" and axis_lock == "x":
+                    matches.append((d_screen, qx - mx, None, (qx, qy), origin, kind))
+                elif kind == "edge" and axis_lock == "y":
+                    matches.append((d_screen, None, qy - my, (qx, qy), origin, kind))
+                else:
+                    matches.append((d_screen, qx - mx, qy - my, (qx, qy), origin, kind))
+
             if self._grid_snap:
                 gx = round(mx / self._grid_spacing) * self._grid_spacing
                 gy = round(my / self._grid_spacing) * self._grid_spacing
-                consider(
-                    math.hypot(gx - mx, gy - my) * scale,
-                    (gx - mx, gy - my),
-                    (gx, gy),
-                    "grid",
-                )
+                d = math.hypot(gx - mx, gy - my) * scale
+                if d <= thresh:
+                    matches.append((d, gx - mx, gy - my, (gx, gy), origin, "grid"))
+
             for orient, coord in self._guides:
                 if orient == "v":
-                    consider(
-                        abs(coord - mx) * scale,
-                        (coord - mx, 0.0),
-                        (coord, my),
-                        "guide",
-                    )
+                    d = abs(coord - mx) * scale
+                    if d <= thresh:
+                        matches.append((
+                            d,
+                            coord - mx,
+                            None,
+                            (coord, my),
+                            origin,
+                            "guide",
+                        ))
                 else:
-                    consider(
-                        abs(coord - my) * scale,
-                        (0.0, coord - my),
-                        (mx, coord),
-                        "guide",
-                    )
+                    d = abs(coord - my) * scale
+                    if d <= thresh:
+                        matches.append((
+                            d,
+                            None,
+                            coord - my,
+                            (mx, coord),
+                            origin,
+                            "guide",
+                        ))
+
+        if not matches and not coupled_matches:
+            return None
+
+        x_candidates = [m for m in matches if m[1] is not None]
+        y_candidates = [m for m in matches if m[2] is not None]
+
+        if not x_candidates and not y_candidates:
+            if not coupled_matches:
+                return None
+            # Nothing axis-safe nearby at all — the only thing to snap to is
+            # a diagonal edge, so use it as a single full 2D touch (both axes
+            # from the same match), same as the classic single-nearest-point
+            # snap. Do NOT mix it in below: it must never supply just one of
+            # its two coordinates alongside an unrelated match's other axis.
+            d_screen, cdx, cdy, target, origin, kind = min(
+                coupled_matches, key=lambda m: m[0]
+            )
+            dragged_pt = (origin[0] + cdx, origin[1] + cdy)
+            return cdx, cdy, [(target, kind, dragged_pt)]
+
+        best_x = (
+            min(x_candidates, key=lambda m: abs(m[1] or 0.0)) if x_candidates else None
+        )
+        best_y = (
+            min(y_candidates, key=lambda m: abs(m[2] or 0.0)) if y_candidates else None
+        )
+        adj_dx: float = (
+            best_x[1] if best_x is not None and best_x[1] is not None else 0.0
+        )
+        adj_dy: float = (
+            best_y[2] if best_y is not None and best_y[2] is not None else 0.0
+        )
+
+        indicators: list[tuple[tuple[float, float], str, tuple[float, float]]] = []
+        seen_targets: set[tuple[float, float]] = set()
+        for m in (best_x, best_y):
+            if m is None:
+                continue
+            _, _, _, target, origin, kind = m
+            if target in seen_targets:
+                continue
+            seen_targets.add(target)
+            dragged_pt = (origin[0] + adj_dx, origin[1] + adj_dy)
+            indicators.append((target, kind, dragged_pt))
+        return adj_dx, adj_dy, indicators
+
+    def _resize_handle_snap_adjust(
+        self, wx: float, wy: float
+    ) -> tuple[float, float, str] | None:
+        """Snap a dragged resize-handle position to nearby vertex/midpoint/
+        edge/center of other shapes (any layer), plus grid/guides — mirrors
+        the move-drag snap behavior so resizing feels consistent."""
+        scale = max(self._scale, _MIN_SCALE)
+        thresh = _SNAP_DIST
+        world_r = thresh / scale
+        static_pts, static_segs, static_centers = self._static_snap_geometry(
+            exclude=self._sel
+        )
+        candidate = self._nearest_snap_candidate(
+            wx,
+            wy,
+            static_pts,
+            static_segs,
+            static_centers,
+            world_r=world_r,
+            scale=scale,
+            thresh=thresh,
+        )
+        # A resize handle only ever moves as a single full 2D point, so the
+        # edge axis-lock distinction (only relevant for splitting a match
+        # across two independently-chosen touches) doesn't apply here.
+        best: tuple[float, tuple[float, float], str] | None = (
+            (candidate[0], candidate[1], candidate[2])
+            if candidate is not None
+            else None
+        )
+        if self._grid_snap:
+            gx = round(wx / self._grid_spacing) * self._grid_spacing
+            gy = round(wy / self._grid_spacing) * self._grid_spacing
+            d = math.hypot(gx - wx, gy - wy) * scale
+            if d <= thresh and (best is None or d < best[0]):
+                best = (d, (gx, gy), "grid")
+        for orient, coord in self._guides:
+            if orient == "v":
+                d = abs(coord - wx) * scale
+                if d <= thresh and (best is None or d < best[0]):
+                    best = (d, (coord, wy), "guide")
+            else:
+                d = abs(coord - wy) * scale
+                if d <= thresh and (best is None or d < best[0]):
+                    best = (d, (wx, coord), "guide")
         if best is None:
             return None
-        return best[1], best[2], best[3], best[4]
+        _, (sx, sy), kind = best
+        return sx, sy, kind
 
     def _find_guide_at(self, cx: float, cy: float) -> int | None:
         """Guide index within grab distance of the cursor (screen px)."""
         best: int | None = None
-        best_d = 4.0
+        best_d = 6.0
         for i, (orient, coord) in enumerate(self._guides):
             if orient == "v":
                 gx, _ = self._w2c(coord, 0.0)
@@ -2469,6 +2871,14 @@ class PolylineView(
         self._gizmo_snapshot = {
             idx: list(self._entities[idx].points) for idx in self._mutable_selected_indices()
         }
+
+        def _meta_copy(idx: int) -> dict[str, Any] | None:
+            meta = self._entities[idx].meta
+            return dict(meta) if isinstance(meta, dict) else None
+
+        self._gizmo_meta_snapshot = {
+            idx: _meta_copy(idx) for idx in self._mutable_selected_indices()
+        }
         self._gizmo_drag_moved = False
         self._gizmo_undo_pushed = False
         return bool(self._gizmo_snapshot)
@@ -2485,11 +2895,33 @@ class PolylineView(
         ax, ay = self._gizmo_anchor_w
         hx, hy = self._gizmo_handle_w
 
+        if mods is None:
+            mods = QApplication.keyboardModifiers()
+
+        # Snap the dragged handle itself to nearby vertex/midpoint/edge/
+        # center of other shapes (any layer) plus grid/guides — mirrors
+        # move-drag snapping so resize feels consistent. Alt disables it.
+        allow_snap = not bool(mods & Qt.KeyboardModifier.AltModifier)
+        snap_result = self._resize_handle_snap_adjust(wx, wy) if allow_snap else None
+        if snap_result is not None:
+            wx, wy, snap_type = snap_result
+            self._hover_snap = (wx, wy)
+            self._hover_snap_type = snap_type
+        else:
+            self._hover_snap = None
+            self._hover_snap_type = None
+
         def _factor(cur: float, a: float, h: float) -> float:
             span = h - a
             if abs(span) < 1e-9:
                 return 1.0
-            return max(0.05, min(20.0, (cur - a) / span))
+            f = (cur - a) / span
+            # Clamp magnitude only — preserve sign so dragging a handle past
+            # the opposite edge flips the shape (mirrors it) instead of
+            # getting stuck at a minimum positive scale.
+            if abs(f) < 0.05:
+                f = 0.05 if f >= 0.0 else -0.05
+            return max(-20.0, min(20.0, f))
 
         sx = _factor(wx, ax, hx)
         sy = _factor(wy, ay, hy)
@@ -2498,8 +2930,6 @@ class PolylineView(
         elif handle in ("e", "w"):
             sy = 1.0
         else:
-            if mods is None:
-                mods = QApplication.keyboardModifiers()
             if mods & Qt.KeyboardModifier.ShiftModifier:
                 # Shift = keep aspect (uniform, dominant axis wins)
                 s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy
@@ -2513,6 +2943,24 @@ class PolylineView(
             self._entities[idx].points = [
                 (ax + (x - ax) * sx, ay + (y - ay) * sy) for x, y in src_poly
             ]
+            # Keep parametric meta (circle/ellipse/rectangle "center") in
+            # sync with the resized points — otherwise centroid-based snap
+            # targets stay stale at the shape's PRE-resize position, since
+            # `_entity_center()` reads meta["center"] directly rather than
+            # recomputing it from `.points`. Always derive from the drag-
+            # start snapshot (never the live/already-updated meta) so
+            # repeated mouse-move events don't compound the transform.
+            snap_meta = self._gizmo_meta_snapshot.get(idx)
+            if isinstance(snap_meta, dict) and isinstance(
+                snap_meta.get("center"), (tuple, list)
+            ):
+                cx0, cy0 = snap_meta["center"][0], snap_meta["center"][1]
+                new_meta = dict(snap_meta)
+                new_meta["center"] = (
+                    ax + (float(cx0) - ax) * sx,
+                    ay + (float(cy0) - ay) * sy,
+                )
+                self._entities[idx].meta = new_meta
 
     def _apply_gizmo_drag(
         self, wx: float, wy: float, mods: Qt.KeyboardModifier | None = None
@@ -2559,6 +3007,25 @@ class PolylineView(
                 ry = cy + (sx - cx) * sa + (sy - cy) * ca
                 out_poly.append((rx, ry))
             self._entities[idx].points = out_poly
+            # Same staleness fix as _apply_handle_scale: recompute meta["center"]
+            # under the identical scale+rotate transform, from the drag-start
+            # snapshot, so circle/ellipse centroid snapping stays accurate
+            # after a uniform corner-scale or rotate gizmo drag too.
+            snap_meta = self._gizmo_meta_snapshot.get(idx)
+            if isinstance(snap_meta, dict) and isinstance(
+                snap_meta.get("center"), (tuple, list)
+            ):
+                ecx0, ecy0 = (
+                    float(snap_meta["center"][0]),
+                    float(snap_meta["center"][1]),
+                )
+                scx = cx + (ecx0 - cx) * scale
+                scy = cy + (ecy0 - cy) * scale
+                rcx = cx + (scx - cx) * ca - (scy - cy) * sa
+                rcy = cy + (scx - cx) * sa + (scy - cy) * ca
+                new_meta = dict(snap_meta)
+                new_meta["center"] = (rcx, rcy)
+                self._entities[idx].meta = new_meta
 
     def _end_gizmo_drag(self) -> bool:
         moved = self._gizmo_drag_moved
@@ -2568,8 +3035,11 @@ class PolylineView(
         self._gizmo_anchor_w = None
         self._gizmo_handle_w = None
         self._gizmo_snapshot = {}
+        self._gizmo_meta_snapshot = {}
         self._gizmo_drag_moved = False
         self._gizmo_undo_pushed = False
+        self._hover_snap = None
+        self._hover_snap_type = None
         return moved
 
     def eventFilter(self, obj, event) -> bool:
@@ -3060,14 +3530,19 @@ class PolylineView(
             if pos.y() <= r:
                 self._guides.append(("h", wy0))
                 self._guide_drag = len(self._guides) - 1
+                self._selected_guide = self._guide_drag
+                self._guide_drag_moved = False
                 self._redraw()
                 return
             if pos.x() <= r:
                 self._guides.append(("v", wx0))
                 self._guide_drag = len(self._guides) - 1
+                self._selected_guide = self._guide_drag
+                self._guide_drag_moved = False
                 self._redraw()
                 return
-        # Grab an existing guide (only when not over a shape).
+        # Grab an existing guide (only when not over a shape) — click selects
+        # it (Delete/Backspace removes it); dragging moves it.
         if (
             self._selectable
             and self._mode == "select"
@@ -3077,7 +3552,14 @@ class PolylineView(
             gi = self._find_guide_at(pos.x(), pos.y())
             if gi is not None:
                 self._guide_drag = gi
+                self._selected_guide = gi
+                self._guide_drag_moved = False
+                self._redraw()
                 return
+        # Clicking elsewhere clears any selected guide.
+        if self._selected_guide is not None:
+            self._selected_guide = None
+            self._redraw()
 
         # Selection badges / transform gizmo take priority over tools.
         if (
@@ -3102,6 +3584,7 @@ class PolylineView(
         self._cursor_wy = wy
         self._hover_snap = None
         self._hover_snap_type = None
+        self._hover_snap_multi = []
 
         if self._mmb_prev is not None and event.buttons() & Qt.MouseButton.MiddleButton:
             self._ox += pos.x() - self._mmb_prev.x()
@@ -3138,6 +3621,7 @@ class PolylineView(
                 orient,
                 wy if orient == "h" else wx,
             )
+            self._guide_drag_moved = True
             self._redraw()
             return
 
@@ -3174,9 +3658,13 @@ class PolylineView(
             return
 
         if self._guide_drag is not None:
-            if pos.x() <= self.RULER_PX or pos.y() <= self.RULER_PX:
+            if self._guide_drag_moved and (
+                pos.x() <= self.RULER_PX or pos.y() <= self.RULER_PX
+            ):
                 del self._guides[self._guide_drag]
+                self._selected_guide = None
             self._guide_drag = None
+            self._guide_drag_moved = False
             self._redraw()
             return
 
@@ -3284,6 +3772,7 @@ class PolylineView(
         new_hidden: set[int] = set()
         new_locked: set[int] = set()
         new_groups: dict[int, int] = {}
+        new_layers: dict[int, str | None] = {}
 
         def _carry_flags(src_idx: int, ni: int) -> None:
             src = self._entities[src_idx]
@@ -3293,6 +3782,10 @@ class PolylineView(
                 new_hidden.add(ni)
             if src.locked:
                 new_locked.add(ni)
+            # Preserve the source entity's layer — unrelated entities that
+            # merely pass through a split (or split pieces of a shape on a
+            # non-active layer) must NOT be reassigned to the active layer.
+            new_layers[ni] = src.layer
 
         def _keep(src_idx: int, p: list[tuple[float, float]]) -> None:
             """Carry an unchanged poly through with its kind/meta/flags intact."""
@@ -3455,7 +3948,7 @@ class PolylineView(
                 hidden=i in new_hidden,
                 locked=i in new_locked,
                 group=new_groups.get(i),
-                layer=self._active_layer,
+                layer=new_layers.get(i, self._active_layer),
             )
             for i, (p, k, m) in enumerate(zip(result_polys, result_kinds, result_meta))
         ]
@@ -4101,6 +4594,11 @@ class PolylineView(
         return True
 
     def align_selected(self, mode: str) -> bool:
+        """Align each selected alignment "unit" to the selection's overall
+        bounds. Grouped shapes are treated as a single rigid unit (aligned
+        together by their combined bbox) so aligning a single selected group
+        is a no-op and aligning a group alongside other shapes keeps the
+        group's internal layout intact."""
         indices = self._mutable_selected_indices()
         bounds = self._selection_bounds(indices)
         if len(indices) < 2 or bounds is None:
@@ -4108,9 +4606,23 @@ class PolylineView(
         bx0, by0, bx1, by1 = bounds
         center_x = (bx0 + bx1) / 2.0
         center_y = (by0 + by1) / 2.0
-        self._push_undo()
+
+        units: dict[object, list[int]] = {}
         for idx in indices:
-            px0, py0, px1, py1 = self._poly_bounds(self._entities[idx].points)
+            gid = self._entities[idx].group
+            key: object = ("group", gid) if gid is not None else ("shape", idx)
+            units.setdefault(key, []).append(idx)
+        if len(units) < 2:
+            return False  # a single shape (or single group) has nothing to align to
+        if mode not in ("left", "center-x", "right", "top", "center-y", "bottom"):
+            return False
+
+        self._push_undo()
+        for member_indices in units.values():
+            unit_bounds = self._selection_bounds(member_indices)
+            if unit_bounds is None:
+                continue
+            px0, py0, px1, py1 = unit_bounds
             dx = dy = 0.0
             if mode == "left":
                 dx = bx0 - px0
@@ -4124,18 +4636,21 @@ class PolylineView(
                 dy = center_y - (py0 + py1) / 2.0
             elif mode == "bottom":
                 dy = by0 - py0
-            else:
-                return False
-            self._entities[idx].points = [(x + dx, y + dy) for x, y in self._entities[idx].points]
-            self._transform_entity_meta(
-                idx,
-                center=(center_x, center_y),
-                kind=self._entities[idx].kind,
-                meta=self._entities[idx].meta,
-                transform="translate",
-                dx=dx,
-                dy=dy,
-            )
+            if dx == 0.0 and dy == 0.0:
+                continue
+            for idx in member_indices:
+                self._entities[idx].points = [
+                    (x + dx, y + dy) for x, y in self._entities[idx].points
+                ]
+                self._transform_entity_meta(
+                    idx,
+                    center=(center_x, center_y),
+                    kind=self._entities[idx].kind,
+                    meta=self._entities[idx].meta,
+                    transform="translate",
+                    dx=dx,
+                    dy=dy,
+                )
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -4910,6 +5425,49 @@ class PolylineView(
         self._notify()
         self._fire_poly_change()
 
+    # ── Layer-tree-driven group/ungroup (accept index lists) ─────────────
+
+    def group_indices(self, indices: list[int]) -> int:
+        """Group the entities at ``indices`` (from layer tree). Returns count."""
+        valid = [i for i in indices if 0 <= i < len(self._entities)]
+        if len(valid) < 2:
+            self._show_flash("Select 2+ shapes to group", 1000)
+            return 0
+        self._push_undo()
+        gid = self._next_group_id
+        self._next_group_id += 1
+        for idx in valid:
+            self._entities[idx].group = gid
+        self._show_flash(f"Grouped {len(valid)} shapes", 900)
+        self._sel = set(valid)
+        self._notify()
+        self._fire_poly_change()
+        return len(valid)
+
+    def ungroup_indices(self, indices: list[int]) -> int:
+        """Ungroup the entities at ``indices`` (from layer tree). Returns count."""
+        self._push_undo()
+        ungrouped_gids: set[int] = set()
+        valid = [i for i in indices if 0 <= i < len(self._entities)]
+        for idx in valid:
+            gid = self._group_of(idx)
+            if gid is not None:
+                ungrouped_gids.add(gid)
+                self._entities[idx].group = None
+        if not ungrouped_gids:
+            self._show_flash("Shapes are not grouped", 700)
+            return 0
+        # Dissolve all members of affected groups.
+        for e in self._entities:
+            if e.group in ungrouped_gids:
+                e.group = None
+        for gid in ungrouped_gids:
+            self._group_labels.pop(gid, None)
+        self._show_flash("Ungrouped", 700)
+        self._notify()
+        self._fire_poly_change()
+        return len(valid)
+
     def _send_selected_to_draft(self) -> None:
         cb = getattr(self, "_send_selected_to_draft_cb", None)
         if not callable(cb):
@@ -5142,6 +5700,107 @@ class PolylineView(
             normalized[-1] = normalized[0]
         return normalized
 
+    def smooth_selected(self, iterations: int = 2) -> int:
+        """Smooth jagged selected polylines using Chaikin's corner-cutting
+        algorithm — repeatedly cuts corners, rounding sharp vertices into a
+        smooth curve while preserving the overall shape. Closed shapes stay
+        closed; open polylines keep their endpoints fixed. Returns the
+        number of shapes smoothed.
+        """
+        indices = self._mutable_selected_indices()
+        to_smooth = [i for i in indices if len(self._entities[i].points) >= 3]
+        if not to_smooth:
+            return 0
+        self._push_undo()
+        count = 0
+        for idx in to_smooth:
+            poly = self._entities[idx].points
+            closed = self._is_poly_closed(poly)
+            pts = poly[:-1] if closed else list(poly)
+            if len(pts) < 3:
+                continue
+            for _ in range(max(1, iterations)):
+                pts = self._chaikin_pass(pts, closed=closed)
+            if closed:
+                pts.append(pts[0])
+            self._entities[idx].points = pts
+            # Smoothing invalidates any parametric meta (circle/arc/rect/…);
+            # the result is a plain freeform polyline.
+            self._entities[idx].kind = "polyline"
+            self._entities[idx].meta = None
+            count += 1
+        if count == 0:
+            return 0
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return count
+
+    @staticmethod
+    def _chaikin_pass(
+        pts: list[tuple[float, float]], *, closed: bool
+    ) -> list[tuple[float, float]]:
+        """One Chaikin corner-cutting pass: replaces each corner with two
+        points 1/4 and 3/4 along its adjoining segments."""
+        n = len(pts)
+        out: list[tuple[float, float]] = []
+        if closed:
+            for i in range(n):
+                p0 = pts[i]
+                p1 = pts[(i + 1) % n]
+                out.append((p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25))
+                out.append((p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75))
+        else:
+            out.append(pts[0])
+            for i in range(n - 1):
+                p0 = pts[i]
+                p1 = pts[i + 1]
+                out.append((p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25))
+                out.append((p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75))
+            out.append(pts[-1])
+        return out
+
+    def simplify_selected(self, tolerance: float = 0.2) -> int:
+        """Reduce vertex count on selected polylines via Douglas-Peucker
+        simplification (Shapely), preserving overall shape within
+        ``tolerance`` mm. Closed shapes stay closed. Returns the number of
+        shapes actually simplified (unchanged/degenerate results are
+        skipped).
+        """
+        indices = self._mutable_selected_indices()
+        to_simplify = [i for i in indices if len(self._entities[i].points) >= 3]
+        if not to_simplify:
+            return 0
+        self._push_undo()
+        count = 0
+        for idx in to_simplify:
+            poly = self._entities[idx].points
+            closed = self._is_poly_closed(poly)
+            try:
+                simplified = LineString(poly).simplify(
+                    tolerance, preserve_topology=False
+                )
+            except (GEOSException, ValueError):
+                continue
+            coords = [(float(x), float(y)) for x, y in simplified.coords]
+            if len(coords) < 2:
+                continue
+            if closed and coords[0] != coords[-1]:
+                coords.append(coords[0])
+            if len(coords) >= len(poly):
+                continue  # no reduction achieved — leave the shape as-is
+            self._entities[idx].points = coords
+            # Simplification invalidates any parametric meta (circle/arc/
+            # rect/…); the result is a plain freeform polyline.
+            self._entities[idx].kind = "polyline"
+            self._entities[idx].meta = None
+            count += 1
+        if count == 0:
+            return 0
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return count
 
     # ── Base right-click handling + vertex ops (restored from _select/_edit mixins) ──
 

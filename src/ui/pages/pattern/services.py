@@ -28,6 +28,13 @@ from src.backend.generators._shared import _extract_polys as _extract_polys_shar
 from src.backend.generators._shared import (
     _polygon_from_polyline as _polygon_from_polyline_shared,
 )
+from src.backend.generators._shared import is_open_polyline as _is_open_polyline_shared
+from src.backend.generators._shared import (
+    merge_and_classify_outlines as _merge_and_classify_outlines_shared,
+)
+from src.backend.generators._shared import (
+    nested_polygon_region as _nested_polygon_region_shared,
+)
 from src.ui.pages.pattern.fill import (
     NULL_PATTERN,
     FillSpec,
@@ -386,6 +393,31 @@ class PatternProcessingService:
             pass  # rotation is applied in build_pattern_polys via outline transform
         return polys
 
+    @staticmethod
+    def _is_open_polyline(poly: list[tuple[float, float]], tol: float = 0.01) -> bool:
+        """Strict open/closed check matching the canvas's own ground truth
+        (``PolylineView._is_poly_closed``) — NOT the lenient few-mm tolerance
+        ``analyze_outline_polylines``/``polylines_to_outline`` use elsewhere
+        for hand-drawn-shape robustness. A deliberately-opened outline (via
+        the canvas "Open Outline" action) always has a real, if small, gap;
+        this must not be confused with a merely-imprecise closed sketch.
+        """
+        return _is_open_polyline_shared(poly, tol)
+
+    @staticmethod
+    def _merge_and_classify_outlines(
+        outline_polys: list[list[tuple[float, float]]],
+    ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
+        """Weld + merge end-to-end-connected outline polylines before
+        classifying open vs. closed, then return (closed_polys, open_polys).
+
+        Delegates to ``src.backend.generators._shared.merge_and_classify_outlines``
+        — the SAME logic is also needed by the custom-tile generator
+        (``gen_custom_tile``), so it lives in the shared backend module and
+        this is just a thin wrapper kept for existing call sites here.
+        """
+        return _merge_and_classify_outlines_shared(outline_polys)
+
     def build_pattern_polys(
         self,
         outline_polys: list[list[tuple[float, float]]],
@@ -404,8 +436,18 @@ class PatternProcessingService:
         fill_options: dict | None = None,
         fill_polys_out: list[list[tuple[float, float]]] | None = None,
     ) -> list[list[tuple[float, float]]]:
+        # An OPEN outline shape acts as an automatic cutout — same treatment
+        # as an explicitly marked exclusion/cutout region (user request: "an
+        # open shape should work similar to a cutout"). Only genuinely CLOSED
+        # shapes contribute to the fillable body/outline. Connected pieces
+        # (e.g. an Exploded circle's individual 2-point segments) are first
+        # merged back into continuous paths so they can still be recognized
+        # as closed/open as a whole, not lost entirely piece-by-piece.
+        closed_outline_polys, open_outline_polys = self._merge_and_classify_outlines(
+            outline_polys
+        )
         scaled = self.apply_scale(
-            outline_polys,
+            closed_outline_polys,
             scale[0],
             scale[1],
             orig_w=orig_w,
@@ -420,16 +462,22 @@ class PatternProcessingService:
         fill_outline = (
             nested_fill_region if nested_fill_region is not None else orig_outline
         )
-        if exclusion_polys:
+        all_exclusion_polys = list(exclusion_polys or []) + open_outline_polys
+        if all_exclusion_polys:
             excl_scaled = self.apply_scale(
-                exclusion_polys,
+                all_exclusion_polys,
                 scale[0],
                 scale[1],
                 orig_w=orig_w,
                 orig_h=orig_h,
             )
-            excl_outline = polylines_to_outline(excl_scaled)
-            fill_outline = fill_outline.difference(excl_outline)
+            # build_fill_region (not polylines_to_outline) handles a cutout
+            # of ANY gap size via Shapely's implicit ring-closing — an open
+            # cutout shouldn't fail to exclude just because its gap exceeds
+            # polylines_to_outline's lenient few-mm "closed enough" check.
+            excl_outline = build_fill_region(excl_scaled)
+            if excl_outline is not None:
+                fill_outline = fill_outline.difference(excl_outline)
 
         # Always generate pattern elements inside the fill region (never
         # outside the outline). When ``invert_fill`` is requested we compute
@@ -527,18 +575,51 @@ class PatternProcessingService:
             # source geometry for pattern-targeted fills.
             if spec.target_pattern and polys:
                 try:
-                    # Try filling closed pattern polygons first. For
-                    # non-polygonizable linework, fall back to a best-effort
-                    # polygonize of the combined linework so tile-like
-                    # patterns that emit lines can still be hatched.
+                    # Collect closed cells first. For "Custom Tile" patterns
+                    # specifically, combine them via even-odd nesting
+                    # (nested_polygon_region) before hatching — filling each
+                    # closed cell independently would also hatch a HOLE ring
+                    # (the cutout left by an Exploded/open shape inside the
+                    # tile, see gen_custom_tile) as if it were its own solid
+                    # area, since a hole ring is just another closed polyline
+                    # once it reaches this point with no memory of why it's
+                    # shaped that way.
+                    #
+                    # This must NOT be applied to every pattern though: many
+                    # patterns (Topographic, Concentric Rings, Golden Spiral,
+                    # Sunburst, …) legitimately produce MANY nested closed
+                    # rings that are each independently solid (e.g.
+                    # progressively-smaller elevation contours) — NOT a hole
+                    # relationship. Even-odd nesting there would incorrectly
+                    # punch alternating "holes" through them, so an inner
+                    # contour would never fill "all the way". Custom Tile is
+                    # currently the ONLY generator that produces genuine
+                    # holes, so gate the nesting treatment on that.
                     pending_lines: list[list[tuple[float, float]]] = []
+                    closed_cells: list[list[tuple[float, float]]] = []
                     for poly in polys:
-                        shp = _polygon_from_polyline_shared(poly)
+                        # Only fill genuinely closed pattern cells by default —
+                        # open strokes should not be silently auto-closed and
+                        # filled as if they bounded a region.
+                        shp = _polygon_from_polyline_shared(poly, force_close=False)
                         if shp is not None:
-                            fill_strokes.extend(apply_fill(shp, spec))
+                            closed_cells.append(poly)
                         else:
                             if len(poly) >= 2:
                                 pending_lines.append(poly)
+
+                    if closed_cells:
+                        if params.get("tile_path"):
+                            nested_region = _nested_polygon_region_shared(closed_cells)
+                            if nested_region is not None and not nested_region.is_empty:
+                                fill_strokes.extend(apply_fill(nested_region, spec))
+                        else:
+                            for poly in closed_cells:
+                                shp = _polygon_from_polyline_shared(
+                                    poly, force_close=False
+                                )
+                                if shp is not None:
+                                    fill_strokes.extend(apply_fill(shp, spec))
 
                     # Polygonize any remaining linework and fill resulting polygons.
                     if pending_lines:
@@ -581,6 +662,38 @@ class PatternProcessingService:
                 polys = base + fill_strokes
         return polys
 
+    @staticmethod
+    def _floating_open_cutouts(
+        zones: list[dict],
+        all_polys: list[list[tuple[float, float]]] | None,
+    ) -> list[list[tuple[float, float]]]:
+        """Outlines present on the canvas but NOT assigned to any zone,
+        that are genuinely OPEN (after merging any exploded pieces back
+        together) — these should still act as automatic cutouts for every
+        zone, the same "open shape = cutout" rule the non-zone workflow
+        already applies, even though Zones otherwise require each outline
+        to be explicitly assigned. Safe to hand to every zone unconditionally:
+        subtracting a cutout that doesn't spatially overlap a given zone's
+        fill region is simply a no-op for that zone.
+        """
+        if not all_polys:
+            return []
+        assigned_sigs = {
+            PatternProcessingService._poly_signature(p)
+            for zone in zones
+            for p in zone.get("polys", [])
+        }
+        unassigned = [
+            p
+            for p in all_polys
+            if PatternProcessingService._poly_signature(p) not in assigned_sigs
+        ]
+        if not unassigned:
+            return []
+        _closed, open_ = PatternProcessingService._merge_and_classify_outlines(
+            unassigned
+        )
+        return open_
 
     def build_zone_pattern_polys(
         self,
@@ -589,6 +702,7 @@ class PatternProcessingService:
         include_border: bool,
         orig_w: float,
         orig_h: float,
+        all_polys: list[list[tuple[float, float]]] | None = None,
         invert_fill: bool = False,
         mirror_v: bool = False,
         mirror_h: bool = False,
@@ -597,7 +711,8 @@ class PatternProcessingService:
         fill_options: dict | None = None,
         fill_polys_out: list | None = None,
     ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
-        all_polys: list[list[tuple[float, float]]] = []
+        floating_cutouts = self._floating_open_cutouts(zones, all_polys)
+        all_polys_out: list[list[tuple[float, float]]] = []
         border_polys: list[list[tuple[float, float]]] = []
         for zone in zones:
             zone_fill: list[list[tuple[float, float]]] = []
@@ -605,7 +720,7 @@ class PatternProcessingService:
             # entry, use it; otherwise fall back to the global fill_options.
             zone_fill_options = zone.get("fill") or fill_options
             zone_generated = self.build_pattern_polys(
-                zone["polys"],
+                zone["polys"] + floating_cutouts,
                 pattern=zone["pattern"],
                 params=zone["params"],
                 scale=zone["scale"],
@@ -620,7 +735,7 @@ class PatternProcessingService:
                 fill_options=zone_fill_options,
                 fill_polys_out=zone_fill if fill_polys_out is not None else None,
             )
-            all_polys.extend(zone_generated)
+            all_polys_out.extend(zone_generated)
             if fill_polys_out is not None and zone_fill:
                 fill_polys_out.extend(zone_fill)
             # Always collect the outline so the export can ship it as a
@@ -636,7 +751,12 @@ class PatternProcessingService:
                     orig_h=orig_h,
                 )
             )
-        return all_polys, border_polys
+        # Floating (unassigned) open cutouts aren't scoped to any single
+        # zone's scale, so they're included in the border/outline layer
+        # as-is (raw coordinates) — they're still visible even though they
+        # were used as a cutout mask above, not because they were assigned.
+        border_polys.extend(floating_cutouts)
+        return all_polys_out, border_polys
 
     def build_preview_polys(
         self,
@@ -728,12 +848,13 @@ class PatternProcessingService:
         zone_poly_ids: set[int] = set()
         zone_pattern_polys: list[list[tuple[float, float]]] = []
         zone_fill_polys: list[list[tuple[float, float]]] = []
+        floating_cutouts = self._floating_open_cutouts(zones, all_polys)
 
         for zone in zones:
             fill_buf: list[list[tuple[float, float]]] = []
             zone_fill_options = zone.get("fill") or fill_options
             zone_generated = self.build_pattern_polys(
-                zone["polys"],
+                zone["polys"] + floating_cutouts,
                 pattern=zone["pattern"],
                 params=zone["params"],
                 scale=zone["scale"],

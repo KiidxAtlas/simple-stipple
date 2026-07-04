@@ -828,8 +828,9 @@ class PatternPage(BasePage):
         self._fill_mode_combo = QComboBox()
         self._fill_mode_combo.addItem("None", "none")
         self._fill_mode_combo.addItem("Lines", "lines")
+        self._fill_mode_combo.addItem("Crosshatch", "crosshatch")
         self._fill_mode_combo.setToolTip(
-            "Fill the shape with parallel laser-engrave lines.\nNone = pattern strokes only."
+            "Fill the shape with laser-engne lines.\nNone = pattern strokes only.\nLines = parallel hatch.\nCrosshatch = intersecting diagonal lines."
         )
         self._fill_mode_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
         mode_row.addWidget(self._fill_mode_combo, stretch=1)
@@ -852,12 +853,12 @@ class PatternPage(BasePage):
         target_row.addWidget(QLabel("Targets"))
         self._fill_target_outline_cb = QCheckBox("Outline")
         self._fill_target_outline_cb.setToolTip("Fill the input outline region (minus exclusions)")
-        self._fill_target_outline_cb.setChecked(True)
+        self._fill_target_outline_cb.setChecked(False)
         self._fill_target_outline_cb.stateChanged.connect(self._schedule_preview)
         target_row.addWidget(self._fill_target_outline_cb)
         self._fill_target_pattern_cb = QCheckBox("Pattern cells")
         self._fill_target_pattern_cb.setToolTip("Hatch each closed pattern stroke (tiles, tessellation, …)")
-        self._fill_target_pattern_cb.setChecked(False)
+        self._fill_target_pattern_cb.setChecked(True)
         self._fill_target_pattern_cb.stateChanged.connect(self._schedule_preview)
         target_row.addWidget(self._fill_target_pattern_cb)
         target_row.addStretch()
@@ -1432,7 +1433,19 @@ class PatternPage(BasePage):
                 return
             threading.Thread(
                 target=run_generate_zones,
-                args=(zones_snap, out_path, include_border, open_paths, invert_fill, mirror_v, mirror_h, border_fade, excl_polys, generation_token, cancel_event),
+                args=(
+                    zones_snap,
+                    out_path,
+                    include_border,
+                    open_paths,
+                    invert_fill,
+                    mirror_v,
+                    mirror_h,
+                    border_fade,
+                    excl_polys,
+                    generation_token,
+                    cancel_event,
+                ),
                 kwargs={
                     "pattern_service": self._pattern_service,
                     "orig_w": self._orig_w,
@@ -1440,6 +1453,7 @@ class PatternPage(BasePage):
                     "on_done": self._gen_done.emit,
                     "on_error": self._gen_error.emit,
                     "fill_options": gen_fill_options,
+                    "canvas_polys": list(self._edit_polys),
                 },
                 daemon=True,
             ).start()

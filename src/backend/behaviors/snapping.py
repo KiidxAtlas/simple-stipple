@@ -31,6 +31,39 @@ IsPolylineClosed = Callable[[Polyline], bool]
 SegmentIntersectionPoint = Callable[[Point, Point, Point, Point], Point | None]
 
 
+def polygon_centroid(poly: Sequence[Point]) -> Point:
+    """Area-weighted centroid of a closed polygon.
+
+    Falls back to the plain vertex average when the polygon has fewer than
+    3 distinct vertices or is degenerate (zero area, e.g. collinear points)
+    — this keeps "center" snap meaningful even for skinny/degenerate shapes,
+    and matches what users expect (visual center of mass), not the
+    bounding-box midpoint which can sit far outside an irregular polygon.
+    """
+    pts = list(poly)
+    if len(pts) >= 2 and pts[0] == pts[-1]:
+        pts = pts[:-1]
+    n = len(pts)
+    if n == 0:
+        return (0.0, 0.0)
+    if n < 3:
+        return (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n)
+    area2 = 0.0
+    cx = 0.0
+    cy = 0.0
+    for i in range(n):
+        x0, y0 = pts[i]
+        x1, y1 = pts[(i + 1) % n]
+        cross = x0 * y1 - x1 * y0
+        area2 += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+    if abs(area2) < 1e-9:
+        return (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n)
+    area6 = area2 * 3.0
+    return (cx / area6, cy / area6)
+
+
 def snap_to_grid(wx: float, wy: float, spacing: float) -> Point:
     spacing = max(spacing, 0.001)
     return (round(wx / spacing) * spacing, round(wy / spacing) * spacing)
@@ -197,8 +230,7 @@ def snap_to_polyline(
     for _pi, poly in candidate_polys:
         if not is_poly_closed(poly):
             continue
-        x0, y0, x1, y1 = poly_bounds(poly)
-        center = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        center = polygon_centroid(poly)
         sx, sy = w2c(*center)
         d = math.hypot(cx - sx, cy - sy)
         if d < best_dist:

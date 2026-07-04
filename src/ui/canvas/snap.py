@@ -32,7 +32,7 @@ class SnapEngine:
 
     GUIDE_SNAP_PX = 8.0
 
-    def __init__(self, view: "PolylineView") -> None:
+    def __init__(self, view: PolylineView) -> None:
         self.v = view
 
     # ── Public API ────────────────────────────────────────────────────────
@@ -59,7 +59,10 @@ class SnapEngine:
             grid_snap_enabled=v._grid_snap,
             grid_spacing=v._grid_spacing,
             polylines=[e.points for e in v._entities],
-            hidden_polys=v._noninteractive_indices(),
+            # Snapping targets include ALL entities, even those on non-active
+            # layers. Users should be able to snap TO shapes on other layers
+            # while still only being able to SELECT on the active layer.
+            hidden_polys=set(),  # no exclusions for snapping
             scale=v._scale,
             w2c=v._w2c,
             c2w=v._c2w,
@@ -96,6 +99,9 @@ class SnapEngine:
         v = self.v
         best: SnapResult | None = None
         best_dist = float("inf")
+        # Shape snapping works across ALL layers — shapes on non-active
+        # Shape snapping works across ALL layers — shapes on non-active
+        # layers are valid snap targets even when not selectable/editable.
         for shape in v._snap_shapes():
             if not getattr(shape, "visible", True):
                 continue

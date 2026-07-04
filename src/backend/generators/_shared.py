@@ -395,6 +395,214 @@ def apply_interlace(
     return result
 
 
+# ─── Open/closed outline reconnection ──────────────────────────────────────
+#
+# Shared by the pattern page's outline handling (services.py) AND the custom-
+# tile generator below — a shape "Exploded" into individual 2-point segments,
+# or a hand-drawn shape whose edges were drawn as separate strokes, must
+# still be recognized as one continuous (closed or open) path, not as a pile
+# of disconnected pieces each too small to mean anything on its own.
+
+# Endpoint weld tolerance: far below drawing scale, but real hand-drawn
+# segments meant to share a vertex are essentially never bit-for-bit
+# identical (unlike a programmatic "Explode", where pieces DO share exact
+# coordinates) — without welding first, Shapely's `linemerge()` treats even
+# a 0.0001 mm endpoint mismatch as two genuinely separate lines and never
+# reconnects them. Mirrors `PolylineView.merge_selected_segments_to_objects`'s
+# own `_MERGE_TOL` constant for consistency.
+OUTLINE_WELD_TOL = 0.01
+
+
+def is_open_polyline(
+    poly: list[tuple[float, float]], tol: float = OUTLINE_WELD_TOL
+) -> bool:
+    """True if ``poly`` is NOT a closed ring (first/last points not within
+    ``tol`` of each other, or fewer than 3 points so it can never close)."""
+    if len(poly) < 3:
+        return True
+    return math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) >= tol
+
+
+def weld_outline_endpoints(
+    polys: list[list[tuple[float, float]]], tol: float = OUTLINE_WELD_TOL
+) -> list[list[tuple[float, float]]]:
+    """Snap near-coincident endpoints (within ``tol``) across ALL polylines
+    to a shared point, so segments drawn by hand (whose shared vertices are
+    close but not bit-identical) still reconnect via ``linemerge``. Only
+    each polyline's first/last point is touched — interior vertices are
+    left alone."""
+    endpoints: list[tuple[int, bool, tuple[float, float]]] = []
+    for i, p in enumerate(polys):
+        if len(p) < 2:
+            continue
+        endpoints.append((i, True, p[0]))
+        endpoints.append((i, False, p[-1]))
+    n = len(endpoints)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    for i in range(n):
+        xi, yi = endpoints[i][2]
+        for j in range(i + 1, n):
+            xj, yj = endpoints[j][2]
+            if abs(xi - xj) < tol and abs(yi - yj) < tol:
+                union(i, j)
+
+    clusters: dict[int, list[tuple[float, float]]] = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(endpoints[i][2])
+    rep = {
+        r: (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+        for r, pts in clusters.items()
+    }
+
+    result = [list(p) for p in polys]
+    for i in range(n):
+        idx, is_first, _ = endpoints[i]
+        new_pt = rep[find(i)]
+        if is_first:
+            result[idx][0] = new_pt
+        else:
+            result[idx][-1] = new_pt
+    return result
+
+
+def merge_and_classify_outlines(
+    polys: list[list[tuple[float, float]]],
+) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
+    """Weld near-coincident endpoints, merge end-to-end-connected pieces
+    back into continuous paths, then classify each result as closed or
+    open. Returns (closed_polys, open_polys).
+
+    Without this, a shape broken into individual segments (via Explode, or
+    just drawn as separate strokes) would be entirely lost: no single small
+    piece is closed, and none has enough points to act as a cutout region
+    on its own either.
+    """
+    from shapely.ops import linemerge  # type: ignore[import-untyped]
+
+    welded = weld_outline_endpoints(polys)
+    lines = [LineString(p) for p in welded if len(p) >= 2]
+    if not lines:
+        return [], []
+    try:
+        # Pass the plain list directly — linemerge() raises on a bare single
+        # LineString (it wants a MultiLineString or a sequence of lines), and
+        # a single already-closed ring is common enough (any ordinary
+        # never-exploded outline) that this must not raise for it.
+        merged = linemerge(lines)
+    except (ValueError, TypeError):
+        merged = None
+    geoms = (
+        list(merged.geoms)
+        if merged is not None and hasattr(merged, "geoms")
+        else ([merged] if merged is not None else [])
+    )
+    closed: list[list[tuple[float, float]]] = []
+    open_: list[list[tuple[float, float]]] = []
+    for geom in geoms:
+        coords = [(float(x), float(y)) for x, y in geom.coords]
+        if len(coords) < 2:
+            continue
+        if len(coords) >= 3 and not is_open_polyline(coords):
+            closed.append(coords)
+        else:
+            open_.append(coords)
+    return closed, open_
+
+
+def nested_polygon_region(polylines: list[list[tuple[float, float]]]):
+    """Build a region from CLOSED polylines that respects nesting as holes.
+
+    A polyline fully contained inside another becomes a hole (even-odd
+    nesting, the standard SVG/DXF convention) instead of being silently
+    merged into a solid region by a plain union — that's why a donut used
+    to fill solid through the hole. Returns ``None`` if there are no usable
+    closed rings. Shared by the pattern-outline fill region computation
+    (``ui/pages/pattern/fill.py::build_fill_region``) and the custom-tile
+    generator below, so a nested closed ring means "hole" consistently
+    everywhere in the app, not just for the main outline.
+    """
+    from shapely.geometry import MultiPolygon  # type: ignore[import-untyped]
+    from shapely.ops import unary_union  # type: ignore[import-untyped]
+
+    rings: list[Polygon] = []
+    for pl in polylines:
+        if len(pl) < 3:
+            continue
+        try:
+            poly = Polygon(pl)
+        except (TypeError, ValueError):
+            continue
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty or poly.area <= 0:
+            continue
+        rings.append(poly)
+
+    if not rings:
+        return None
+
+    # Depth-of-nesting via a spatial index (STRtree) rather than an O(n^2)
+    # all-pairs comparison — for a large tiled pattern (hundreds/thousands
+    # of small rings from repeated tiles), naive all-pairs containment
+    # checks took over 10 SECONDS; almost every one of those comparisons
+    # was wasted work since a ring can only possibly be "inside" something
+    # whose bounding box it falls within. The STRtree prefilters candidates
+    # by bounding-box overlap first, so each ring only needs a handful of
+    # exact `.contains()` checks against genuinely nearby rings, not every
+    # other ring in the whole pattern. Even depth = solid, odd depth = hole
+    # (standard even-odd/SVG nesting rule) — this is purely GEOMETRIC
+    # nesting, not tied to whether a ring originated from an open shape.
+    from shapely import STRtree  # type: ignore[import-untyped]
+
+    tree = STRtree(rings)
+    depths = [0] * len(rings)
+    for i, p in enumerate(rings):
+        rp = p.representative_point()
+        for j in tree.query(rp):
+            j = int(j)
+            if j == i:
+                continue
+            other = rings[j]
+            if other.area > p.area and other.contains(rp):
+                depths[i] += 1
+
+    solids = [p for p, d in zip(rings, depths) if d % 2 == 0]
+    holes = [p for p, d in zip(rings, depths) if d % 2 == 1]
+
+    if not solids:
+        return None
+
+    solid_union = unary_union(solids)
+    if holes:
+        solid_union = solid_union.difference(unary_union(holes))
+
+    if solid_union.is_empty:
+        return None
+    if isinstance(solid_union, (Polygon, MultiPolygon)):
+        return solid_union
+    # GeometryCollection fallback: keep only polygonal parts.
+    polys = [
+        g
+        for g in getattr(solid_union, "geoms", [])
+        if isinstance(g, (Polygon, MultiPolygon))
+    ]
+    if not polys:
+        return None
+    return polys[0] if len(polys) == 1 else unary_union(polys)
+
+
 # ─── Hatch infill (laser-fill) ─────────────────────────────────────────────
 
 
@@ -403,11 +611,23 @@ HATCH_MODES = ("none", "lines", "crosshatch", "racecar", "concentric")
 
 def _polygon_from_polyline(
     poly: list[tuple[float, float]],
+    *,
+    force_close: bool = True,
 ) -> Polygon | None:
+    """Build a Shapely polygon from a flattened polyline.
+
+    ``force_close=True`` (default, matches historical behavior for callers
+    like the pattern-fade centroid calculation) implicitly closes an open
+    ring. Pass ``force_close=False`` to instead return None for a genuinely
+    open polyline — used by pattern-cell fill so open strokes aren't
+    silently treated as closed regions and filled unexpectedly.
+    """
     if not poly or len(poly) < 3:
         return None
     pts = list(poly)
     if pts[0] != pts[-1]:
+        if not force_close:
+            return None
         pts = pts + [pts[0]]
     try:
         shape = Polygon(pts)

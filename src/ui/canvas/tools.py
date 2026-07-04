@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 class CanvasTool:
     """Base tool: hooks return True when the event was fully handled."""
 
-    def __init__(self, view: "PolylineView") -> None:
+    def __init__(self, view: PolylineView) -> None:
         self.v = view
 
     def press(self, event: QMouseEvent) -> bool:
@@ -81,17 +81,15 @@ def _seg_hits_rect(
             if p < 0:
                 if r > t1:
                     return False
-                if r > t0:
-                    t0 = r
+                t0 = max(t0, r)
             else:
-                if r < t1:
-                    t1 = r
+                t1 = min(t1, r)
                 if r < t0:
                     return False
     return True
 
 
-def apply_edit_drag(v: "PolylineView", event: QMouseEvent) -> bool:
+def apply_edit_drag(v: PolylineView, event: QMouseEvent) -> bool:
     """Shared vertex-drag update used by both Edit mode and select-mode
     direct vertex editing. Returns True when a drag consumed the event."""
     if not (
@@ -151,7 +149,7 @@ def apply_edit_drag(v: "PolylineView", event: QMouseEvent) -> bool:
     return True
 
 
-def release_edit_drag(v: "PolylineView") -> None:
+def release_edit_drag(v: PolylineView) -> None:
     """Finish a vertex drag (Edit mode or select-mode direct editing)."""
     v._edit_dragging = False
     v._edit_linked_verts = set()
@@ -663,6 +661,20 @@ class SelectTool(CanvasTool):
         ):
             v._redraw()
             return True
+        if v._gizmo_move_rect is not None and v._gizmo_move_rect.contains(pt):
+            # Dedicated move handle — always drags the whole selection as a
+            # unit, bypassing per-shape hit-testing (handy for thin/tiny or
+            # overlapping shapes that are awkward to grab directly).
+            v._lmb_press = pos
+            v._lmb_prev = pos
+            v._lmb_target = None
+            v._move_origin = (wx0, wy0)
+            v._move_dragging = False
+            v._move_undo_pushed = False
+            v._move_snap_exclude_vertices = set()
+            v._move_snap_exclude_segments = set()
+            v._redraw()
+            return True
         return False
 
     def press(self, event: QMouseEvent) -> bool:
@@ -808,8 +820,9 @@ class SelectTool(CanvasTool):
                     new_wx, new_wy = v._c2w(pos.x(), pos.y())
                     raw_dx = new_wx - v._move_anchor_w[0]
                     raw_dy = new_wy - v._move_anchor_w[1]
-                    move_snap_type = ""
-                    snap_pos: tuple[float, float] | None = None
+                    snap_indicators: list[
+                        tuple[tuple[float, float], str, tuple[float, float]]
+                    ] = []
                     allow_snap = not bool(
                         event.modifiers() & Qt.KeyboardModifier.AltModifier
                     )
@@ -818,8 +831,7 @@ class SelectTool(CanvasTool):
                         if adj is not None:
                             raw_dx += adj[0]
                             raw_dy += adj[1]
-                            snap_pos = adj[2]
-                            move_snap_type = adj[3]
+                            snap_indicators = adj[2]
                     step_dx = raw_dx - v._move_applied_w[0]
                     step_dy = raw_dy - v._move_applied_w[1]
                     if abs(step_dx) > 1e-12 or abs(step_dy) > 1e-12:
@@ -843,9 +855,10 @@ class SelectTool(CanvasTool):
                             )
                         v._move_applied_w = (raw_dx, raw_dy)
                     v._cursor_wx, v._cursor_wy = new_wx, new_wy
-                    if move_snap_type and snap_pos is not None:
-                        v._hover_snap = snap_pos
-                        v._hover_snap_type = move_snap_type
+                    v._hover_snap_multi = snap_indicators
+                    if snap_indicators:
+                        v._hover_snap = snap_indicators[0][0]
+                        v._hover_snap_type = snap_indicators[0][1]
                     v._redraw()
                     return True
             if v._lmb_prev:

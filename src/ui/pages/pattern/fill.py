@@ -24,24 +24,24 @@ from typing import Any, Literal
 # Reuses the existing UI label so we don't have to migrate state.
 NULL_PATTERN = "— None —"
 
-FillMode = Literal["none", "lines"]
-_VALID_MODES: frozenset[str] = frozenset({"none", "lines"})
+FillMode = Literal["none", "lines", "crosshatch"]
+_VALID_MODES: frozenset[str] = frozenset({"none", "lines", "crosshatch"})
 
 
 @dataclass(frozen=True)
 class FillSpec:
     """Declarative description of how to fill a region with laser strokes.
 
-    Only ``mode == "lines"`` is implemented. Other modes (crosshatch,
-    concentric, racecar) can be added by extending :func:`apply_fill`.
+    Supported modes: ``"lines"`` (parallel hatch) and ``"crosshatch"``
+    (two sets of parallel lines at different angles).
     """
 
     mode: FillMode = "none"
     spacing: float = 1.0
     angle_deg: float = 0.0
     keep_pattern: bool = True  # if False, drop pattern strokes from output
-    target_outline: bool = True  # fill the input outline region
-    target_pattern: bool = False  # fill the closed pattern strokes
+    target_outline: bool = False  # fill the input outline region
+    target_pattern: bool = True  # fill the closed pattern strokes
     inset: float = 0.0  # shrink fill region by this many mm before hatching
 
     def __post_init__(self) -> None:
@@ -76,7 +76,7 @@ class FillSpec:
         mode = str(data.get("mode", "none") or "none")
         # Legacy modes we no longer support → fall back to lines so the user
         # still gets *some* fill, with a deprecation in the project log.
-        if mode in {"crosshatch", "racecar", "concentric"}:
+        if mode in {"racecar", "concentric"}:
             mode = "lines"
         if mode not in _VALID_MODES:
             mode = "none"
@@ -85,9 +85,11 @@ class FillSpec:
             spacing = 1.0
         angle_deg = float(data.get("angle_deg", data.get("angle", 0.0)) or 0.0)
         keep_pattern = bool(data.get("keep_pattern", data.get("keep_outline", True)))
-        # Default targets preserve historical behavior: fill the outline only.
-        target_outline = bool(data.get("target_outline", True))
-        target_pattern = bool(data.get("target_pattern", False))
+        # Default targets: fill the pattern cells, not the outline — most
+        # users pattern-fill wanting the individual repeated cells engraved,
+        # not a single solid region.
+        target_outline = bool(data.get("target_outline", False))
+        target_pattern = bool(data.get("target_pattern", True))
         inset = float(data.get("inset", 0.0) or 0.0)
         if inset < 0:
             inset = 0.0
@@ -118,65 +120,17 @@ def build_fill_region(polylines: list[list[tuple[float, float]]]) -> Any:
     region — that's why a donut used to fill solid through the hole.
 
     Returns ``None`` if there are no usable closed rings.
+
+    Delegates to ``src.backend.generators._shared.nested_polygon_region`` —
+    the SAME even-odd nesting logic is also needed by the custom-tile
+    generator, so it lives in the shared backend module; this wrapper is
+    kept for existing call sites here.
     """
-    from shapely.geometry import MultiPolygon, Polygon  # type: ignore[import-untyped]
-    from shapely.ops import unary_union  # type: ignore[import-untyped]
+    from src.backend.generators._shared import (
+        nested_polygon_region as _nested_polygon_region_shared,
+    )
 
-    rings: list[Any] = []
-    for pl in polylines:
-        if len(pl) < 3:
-            continue
-        try:
-            poly = Polygon(pl)
-        except (TypeError, ValueError):
-            continue
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if poly.is_empty or poly.area <= 0:
-            continue
-        rings.append(poly)
-
-    if not rings:
-        return None
-
-    # Sort largest-first so containment checks see candidate parents before
-    # children. For each ring, count how many other rings contain it; even
-    # depth = solid, odd depth = hole.
-    rings.sort(key=lambda p: p.area, reverse=True)
-    depths = [
-        sum(
-            1
-            for j, other in enumerate(rings)
-            if j != i
-            and other.area > p.area
-            and other.contains(p.representative_point())
-        )
-        for i, p in enumerate(rings)
-    ]
-
-    solids = [p for p, d in zip(rings, depths) if d % 2 == 0]
-    holes = [p for p, d in zip(rings, depths) if d % 2 == 1]
-
-    if not solids:
-        return None
-
-    solid_union = unary_union(solids)
-    if holes:
-        solid_union = solid_union.difference(unary_union(holes))
-
-    if solid_union.is_empty:
-        return None
-    if isinstance(solid_union, (Polygon, MultiPolygon)):
-        return solid_union
-    # GeometryCollection fallback: keep only polygonal parts.
-    polys = [
-        g
-        for g in getattr(solid_union, "geoms", [])
-        if isinstance(g, (Polygon, MultiPolygon))
-    ]
-    if not polys:
-        return None
-    return polys[0] if len(polys) == 1 else unary_union(polys)
+    return _nested_polygon_region_shared(polylines)
 
 
 def apply_fill(
@@ -211,6 +165,8 @@ def apply_fill(
 
     if spec.mode == "lines":
         return _fill_lines(region_geom, spec.spacing, spec.angle_deg)
+    if spec.mode == "crosshatch":
+        return _fill_crosshatch(region_geom, spec.spacing, spec.angle_deg)
     return []
 
 
@@ -311,3 +267,20 @@ def _fill_lines(
             for line in out_rotated
         ]
     return out_rotated
+
+
+def _fill_crosshatch(
+    region_geom: Any,
+    spacing: float,
+    angle_deg: float,
+) -> list[list[tuple[float, float]]]:
+    """Crosshatch fill: two sets of parallel lines at ±45° to the base angle.
+
+    The crosshatch pattern is created by generating two sets of parallel
+    hatch lines — one rotated +45° and one rotated -45° from the base
+    ``angle_deg`` — and combining them.  This gives the classic diagonal
+    crosshatch look used in many laser-engraving applications.
+    """
+    lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0)
+    lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0)
+    return lines_1 + lines_2

@@ -58,6 +58,55 @@ class CanvasLayerSidebarController:
             )
         if hasattr(self._layers_tree, "layerSoloRequested"):
             self._layers_tree.layerSoloRequested.connect(self.on_solo_requested)
+        # Shape operation signals — group, ungroup, merge, copy.
+        if hasattr(self._layers_tree, "shapesGroupRequested"):
+            self._layers_tree.shapesGroupRequested.connect(
+                lambda layer, keys: self._handle_shape_operation("group", layer, keys)
+            )
+        if hasattr(self._layers_tree, "shapesUngroupRequested"):
+            self._layers_tree.shapesUngroupRequested.connect(
+                lambda layer, keys: self._handle_shape_operation("ungroup", layer, keys)
+            )
+        if hasattr(self._layers_tree, "shapesMergeRequested"):
+            self._layers_tree.shapesMergeRequested.connect(
+                lambda layer, keys: self._handle_shape_operation("merge", layer, keys)
+            )
+        if hasattr(self._layers_tree, "shapesCopyRequested"):
+            self._layers_tree.shapesCopyRequested.connect(
+                lambda layer, keys: self._handle_shape_operation("copy", layer, keys)
+            )
+
+    def _handle_shape_operation(self, op: str, layer: str, keys: list) -> None:
+        """Dispatch shape operations from the layer tree to the canvas."""
+        from .model import flatten_shape_keys
+
+        indices = flatten_shape_keys(keys)
+        if not indices:
+            return
+        canvas = self._canvas
+        if op == "group":
+            if hasattr(canvas, "group_indices"):
+                canvas.group_indices(indices)
+        elif op == "ungroup":
+            if hasattr(canvas, "ungroup_indices"):
+                canvas.ungroup_indices(indices)
+        elif op == "merge":
+            if hasattr(canvas, "merge_selected_segments_to_objects"):
+                # Temporarily select, merge, then restore selection.
+                canvas.set_selection(indices)
+                canvas.merge_selected_segments_to_objects()
+        elif op == "copy" and hasattr(canvas, "_clipboard"):
+            ents = canvas._entities
+            clip_items = [
+                {
+                    "points": list(ents[i].points),
+                    "kind": ents[i].kind,
+                    "meta": ents[i].meta,
+                }
+                for i in indices
+                if 0 <= i < len(ents)
+            ]
+            canvas._clipboard = clip_items
 
     @property
     def state(self) -> LayerTreeState:
@@ -85,6 +134,16 @@ class CanvasLayerSidebarController:
             if isinstance(row, dict)
         }
         self._layers_tree.set_layers(rows)
+        # Rebuilding the tree wipes its row selection — reapply whatever is
+        # currently selected on the canvas so the highlight survives status
+        # refreshes (e.g. clicking a shape on a non-active layer switches
+        # the active layer, which triggers a refresh right after the shape
+        # selection was set; without this, the tree would show only the
+        # newly-active LAYER highlighted, not the actual selected shape).
+        get_indices = getattr(self._canvas, "get_selection_indices", None)
+        select_keys = getattr(self._layers_tree, "select_shape_keys", None)
+        if callable(get_indices) and callable(select_keys):
+            select_keys(get_indices())
 
     def on_layer_visibility_changed(self, layer: str, visible: bool) -> None:
         if self._visibility_adapter is not None:

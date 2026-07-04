@@ -161,15 +161,25 @@ class CanvasLayerTreeModule(QWidget):
         self.tree = tree
         self.controller = controller
 
+        # Canvas -> tree sync: highlight the tree rows for whatever is
+        # currently selected on the canvas (click a shape, group, etc.).
+        if hasattr(canvas, "selectionChanged"):
+            canvas.selectionChanged.connect(self._sync_tree_selection)
+
     @property
     def state(self) -> LayerTreeState:
         return self.controller.state
 
     def refresh_tree(self) -> None:
         self.controller.refresh_tree()
+        self._sync_tree_selection()
 
     def apply_current_visibility(self) -> None:
         self.controller.apply_current_visibility()
+
+    def _sync_tree_selection(self, _count: int = 0) -> None:
+        if hasattr(self._canvas, "get_selection_indices"):
+            self.tree.select_shape_keys(self._canvas.get_selection_indices())
 
     def _default_select(self, indices: list[int]) -> None:
         if hasattr(self._canvas, "set_selection"):
