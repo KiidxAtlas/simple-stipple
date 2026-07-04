@@ -629,3 +629,20 @@ def test_undo_redo_deep_sequence(qapp):
         assert v.redo()
     assert v.poly_count == 6
     assert not v.redo()
+
+
+def test_snap_engine_vertex_and_guides(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.fit()
+    # near the (10,10) corner in screen space → vertex snap
+    cx, cy = v._w2c(10.2, 9.9)
+    res = v._resolve_snap(cx, cy, 10.2, 9.9)
+    assert res is not None
+    assert res[0] == pytest.approx(10.0) and res[1] == pytest.approx(10.0)
+
+    # guide lines participate in snapping
+    v._guides.append(("v", 20.0))
+    cx, cy = v._w2c(20.05, 30.0)
+    res = v._resolve_snap(cx, cy, 20.05, 30.0)
+    assert res is not None and res[2] == "guide"
+    assert res[0] == pytest.approx(20.0)

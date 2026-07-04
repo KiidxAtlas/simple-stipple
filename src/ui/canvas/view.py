@@ -61,14 +61,11 @@ from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas import tools as canvas_tools
 from src.ui.canvas.entities import EntityRecord
 from src.ui.canvas.render import CanvasRenderer
+from src.ui.canvas.snap import SnapEngine
 from src.ui.canvas.undo import UndoStore
-from src.ui.canvas.shape_snapping import ShapeSnapEngine
 from src.ui.core.focus_policy import blur_focused_line_edit
 from src.backend.behaviors.snapping import (
-    resolve_snap as _legacy_resolve_snap,
-    resolve_drag_snap as _legacy_resolve_drag_snap,
-    snap_to_polyline as _legacy_snap_to_polyline,
-    angle_snap as _legacy_angle_snap,
+    snap_to_polyline as _snap_to_polyline_candidates,
 )
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
@@ -354,6 +351,11 @@ class PolylineView(
 
         # Undo / redo history (delta-based; see src/ui/canvas/undo.py)
         self._undo_store = UndoStore()
+
+        # Unified snap engine (src/ui/canvas/snap.py) and guide lines
+        # (("h", y_world) or ("v", x_world)); guides participate in snapping.
+        self._snap_engine = SnapEngine(self)
+        self._guides: list[tuple[str, float]] = []
 
         # Fit scale for zoom-% display
         self._fit_scale: float = 1.0
@@ -2986,37 +2988,6 @@ class PolylineView(
 
     # ---- Snap helpers (inlined from _SnapMixin) ----
 
-    def _shape_snap_candidate(self, cx: float, cy: float) -> tuple[float, float, str] | None:
-        best: tuple[float, float, str] | None = None
-        best_dist = float("inf")
-        for shape in self._snap_shapes():
-            if not getattr(shape, "visible", True):
-                continue
-            for sx, sy, snap_type in ShapeSnapEngine.get_snap_candidates(shape):
-                pcx, pcy = self._w2c(sx, sy)
-                dist = math.hypot(cx - pcx, cy - pcy)
-                if dist <= ShapeSnapEngine.SNAP_RADIUS and dist < best_dist:
-                    best_dist = dist
-                    best = (sx, sy, snap_type)
-        return best
-
-    def _pick_better_snap(
-        self,
-        cx: float,
-        cy: float,
-        first: tuple[float, float, str] | None,
-        second: tuple[float, float, str] | None,
-    ) -> tuple[float, float, str] | None:
-        if first is None:
-            return second
-        if second is None:
-            return first
-        fcx, fcy = self._w2c(first[0], first[1])
-        scx, scy = self._w2c(second[0], second[1])
-        fd = math.hypot(cx - fcx, cy - fcy)
-        sd = math.hypot(cx - scx, cy - scy)
-        return second if sd < fd else first
-
     def _snap_to_polyline(
         self,
         cx: float,
@@ -3024,7 +2995,7 @@ class PolylineView(
         *,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
-        return _legacy_snap_to_polyline(
+        return _snap_to_polyline_candidates(
             cx, cy, [e.points for e in self._entities], self._noninteractive_indices(), self._scale,
             self._w2c, self._c2w, self._poly_bounds,
             self._is_poly_closed, self._segment_intersection_point,
@@ -3038,16 +3009,11 @@ class PolylineView(
         allow_polyline: bool = True, allow_grid: bool = True,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
-        legacy = _legacy_resolve_snap(
-            cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
-            grid_snap_enabled=self._grid_snap, grid_spacing=self._grid_spacing,
-            polylines=[e.points for e in self._entities], hidden_polys=self._noninteractive_indices(), scale=self._scale,
-            w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
-            is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
-            mode=self._mode, reference_point=reference_point, draw_points=self._draw_pts,
+        return self._snap_engine.query(
+            cx, cy, wx, wy,
+            allow_polyline=allow_polyline, allow_grid=allow_grid,
+            reference_point=reference_point,
         )
-        shape_candidate = self._shape_snap_candidate(cx, cy)
-        return self._pick_better_snap(cx, cy, legacy, shape_candidate)
 
     def _resolve_drag_snap(
         self,
@@ -3058,20 +3024,16 @@ class PolylineView(
         exclude_segments: set[tuple[int, int]] | None = None,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
-        legacy = _legacy_resolve_drag_snap(
-            cx, cy, wx, wy, allow_polyline=allow_polyline, allow_grid=allow_grid,
-            allow_vertex=allow_vertex, grid_snap_enabled=self._grid_snap,
-            grid_spacing=self._grid_spacing, polylines=[e.points for e in self._entities], hidden_polys=self._noninteractive_indices(),
-            scale=self._scale, w2c=self._w2c, c2w=self._c2w, poly_bounds=self._poly_bounds,
-            is_poly_closed=self._is_poly_closed, segment_intersection_point=self._segment_intersection_point,
-            mode=self._mode, exclude_vertices=exclude_vertices, exclude_segments=exclude_segments,
-            reference_point=reference_point, draw_points=self._draw_pts,
+        return self._snap_engine.query(
+            cx, cy, wx, wy, drag=True,
+            allow_polyline=allow_polyline, allow_grid=allow_grid,
+            allow_vertex=allow_vertex,
+            exclude_vertices=exclude_vertices, exclude_segments=exclude_segments,
+            reference_point=reference_point,
         )
-        shape_candidate = self._shape_snap_candidate(cx, cy)
-        return self._pick_better_snap(cx, cy, legacy, shape_candidate)
 
     def _angle_snap(self, ax: float, ay: float, wx: float, wy: float) -> tuple[float, float]:
-        return _legacy_angle_snap(ax, ay, wx, wy)
+        return self._snap_engine.angle(ax, ay, wx, wy)
 
     # ---- Shape preview helpers (inlined from _DrawModeMixin) ----
 
