@@ -5,7 +5,11 @@ from __future__ import annotations
 import math
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import LineString, Point, Polygon  # type: ignore[import-untyped]
+from shapely.geometry import (
+    LineString,  # type: ignore[import-untyped]
+    Point,
+    Polygon,
+)
 
 from src.backend.generators._shared import (
     _clip_to_outline,
@@ -255,7 +259,7 @@ def gen_mesh(outline_poly, r: float, spacing: float) -> list[list[tuple[float, f
     while y <= maxy + pad:
         x = minx - pad
         while x <= maxx + pad:
-            circle = Point(x, y).buffer(r, resolution=16)
+            circle = Point(x, y).buffer(r, quad_segs=16)
             _clip_to_outline(circle, outline_poly, prep, result)
             x += spacing
         y += spacing

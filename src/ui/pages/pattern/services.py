@@ -7,8 +7,6 @@ import math
 from typing import Any, cast
 from uuid import uuid4
 
-LOGGER = logging.getLogger(__name__)
-
 from shapely import prepared as _shp_prepared  # type: ignore[import-untyped]
 
 from src.backend.dxf.io import (
@@ -41,6 +39,8 @@ from src.ui.pages.pattern.fill import (
     apply_fill,
     build_fill_region,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _clip_rotated_element(
@@ -501,9 +501,7 @@ class PatternProcessingService:
             cx = float(_centroid.x)
             cy = float(_centroid.y)
         if abs(rot_deg) > 1e-9:
-            from shapely.affinity import (
-                rotate as _shp_rot,  # type: ignore[import-untyped]
-            )
+            from shapely.affinity import rotate as _shp_rot  # type: ignore[import-untyped]
 
             gen_outline = _shp_rot(active_region, -rot_deg, origin=(cx, cy))
         else:
@@ -624,9 +622,7 @@ class PatternProcessingService:
                     # Polygonize any remaining linework and fill resulting polygons.
                     if pending_lines:
                         try:
-                            from shapely.geometry import (
-                                LineString as _LS,  # type: ignore[import-untyped]
-                            )
+                            from shapely.geometry import LineString as _LS  # type: ignore[import-untyped]
                             from shapely.ops import (  # type: ignore[import-untyped]
                                 linemerge,
                                 polygonize,
@@ -634,7 +630,7 @@ class PatternProcessingService:
                             )
 
                             lines = [_LS(p) for p in pending_lines if len(p) >= 2]
-                            merged = linemerge(unary_union(lines))
+                            merged = linemerge(unary_union(lines))  # type: ignore[arg-type]
                             polys_from_lines = list(polygonize(merged))
                             for shp in polys_from_lines:
                                 try:

@@ -9,6 +9,7 @@ works without any modification.
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING, cast
 
 from PIL import Image as PILImage
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
@@ -34,66 +35,136 @@ from src.backend.geometry.primitives import (
 )
 from src.backend.geometry.spline import build_spline_poly
 from src.constants import DIM, POLY, Q_BG, SEL
-from src.ui.canvas._constants import (
-    BADGE_BG as _BADGE_BG,
-)
-from src.ui.canvas._constants import (
-    BADGE_DIM as _BADGE_DIM,
-)
-from src.ui.canvas._constants import (
-    BADGE_TEXT as _BADGE_TEXT,
-)
-from src.ui.canvas._constants import (
-    DRAW_COLOR as _DRAW_COLOR,
-)
-from src.ui.canvas._constants import (
-    DRAW_LINE_W as _DRAW_LINE_W,
-)
-from src.ui.canvas._constants import (
-    DRAW_VERT_R as _DRAW_VERT_R,
-)
-from src.ui.canvas._constants import (
-    GRID_AXIS as _GRID_AXIS,
-)
-from src.ui.canvas._constants import (
-    GRID_MAJOR as _GRID_MAJOR,
-)
-from src.ui.canvas._constants import (
-    GRID_MINOR as _GRID_MINOR,
-)
-from src.ui.canvas._constants import (
-    GUIDE_COLOR as _GUIDE_COLOR,
-)
-from src.ui.canvas._constants import (
-    HANDLE as _HANDLE,
-)
-from src.ui.canvas._constants import (
-    HANDLE_ACTIVE as _HANDLE_ACTIVE,
-)
-from src.ui.canvas._constants import (
-    HANDLE_HOVER as _HANDLE_HOVER,
-)
-from src.ui.canvas._constants import (
-    HANDLE_R as _HANDLE_R,
-)
-from src.ui.canvas._constants import (
-    MEASURE_COLOR as _MEASURE_COLOR,
-)
-from src.ui.canvas._constants import (
-    ORTHO_COLOR as _ORTHO_COLOR,
-)
-from src.ui.canvas._constants import (
-    RUBBER_W as _RUBBER_W,
-)
-from src.ui.canvas._constants import (
-    SELECT_PT as _SELECT_PT,
-)
-from src.ui.canvas._constants import (
-    SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE,
-)
-from src.ui.canvas._constants import (
-    SNAP_CLOSE as _SNAP_CLOSE,
-)
+from src.ui.canvas._constants import BADGE_BG as _BADGE_BG
+from src.ui.canvas._constants import BADGE_DIM as _BADGE_DIM
+from src.ui.canvas._constants import BADGE_TEXT as _BADGE_TEXT
+from src.ui.canvas._constants import DRAW_COLOR as _DRAW_COLOR
+from src.ui.canvas._constants import DRAW_LINE_W as _DRAW_LINE_W
+from src.ui.canvas._constants import DRAW_VERT_R as _DRAW_VERT_R
+from src.ui.canvas._constants import GRID_AXIS as _GRID_AXIS
+from src.ui.canvas._constants import GRID_MAJOR as _GRID_MAJOR
+from src.ui.canvas._constants import GRID_MINOR as _GRID_MINOR
+from src.ui.canvas._constants import GUIDE_COLOR as _GUIDE_COLOR
+from src.ui.canvas._constants import HANDLE as _HANDLE
+from src.ui.canvas._constants import HANDLE_ACTIVE as _HANDLE_ACTIVE
+from src.ui.canvas._constants import HANDLE_HOVER as _HANDLE_HOVER
+from src.ui.canvas._constants import HANDLE_R as _HANDLE_R
+from src.ui.canvas._constants import MEASURE_COLOR as _MEASURE_COLOR
+from src.ui.canvas._constants import ORTHO_COLOR as _ORTHO_COLOR
+from src.ui.canvas._constants import RUBBER_W as _RUBBER_W
+from src.ui.canvas._constants import SELECT_PT as _SELECT_PT
+from src.ui.canvas._constants import SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE
+from src.ui.canvas._constants import SNAP_CLOSE as _SNAP_CLOSE
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QWidget
+
+    from src.ui.canvas.entities import EntityRecord
+
+    class _RendererHost(Protocol):
+        """Structural view of the PolylineView state CanvasRenderer's paint
+        helpers read and write. PolylineView is assembled via multiple
+        inheritance (``class PolylineView(QWidget, CanvasRenderer)``), so a
+        type checker examining this file alone can't see PolylineView's
+        attributes — this protocol closes that gap without creating a real
+        (circular) runtime dependency on view.py.
+        """
+
+        RULER_PX: int
+        _accent_polys: dict[int, str]
+        _angle_snap_active: bool
+        _band_start: QPointF | None
+        _bg_h_mm: float
+        _bg_pil: PILImage.Image | None
+        _bg_w_mm: float
+        _cursor_wx: float | None
+        _cursor_wy: float | None
+        _draw_arc_mode: str
+        _draw_arc_pts: list[tuple[float, float]]
+        _draw_constraint: str | None
+        _draw_construction_mode: bool
+        _draw_primitive: str
+        _draw_pts: list[tuple[float, float]]
+        _draw_shape_anchor_w: tuple[float, float] | None
+        _draw_shape_cursor_w: tuple[float, float] | None
+        _draw_shape_preview_active: bool
+        _draw_snap: tuple[float, float] | None
+        _draw_snap_type: str | None
+        _edit_dragging: bool
+        _edit_poly: int | None
+        _edit_selected_verts: set[tuple[int, int]]
+        _edit_vert: int | None
+        _entities: list[EntityRecord]
+        _fit_scale: float
+        _ghost_polys: list[list[tuple[float, float]]]
+        _ghost_visible: bool
+        _grid_snap: bool
+        _grid_spacing: float
+        _grid_visible: bool
+        _guides: list[tuple[str, float]]
+        _hover_poly: int | None
+        _hover_snap: tuple[float, float] | None
+        _hover_snap_multi: list[tuple[tuple[float, float], str, tuple[float, float]]]
+        _hover_snap_type: str | None
+        _hover_vert: tuple[int, int] | None
+        _img_bounds: tuple[float, float] | None
+        _layer_colors: dict[str, str]
+        _lmb_prev: QPointF | None
+        _mbtn_rect: tuple[float, float, float, float]
+        _measure_anchor: tuple[float, float] | None
+        _measure_edit: QLineEdit | None
+        _measure_end: tuple[float, float] | None
+        _measure_hover: tuple[float, float] | None
+        _measure_hover_pre: tuple[float, float] | None
+        _measure_mode: bool
+        _mode: str
+        _rulers_visible: bool
+        _scale: float
+        _sel: set[int]
+        _shift_drag: bool
+        _show_selection_bbox: bool
+
+        def _on_active_layer(self, e: EntityRecord) -> bool: ...
+        def _is_near_start(self) -> bool: ...
+        def _w2c(self, x: float, y: float) -> tuple[float, float]: ...
+        def _c2w(self, cx: float, cy: float) -> tuple[float, float]: ...
+        def _redraw(self) -> None: ...
+        def _refresh_draw_sidebar_state(self) -> None: ...
+        def _scale_all(self, factor: float) -> None: ...
+        def _selected_single_line(self) -> int | None: ...
+        def _set_selected_height(self, height: float) -> bool: ...
+        def _set_selected_width(self, width: float) -> bool: ...
+        def _set_selected_line_length(self, length: float) -> bool: ...
+        def _set_selected_line_angle(self, angle_deg: float) -> bool: ...
+
+        def _snap_to_polyline(
+            self,
+            cx: float,
+            cy: float,
+            *,
+            reference_point: tuple[float, float] | None = None,
+        ) -> tuple[float, float, str] | None: ...
+
+        def _selection_bounds(
+            self, indices: list[int] | None = None
+        ) -> tuple[float, float, float, float] | None: ...
+
+        @staticmethod
+        def _poly_rect_for_culling(
+            poly: list[tuple[float, float]], *, epsilon: float = 1e-6
+        ) -> QRectF: ...
+
+        # QWidget surface the paint helpers use directly.
+        def width(self) -> int: ...
+        def height(self) -> int: ...
+        def rect(self) -> QRect: ...
+
+    _RendererBase = _RendererHost
+else:
+    _RendererBase = object
 
 _FONT_HEL_9 = QFont("Helvetica", 9)
 _FONT_HEL_9_DEMIBOLD = QFont("Helvetica", 9, QFont.Weight.DemiBold)
@@ -113,7 +184,7 @@ def _pil_to_qpixmap(pil_img: PILImage.Image) -> QPixmap:
     return QPixmap.fromImage(qimg.copy())
 
 
-class CanvasRenderer:
+class CanvasRenderer(_RendererBase):
     """Mixin providing all ``_paint_*`` draw helpers for :class:`PolylineView`.
 
     Do not instantiate directly — inherit alongside ``QWidget``.
@@ -153,9 +224,7 @@ class CanvasRenderer:
         source_rect = QRectF(self._bg_pixmap.rect())
         painter.drawPixmap(target_rect, self._bg_pixmap, source_rect)
 
-    def _paint_ghost_polys(
-        self, painter: QPainter, visible: QRectF
-    ) -> None:
+    def _paint_ghost_polys(self, painter: QPainter, visible: QRectF) -> None:
         if not self._ghost_polys or not self._ghost_visible:
             return
         ghost_color = QColor(POLY)
@@ -178,8 +247,7 @@ class CanvasRenderer:
                 gpath.lineTo(px, py_)
             if (
                 len(poly) >= 3
-                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1])
-                < 0.5
+                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
             ):
                 gpath.closeSubpath()
             painter.drawPath(gpath)
@@ -199,9 +267,7 @@ class CanvasRenderer:
                 # the layer's assigned color (dimmed) when set, so switching
                 # the active layer doesn't lose the multi-layer color context.
                 layer_hex = (
-                    self._layer_colors.get(ent.layer)
-                    if ent.layer is not None
-                    else None
+                    self._layer_colors.get(ent.layer) if ent.layer is not None else None
                 )
                 ghost_color = QColor(layer_hex) if layer_hex else QColor(POLY)
                 ghost_color.setAlpha(140)  # doubled from 70 for better visibility
@@ -217,9 +283,7 @@ class CanvasRenderer:
                     gpath.lineTo(px, py_)
                 if (
                     len(poly) >= 3
-                    and math.hypot(
-                        poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]
-                    )
+                    and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1])
                     < 0.5
                 ):
                     gpath.closeSubpath()
@@ -280,7 +344,18 @@ class CanvasRenderer:
             painter.drawPath(path)
 
     _RULER_STEPS = (
-        0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0,
+        0.1,
+        0.2,
+        0.5,
+        1.0,
+        2.0,
+        5.0,
+        10.0,
+        20.0,
+        50.0,
+        100.0,
+        200.0,
+        500.0,
         1000.0,
     )
 
@@ -432,9 +507,7 @@ class CanvasRenderer:
 
     def _paint_edit_handles(self, painter: QPainter) -> None:
         for pi, poly in enumerate(e.points for e in self._entities):
-            kind = (
-                self._entities[pi].kind if pi < len(self._entities) else "polyline"
-            )
+            kind = self._entities[pi].kind if pi < len(self._entities) else "polyline"
             if kind in {"arc", "circle", "ellipse"}:
                 continue
             for vi, pt in enumerate(poly):
@@ -473,9 +546,7 @@ class CanvasRenderer:
         for pi in sorted(self._sel):
             if pi < 0 or pi >= len(self._entities):
                 continue
-            kind = (
-                self._entities[pi].kind if pi < len(self._entities) else "polyline"
-            )
+            kind = self._entities[pi].kind if pi < len(self._entities) else "polyline"
             if kind in {"arc", "circle", "ellipse"}:
                 continue
             poly = self._entities[pi].points
@@ -1051,20 +1122,23 @@ class CanvasRenderer:
             ("w", left, mid_y),
         ]
         self._gizmo_handle_rects = []
-        
+
         # Handle styling: filled circles with blue border.
         handle_pen = QPen(QColor("#79c0ff"), 1.5)
         handle_brush = QBrush(QColor("#0d1117"))
         painter.setPen(handle_pen)
         painter.setBrush(handle_brush)
-        
+
         for name, hx, hy in handles:
             rect = QRectF(hx - hs, hy - hs, hs * 2, hs * 2)
             # Generous hit area (16px), tight visual (12px).
-            self._gizmo_handle_rects.append(
-                (name, rect.adjusted(-4, -4, 4, 4))
+            self._gizmo_handle_rects.append((name, rect.adjusted(-4, -4, 4, 4)))
+            painter.drawEllipse(
+                int(rect.x() - 2),
+                int(rect.y() - 2),
+                int(rect.width() + 4),
+                int(rect.height() + 4),
             )
-            painter.drawEllipse(int(rect.x() - 2), int(rect.y() - 2), int(rect.width() + 4), int(rect.height() + 4))
 
         # Rotate handle: orange circle with rotation icon.
         rotate_pen = QPen(QColor("#f5a623"), 1.5)
@@ -1090,9 +1164,7 @@ class CanvasRenderer:
         move_brush = QBrush(QColor(13, 17, 23, 235))
         painter.setPen(move_pen)
         painter.setBrush(move_brush)
-        painter.drawEllipse(
-            QPointF(mid_x, mid_y), move_size, move_size
-        )
+        painter.drawEllipse(QPointF(mid_x, mid_y), move_size, move_size)
         painter.setPen(QPen(QColor("#79c0ff"), 1.6))
         arm = move_size * 0.62
         head = move_size * 0.3
@@ -1104,11 +1176,17 @@ class CanvasRenderer:
             perp_x, perp_y = -ddy, ddx
             painter.drawLine(
                 QPointF(tip_x, tip_y),
-                QPointF(tip_x - ddx * head + perp_x * head, tip_y - ddy * head + perp_y * head),
+                QPointF(
+                    tip_x - ddx * head + perp_x * head,
+                    tip_y - ddy * head + perp_y * head,
+                ),
             )
             painter.drawLine(
                 QPointF(tip_x, tip_y),
-                QPointF(tip_x - ddx * head - perp_x * head, tip_y - ddy * head - perp_y * head),
+                QPointF(
+                    tip_x - ddx * head - perp_x * head,
+                    tip_y - ddy * head - perp_y * head,
+                ),
             )
 
     def _paint_selection_bbox(self, painter: QPainter, visible: QRectF) -> None:
@@ -1301,7 +1379,7 @@ class CanvasRenderer:
             )
 
     def paintEvent(self, event, /):
-        painter = QPainter(self)
+        painter = QPainter(cast("QWidget", self))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w = max(self.width(), 100)
@@ -1634,16 +1712,14 @@ class CanvasRenderer:
 
     def _paint_chrome_rulers(self, painter: QPainter) -> None:
         """Rulers paint over everything else (chrome layer)."""
-        self._paint_rulers(
-            painter, max(self.width(), 100), max(self.height(), 100)
-        )
+        self._paint_rulers(painter, max(self.width(), 100), max(self.height(), 100))
 
     def _show_flash(self, text: str, duration_ms: int = 1200) -> None:
         """Show a brief flash indicator on the canvas."""
         self._flash_text = text
         if self._flash_timer is not None:
             self._flash_timer.stop()
-        self._flash_timer = QTimer(self)
+        self._flash_timer = QTimer(cast("QWidget", self))
         self._flash_timer.setSingleShot(True)
         self._flash_timer.timeout.connect(self._clear_flash)
         self._flash_timer.start(duration_ms)
@@ -1681,18 +1757,18 @@ class CanvasRenderer:
         - Modern dark theme with subtle borders
         - Monospace font for precise number reading
         """
-        edit = QLineEdit(self)
+        edit = QLineEdit(cast("QWidget", self))
         edit.setFixedWidth(max(width, 60))
         edit.setFixedHeight(height)
         edit.setAlignment(align)
         edit.setStyleSheet(self._DIM_STYLE)
-        
+
         # Store hover style for focus events.
         edit.setProperty("_dim_hover_style", self._DIM_STYLE_HOVER)
-        
+
         if placeholder:
             edit.setPlaceholderText(placeholder)
-        edit.installEventFilter(self)
+        edit.installEventFilter(cast("QWidget", self))
         edit.show()
         return edit
 
@@ -1982,7 +2058,7 @@ class CanvasRenderer:
         chx, chy = self._w2c(hx, hy)
         mx, my = (cax + chx) / 2, (cay + chy) / 2
 
-        le = QLineEdit(self)
+        le = QLineEdit(cast("QWidget", self))
         le.setText(f"{dist:.2f}")
         le.setFixedWidth(100)
         le.setFixedHeight(24)
@@ -2033,4 +2109,3 @@ class CanvasRenderer:
         self._redraw()
 
     # ── Clipboard & nudge helpers ─────────────────────────────────────────────
-

@@ -28,4 +28,4 @@ def test_apply_fill_lines_skip_hole():
 
 def test_fillspec_rejects_unknown_mode():
     with pytest.raises(ValueError):
-        FillSpec(mode="nonsense")
+        FillSpec(mode="nonsense")  # type: ignore[arg-type]  # deliberately invalid

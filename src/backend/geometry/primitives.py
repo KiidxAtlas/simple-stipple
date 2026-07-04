@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import TypeAlias
 
-from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
+from shapely.geometry import (
+    LineString,  # type: ignore[import-untyped]
+    Polygon,
+)
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 
 from src.backend.geometry.shapes import (

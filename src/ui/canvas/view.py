@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from copy import deepcopy
-from typing import Any
+from typing import Any, ClassVar, Literal, cast, overload
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
@@ -19,19 +19,8 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import (
-    QKeyEvent,
-    QMouseEvent,
-    QPainter,
-    QPixmap,
-    QWheelEvent,
-)
-from PySide6.QtWidgets import (
-    QApplication,
-    QLineEdit,
-    QMenu,
-    QWidget,
-)
+from PySide6.QtGui import QKeyEvent, QMouseEvent, QPainter, QPixmap, QWheelEvent
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
 from shapely.errors import GEOSException
 from shapely.geometry import (
     GeometryCollection,
@@ -45,24 +34,22 @@ from shapely.geometry import (
 from shapely.ops import linemerge, unary_union
 from shapely.ops import split as shapely_split
 
+from src.backend.behaviors.snapping import polygon_centroid as _polygon_centroid
+from src.backend.behaviors.snapping import (
+    snap_to_polyline as _snap_to_polyline_candidates,
+)
 from src.backend.geometry.primitives import (
     build_circle_poly,
     build_ellipse_poly,
     build_polygon_poly,
     build_rect_poly,
 )
-from src.constants import DRAG_THRESH
-from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
-from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
-
-_MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
-from src.backend.behaviors.snapping import polygon_centroid as _polygon_centroid
-from src.backend.behaviors.snapping import (
-    snap_to_polyline as _snap_to_polyline_candidates,
-)
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
+from src.constants import DRAG_THRESH
 from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas import tools as canvas_tools
+from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
+from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
 from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 from src.ui.canvas.entities import EntityRecord
@@ -72,6 +59,8 @@ from src.ui.canvas.undo import UndoStore
 from src.ui.core.focus_policy import blur_focused_line_edit
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
+
+_MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 
 
 def _rehydrate_meta(meta: dict) -> dict:
@@ -205,7 +194,9 @@ class PolylineView(
         self._layer_order = [n for n in self._layer_order if n != name]
         if not self._layer_order:
             self._layer_order = [
-                self._active_layer if self._active_layer != name else "Layer 1"
+                self._active_layer
+                if self._active_layer is not None and self._active_layer != name
+                else "Layer 1"
             ]
         if self._active_layer == name:
             self._active_layer = self._layer_order[0]
@@ -472,6 +463,8 @@ class PolylineView(
         self._hover_vert: tuple[int, int] | None = None
         # Select-mode hover pre-highlight: which polyline a click would pick
         self._hover_poly: int | None = None
+        # Last displayed cursor position (rounded), to skip redundant repaints
+        self._prev_cursor_display: tuple[float, float] | None = None
 
         # Move state (select mode drag-to-move). Object snapping works on
         # absolute deltas from the drag anchor: the selection's own vertices
@@ -632,9 +625,7 @@ class PolylineView(
             self._redraw()
         self._notify()
 
-    def get_view_state(
-        self,
-    ) -> dict[str, float | str | bool | list[int] | dict[str, int]]:
+    def get_view_state(self) -> dict[str, Any]:
         return {
             "scale": self._scale,
             "ox": self._ox,
@@ -653,7 +644,7 @@ class PolylineView(
             "group_labels": {str(k): v for k, v in self._group_labels.items()},
         }
 
-    def set_view_state(self, state: dict[str, float | str | bool | list[int]]) -> None:
+    def set_view_state(self, state: dict[str, Any]) -> None:
         scale_state = state.get("scale", self._scale)
         ox_state = state.get("ox", self._ox)
         oy_state = state.get("oy", self._oy)
@@ -689,17 +680,13 @@ class PolylineView(
         raw_guides = state.get("guides", [])
         if isinstance(raw_guides, list):
             self._guides = [
-                (str(o), float(c))
-                for o, c in raw_guides
-                if str(o) in ("h", "v")
+                (str(o), float(c)) for o, c in raw_guides if str(o) in ("h", "v")
             ]
         if "rulers_visible" in state:
             self._rulers_visible = bool(state.get("rulers_visible"))
         raw_colors = state.get("layer_colors", {})
         if isinstance(raw_colors, dict):
-            self._layer_colors = {
-                str(k): str(v) for k, v in raw_colors.items() if v
-            }
+            self._layer_colors = {str(k): str(v) for k, v in raw_colors.items() if v}
         self._set_flagged("hidden", hidden_state)
         self._set_flagged("locked", locked_state)
         raw_groups = state.get("groups", {})
@@ -725,7 +712,9 @@ class PolylineView(
         self._redraw()
 
     def get_selected(self) -> list[list[tuple[float, float]]]:
-        return [p for i, p in enumerate(e.points for e in self._entities) if i in self._sel]
+        return [
+            p for i, p in enumerate(e.points for e in self._entities) if i in self._sel
+        ]
 
     def _append_entity(
         self,
@@ -883,9 +872,7 @@ class PolylineView(
         surviving entities — no index remapping needed (previously ~45 lines
         of error-prone bookkeeping).
         """
-        self._entities = [
-            e for i, e in enumerate(self._entities) if i not in drop
-        ]
+        self._entities = [e for i, e in enumerate(self._entities) if i not in drop]
         # A group with fewer than two surviving members is meaningless —
         # dissolve it so no phantom "Group · 1 shapes" rows linger.
         counts: dict[int, int] = {}
@@ -895,6 +882,7 @@ class PolylineView(
         for e in self._entities:
             if e.group is not None and counts[e.group] < 2:
                 e.group = None
+
     def delete_indices(self, indices: list[int]) -> int:
         """Delete specific entities regardless of the active layer (used by
         the layer tree); locked entities survive."""
@@ -928,9 +916,7 @@ class PolylineView(
         return n
 
     def undo(self) -> bool:
-        result = self._undo_store.undo(
-            self._entities, self._sel, self._layer_state()
-        )
+        result = self._undo_store.undo(self._entities, self._sel, self._layer_state())
         if result is None:
             return False
         self._restore_history_state(*result)
@@ -941,9 +927,7 @@ class PolylineView(
         return True
 
     def redo(self) -> bool:
-        result = self._undo_store.redo(
-            self._entities, self._sel, self._layer_state()
-        )
+        result = self._undo_store.redo(self._entities, self._sel, self._layer_state())
         if result is None:
             return False
         self._restore_history_state(*result)
@@ -1157,10 +1141,10 @@ class PolylineView(
             self._delete_selected_guide()
             return
         if self._mode == "edit":
-            if getattr(self, "_edit_selected_verts", None):
-                self._delete_edit_vertices(set(getattr(self, "_edit_selected_verts", set())))
+            if self._edit_selected_verts:
+                self._delete_edit_vertices(set(self._edit_selected_verts))
                 return
-            if getattr(self, "_hover_vert", None) is not None:
+            if self._hover_vert is not None:
                 self._delete_edit_vertices({self._hover_vert})
                 return
         if self._mode == "select":
@@ -1197,12 +1181,16 @@ class PolylineView(
             self.delete_selected()
 
     def _linked_vertices(self, poly_idx: int, vert_idx: int) -> set[tuple[int, int]]:
-        if poly_idx >= len(self._entities) or vert_idx >= len(self._entities[poly_idx].points):
+        if poly_idx >= len(self._entities) or vert_idx >= len(
+            self._entities[poly_idx].points
+        ):
             return set()
         target_pt = self._entities[poly_idx].points[vert_idx]
         linked = {(poly_idx, vert_idx)}
+
         def _eq(a: tuple, b: tuple) -> bool:
             return abs(a[0] - b[0]) < 1e-6 and abs(a[1] - b[1]) < 1e-6
+
         for i, poly in enumerate(e.points for e in self._entities):
             if i == poly_idx:
                 is_closed = len(poly) >= 4 and _eq(poly[0], poly[-1])
@@ -1216,7 +1204,7 @@ class PolylineView(
         return linked
 
     def _apply_edit_vertex_position(self, wx: float, wy: float) -> None:
-        if getattr(self, "_edit_poly", None) is None or getattr(self, "_edit_vert", None) is None:
+        if self._edit_poly is None or self._edit_vert is None:
             return
         kind = self._entities[self._edit_poly].kind
         meta = self._entities[self._edit_poly].meta
@@ -1229,9 +1217,13 @@ class PolylineView(
                 meta["radius"] = radius
                 poly_len = len(self._entities[self._edit_poly].points)
                 if self._edit_vert <= 1:
-                    meta["start_angle"] = (math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0)
+                    meta["start_angle"] = (
+                        math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0
+                    )
                 elif self._edit_vert >= max(0, poly_len - 2):
-                    meta["end_angle"] = (math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0)
+                    meta["end_angle"] = (
+                        math.degrees(math.atan2(wy - cy, wx - cx)) % 360.0
+                    )
                 return
         if kind == "rectangle" and isinstance(meta, dict):
             center = meta.get("center")
@@ -1250,15 +1242,23 @@ class PolylineView(
         for pi, vi in targets:
             if self._is_locked(pi):
                 continue
-            if 0 <= pi < len(self._entities) and 0 <= vi < len(self._entities[pi].points):
+            if 0 <= pi < len(self._entities) and 0 <= vi < len(
+                self._entities[pi].points
+            ):
                 self._entities[pi].points[vi] = (wx, wy)
 
         if self._edit_poly is not None and 0 <= self._edit_poly < len(self._entities):
-            if kind == "line" and isinstance(meta, dict) and len(self._entities[self._edit_poly].points) >= 2:
+            if (
+                kind == "line"
+                and isinstance(meta, dict)
+                and len(self._entities[self._edit_poly].points) >= 2
+            ):
                 meta["start"] = tuple(self._entities[self._edit_poly].points[0])
                 meta["end"] = tuple(self._entities[self._edit_poly].points[-1])
             elif kind == "spline" and isinstance(meta, dict):
-                meta["control_points"] = [tuple(pt) for pt in self._entities[self._edit_poly].points]
+                meta["control_points"] = [
+                    tuple(pt) for pt in self._entities[self._edit_poly].points
+                ]
 
     def _select_edit_vertices_in_rect(
         self, x1c: float, y1c: float, x2c: float, y2c: float, *, additive: bool = True
@@ -1281,13 +1281,17 @@ class PolylineView(
         for i in sorted(self._sel):
             if i >= len(self._entities):
                 continue
-            self._clipboard.append({
-                "polyline": list(self._entities[i].points),
-                "kind": self._entities[i].kind,
-                "meta": deepcopy(self._entities[i].meta) if self._entities[i].meta is not None else None,
-                "construction": self._entities[i].construction,
-                "group": self._entities[i].group,
-            })
+            self._clipboard.append(
+                {
+                    "polyline": list(self._entities[i].points),
+                    "kind": self._entities[i].kind,
+                    "meta": deepcopy(self._entities[i].meta)
+                    if self._entities[i].meta is not None
+                    else None,
+                    "construction": self._entities[i].construction,
+                    "group": self._entities[i].group,
+                }
+            )
 
     def _paste_records(self, offset: float) -> list[int]:
         """Append clipboard records at ``offset``; grouped sources stay
@@ -1298,7 +1302,9 @@ class PolylineView(
             poly = list(record.get("polyline", []))
             new_poly = [(x + offset, y + offset) for x, y in poly]
             kind = str(record.get("kind", "polyline"))
-            meta = self._translated_entity_meta(kind, record.get("meta"), offset, offset)
+            meta = self._translated_entity_meta(
+                kind, record.get("meta"), offset, offset
+            )
             new_idx = self._append_entity(new_poly, kind=kind, meta=meta)
             if record.get("construction"):
                 self._entities[new_idx].construction = True
@@ -1330,7 +1336,12 @@ class PolylineView(
     def _duplicate_selected_with_offset(self) -> None:
         if not self._sel or not self._entities:
             return
-        min_x, max_x, min_y, max_y = (float("inf"), float("-inf"), float("inf"), float("-inf"))
+        min_x, max_x, min_y, max_y = (
+            float("inf"),
+            float("-inf"),
+            float("inf"),
+            float("-inf"),
+        )
         for idx in self._sel:
             if idx < len(self._entities):
                 for x, y in self._entities[idx].points:
@@ -1378,20 +1389,29 @@ class PolylineView(
         QTimer.singleShot(500, self._undo_store.break_coalescing)
         for idx in mutable:
             if idx < len(self._entities):
-                self._entities[idx].points = [(x + dx, y + dy) for x, y in self._entities[idx].points]
+                self._entities[idx].points = [
+                    (x + dx, y + dy) for x, y in self._entities[idx].points
+                ]
                 self._transform_entity_meta(
                     idx,
                     center=(0.0, 0.0),
                     kind=self._entities[idx].kind,
                     meta=self._entities[idx].meta,
-                    transform="translate", dx=dx, dy=dy,
+                    transform="translate",
+                    dx=dx,
+                    dy=dy,
                 )
         self._redraw()
         self._notify()
         self._fire_poly_change()
 
     def _shape_primitive_active(self) -> bool:
-        return getattr(self, "_draw_primitive", "polyline") in {"rectangle", "circle", "ellipse", "polygon"}
+        return getattr(self, "_draw_primitive", "polyline") in {
+            "rectangle",
+            "circle",
+            "ellipse",
+            "polygon",
+        }
 
     def _is_near_start(self) -> bool:
         if getattr(self, "_mode", None) != "draw":
@@ -1408,7 +1428,10 @@ class PolylineView(
         return math.hypot(cur_cx - start_cx, cur_cy - start_cy) < 10.0
 
     def _finish_draw(self, *, close: bool = False) -> None:
-        if getattr(self, "_mode", None) != "draw" or len(getattr(self, "_draw_pts", [])) < 2:
+        if (
+            getattr(self, "_mode", None) != "draw"
+            or len(getattr(self, "_draw_pts", [])) < 2
+        ):
             return
         draw_pts = self._draw_pts
         primitive = getattr(self, "_draw_primitive", "polyline")
@@ -1418,10 +1441,17 @@ class PolylineView(
         if close and draw_pts[0] != draw_pts[-1]:
             draw_pts.append(draw_pts[0])
         drawn = list(draw_pts)
-        self._commit_drawn_polyline(drawn, primitive=primitive, close=close, created_flash="Polyline created")
+        self._commit_drawn_polyline(
+            drawn, primitive=primitive, close=close, created_flash="Polyline created"
+        )
 
     def _commit_drawn_polyline(
-        self, poly: list[tuple[float, float]], *, primitive: str, close: bool = False, created_flash: str = "Polyline created"
+        self,
+        poly: list[tuple[float, float]],
+        *,
+        primitive: str,
+        close: bool = False,
+        created_flash: str = "Polyline created",
     ) -> bool:
         if len(poly) < 2:
             return False
@@ -1429,9 +1459,16 @@ class PolylineView(
         split_happened = False
         split_closed = 0
         split_open = 0
-        can_cut_split = getattr(self, "_draw_split_enabled", True) and primitive in {"line", "polyline", "arc", "spline"}
+        can_cut_split = getattr(self, "_draw_split_enabled", True) and primitive in {
+            "line",
+            "polyline",
+            "arc",
+            "spline",
+        }
         if can_cut_split and not close and len(poly) >= 2:
-            split_happened, split_closed, split_open = self._split_geometry_with_line(poly)
+            split_happened, split_closed, split_open = self._split_geometry_with_line(
+                poly
+            )
 
         kind = "polyline"
         meta: dict[str, Any] | None = None
@@ -1443,15 +1480,29 @@ class PolylineView(
                 arc_spec_from_center_start_end,
                 arc_spec_from_three_points,
             )
-            if getattr(self, "_draw_arc_mode", "center-start-end") == "center-start-end":
+
+            if (
+                getattr(self, "_draw_arc_mode", "center-start-end")
+                == "center-start-end"
+            ):
                 spec = arc_spec_from_center_start_end(poly[0], poly[1], poly[2])
             else:
                 spec = arc_spec_from_three_points(poly[0], poly[1], poly[2])
             if spec is not None:
-                meta = {"center": spec.center, "radius": spec.radius, "start_angle": spec.start_angle, "end_angle": spec.end_angle}
+                meta = {
+                    "center": spec.center,
+                    "radius": spec.radius,
+                    "start_angle": spec.start_angle,
+                    "end_angle": spec.end_angle,
+                }
         elif primitive == "spline" and len(poly) >= 2:
             kind = "spline"
-            meta = {"segments": 24, "closed": close, "control_points": [tuple(pt) for pt in poly], "degree": 3}
+            meta = {
+                "segments": 24,
+                "closed": close,
+                "control_points": [tuple(pt) for pt in poly],
+                "degree": 3,
+            }
 
         rec = EntityRecord(
             points=list(poly), kind=kind, meta=meta, layer=self._active_layer
@@ -1462,7 +1513,15 @@ class PolylineView(
             self._entities[new_idx].construction = True
 
         merged_idx: int | None = None
-        if (primitive in {"line", "polyline"} and not getattr(self, "_draw_construction_mode", False) and not split_happened and any(snap_type == "vertex" for snap_type in getattr(self, "_draw_point_snap_types", []))):
+        if (
+            primitive in {"line", "polyline"}
+            and not getattr(self, "_draw_construction_mode", False)
+            and not split_happened
+            and any(
+                snap_type == "vertex"
+                for snap_type in getattr(self, "_draw_point_snap_types", [])
+            )
+        ):
             merged_idx = self._try_merge_endpoints()
             if merged_idx is not None:
                 new_idx = merged_idx
@@ -1483,7 +1542,9 @@ class PolylineView(
                 self._show_flash("Regions cut", 900)
             else:
                 self._show_flash("Segments split", 900)
-        elif merged_idx is not None and self._is_poly_closed(self._entities[new_idx].points):
+        elif merged_idx is not None and self._is_poly_closed(
+            self._entities[new_idx].points
+        ):
             self._show_flash("Polyline closed", 800)
         elif merged_idx is not None:
             self._show_flash("Segments merged", 800)
@@ -1787,9 +1848,7 @@ class PolylineView(
         if not self._sel:
             self._show_flash("Select shape(s) first", 1000)
             return
-        self._show_hud_prompt(
-            "Offset distance (mm)", 1.0, self.offset_selected
-        )
+        self._show_hud_prompt("Offset distance (mm)", 1.0, self.offset_selected)
 
     def set_construction_mode(self, enabled: bool) -> None:
         self._draw_construction_mode = bool(enabled)
@@ -1880,9 +1939,7 @@ class PolylineView(
                     "group": e.group,
                     "layer": e.layer,
                     "group_label": (
-                        self._group_labels.get(e.group)
-                        if e.group is not None
-                        else None
+                        self._group_labels.get(e.group) if e.group is not None else None
                     ),
                 }
             )
@@ -1900,7 +1957,9 @@ class PolylineView(
             if isinstance(meta, dict):
                 meta = _rehydrate_meta(meta)
             gid = r.get("group")
-            gid = int(gid) if isinstance(gid, (int, float)) and gid is not None else None
+            gid = (
+                int(gid) if isinstance(gid, (int, float)) and gid is not None else None
+            )
             if gid is not None:
                 max_gid = max(max_gid, gid)
             ents.append(
@@ -1912,9 +1971,7 @@ class PolylineView(
                     hidden=bool(r.get("hidden", False)),
                     locked=bool(r.get("locked", False)),
                     group=gid,
-                    layer=(
-                        str(r["layer"]) if r.get("layer") is not None else None
-                    ),
+                    layer=(str(r["layer"]) if r.get("layer") is not None else None),
                 )
             )
         self._entities = ents
@@ -1941,9 +1998,7 @@ class PolylineView(
         for idx, poly in enumerate(e.points for e in self._entities):
             if self._entities[idx].construction:
                 continue
-            kind = (
-                self._entities[idx].kind
-            )
+            kind = self._entities[idx].kind
             meta = self._entities[idx].meta
             # Only shapes the user actually named (custom label, or a named
             # group) get their own DXF layer on export — auto-generating a
@@ -1970,13 +2025,15 @@ class PolylineView(
                 export_meta["control_points"] = [tuple(pt) for pt in poly]
                 export_meta.setdefault("degree", 3)
                 export_meta.setdefault("closed", self._is_poly_closed(poly))
-            result.append({
-                "index": idx,
-                "polyline": list(poly),
-                "kind": kind,
-                "meta": export_meta,
-                "layer": self._entities[idx].layer,
-            })
+            result.append(
+                {
+                    "index": idx,
+                    "polyline": list(poly),
+                    "kind": kind,
+                    "meta": export_meta,
+                    "layer": self._entities[idx].layer,
+                }
+            )
         return result
 
     # Default work-area shown before anything is drawn — without this, the
@@ -1988,7 +2045,6 @@ class PolylineView(
     def _bbox(self) -> tuple[float, float, float, float]:
         pts = [pt for p in (e.points for e in self._entities) for pt in p]
         if self._img_bounds:
-
             bw, bh = self._img_bounds
             pts.extend([(0.0, 0.0), (bw, bh)])
         if not pts:
@@ -2238,9 +2294,36 @@ class PolylineView(
         n = len(poly)
         if n < 2:
             return 0
-        if n >= 3 and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01:
+        if (
+            n >= 3
+            and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01
+        ):
             return n
         return n - 1
+
+    @overload
+    def _closest_point_on_poly(
+        self,
+        poly: list[tuple[float, float]],
+        wx: float,
+        wy: float,
+        cx: float,
+        cy: float,
+        *,
+        return_segment: Literal[False] = False,
+    ) -> float | None: ...
+
+    @overload
+    def _closest_point_on_poly(
+        self,
+        poly: list[tuple[float, float]],
+        wx: float,
+        wy: float,
+        cx: float,
+        cy: float,
+        *,
+        return_segment: Literal[True],
+    ) -> tuple[float | None, tuple[int, tuple[float, float]] | None]: ...
 
     def _closest_point_on_poly(
         self,
@@ -2251,7 +2334,7 @@ class PolylineView(
         cy: float,
         *,
         return_segment: bool = False,
-    ):
+    ) -> float | None | tuple[float | None, tuple[int, tuple[float, float]] | None]:
         """Compute closest point on every segment of *poly* to world point (wx,wy).
 
         Returns the screen-distance and, depending on *return_segment*, either
@@ -2263,7 +2346,7 @@ class PolylineView(
         best: Any = None
         n = len(poly)
         if n < 2:
-            return (None, (None, None, None)) if return_segment else None
+            return (None, None) if return_segment else None
         seg_count = self._poly_closed_n(poly)
         for vi in range(seg_count):
             ax, ay = poly[vi]
@@ -2271,16 +2354,16 @@ class PolylineView(
             dx, dy = bx - ax, by - ay
             seg_len_sq = dx * dx + dy * dy
             if seg_len_sq < 1e-12:
+                px_py = (ax, ay)
                 scx, scy = self._w2c(ax, ay)
                 d = math.hypot(cx - scx, cy - scy)
             else:
                 t = max(0.0, min(1.0, ((wx - ax) * dx + (wy - ay) * dy) / seg_len_sq))
-                px, py_ = ax + t * dx, ay + t * dy
-                scx, scy = self._w2c(px, py_)
+                px_py = (ax + t * dx, ay + t * dy)
+                scx, scy = self._w2c(*px_py)
                 d = math.hypot(cx - scx, cy - scy)
             if d < best_dist:
                 best_dist = d
-                px_py = (ax + t * dx, ay + t * dy) if seg_len_sq >= 1e-12 else (ax, ay)
                 if return_segment:
                     best = (vi, px_py)
                 else:
@@ -2622,14 +2705,16 @@ class PolylineView(
             if candidate is not None:
                 d_screen, (qx, qy), kind, axis_lock = candidate
                 if kind == "edge" and axis_lock is None:
-                    coupled_matches.append((
-                        d_screen,
-                        qx - mx,
-                        qy - my,
-                        (qx, qy),
-                        origin,
-                        kind,
-                    ))
+                    coupled_matches.append(
+                        (
+                            d_screen,
+                            qx - mx,
+                            qy - my,
+                            (qx, qy),
+                            origin,
+                            kind,
+                        )
+                    )
                 elif kind == "edge" and axis_lock == "x":
                     matches.append((d_screen, qx - mx, None, (qx, qy), origin, kind))
                 elif kind == "edge" and axis_lock == "y":
@@ -2648,25 +2733,29 @@ class PolylineView(
                 if orient == "v":
                     d = abs(coord - mx) * scale
                     if d <= thresh:
-                        matches.append((
-                            d,
-                            coord - mx,
-                            None,
-                            (coord, my),
-                            origin,
-                            "guide",
-                        ))
+                        matches.append(
+                            (
+                                d,
+                                coord - mx,
+                                None,
+                                (coord, my),
+                                origin,
+                                "guide",
+                            )
+                        )
                 else:
                     d = abs(coord - my) * scale
                     if d <= thresh:
-                        matches.append((
-                            d,
-                            None,
-                            coord - my,
-                            (mx, coord),
-                            origin,
-                            "guide",
-                        ))
+                        matches.append(
+                            (
+                                d,
+                                None,
+                                coord - my,
+                                (mx, coord),
+                                origin,
+                                "guide",
+                            )
+                        )
 
         if not matches and not coupled_matches:
             return None
@@ -2818,9 +2907,7 @@ class PolylineView(
     def paintEvent(self, event) -> None:
         """Bridge Qt paint dispatch to CanvasRenderer mixin implementation."""
         CanvasRenderer.paintEvent(self, event)
-        tool = (
-            self._measure_tool if self._measure_mode else self._tools.get(self._mode)
-        )
+        tool = self._measure_tool if self._measure_mode else self._tools.get(self._mode)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if tool is not None:
@@ -2828,7 +2915,7 @@ class PolylineView(
         self._paint_chrome_rulers(painter)
         painter.end()
 
-    _HANDLE_ANCHORS = {
+    _HANDLE_ANCHORS: ClassVar[dict[str, tuple[tuple[float, float], tuple[float, float]]]] = {
         # handle → (anchor position, handle position) as bbox fractions
         "nw": ((1.0, 0.0), (0.0, 1.0)),
         "n": ((0.5, 0.0), (0.5, 1.0)),
@@ -2869,7 +2956,8 @@ class PolylineView(
         self._gizmo_drag_mode = mode
         self._gizmo_center_w = (cx, cy)
         self._gizmo_snapshot = {
-            idx: list(self._entities[idx].points) for idx in self._mutable_selected_indices()
+            idx: list(self._entities[idx].points)
+            for idx in self._mutable_selected_indices()
         }
 
         def _meta_copy(idx: int) -> dict[str, Any] | None:
@@ -3453,11 +3541,13 @@ class PolylineView(
 
     def event(self, ev) -> bool:
         # macOS trackpad pinch zoom.
-        if ev.type() == QEvent.Type.NativeGesture:
-            if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
-                pos = ev.position()
-                self._zoom_at(pos.x(), pos.y(), 1.0 + float(ev.value()))
-                return True
+        if (
+            ev.type() == QEvent.Type.NativeGesture
+            and ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
+        ):
+            pos = ev.position()
+            self._zoom_at(pos.x(), pos.y(), 1.0 + float(ev.value()))
+            return True
         return super().event(ev)
 
     def set_zoom_percent(self, percent: float) -> None:
@@ -3562,11 +3652,8 @@ class PolylineView(
             self._redraw()
 
         # Selection badges / transform gizmo take priority over tools.
-        if (
-            self._mode == "select"
-            and self._sel
-            and self._tools["select"].press_overlays(event)
-        ):
+        select_tool = cast(canvas_tools.SelectTool, self._tools["select"])
+        if self._mode == "select" and self._sel and select_tool.press_overlays(event):
             return
 
         if self._measure_mode:
@@ -3612,10 +3699,7 @@ class PolylineView(
             self._redraw()
             return
 
-        if (
-            self._guide_drag is not None
-            and event.buttons() & Qt.MouseButton.LeftButton
-        ):
+        if self._guide_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
             orient, _ = self._guides[self._guide_drag]
             self._guides[self._guide_drag] = (
                 orient,
@@ -3791,9 +3875,7 @@ class PolylineView(
             """Carry an unchanged poly through with its kind/meta/flags intact."""
             ni = len(result_polys)
             result_polys.append(p)
-            result_kinds.append(
-                self._entities[src_idx].kind
-            )
+            result_kinds.append(self._entities[src_idx].kind)
             m = self._entities[src_idx].meta
             result_meta.append(deepcopy(m) if m is not None else None)
             _carry_flags(src_idx, ni)
@@ -3986,49 +4068,76 @@ class PolylineView(
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
         return _snap_to_polyline_candidates(
-            cx, cy, [e.points for e in self._entities], self._noninteractive_indices(), self._scale,
-            self._w2c, self._c2w, self._poly_bounds,
-            self._is_poly_closed, self._segment_intersection_point,
-            reference_point=reference_point, draw_points=self._draw_pts, mode=self._mode,
+            cx,
+            cy,
+            [e.points for e in self._entities],
+            self._noninteractive_indices(),
+            self._scale,
+            self._w2c,
+            self._c2w,
+            self._poly_bounds,
+            self._is_poly_closed,
+            self._segment_intersection_point,
+            reference_point=reference_point,
+            draw_points=self._draw_pts,
+            mode=self._mode,
         )
 
     def _resolve_snap(
         self,
-        cx: float, cy: float, wx: float, wy: float,
+        cx: float,
+        cy: float,
+        wx: float,
+        wy: float,
         *,
-        allow_polyline: bool = True, allow_grid: bool = True,
+        allow_polyline: bool = True,
+        allow_grid: bool = True,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
         return self._snap_engine.query(
-            cx, cy, wx, wy,
-            allow_polyline=allow_polyline, allow_grid=allow_grid,
+            cx,
+            cy,
+            wx,
+            wy,
+            allow_polyline=allow_polyline,
+            allow_grid=allow_grid,
             reference_point=reference_point,
         )
 
     def _resolve_drag_snap(
         self,
-        cx: float, cy: float, wx: float, wy: float,
+        cx: float,
+        cy: float,
+        wx: float,
+        wy: float,
         *,
-        allow_polyline: bool = True, allow_grid: bool = True, allow_vertex: bool = True,
+        allow_polyline: bool = True,
+        allow_grid: bool = True,
+        allow_vertex: bool = True,
         exclude_vertices: set[tuple[int, int]] | None = None,
         exclude_segments: set[tuple[int, int]] | None = None,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
         return self._snap_engine.query(
-            cx, cy, wx, wy, drag=True,
-            allow_polyline=allow_polyline, allow_grid=allow_grid,
+            cx,
+            cy,
+            wx,
+            wy,
+            drag=True,
+            allow_polyline=allow_polyline,
+            allow_grid=allow_grid,
             allow_vertex=allow_vertex,
-            exclude_vertices=exclude_vertices, exclude_segments=exclude_segments,
+            exclude_vertices=exclude_vertices,
+            exclude_segments=exclude_segments,
             reference_point=reference_point,
         )
 
-    def _angle_snap(self, ax: float, ay: float, wx: float, wy: float) -> tuple[float, float]:
+    def _angle_snap(
+        self, ax: float, ay: float, wx: float, wy: float
+    ) -> tuple[float, float]:
         return self._snap_engine.angle(ax, ay, wx, wy)
 
     # ---- Shape preview helpers (inlined from _DrawModeMixin) ----
-
-
-
 
     def _offset_selected(self, distance: float) -> int:
         indices = self._mutable_selected_indices()
@@ -4065,8 +4174,6 @@ class PolylineView(
         self._sync_shape_storage_from_entities()
         if callable(self._on_poly_change):
             self._on_poly_change()
-
-
 
     # ── Methods restored from pre-refactor mixins (were dropped in the
     #    mixin-inlining refactor; callers in dxf_canvas.py/render.py remained). ──
@@ -4131,7 +4238,9 @@ class PolylineView(
         else:
             return False
 
-        keyed = [(idx, self._poly_bounds(self._entities[idx].points)) for idx in indices]
+        keyed = [
+            (idx, self._poly_bounds(self._entities[idx].points)) for idx in indices
+        ]
         keyed.sort(key=lambda x: x[1][lo])
 
         self._push_undo()
@@ -4144,7 +4253,9 @@ class PolylineView(
             else:
                 delta = (cur_edge + spacing) - b[lo]
             dx, dy = (delta, 0.0) if axis == "horizontal" else (0.0, delta)
-            self._entities[idx].points = [(x + dx, y + dy) for x, y in self._entities[idx].points]
+            self._entities[idx].points = [
+                (x + dx, y + dy) for x, y in self._entities[idx].points
+            ]
             self._transform_entity_meta(
                 idx,
                 center=(0.0, 0.0),
@@ -4204,7 +4315,9 @@ class PolylineView(
         self._demote_selected_entities_to_polylines(indices)
         self._push_undo()
         for idx in indices:
-            self._entities[idx].points = [(x, cy + (y - cy) * fy) for x, y in self._entities[idx].points]
+            self._entities[idx].points = [
+                (x, cy + (y - cy) * fy) for x, y in self._entities[idx].points
+            ]
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -4225,7 +4338,9 @@ class PolylineView(
         self._demote_selected_entities_to_polylines(indices)
         self._push_undo()
         for idx in indices:
-            self._entities[idx].points = [(cx + (x - cx) * fx, y) for x, y in self._entities[idx].points]
+            self._entities[idx].points = [
+                (cx + (x - cx) * fx, y) for x, y in self._entities[idx].points
+            ]
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -4278,11 +4393,7 @@ class PolylineView(
         drop = min(pieces, key=lambda g: g.distance(click))
         kept = [g for g in pieces if g is not drop]
         merged = linemerge(kept) if len(kept) > 1 else kept[0]
-        out = (
-            list(merged.geoms)
-            if isinstance(merged, MultiLineString)
-            else [merged]
-        )
+        out = list(merged.geoms) if isinstance(merged, MultiLineString) else [merged]
         self._push_undo()
         first, *rest = out
         e = self._entities[idx]
@@ -4292,9 +4403,7 @@ class PolylineView(
         new_sel = {idx}
         for piece in rest:
             new_sel.add(
-                self._append_entity(
-                    [(float(x), float(y)) for x, y in piece.coords]
-                )
+                self._append_entity([(float(x), float(y)) for x, y in piece.coords])
             )
         self._sel = new_sel
         self._sync_shape_storage_from_entities()
@@ -4350,9 +4459,7 @@ class PolylineView(
         dx, dy = dx / length, dy / length
         bx0, by0, bx1, by1 = self._bbox()
         reach = max(bx1 - bx0, by1 - by0, 1.0) * 3.0
-        ray = LineString(
-            [tip, (tip[0] + dx * reach, tip[1] + dy * reach)]
-        )
+        ray = LineString([tip, (tip[0] + dx * reach, tip[1] + dy * reach)])
         others = self._other_linework(idx)
         if others is None or others.is_empty:
             self._show_flash("Nothing to extend to", 1100)
@@ -4666,9 +4773,13 @@ class PolylineView(
         self._push_undo()
         for idx in indices:
             if axis == "horizontal":
-                self._entities[idx].points = [(2 * cx - x, y) for x, y in self._entities[idx].points]
+                self._entities[idx].points = [
+                    (2 * cx - x, y) for x, y in self._entities[idx].points
+                ]
             elif axis == "vertical":
-                self._entities[idx].points = [(x, 2 * cy - y) for x, y in self._entities[idx].points]
+                self._entities[idx].points = [
+                    (x, 2 * cy - y) for x, y in self._entities[idx].points
+                ]
             else:
                 return False
             self._transform_entity_meta(
@@ -4726,8 +4837,7 @@ class PolylineView(
         cy = (min(ys) + max(ys)) / 2
         for ent in self._entities:
             ent.points = [
-                (cx + (x - cx) * factor, cy + (y - cy) * factor)
-                for x, y in ent.points
+                (cx + (x - cx) * factor, cy + (y - cy) * factor) for x, y in ent.points
             ]
         for idx in range(len(self._entities)):
             self._transform_entity_meta(
@@ -4943,7 +5053,9 @@ class PolylineView(
         vertices: set[tuple[int, int]] = set()
         for pi in poly_indices:
             if 0 <= pi < len(self._entities):
-                vertices.update((pi, vi) for vi in range(len(self._entities[pi].points)))
+                vertices.update(
+                    (pi, vi) for vi in range(len(self._entities[pi].points))
+                )
         return vertices
 
     def _would_split_closed_polygon(self, polygon: Polygon, cutter: LineString) -> bool:
@@ -5180,9 +5292,7 @@ class PolylineView(
         y = self._chrome_top() + 8
         hidden_x = left - self._draw_sidebar.width() + 20
         shown_x = left + 8
-        self._draw_sidebar.setFixedHeight(
-            min(430, max(260, self.height() - y - 8))
-        )
+        self._draw_sidebar.setFixedHeight(min(430, max(260, self.height() - y - 8)))
 
         if not animate:
             if visible:
@@ -5657,10 +5767,12 @@ class PolylineView(
             if len(chain) >= 3 and _eq(chain[0], chain[-1]):
                 # normalize explicit closure point
                 chain[-1] = chain[0]
-            merged_polys.append((
-                self._normalize_merged_chain(chain),
-                chain_construction,
-            ))
+            merged_polys.append(
+                (
+                    self._normalize_merged_chain(chain),
+                    chain_construction,
+                )
+            )
 
         # Remove the merged sources via _compact_entities so entity kinds,
         # meta, hidden/locked sets, and groups are all remapped consistently —
@@ -6007,4 +6119,3 @@ class PolylineView(
         self._notify()
         self._fire_poly_change()
         return True
-

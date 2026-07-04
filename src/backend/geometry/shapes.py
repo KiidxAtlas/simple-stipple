@@ -32,7 +32,7 @@ def shape_rect(w: float, h: float) -> list[tuple[float, float]]:
 
 @lru_cache(maxsize=256)
 def _shape_circle_cached(r: float, n: int) -> tuple[PointTuple, ...]:
-    return tuple(_to_coords(Point(0, 0).buffer(r, resolution=max(3, n // 4))))
+    return tuple(_to_coords(Point(0, 0).buffer(r, quad_segs=max(3, n // 4))))
 
 
 def shape_circle(r: float, n: int = 64) -> list[PointTuple]:
@@ -44,7 +44,7 @@ def shape_circle(r: float, n: int = 64) -> list[PointTuple]:
 
 @lru_cache(maxsize=256)
 def _shape_ellipse_cached(rx: float, ry: float, n: int) -> tuple[PointTuple, ...]:
-    circle = Point(0, 0).buffer(1.0, resolution=max(3, n // 4))
+    circle = Point(0, 0).buffer(1.0, quad_segs=max(3, n // 4))
     ellipse = shapely_scale(circle, xfact=rx, yfact=ry, origin=(0, 0))
     return tuple(_to_coords(ellipse))
 
@@ -85,5 +85,5 @@ def shape_slot(
     radius = width / 2.0
     half_straight = max(0.0, length / 2.0 - radius)
     line = LineString([(-half_straight, 0.0), (half_straight, 0.0)])
-    slot = line.buffer(radius, resolution=max(4, n_end // 2), cap_style="round")
+    slot = line.buffer(radius, quad_segs=max(4, n_end // 2), cap_style="round")
     return _to_coords(slot)

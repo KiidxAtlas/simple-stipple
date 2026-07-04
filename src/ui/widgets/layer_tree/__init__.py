@@ -1,5 +1,6 @@
 """Layer tree — re-exports all public symbols."""
 
+from .controller import CanvasLayerSidebarController
 from .model import (
     LayerRowsBuilder,
     LayerTreeRow,
@@ -13,7 +14,6 @@ from .model import (
     hidden_bucket,
 )
 from .widget import DxfLayersTree
-from .controller import CanvasLayerSidebarController
 
 __all__ = [
     "LayerTreeState",

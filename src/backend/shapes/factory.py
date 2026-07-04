@@ -17,6 +17,12 @@ from src.backend.shapes.shape import (
 )
 
 
+def _as_point(value: Any) -> Point:
+    """Coerce a JSON-decoded [x, y] list (or tuple) into a Point."""
+    x, y = value
+    return (float(x), float(y))
+
+
 class ShapeFactory:
     """Factory for creating shapes from various inputs."""
 
@@ -246,15 +252,15 @@ class ShapeFactory:
         elif shape_type == "line":
             return LineShape(
                 id=shape_id or cls.next_id(),
-                start=tuple(data.get("start", (0, 0))),
-                end=tuple(data.get("end", (0, 0))),
+                start=_as_point(data.get("start", (0, 0))),
+                end=_as_point(data.get("end", (0, 0))),
                 **kwargs,
             )
 
         elif shape_type == "arc":
             return ArcShape(
                 id=shape_id or cls.next_id(),
-                center=tuple(data.get("center", (0, 0))),
+                center=_as_point(data.get("center", (0, 0))),
                 radius=data.get("radius", 0),
                 start_angle=data.get("start_angle", 0),
                 end_angle=data.get("end_angle", 180),
@@ -265,7 +271,7 @@ class ShapeFactory:
         elif shape_type == "circle":
             return CircleShape(
                 id=shape_id or cls.next_id(),
-                center=tuple(data.get("center", (0, 0))),
+                center=_as_point(data.get("center", (0, 0))),
                 radius=data.get("radius", 0),
                 segments=data.get("segments", 64),
                 **kwargs,
@@ -274,7 +280,7 @@ class ShapeFactory:
         elif shape_type == "ellipse":
             return EllipseShape(
                 id=shape_id or cls.next_id(),
-                center=tuple(data.get("center", (0, 0))),
+                center=_as_point(data.get("center", (0, 0))),
                 rx=data.get("rx", 0),
                 ry=data.get("ry", 0),
                 rotation=data.get("rotation", 0),
@@ -285,7 +291,7 @@ class ShapeFactory:
         elif shape_type == "rectangle":
             return RectangleShape(
                 id=shape_id or cls.next_id(),
-                center=tuple(data.get("center", (0, 0))),
+                center=_as_point(data.get("center", (0, 0))),
                 width=data.get("width", 0),
                 height=data.get("height", 0),
                 rotation=data.get("rotation", 0),

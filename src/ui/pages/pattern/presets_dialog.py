@@ -376,4 +376,5 @@ class PresetManagerDialog(QDialog):
 
     # ------------------------------------------------------------------
 
+
 __all__ = ["PresetManagerDialog"]

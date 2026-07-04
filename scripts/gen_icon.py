@@ -49,7 +49,7 @@ print(f"Saved {out_png}")
 
 # ICO for Windows — embed standard sizes so Explorer/taskbar look sharp at every size
 ico_sizes = [16, 32, 48, 256]
-ico_frames = [img.resize((s, s), Image.LANCZOS) for s in ico_sizes]
+ico_frames = [img.resize((s, s), Image.Resampling.LANCZOS) for s in ico_sizes]
 out_ico = assets / "icon.ico"
 ico_frames[0].save(
     out_ico,

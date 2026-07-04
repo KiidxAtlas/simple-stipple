@@ -184,18 +184,10 @@ def _fill_lines(
     import math
 
     from shapely.affinity import rotate as _shp_rotate  # type: ignore[import-untyped]
-    from shapely.geometry import (  # type: ignore[import-untyped]
-        LineString as _LS,
-    )
-    from shapely.geometry import (
-        MultiLineString as _MLS,
-    )
-    from shapely.geometry import (
-        MultiPolygon as _MP,
-    )
-    from shapely.geometry import (
-        Polygon as _Poly,
-    )
+    from shapely.geometry import LineString as _LS  # type: ignore[import-untyped]
+    from shapely.geometry import MultiLineString as _MLS
+    from shapely.geometry import MultiPolygon as _MP
+    from shapely.geometry import Polygon as _Poly
 
     # Rotate the region into a frame where hatch is horizontal. This avoids
     # having to rotate every emitted line.
@@ -267,23 +259,6 @@ def _fill_lines(
             for line in out_rotated
         ]
     return out_rotated
-
-
-def _fill_crosshatch(
-    region_geom: Any,
-    spacing: float,
-    angle_deg: float,
-) -> list[list[tuple[float, float]]]:
-    """Crosshatch fill: two sets of parallel lines at ±45° to the base angle.
-
-    The crosshatch pattern is created by generating two sets of parallel
-    hatch lines — one rotated +45° and one rotated -45° from the base
-    ``angle_deg`` — and combining them.  This gives the classic diagonal
-    crosshatch look used in many laser-engraving applications.
-    """
-    lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0)
-    lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0)
-    return lines_1 + lines_2
 
 
 def _fill_crosshatch(

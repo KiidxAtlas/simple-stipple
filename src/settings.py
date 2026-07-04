@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import platform as _platform
 
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.paths import user_data_dir
@@ -33,8 +34,6 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
 
 
 # Platform-adjusted default keybindings: on macOS prefer 'Meta' (Command)
-import platform as _platform
-
 if _platform.system() == "Darwin":
     # Copy and replace Ctrl with Meta where appropriate
     for k, v in list(DEFAULT_KEYBINDINGS.items()):

@@ -6,9 +6,6 @@ import platform as _platform
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer
-
-# Platform modifier for human-readable shortcut hints
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,6 +17,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# Platform modifier for human-readable shortcut hints
+_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
 def section_label(parent_layout, text: str) -> QLabel:

@@ -6,8 +6,8 @@ import math
 
 import numpy as np
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import (  # type: ignore[import-untyped]
-    LineString,
+from shapely.geometry import (
+    LineString,  # type: ignore[import-untyped]
     MultiPoint,
     Polygon,
 )
@@ -97,11 +97,13 @@ def gen_penrose_tiling(
     for idx, tri in enumerate(triangles):
         if idx not in seen:
             _, A, B, C = tri
-            shapes.append([
-                (A.real, A.imag),
-                (B.real, B.imag),
-                (C.real, C.imag),
-            ])
+            shapes.append(
+                [
+                    (A.real, A.imag),
+                    (B.real, B.imag),
+                    (C.real, C.imag),
+                ]
+            )
 
     prep = prepared.prep(outline_poly)
     shrink = gap / 2.0

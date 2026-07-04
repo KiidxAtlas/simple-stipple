@@ -14,7 +14,7 @@ editing keys) stays in the view — this table is for discrete actions.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -47,7 +47,9 @@ def _close_paths(v: Any) -> None:
 
 def _open_paths(v: Any) -> None:
     n = v.open_selected_polylines()
-    v._show_flash(f"Opened {n} polyline(s)" if n else "No closed polyline selected", 900)
+    v._show_flash(
+        f"Opened {n} polyline(s)" if n else "No closed polyline selected", 900
+    )
 
 
 def _toggle_construction(v: Any) -> None:
@@ -61,7 +63,9 @@ def _toggle_construction(v: Any) -> None:
     else:
         v._redraw()
     v._show_flash(
-        "Construction draw: ON" if v._draw_construction_mode else "Construction draw: OFF",
+        "Construction draw: ON"
+        if v._draw_construction_mode
+        else "Construction draw: OFF",
         900,
     )
     v._refresh_draw_sidebar_state()
@@ -141,7 +145,11 @@ COMMANDS: tuple[Command, ...] = (
         "clipboard.cut", "Cut", lambda v: v._cut_selected(), "Ctrl+X", category="Edit"
     ),
     Command(
-        "clipboard.copy", "Copy", lambda v: v._copy_selected(), "Ctrl+C", category="Edit"
+        "clipboard.copy",
+        "Copy",
+        lambda v: v._copy_selected(),
+        "Ctrl+C",
+        category="Edit",
     ),
     Command(
         "clipboard.paste",
@@ -173,7 +181,11 @@ COMMANDS: tuple[Command, ...] = (
     ),
     # ── Selection ───────────────────────────────────────────────────────────
     Command(
-        "select.all", "Select All", lambda v: v.select_all(), "Ctrl+A", category="Selection"
+        "select.all",
+        "Select All",
+        lambda v: v.select_all(),
+        "Ctrl+A",
+        category="Selection",
     ),
     Command(
         "select.none",
@@ -398,7 +410,7 @@ def _combo(spec: str) -> tuple[int, int]:
     """Parse a shortcut spec into a (key, modifiers) pair for keymap lookup."""
     seq = QKeySequence(spec)
     assert seq.count() == 1, spec
-    kc = seq[0]
+    kc = seq[0]  # type: ignore[index]  # QKeySequence.__getitem__ is real at runtime; missing from stubs
     return int(kc.key()), int(kc.keyboardModifiers().value)
 
 
@@ -418,7 +430,9 @@ def match_key(key: int, mods: Qt.KeyboardModifier) -> Command | None:
         return cmd
     # Symbol keys often arrive with Shift held (e.g. "+" on many layouts).
     if not (Qt.Key.Key_A <= key <= Qt.Key.Key_Z):
-        return _KEYMAP.get((int(key), m & ~int(Qt.KeyboardModifier.ShiftModifier.value)))
+        return _KEYMAP.get(
+            (int(key), m & ~int(Qt.KeyboardModifier.ShiftModifier.value))
+        )
     return None
 
 

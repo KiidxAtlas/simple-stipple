@@ -6,7 +6,10 @@ import math
 from typing import Any, cast
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import LineString, Polygon  # type: ignore[import-untyped]
+from shapely.geometry import (
+    LineString,  # type: ignore[import-untyped]
+    Polygon,
+)
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
 from src.backend.generators._shared import (

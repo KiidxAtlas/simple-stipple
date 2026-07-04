@@ -19,10 +19,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QMouseEvent
 
-from src.backend.geometry.arc import (
-    arc_from_center_start_end,
-    arc_from_three_points,
-)
+from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
 from src.constants import DRAG_THRESH
 
 if TYPE_CHECKING:
@@ -92,9 +89,7 @@ def _seg_hits_rect(
 def apply_edit_drag(v: PolylineView, event: QMouseEvent) -> bool:
     """Shared vertex-drag update used by both Edit mode and select-mode
     direct vertex editing. Returns True when a drag consumed the event."""
-    if not (
-        v._edit_dragging and v._edit_poly is not None and v._edit_vert is not None
-    ):
+    if not (v._edit_dragging and v._edit_poly is not None and v._edit_vert is not None):
         return False
     pos = event.position()
     wx, wy = v._c2w(pos.x(), pos.y())
@@ -814,6 +809,10 @@ class SelectTool(CanvasTool):
                     v._move_applied_w = (0.0, 0.0)
                     v._move_start_pts = v._moving_sample_points()
                 if v._move_dragging:
+                    # Invariant: _move_dragging only ever becomes True right
+                    # above, together with _move_anchor_w — so it's always
+                    # set by the time we get here.
+                    assert v._move_anchor_w is not None
                     if not v._move_undo_pushed:
                         v._push_undo()
                         v._move_undo_pushed = True
@@ -875,7 +874,7 @@ class SelectTool(CanvasTool):
             return True
         # Only repaint if the displayed cursor-position text
         # (2 decimal places) actually changed.
-        _prev_cx = getattr(v, "_prev_cursor_display", None)
+        _prev_cx = v._prev_cursor_display
         _cur_cx = (round(wx, 2), round(wy, 2))
         if _prev_cx == _cur_cx:
             return True
@@ -904,9 +903,7 @@ class SelectTool(CanvasTool):
                 if not poly:
                     continue
                 pts_c = [v._w2c(x, y) for x, y in poly]
-                inside = [
-                    x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c
-                ]
+                inside = [x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c]
                 if window:
                     if all(inside):
                         picked.add(idx)
@@ -917,9 +914,7 @@ class SelectTool(CanvasTool):
                 n = len(pts_c)
                 seg_count = n if v._is_poly_closed(poly) else n - 1
                 for i in range(seg_count):
-                    if _seg_hits_rect(
-                        pts_c[i], pts_c[(i + 1) % n], x1c, y1c, x2c, y2c
-                    ):
+                    if _seg_hits_rect(pts_c[i], pts_c[(i + 1) % n], x1c, y1c, x2c, y2c):
                         picked.add(idx)
                         break
             # A marquee that catches part of a group selects the whole group.

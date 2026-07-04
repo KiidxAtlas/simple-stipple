@@ -430,10 +430,12 @@ def resolve_drag_snap(
             )
             if vertex_snap is not None:
                 sx, sy = w2c(*vertex_snap)
-                candidates.append((
-                    math.hypot(cx - sx, cy - sy),
-                    (vertex_snap[0], vertex_snap[1], "vertex"),
-                ))
+                candidates.append(
+                    (
+                        math.hypot(cx - sx, cy - sy),
+                        (vertex_snap[0], vertex_snap[1], "vertex"),
+                    )
+                )
 
         best_dist = _SNAP_DIST
         best_midpoint: Point | None = None
@@ -453,10 +455,12 @@ def resolve_drag_snap(
                     best_dist = d
                     best_midpoint = (mx, my)
         if best_midpoint is not None:
-            candidates.append((
-                best_dist,
-                (best_midpoint[0], best_midpoint[1], "midpoint"),
-            ))
+            candidates.append(
+                (
+                    best_dist,
+                    (best_midpoint[0], best_midpoint[1], "midpoint"),
+                )
+            )
 
         best_dist = _SNAP_DIST
         best_edge: Point | None = None
@@ -481,10 +485,12 @@ def resolve_drag_snap(
                     best_dist = d
                     best_edge = (px, py_)
         if best_edge is not None:
-            candidates.append((
-                best_dist,
-                (best_edge[0], best_edge[1], "edge"),
-            ))
+            candidates.append(
+                (
+                    best_dist,
+                    (best_edge[0], best_edge[1], "edge"),
+                )
+            )
     if allow_grid and grid_snap_enabled:
         grid_x, grid_y = snap_to_grid(wx, wy, grid_spacing)
         sx, sy = w2c(grid_x, grid_y)

@@ -6,8 +6,8 @@ import logging
 import math
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import (  # type: ignore[import-untyped]
-    LineString,
+from shapely.geometry import (
+    LineString,  # type: ignore[import-untyped]
     MultiPolygon,
     Polygon,
 )
@@ -503,9 +503,10 @@ def merge_and_classify_outlines(
         merged = linemerge(lines)
     except (ValueError, TypeError):
         merged = None
+    merged_geoms = getattr(merged, "geoms", None)
     geoms = (
-        list(merged.geoms)
-        if merged is not None and hasattr(merged, "geoms")
+        list(merged_geoms)
+        if merged_geoms is not None
         else ([merged] if merged is not None else [])
     )
     closed: list[list[tuple[float, float]]] = []

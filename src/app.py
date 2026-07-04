@@ -26,10 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.document.state import (
-    WORKSPACE_FILE_SUFFIX,
-    normalize_workspace_path,
-)
+from src.backend.document.state import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.paths import user_data_dir
@@ -631,10 +628,6 @@ class App(QMainWindow):
 
         help_menu = self.menuBar().addMenu("Help")
         add(help_menu, "Keyboard Shortcuts…", self._show_shortcuts_reference)
-
-    def _active_canvas(self):
-        page = self._tabs.currentWidget()
-        return getattr(page, "_canvas", None)
 
     def _canvas_call(self, name: str, *args) -> None:
         canvas = self._active_canvas()

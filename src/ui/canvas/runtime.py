@@ -210,12 +210,8 @@ class CanvasRuntime:
             rows.append(
                 {
                     "key": tuple(members),
-                    "label": (
-                        f"{ordinal + 1:02d}  {title}  ·  {len(members)} shapes"
-                    ),
-                    "visible": any(
-                        not canvas._entities[m].hidden for m in members
-                    ),
+                    "label": (f"{ordinal + 1:02d}  {title}  ·  {len(members)} shapes"),
+                    "visible": any(not canvas._entities[m].hidden for m in members),
                     "editable": True,
                     "draggable": True,
                 }

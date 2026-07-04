@@ -114,16 +114,15 @@ class CanvasStatusStrip(QFrame):
         self._on_zoom_selected = callback
 
     def _show_zoom_menu(self, event) -> None:
-        if self._on_zoom_selected is None:
+        callback = self._on_zoom_selected
+        if callback is None:
             return
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
-        menu.addAction("Fit", lambda: self._on_zoom_selected("fit"))
+        menu.addAction("Fit", lambda: callback("fit"))
         for pct in (50, 100, 200, 400):
-            menu.addAction(
-                f"{pct}%", lambda _p=pct: self._on_zoom_selected(_p)
-            )
+            menu.addAction(f"{pct}%", lambda _p=pct: callback(_p))
         menu.popup(self._zoom_label.mapToGlobal(event.position().toPoint()))
 
     def set_selection_count(self, count: int) -> None:

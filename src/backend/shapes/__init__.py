@@ -1,10 +1,10 @@
 """Shape system for the curve redesign."""
 
 from src.backend.shapes.factory import ShapeFactory
+from src.backend.shapes.shape import ArcShape
+from src.backend.shapes.shape import CircleShape
+from src.backend.shapes.shape import CircleShape as Circle
 from src.backend.shapes.shape import (
-    ArcShape,
-    CircleShape,
-    CircleShape as Circle,
     EllipseShape,
     LineShape,
     Point,

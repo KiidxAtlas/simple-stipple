@@ -184,10 +184,12 @@ def _ellipse_points(
         t = start + (span * idx / count)
         cos_t = math.cos(t)
         sin_t = math.sin(t)
-        pts.append((
-            cx + mx * cos_t + minor_x * sin_t,
-            cy + my * cos_t + minor_y * sin_t,
-        ))
+        pts.append(
+            (
+                cx + mx * cos_t + minor_x * sin_t,
+                cy + my * cos_t + minor_y * sin_t,
+            )
+        )
     return _polyline_points_closed(pts, closed=closed)
 
 

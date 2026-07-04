@@ -135,12 +135,14 @@ def describe_polyline(idx: int, poly: list[tuple[float, float]]) -> str:
     width = max(xs) - min(xs)
     height = max(ys) - min(ys)
     point_count = len(poly)
-    if len(poly) > 1 and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01:
+    if (
+        len(poly) > 1
+        and math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) < 0.01
+    ):
         point_count -= 1
         kind = "Closed"
     else:
         kind = "Open"
     return (
-        f"{idx + 1:02d}  {kind}  ·  {point_count} pts  ·  "
-        f"{width:.1f} × {height:.1f} mm"
+        f"{idx + 1:02d}  {kind}  ·  {point_count} pts  ·  {width:.1f} × {height:.1f} mm"
     )

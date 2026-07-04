@@ -14,9 +14,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent
-
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -54,15 +53,15 @@ LMB = Qt.MouseButton.LeftButton
 
 def _mouse_event(etype, cx, cy, button=LMB, mods=NO_MOD):
     buttons = (
-        Qt.MouseButton.NoButton
-        if etype == QEvent.Type.MouseButtonRelease
-        else button
+        Qt.MouseButton.NoButton if etype == QEvent.Type.MouseButtonRelease else button
     )
     return QMouseEvent(etype, QPointF(cx, cy), QPointF(cx, cy), button, buttons, mods)
 
 
 def press(view, cx, cy, button=LMB, mods=NO_MOD):
-    view.mousePressEvent(_mouse_event(QEvent.Type.MouseButtonPress, cx, cy, button, mods))
+    view.mousePressEvent(
+        _mouse_event(QEvent.Type.MouseButtonPress, cx, cy, button, mods)
+    )
 
 
 def move(view, cx, cy, button=LMB, mods=NO_MOD):
@@ -840,6 +839,7 @@ def test_text_carries_params_and_rebuilds(qapp):
     if n == 0:
         pytest.skip("no usable font on offscreen platform")
     params = v.text_params_at(0)
+    assert params is not None
     assert params == {
         "text": "Hi",
         "family": family,
@@ -851,13 +851,17 @@ def test_text_carries_params_and_rebuilds(qapp):
     old_min_x = min(x for e in v._entities for x, _ in e.points)
     old_min_y = min(y for e in v._entities for _, y in e.points)
     assert v.rebuild_text(0, {**params, "text": "Hello", "height_mm": 8.0})
-    assert v.text_params_at(0)["text"] == "Hello"
+    params_after_rebuild = v.text_params_at(0)
+    assert params_after_rebuild is not None
+    assert params_after_rebuild["text"] == "Hello"
     new_min_x = min(x for e in v._entities for x, _ in e.points)
     new_min_y = min(y for e in v._entities for _, y in e.points)
     assert new_min_x == pytest.approx(old_min_x, abs=0.5)
     assert new_min_y == pytest.approx(old_min_y, abs=0.5)
     assert v.undo()
-    assert v.text_params_at(0)["text"] == "Hi"
+    params_after_undo = v.text_params_at(0)
+    assert params_after_undo is not None
+    assert params_after_undo["text"] == "Hi"
 
 
 def test_selected_circle_drags_as_move_not_vertex_edit(qapp):
@@ -930,7 +934,7 @@ def test_move_drag_snaps_to_guides_by_geometry(qapp):
     v = make_view(qapp, [square(0, 0)])
     v._guides.append(("v", 50.0))
     v.set_selection([0])
-    drag_world(v, 5.0, 0.0, 44.8, 3.0, steps=6)  # left edge near guide x=50... 
+    drag_world(v, 5.0, 0.0, 44.8, 3.0, steps=6)  # left edge near guide x=50...
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     # one of the square's edges landed exactly on the guide
     assert any(abs(edge - 50.0) < 1e-6 for edge in (x0, x1))

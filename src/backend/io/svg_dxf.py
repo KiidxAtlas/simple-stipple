@@ -17,7 +17,6 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-
 _NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _CMD_RE = re.compile(rf"[MmLlHhVvZz]|{_NUM_RE}")
 
@@ -175,7 +174,7 @@ def svg_to_dxf(
         shape = shape_from_legacy_meta(kind, meta)
         if shape is None:
             return
-        pts = [tuple(pt) for pt in shape.points]
+        pts = [(x, y) for x, y in shape.points]
         if len(pts) >= 2:
             records.append((pts, kind, meta))
             native_entities[counter] += 1

@@ -213,7 +213,9 @@ class LineShape(Shape):
         ex, ey = self.end
         if not _finite(sx, sy, ex, ey) or math.hypot(ex - sx, ey - sy) <= 1e-9:
             return False
-        msp.add_line((float(sx), float(sy)), (float(ex), float(ey)), dxfattribs=dxfattribs)
+        msp.add_line(
+            (float(sx), float(sy)), (float(ex), float(ey)), dxfattribs=dxfattribs
+        )
         return True
 
 
@@ -373,7 +375,9 @@ class CircleShape(Shape):
         cx, cy = self.center
         if not _finite(cx, cy, self.radius) or self.radius <= 1e-9:
             return False
-        msp.add_circle((float(cx), float(cy)), float(self.radius), dxfattribs=dxfattribs)
+        msp.add_circle(
+            (float(cx), float(cy)), float(self.radius), dxfattribs=dxfattribs
+        )
         return True
 
 
@@ -409,16 +413,20 @@ class EllipseShape(Shape):
         pts = [self.center]  # Center
 
         # Point on x-axis (semi-major)
-        pts.append((
-            self.center[0] + self.rx * cos_r,
-            self.center[1] + self.rx * sin_r,
-        ))
+        pts.append(
+            (
+                self.center[0] + self.rx * cos_r,
+                self.center[1] + self.rx * sin_r,
+            )
+        )
 
         # Point on y-axis (semi-minor)
-        pts.append((
-            self.center[0] - self.ry * sin_r,
-            self.center[1] + self.ry * cos_r,
-        ))
+        pts.append(
+            (
+                self.center[0] - self.ry * sin_r,
+                self.center[1] + self.ry * cos_r,
+            )
+        )
 
         return pts
 
@@ -582,6 +590,7 @@ class RectangleShape(Shape):
                 "rotation": self.rotation,
             },
         )
+
     # Rectangles have no native DXF entity — base to_dxf() returns False and
     # the caller emits the tessellated LWPOLYLINE (matches legacy writer).
 
@@ -668,4 +677,3 @@ class SplineShape(Shape):
         degree = max(1, min(degree, len(cps) - 1))
         msp.add_spline(cps, degree=degree, dxfattribs=dxfattribs)
         return True
-

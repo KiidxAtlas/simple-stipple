@@ -26,7 +26,6 @@ from src.ui.core.factories import content_splitter, sidebar_panel, surface_frame
 
 
 class RepoPage(BasePage):
-
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self._settings: dict = settings or {}

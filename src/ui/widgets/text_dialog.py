@@ -20,11 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.canvas.text_shapes import (
-    install_font_file,
-    load_user_fonts,
-    user_fonts_dir,
-)
+from src.ui.canvas.text_shapes import install_font_file, load_user_fonts, user_fonts_dir
 
 
 class AddTextDialog(QDialog):
@@ -86,8 +82,7 @@ class AddTextDialog(QDialog):
         form.addRow(self._preview)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -141,9 +136,7 @@ class AddTextDialog(QDialog):
             return
         family = install_font_file(path)
         if family is None:
-            QMessageBox.warning(
-                self, "Import font", "Could not load that font file."
-            )
+            QMessageBox.warning(self, "Import font", "Could not load that font file.")
             return
         self._font_combo.setCurrentFont(QFont(family))
         self._update_preview()

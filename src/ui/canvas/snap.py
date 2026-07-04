@@ -14,11 +14,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from src.backend.behaviors.snapping import (
-    angle_snap,
-    resolve_drag_snap,
-    resolve_snap,
-)
+from src.backend.behaviors.snapping import angle_snap, resolve_drag_snap, resolve_snap
 from src.ui.canvas.shape_snapping import ShapeSnapEngine
 
 if TYPE_CHECKING:
@@ -53,39 +49,58 @@ class SnapEngine:
         reference_point: tuple[float, float] | None = None,
     ) -> SnapResult | None:
         v = self.v
-        common = dict(
-            allow_polyline=allow_polyline,
-            allow_grid=allow_grid,
-            grid_snap_enabled=v._grid_snap,
-            grid_spacing=v._grid_spacing,
-            polylines=[e.points for e in v._entities],
-            # Snapping targets include ALL entities, even those on non-active
-            # layers. Users should be able to snap TO shapes on other layers
-            # while still only being able to SELECT on the active layer.
-            hidden_polys=set(),  # no exclusions for snapping
-            scale=v._scale,
-            w2c=v._w2c,
-            c2w=v._c2w,
-            poly_bounds=v._poly_bounds,
-            is_poly_closed=v._is_poly_closed,
-            segment_intersection_point=v._segment_intersection_point,
-            mode=v._mode,
-            reference_point=reference_point,
-            draw_points=v._draw_pts,
-        )
+        polylines = [e.points for e in v._entities]
+        # Snapping targets include ALL entities, even those on non-active
+        # layers. Users should be able to snap TO shapes on other layers
+        # while still only being able to SELECT on the active layer.
+        hidden_polys: set[int] = set()  # no exclusions for snapping
         if drag:
             best = resolve_drag_snap(
                 cx,
                 cy,
                 wx,
                 wy,
+                allow_polyline=allow_polyline,
+                allow_grid=allow_grid,
                 allow_vertex=allow_vertex,
                 exclude_vertices=exclude_vertices,
                 exclude_segments=exclude_segments,
-                **common,
+                grid_snap_enabled=v._grid_snap,
+                grid_spacing=v._grid_spacing,
+                polylines=polylines,
+                hidden_polys=hidden_polys,
+                scale=v._scale,
+                w2c=v._w2c,
+                c2w=v._c2w,
+                poly_bounds=v._poly_bounds,
+                is_poly_closed=v._is_poly_closed,
+                segment_intersection_point=v._segment_intersection_point,
+                mode=v._mode,
+                reference_point=reference_point,
+                draw_points=v._draw_pts,
             )
         else:
-            best = resolve_snap(cx, cy, wx, wy, **common)
+            best = resolve_snap(
+                cx,
+                cy,
+                wx,
+                wy,
+                allow_polyline=allow_polyline,
+                allow_grid=allow_grid,
+                grid_snap_enabled=v._grid_snap,
+                grid_spacing=v._grid_spacing,
+                polylines=polylines,
+                hidden_polys=hidden_polys,
+                scale=v._scale,
+                w2c=v._w2c,
+                c2w=v._c2w,
+                poly_bounds=v._poly_bounds,
+                is_poly_closed=v._is_poly_closed,
+                segment_intersection_point=v._segment_intersection_point,
+                mode=v._mode,
+                reference_point=reference_point,
+                draw_points=v._draw_pts,
+            )
         best = self._pick_better(cx, cy, best, self._shape_candidate(cx, cy))
         best = self._pick_better(cx, cy, best, self._guide_candidate(cx, cy, wx, wy))
         return best

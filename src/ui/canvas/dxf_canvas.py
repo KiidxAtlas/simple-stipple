@@ -23,6 +23,12 @@ class DxfSelectTool(canvas_tools.SelectTool):
     """Select tool with DxfCanvas extras: radial menu, quick-shape drag,
     and click-to-activate for shapes on non-active layers."""
 
+    # DxfSelectTool is only ever constructed with a DxfCanvas (see
+    # DxfCanvas.__init__ below), which adds radial-menu/quick-shape state on
+    # top of the base PolylineView — narrow the inherited `v` accordingly so
+    # those DxfCanvas-only attributes type-check.
+    v: "DxfCanvas"
+
     def press(self, event: QMouseEvent) -> bool:
         c = self.v
         pos = event.position()
@@ -277,9 +283,7 @@ class DxfCanvas(PolylineView):
         if poly_hit is not None:
             idx = poly_hit
             if self.text_params_at(idx) is not None:
-                menu.addAction(
-                    "Edit text…", lambda _i=idx: self.prompt_edit_text(_i)
-                )
+                menu.addAction("Edit text…", lambda _i=idx: self.prompt_edit_text(_i))
             if idx in self._sel:
                 menu.addAction("Deselect", lambda: self._ctx_deselect(idx))
             else:
@@ -343,7 +347,8 @@ class DxfCanvas(PolylineView):
             open_count = sum(
                 1
                 for i in self._sel
-                if i < len(self._entities) and not self._is_poly_closed(self._entities[i].points)
+                if i < len(self._entities)
+                and not self._is_poly_closed(self._entities[i].points)
             )
             if open_count:
                 label = "Close path"
@@ -416,17 +421,50 @@ class DxfCanvas(PolylineView):
             )
         arrange_menu.addSeparator()
         for label, title, prompt, default, axis, dist_mode in (
-            ("Distribute horizontal — gap…", "Distribute Horizontal", "Spacing (mm):", 1.0, "horizontal", "gap"),
-            ("Distribute vertical — gap…", "Distribute Vertical", "Spacing (mm):", 1.0, "vertical", "gap"),
-            ("Distribute horizontal — center-to-center…", "Distribute Horizontal (Center-to-Center)", "Center spacing (mm):", 10.0, "horizontal", "center"),
-            ("Distribute vertical — center-to-center…", "Distribute Vertical (Center-to-Center)", "Center spacing (mm):", 10.0, "vertical", "center"),
+            (
+                "Distribute horizontal — gap…",
+                "Distribute Horizontal",
+                "Spacing (mm):",
+                1.0,
+                "horizontal",
+                "gap",
+            ),
+            (
+                "Distribute vertical — gap…",
+                "Distribute Vertical",
+                "Spacing (mm):",
+                1.0,
+                "vertical",
+                "gap",
+            ),
+            (
+                "Distribute horizontal — center-to-center…",
+                "Distribute Horizontal (Center-to-Center)",
+                "Center spacing (mm):",
+                10.0,
+                "horizontal",
+                "center",
+            ),
+            (
+                "Distribute vertical — center-to-center…",
+                "Distribute Vertical (Center-to-Center)",
+                "Center spacing (mm):",
+                10.0,
+                "vertical",
+                "center",
+            ),
         ):
             arrange_menu.addAction(
                 label,
-                lambda _t=title, _p=prompt, _d=default, _a=axis, _m=dist_mode: _run_transform(
-                    lambda: _run_prompted_transform(
-                        _t, _p, _d, 0.0,
-                        lambda value: self._distribute_selected(_a, value, mode=_m),
+                lambda _t=title, _p=prompt, _d=default, _a=axis, _m=dist_mode: (
+                    _run_transform(
+                        lambda: _run_prompted_transform(
+                            _t,
+                            _p,
+                            _d,
+                            0.0,
+                            lambda value: self._distribute_selected(_a, value, mode=_m),
+                        )
                     )
                 ),
             )

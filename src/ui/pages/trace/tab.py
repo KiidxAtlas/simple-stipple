@@ -507,8 +507,7 @@ class TracePage(BasePage):
             draft_profile=True,
         )
         self._canvas.set_empty_message(
-            "No image loaded\n"
-            "Open or drop an image (PNG/JPG) to trace it into outlines"
+            "No image loaded\nOpen or drop an image (PNG/JPG) to trace it into outlines"
         )
         self._canvas.set_grid_visible(True)
         self._canvas.set_grid_snap(False)

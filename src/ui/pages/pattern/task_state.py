@@ -42,4 +42,3 @@ class CancellableTaskState:
 
     def has_pending(self) -> bool:
         return self.pending
-

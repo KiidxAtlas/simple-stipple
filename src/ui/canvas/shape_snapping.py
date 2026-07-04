@@ -42,26 +42,34 @@ class ShapeSnapEngine:
             # Center (primary snap point)
             points.append((shape.center[0], shape.center[1], "center"))
             # Cardinal points
-            points.append((
-                shape.center[0],
-                shape.center[1] + shape.radius,
-                "circle_north",
-            ))
-            points.append((
-                shape.center[0],
-                shape.center[1] - shape.radius,
-                "circle_south",
-            ))
-            points.append((
-                shape.center[0] + shape.radius,
-                shape.center[1],
-                "circle_east",
-            ))
-            points.append((
-                shape.center[0] - shape.radius,
-                shape.center[1],
-                "circle_west",
-            ))
+            points.append(
+                (
+                    shape.center[0],
+                    shape.center[1] + shape.radius,
+                    "circle_north",
+                )
+            )
+            points.append(
+                (
+                    shape.center[0],
+                    shape.center[1] - shape.radius,
+                    "circle_south",
+                )
+            )
+            points.append(
+                (
+                    shape.center[0] + shape.radius,
+                    shape.center[1],
+                    "circle_east",
+                )
+            )
+            points.append(
+                (
+                    shape.center[0] - shape.radius,
+                    shape.center[1],
+                    "circle_west",
+                )
+            )
 
         elif isinstance(shape, EllipseShape):
             # Center
@@ -70,17 +78,21 @@ class ShapeSnapEngine:
             cos_r = math.cos(shape.rotation * math.pi / 180)
             sin_r = math.sin(shape.rotation * math.pi / 180)
             # North
-            points.append((
-                shape.center[0] + shape.ry * sin_r,
-                shape.center[1] + shape.ry * cos_r,
-                "ellipse_north",
-            ))
+            points.append(
+                (
+                    shape.center[0] + shape.ry * sin_r,
+                    shape.center[1] + shape.ry * cos_r,
+                    "ellipse_north",
+                )
+            )
             # South
-            points.append((
-                shape.center[0] - shape.ry * sin_r,
-                shape.center[1] - shape.ry * cos_r,
-                "ellipse_south",
-            ))
+            points.append(
+                (
+                    shape.center[0] - shape.ry * sin_r,
+                    shape.center[1] - shape.ry * cos_r,
+                    "ellipse_south",
+                )
+            )
 
         elif isinstance(shape, SplineShape):
             # Control points are primary snap targets for splines
@@ -93,4 +105,3 @@ class ShapeSnapEngine:
                 points.append((x, y, f"tessellation_{i}"))
 
         return points
-

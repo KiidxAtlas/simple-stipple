@@ -60,7 +60,7 @@ def text_to_polylines(
                 (p.x() - rect.x()) * scale,
                 (rect.bottom() - p.y()) * scale,  # flip: Qt y-down → canvas y-up
             )
-            for p in sub
+            for p in sub  # type: ignore[attr-defined]  # QPolygonF is iterable at runtime; missing from stubs
         ]
         if len(pts) < 3:
             continue

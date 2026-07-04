@@ -160,21 +160,19 @@ class CanvasPropertiesPanel(QWidget):
             self._y.setText(f"{info['y']:.2f}")
             self._w.setText(f"{info['w']:.2f}")
             self._h.setText(f"{info['h']:.2f}")
-            self._set_param_rows(
-                info.get("index"), kind, info.get("meta") or {}
-            )
+            self._set_param_rows(info.get("index"), kind, info.get("meta") or {})
         finally:
             self._updating = False
 
-    def _set_param_rows(
-        self, index: int | None, kind: str | None, meta: dict
-    ) -> None:
+    def _set_param_rows(self, index: int | None, kind: str | None, meta: dict) -> None:
         wanted = _PARAM_FIELDS.get(kind or "", [])
         if kind == "line":
             wanted = [("length", "Length"), ("angle", "Angle °")]
         if kind != self._param_kind:
             while self._param_grid.count():
                 item = self._param_grid.takeAt(0)
+                if item is None:
+                    continue
                 w = item.widget()
                 if w is not None:
                     w.deleteLater()

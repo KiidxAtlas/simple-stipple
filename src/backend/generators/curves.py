@@ -23,10 +23,12 @@ def gen_sunburst(outline_poly, spacing_deg: float) -> list[list[tuple[float, flo
     for i in range(n):
         a = math.radians(i * 180.0 / n)
         sdx, sdy = math.cos(a), math.sin(a)
-        ln = LineString([
-            (cx - sdx * diag, cy - sdy * diag),
-            (cx + sdx * diag, cy + sdy * diag),
-        ])
+        ln = LineString(
+            [
+                (cx - sdx * diag, cy - sdy * diag),
+                (cx + sdx * diag, cy + sdy * diag),
+            ]
+        )
         _collect_lines(outline_poly.intersection(ln), result)
     return result
 
@@ -44,7 +46,7 @@ def gen_concentric_rings(
     result: list[list[tuple[float, float]]] = []
     r = spacing
     while r <= max_r:
-        ring = Point(cx, cy).buffer(r, resolution=n_seg // 4).exterior
+        ring = Point(cx, cy).buffer(r, quad_segs=n_seg // 4).exterior
         _collect_lines(outline_poly.intersection(ring), result)
         r += spacing
     return result

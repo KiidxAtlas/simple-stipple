@@ -6,9 +6,9 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from tests.test_canvas_behavior import (  # noqa: E402
+from tests.test_canvas_behavior import (
     click_world,
-    drag_world,
+    drag_world,  # noqa: E402
     square,
 )
 
@@ -60,7 +60,9 @@ def test_click_inactive_shape_activates_its_layer(qapp):
     click_world(canvas, 35.0, 0.0)
     assert clicked == [1]
     # the draft page handler then switches layer + selects:
-    canvas.set_active_layer(canvas._entities[1].layer)
+    target_layer = canvas._entities[1].layer
+    assert target_layer is not None
+    canvas.set_active_layer(target_layer)
     canvas.set_selection([1])
     assert canvas.active_layer == "Layer 2"
     assert canvas.get_selection_indices() == [1]
@@ -136,7 +138,9 @@ def test_layer_tree_rows_use_entity_indices(qapp):
 def test_shape_label_persists_in_meta(qapp):
     canvas, rt = make_rig(qapp)
     rt.rename_shape("Layer 1", 0, "Base plate")
-    assert canvas._entities[0].meta["label"] == "Base plate"
+    meta = canvas._entities[0].meta
+    assert meta is not None
+    assert meta["label"] == "Base plate"
     rows = rt.build_layer_tree_rows()
     assert "Base plate" in rows[0]["shapes"][0]["label"]
 
@@ -169,7 +173,13 @@ def test_legacy_document_graph_migration(qapp):
     rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
     legacy = {
         "layers": {
-            "geometry": {"id": 1, "polylines": [], "entity_refs": [], "dirty": False, "records": None},
+            "geometry": {
+                "id": 1,
+                "polylines": [],
+                "entity_refs": [],
+                "dirty": False,
+                "records": None,
+            },
             "Layer 1": {
                 "id": 2,
                 "polylines": [square(0, 0)],

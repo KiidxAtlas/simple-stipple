@@ -61,7 +61,9 @@ def test_panel_edits_circle_radius(qapp):
     panel._commit_param("radius")
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(40.0, abs=0.2)
-    assert canvas._entities[0].meta["radius"] == pytest.approx(20.0)
+    meta = canvas._entities[0].meta
+    assert meta is not None
+    assert meta["radius"] == pytest.approx(20.0)
     assert canvas.undo()
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(20.0, abs=0.2)

@@ -22,7 +22,6 @@ from dataclasses import dataclass
 
 from src.ui.canvas.entities import EntityRecord
 
-
 LayerState = tuple[tuple[str, ...], str | None]  # (layer order, active layer)
 
 
@@ -72,9 +71,7 @@ def _diff(
             fwd_changed.append((i, deepcopy(after[i])))
     back_tail = list(before[len(after) :])
     fwd_tail = [deepcopy(e) for e in after[len(before) :]]
-    layers_changed = (
-        layers_before is not None and layers_before != layers_after
-    )
+    layers_changed = layers_before is not None and layers_before != layers_after
     if not back_changed and not back_tail and not fwd_tail and not layers_changed:
         return None  # nothing observable changed; selection-only ≠ a step
     return _Delta(

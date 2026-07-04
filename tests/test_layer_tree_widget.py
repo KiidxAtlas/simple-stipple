@@ -41,6 +41,7 @@ def test_set_layers_accepts_color_and_builds_swatch_icon(qapp):
     )
     item0 = tree._tree.topLevelItem(0)
     item1 = tree._tree.topLevelItem(1)
+    assert item0 is not None and item1 is not None
     assert item0.data(0, tree._ROLE_COLOR) == "#f0883e"
     assert item1.data(0, tree._ROLE_COLOR) is None
     assert not item0.icon(0).isNull()

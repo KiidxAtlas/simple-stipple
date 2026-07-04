@@ -6,10 +6,10 @@ from collections.abc import Callable
 from typing import Any
 
 from src.ui.widgets.layer_tree import (
-    flatten_shape_keys,
     build_layer_row,
     build_shape_rows,
     describe_polyline,
+    flatten_shape_keys,
 )
 
 

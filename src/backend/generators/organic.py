@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Any
 
 import numpy as np
 from scipy.stats.qmc import PoissonDisk  # type: ignore[import-untyped]
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import (  # type: ignore[import-untyped]
-    LineString,
+from shapely.geometry import (
+    LineString,  # type: ignore[import-untyped]
     MultiPoint,
     MultiPolygon,
     Point,
@@ -18,12 +17,11 @@ from shapely.geometry import (  # type: ignore[import-untyped]
 )
 from shapely.ops import voronoi_diagram  # type: ignore[import-untyped]
 
-from src.backend.generators._shared import _extract_polys
-
 from src.backend.generators._shared import (
     LOGGER,
     _clip_to_outline,
     _coords_to_polyline,
+    _extract_polys,
 )
 
 
@@ -59,9 +57,7 @@ def gen_stipple_dots(
     result: list[list[tuple[float, float]]] = []
 
     for cx, cy in centres_world:
-        result.extend(
-            _circle_segments(cx, cy, radius, n_seg, outline_poly, prep)
-        )
+        result.extend(_circle_segments(cx, cy, radius, n_seg, outline_poly, prep))
     return result
 
 
@@ -135,9 +131,7 @@ def gen_stipple_interlaced(
             y = miny + row * row_spacing
             cx, cy = x, y
 
-            result.extend(
-                _circle_segments(cx, cy, radius, n_seg, outline_poly, prep)
-            )
+            result.extend(_circle_segments(cx, cy, radius, n_seg, outline_poly, prep))
 
     return result
 
@@ -196,7 +190,7 @@ def gen_topographic(outline_poly, spacing: float) -> list[list[tuple[float, floa
         distance = contour_idx * spacing
 
         try:
-            contour_line = outline_poly.buffer(-distance, resolution=16)
+            contour_line = outline_poly.buffer(-distance, quad_segs=16)
 
             if contour_line.is_empty or not contour_line.is_valid:
                 continue
@@ -210,7 +204,7 @@ def gen_topographic(outline_poly, spacing: float) -> list[list[tuple[float, floa
                     interior_coords = list(interior.coords)
                     if len(interior_coords) > 2:
                         line = LineString(interior_coords)
-                        buffered = line.buffer(spacing * 0.1, resolution=8)
+                        buffered = line.buffer(spacing * 0.1, quad_segs=8)
                         if buffered.is_valid and not buffered.is_empty:
                             _clip_to_outline(buffered, outline_poly, prep, result)
             elif hasattr(contour_line, "geoms"):

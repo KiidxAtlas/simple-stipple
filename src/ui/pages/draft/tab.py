@@ -110,9 +110,7 @@ class DraftPage(BasePage):
         open_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         open_btn.clicked.connect(self._browse_dxf)
         open_menu = QMenu(open_btn)
-        open_menu.addAction(
-            "Import into drawing (add)…", self._browse_dxf_add
-        )
+        open_menu.addAction("Import into drawing (add)…", self._browse_dxf_add)
         open_btn.setMenu(open_menu)
 
         self._recent_btn = RecentFilesButton(
@@ -348,9 +346,7 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
 
-    def _on_layer_color_change_requested(
-        self, layer: str, color: str | None
-    ) -> None:
+    def _on_layer_color_change_requested(self, layer: str, color: str | None) -> None:
         self._canvas.set_layer_color(layer, color)
         self._refresh_status()
         self._emit_state_changed()

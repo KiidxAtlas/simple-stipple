@@ -226,4 +226,3 @@ class SettingsDialog(QDialog):
 
         save_settings(self._settings)
         self.accept()
-

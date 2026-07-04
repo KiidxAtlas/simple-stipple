@@ -198,7 +198,9 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
             raise ValueError("Selected tile pattern is unavailable.")
         params = {
             "tile_path": tile_path,
-            "gap": tab._parse_float_field(tab._tile_gap, "Gap", minimum=0.0, maximum=1000),
+            "gap": tab._parse_float_field(
+                tab._tile_gap, "Gap", minimum=0.0, maximum=1000
+            ),
             "angle": tab._parse_float_field(tab._tile_angle, "Tile rotation"),
             "interlock": tab._tile_interlock_cb.isChecked(),
         }
@@ -206,9 +208,15 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
         img_path = tab._parse_path_field(tab._htone_img_edit, "Halftone image")
         params = {
             "img_path": img_path,
-            "r_min": tab._parse_float_field(tab._htone_r_min, "Cell min", minimum=0.0, maximum=100),
-            "r_max": tab._parse_float_field(tab._htone_r_max, "Cell max", minimum=0.001, maximum=100),
-            "spacing": tab._parse_float_field(tab._htone_spacing, "Grid spacing", minimum=0.001, maximum=1000),
+            "r_min": tab._parse_float_field(
+                tab._htone_r_min, "Cell min", minimum=0.0, maximum=100
+            ),
+            "r_max": tab._parse_float_field(
+                tab._htone_r_max, "Cell max", minimum=0.001, maximum=100
+            ),
+            "spacing": tab._parse_float_field(
+                tab._htone_spacing, "Grid spacing", minimum=0.001, maximum=1000
+            ),
             "invert": tab._htone_invert.isChecked(),
         }
     else:
@@ -219,7 +227,11 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
         for spec in specs:
             key = spec.param_key or spec.attr[1:]
             widget = getattr(tab, spec.attr)
-            bounds = {k: v for k, v in (("minimum", spec.minimum), ("maximum", spec.maximum)) if v is not None}
+            bounds = {
+                k: v
+                for k, v in (("minimum", spec.minimum), ("maximum", spec.maximum))
+                if v is not None
+            }
             if spec.kind == "checkbox":
                 params[key] = widget.isChecked()
             elif spec.kind == "combobox":
@@ -229,7 +241,9 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
             else:
                 params[key] = tab._parse_float_field(widget, spec.label, **bounds)
 
-    params["rotation"] = tab._parse_float_field(tab._pattern_rotation, "Pattern rotation")
+    params["rotation"] = tab._parse_float_field(
+        tab._pattern_rotation, "Pattern rotation"
+    )
     return params
 
 
@@ -256,8 +270,8 @@ def collect_form_state(page: Any) -> dict:
         "fill_mode": page._fill_mode_combo.currentData() or "none",
         "fill_spacing": page._fill_spacing.text(),
         "fill_angle": page._fill_angle.text(),
-                "fill_keep_outline": page._fill_keep_outline_cb.isChecked(),
-                "fill_target_outline": page._fill_target_outline_cb.isChecked(),
+        "fill_keep_outline": page._fill_keep_outline_cb.isChecked(),
+        "fill_target_outline": page._fill_target_outline_cb.isChecked(),
         "fill_target_pattern": page._fill_target_pattern_cb.isChecked(),
         # Tile library (set by build_tile_library_widget)
         "tile_pattern_path": page._library_patterns.get(
