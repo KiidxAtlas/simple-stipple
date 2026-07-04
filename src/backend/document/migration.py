@@ -1,21 +1,12 @@
-"""Migration helpers between legacy tab states and DocumentGraph."""
+"""Legacy-workspace read helpers (DocumentGraph is no longer written).
+
+Current sessions store flat polyline lists / entity records directly;
+these helpers only exist so old workspace files keep loading.
+"""
 
 from __future__ import annotations
 
 from src.backend.document.graph import DocumentGraph
-
-
-def graph_from_polylines(
-    polylines: list[list[tuple[float, float]]],
-    *,
-    layer: str = "geometry",
-    as_segments: bool = True,  # kept for call-site compatibility; unused
-) -> DocumentGraph:
-    """Build a ``DocumentGraph`` from polyline geometry for a target layer."""
-    graph = DocumentGraph()
-    graph.set_active_layer(layer)
-    graph.set_layer_polylines(layer, polylines)
-    return graph
 
 
 def polylines_from_graph(

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.document.graph import DocumentGraph
-from src.backend.document.migration import graph_from_polylines, polylines_from_graph
+from src.backend.document.migration import polylines_from_graph
 from src.backend.dxf.io import load_dxf_polylines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.modules import CanvasGridModule
@@ -367,11 +367,6 @@ class ConvertPage(BasePage):
         self._precision_bar.refresh()
 
     def get_workspace_state(self) -> dict:
-        doc_graph = graph_from_polylines(
-            self._preview_canvas.get_polylines_state(),
-            layer="convert_preview",
-            as_segments=False,
-        )
         return {
             "active_sub_tab": self._tool_stack.currentIndex(),
             "fvi_src": self._fvi_subtab._src_edit.text(),
@@ -385,7 +380,6 @@ class ConvertPage(BasePage):
             "svg_dxf_out": self._svg_dxf_subtab._out_edit.text(),
             "preview_polys": self._preview_canvas.get_polylines_state(),
             "preview_view": self._preview_canvas.get_view_state(),
-            "document_graph": doc_graph.snapshot(),
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
@@ -410,8 +404,9 @@ class ConvertPage(BasePage):
         self._svg_subtab._out_edit.setText(str(state.get("svg_out", "")))
         self._svg_dxf_subtab._src_edit.setText(str(state.get("svg_dxf_src", "")))
         self._svg_dxf_subtab._out_edit.setText(str(state.get("svg_dxf_out", "")))
+        # Legacy workspaces wrapped preview_polys in a DocumentGraph snapshot.
         graph_state = state.get("document_graph")
-        if isinstance(graph_state, dict):
+        if isinstance(graph_state, dict) and "preview_polys" not in state:
             doc_graph = DocumentGraph()
             doc_graph.restore(graph_state)
             preview_polys = polylines_from_graph(doc_graph, layer="convert_preview")

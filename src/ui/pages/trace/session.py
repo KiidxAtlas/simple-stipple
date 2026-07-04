@@ -6,15 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from src.backend.document.graph import DocumentGraph
-from src.backend.document.migration import graph_from_polylines, polylines_from_graph
+from src.backend.document.migration import polylines_from_graph
 
 
 def get_trace_workspace_state(page: Any) -> dict:
-    doc_graph = graph_from_polylines(
-        page._canvas.get_polylines_state(),
-        layer="trace_preview",
-        as_segments=False,
-    )
     return {
         "image_path": page._img_path or page._img_edit.text(),
         "blur": page._blur.text(),
@@ -41,7 +36,6 @@ def get_trace_workspace_state(page: Any) -> dict:
         "last_height_mm": page._last_height_mm,
         "canvas_polys": page._canvas.get_polylines_state(),
         "canvas_view": page._canvas.get_view_state(),
-        "document_graph": doc_graph.snapshot(),
     }
 
 
@@ -96,8 +90,10 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
     else:
         page._img_info_lbl.setText("")
     polys: list[list[tuple[float, float]]]
+    # Legacy workspaces wrapped the same polylines in a DocumentGraph
+    # snapshot; current ones store canvas_polys directly.
     graph_state = state.get("document_graph")
-    if isinstance(graph_state, dict):
+    if isinstance(graph_state, dict) and "canvas_polys" not in state:
         doc_graph = DocumentGraph()
         doc_graph.restore(graph_state)
         polys = polylines_from_graph(doc_graph, layer="trace_preview")

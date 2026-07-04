@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.backend.document.graph import DocumentGraph
-from src.backend.document.migration import graph_from_polylines, polylines_from_graph
+from src.backend.document.migration import polylines_from_graph
 from src.ui.pages.pattern.params import collect_form_state, restore_form_state
 
 
@@ -15,11 +15,6 @@ def get_pattern_workspace_state(page: Any) -> dict:
         page._edit_polys
         if page._showing_preview
         else page._canvas.get_polylines_state()
-    )
-    doc_graph = graph_from_polylines(
-        polys_to_save,
-        layer="pattern_active",
-        as_segments=False,
     )
     return {
         "dxf_path": page._dxf_edit.text(),
@@ -32,7 +27,6 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "canvas_view": page._canvas.get_view_state(),
         "preview_polys": page._preview_polys_cache,
         "showing_preview": page._showing_preview,
-        "document_graph": doc_graph.snapshot(),
         "zones": list(page._zones),
         "exclusion_ids": list(page._exclusion_ids),
     }
@@ -45,8 +39,10 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     page._dxf_edit.setText(str(state.get("dxf_path", "")))
     restore_form_state(page, state.get("params", {}))
     page._orig_polys = [list(poly) for poly in state.get("orig_polys", [])]
+    # Legacy workspaces wrapped edit_polys in a DocumentGraph snapshot;
+    # current ones store the polylines directly.
     graph_state = state.get("document_graph")
-    if isinstance(graph_state, dict):
+    if isinstance(graph_state, dict) and "edit_polys" not in state:
         doc_graph = DocumentGraph()
         doc_graph.restore(graph_state)
         migrated = polylines_from_graph(doc_graph, layer="pattern_active")
