@@ -193,7 +193,10 @@ class CanvasRenderer:
                 color = QColor(POLY)
             if is_locked:
                 color = QColor("#8b949e")
-            lw = 2.0 if sel else (1.2 if is_construction else 1.5)
+            hovered = not sel and idx == self._hover_poly and self._mode == "select"
+            if hovered:
+                color = QColor("#79c0ff")
+            lw = 2.0 if sel or hovered else (1.2 if is_construction else 1.5)
             pen = QPen(color, lw)
             if is_construction or is_locked:
                 pen.setStyle(Qt.PenStyle.DashLine)

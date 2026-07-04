@@ -820,7 +820,13 @@ class SelectTool(CanvasTool):
                 v._lmb_prev = pos
                 v._redraw()
             return True
-        # Passive hover: only repaint if the displayed cursor-position text
+        # Passive hover: pre-highlight the polyline a click would select.
+        hover = v._find_poly_at(pos.x(), pos.y()) if v._selectable else None
+        if hover != v._hover_poly:
+            v._hover_poly = hover
+            v._redraw()
+            return True
+        # Only repaint if the displayed cursor-position text
         # (2 decimal places) actually changed.
         _prev_cx = getattr(v, "_prev_cursor_display", None)
         _cur_cx = (round(wx, 2), round(wy, 2))

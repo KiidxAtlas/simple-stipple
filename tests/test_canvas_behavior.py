@@ -689,3 +689,13 @@ def test_marquee_pulls_whole_group(qapp):
     v.deselect_all()
     drag_world(v, 45.0, 15.0, 25.0, -5.0)  # crossing box over square 1 only
     assert v.get_selection_indices() == [1, 2]
+
+
+def test_hover_pre_highlight_tracks_target(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    cx, cy = v._w2c(5.0, 0.0)
+    move(v, cx, cy, button=Qt.MouseButton.NoButton)
+    assert v._hover_poly == 0
+    cx, cy = v._w2c(45.0, -20.0)  # empty space
+    move(v, cx, cy, button=Qt.MouseButton.NoButton)
+    assert v._hover_poly is None

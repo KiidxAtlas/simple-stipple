@@ -407,6 +407,8 @@ class PolylineView(
         self._edit_drag_moved: bool = False
         self._edit_undo_pushed: bool = False
         self._hover_vert: tuple[int, int] | None = None
+        # Select-mode hover pre-highlight: which polyline a click would pick
+        self._hover_poly: int | None = None
 
         # Move state (select mode drag-to-move)
         self._move_dragging: bool = False
@@ -644,6 +646,7 @@ class PolylineView(
         self._sync_shape_storage_from_entities()
 
     def _reset_edit_interaction_state(self) -> None:
+        self._hover_poly = None
         self._edit_poly = None
         self._edit_vert = None
         self._edit_dragging = False
