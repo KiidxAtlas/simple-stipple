@@ -802,3 +802,27 @@ def test_hud_prompt_offset_inline(qapp):
     v._prompt_offset_selected()
     key(v, Qt.Key.Key_Escape)
     assert v._hud_prompt_edit is None
+
+
+def test_zoom_bounds_and_presets(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.fit()
+    for _ in range(200):
+        v._zoom_by(2.0)
+    from src.ui.canvas.view import _MAX_SCALE
+
+    assert v._scale == _MAX_SCALE  # clamped, no runaway float
+    v.set_zoom_percent(100)
+    assert v.get_zoom_percent() == pytest.approx(100, abs=1)
+    v.set_zoom_percent(200)
+    assert v.get_zoom_percent() == pytest.approx(200, abs=2)
+
+
+def test_double_click_empty_fits(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.fit()
+    v._zoom_by(4.0)
+    z = v.get_zoom_percent()
+    ev = _mouse_event(QEvent.Type.MouseButtonDblClick, 5.0, 5.0)
+    v.mouseDoubleClickEvent(ev)
+    assert v.get_zoom_percent() < z

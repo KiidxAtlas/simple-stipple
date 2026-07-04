@@ -86,6 +86,7 @@ class DraftPage(BasePage):
         root.addWidget(canvas_host, stretch=1)
 
         self._canvas_status = CanvasStatusStrip()
+        self._canvas_status.set_zoom_callback(self._on_zoom_preset)
         root.addWidget(self._canvas_status)
 
         self.setAcceptDrops(True)
@@ -369,6 +370,13 @@ class DraftPage(BasePage):
             pass
         self._refresh_status()
         self._emit_state_changed()
+
+    def _on_zoom_preset(self, value) -> None:
+        if value == "fit":
+            self._canvas.fit()
+        else:
+            self._canvas.set_zoom_percent(float(value))
+        self._refresh_status()
 
     def _fit_selection(self) -> None:
         if self._canvas.fit_selection():

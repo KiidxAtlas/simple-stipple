@@ -953,4 +953,7 @@ class SelectTool(CanvasTool):
                 v._sel = {hit}
             v._redraw()
             v._notify()
+        elif v._entities:
+            # Double-click on empty canvas = fit view.
+            v.fit()
         return True

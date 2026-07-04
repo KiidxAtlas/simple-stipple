@@ -10,6 +10,7 @@ from PIL import Image as PILImage
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
+    QVariantAnimation,
     QPoint,
     QPointF,
     QPropertyAnimation,
@@ -53,6 +54,8 @@ from src.backend.geometry.primitives import (
 from src.constants import DRAG_THRESH
 from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
 from src.ui.canvas._constants import MIN_SCALE as _MIN_SCALE
+
+_MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 from src.ui.canvas._constants import SNAP_DIST as _SNAP_DIST
 from src.ui.canvas._constants import VERT_HIT as _VERT_HIT
 
@@ -1908,12 +1911,7 @@ class PolylineView(
 
     def _zoom_by(self, factor: float) -> None:
         w, h = max(self.width(), 100), max(self.height(), 100)
-        cx, cy = w / 2, h / 2
-        wx, wy = self._c2w(cx, cy)
-        self._scale = max(_MIN_SCALE, self._scale * factor)
-        self._ox = cx - wx * self._scale
-        self._oy = cy + wy * self._scale
-        self._redraw()
+        self._zoom_at(w / 2, h / 2, factor)
 
     # ── Hit testing ───────────────────────────────────────────────────────────
 
@@ -2686,14 +2684,65 @@ class PolylineView(
         if delta == 0:
             event.accept()
             return
-        factor = max(0.9, min(1.1, 1.0 + delta * 0.0007))
+        # Ctrl+wheel = fine zoom for precision work.
+        fine = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        span = 0.02 if fine else 0.1
+        factor = max(1.0 - span, min(1.0 + span, 1.0 + delta * 0.0007))
         pos = event.position()
-        wx, wy = self._c2w(pos.x(), pos.y())
-        self._scale = max(_MIN_SCALE, self._scale * factor)
-        self._ox = pos.x() - wx * self._scale
-        self._oy = pos.y() + wy * self._scale
-        self._redraw()
+        self._zoom_at(pos.x(), pos.y(), factor)
         event.accept()
+
+    def _zoom_at(self, cx: float, cy: float, factor: float) -> None:
+        """Zoom about a canvas point, clamped to sane bounds."""
+        wx, wy = self._c2w(cx, cy)
+        self._scale = max(_MIN_SCALE, min(_MAX_SCALE, self._scale * factor))
+        self._ox = cx - wx * self._scale
+        self._oy = cy + wy * self._scale
+        self._redraw()
+
+    def event(self, ev) -> bool:  # noqa: N802 — Qt naming
+        # macOS trackpad pinch zoom.
+        if ev.type() == QEvent.Type.NativeGesture:
+            if ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture:
+                pos = ev.position()
+                self._zoom_at(pos.x(), pos.y(), 1.0 + float(ev.value()))
+                return True
+        return super().event(ev)
+
+    def set_zoom_percent(self, percent: float) -> None:
+        """Set zoom relative to the fit scale, anchored at the view center."""
+        if self._fit_scale < _MIN_SCALE or percent <= 0:
+            return
+        target = self._fit_scale * percent / 100.0
+        cx, cy = self.width() / 2.0, self.height() / 2.0
+        self._animate_view_to(target, cx, cy)
+
+    def _animate_view_to(self, target_scale: float, cx: float, cy: float) -> None:
+        """Animate to a new scale anchored at a canvas point (instant when
+        the widget is not visible, e.g. headless tests)."""
+        target_scale = max(_MIN_SCALE, min(_MAX_SCALE, target_scale))
+        wx, wy = self._c2w(cx, cy)
+        end_ox = cx - wx * target_scale
+        end_oy = cy + wy * target_scale
+        if not self.isVisible():
+            self._scale, self._ox, self._oy = target_scale, end_ox, end_oy
+            self._redraw()
+            return
+        anim = QVariantAnimation(self)
+        anim.setDuration(140)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        s0, ox0, oy0 = self._scale, self._ox, self._oy
+
+        def _step(t: float) -> None:
+            self._scale = s0 + (target_scale - s0) * t
+            self._ox = ox0 + (end_ox - ox0) * t
+            self._oy = oy0 + (end_oy - oy0) * t
+            self._redraw()
+
+        anim.valueChanged.connect(_step)
+        anim.start(QVariantAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def mousePressEvent(self, event: QMouseEvent):
         pos = event.position()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
 from src.ui.core.factories import info_chip
@@ -56,7 +57,10 @@ class CanvasStatusStrip(QFrame):
 
         self._zoom_label = QLabel("100%")
         self._zoom_label.setStyleSheet("color: #8b949e; font-size: 10px;")
-        self._zoom_label.setToolTip("Zoom level (scroll to zoom)")
+        self._zoom_label.setToolTip("Zoom level — click for presets")
+        self._zoom_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._zoom_label.mousePressEvent = self._show_zoom_menu  # type: ignore[method-assign]
+        self._on_zoom_selected = None
         layout.addWidget(self._zoom_label)
 
         layout.addWidget(self._dot())
@@ -104,6 +108,23 @@ class CanvasStatusStrip(QFrame):
         self._readiness_chip.setProperty("tone", readiness_tone)
         self._readiness_chip.style().unpolish(self._readiness_chip)
         self._readiness_chip.style().polish(self._readiness_chip)
+
+    def set_zoom_callback(self, callback) -> None:
+        """callback(value) where value is a percent int or "fit"."""
+        self._on_zoom_selected = callback
+
+    def _show_zoom_menu(self, event) -> None:
+        if self._on_zoom_selected is None:
+            return
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.addAction("Fit", lambda: self._on_zoom_selected("fit"))
+        for pct in (50, 100, 200, 400):
+            menu.addAction(
+                f"{pct}%", lambda _p=pct: self._on_zoom_selected(_p)
+            )
+        menu.popup(self._zoom_label.mapToGlobal(event.position().toPoint()))
 
     def set_selection_count(self, count: int) -> None:
         """Lightweight update — change only the selection label without a full snapshot."""
