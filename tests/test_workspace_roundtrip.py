@@ -61,3 +61,30 @@ def test_workspace_document_is_json_serializable(app_window):
     doc = w._collect_workspace_document()
     text = json.dumps(doc)
     assert "Layer 1" in text
+
+
+def test_autosave_writes_and_recovery_cleans_up(app_window, tmp_path, monkeypatch):
+    w = app_window
+    monkeypatch.setattr(
+        type(w), "_autosave_path", staticmethod(lambda: tmp_path / "auto.json")
+    )
+    draft = _draft_page(w)
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    w._workspace_dirty = True
+    w._autosave_workspace()
+    assert (tmp_path / "auto.json").exists()
+
+    # a successful save discards the snapshot
+    w._workspace_path = tmp_path / "doc.json"
+    assert w._save_workspace()
+    assert not (tmp_path / "auto.json").exists()
+
+
+def test_autosave_skips_when_clean(app_window, tmp_path, monkeypatch):
+    w = app_window
+    monkeypatch.setattr(
+        type(w), "_autosave_path", staticmethod(lambda: tmp_path / "auto.json")
+    )
+    w._workspace_dirty = False
+    w._autosave_workspace()
+    assert not (tmp_path / "auto.json").exists()

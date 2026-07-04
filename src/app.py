@@ -32,6 +32,7 @@ from src.backend.document.state import (
 )
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
+from src.paths import user_data_dir
 from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
 from src.ui.canvas import commands as canvas_commands
 from src.ui.core.factories import info_chip, surface_frame
@@ -88,6 +89,13 @@ class App(QMainWindow):
         self._workspace_timer = QTimer(self)
         self._workspace_timer.setSingleShot(True)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
+
+        # Crash recovery: periodically snapshot unsaved work to the app data
+        # dir; a clean exit or successful save removes the snapshot.
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(90_000)
+        self._autosave_timer.timeout.connect(self._autosave_workspace)
+        self._autosave_timer.start()
 
         # Periodic auto-fetch while app is open (when enabled in settings)
         self._auto_fetch_timer = QTimer(self)
@@ -362,6 +370,50 @@ class App(QMainWindow):
             self._tabs.setCurrentWidget(self._pattern_page)
             self._schedule_workspace_dirty_check()
 
+    @staticmethod
+    def _autosave_path() -> Path:
+        return user_data_dir() / "autosave.workspace.json"
+
+    def _autosave_workspace(self) -> None:
+        if not self._workspace_dirty or not self._has_workspace_content():
+            return
+        try:
+            write_json_file_atomic(
+                self._autosave_path(), self._collect_workspace_document()
+            )
+        except Exception as exc:  # noqa: BLE001 — autosave must never crash
+            LOGGER.warning("Workspace autosave failed: %s", exc)
+
+    def _discard_autosave(self) -> None:
+        try:
+            self._autosave_path().unlink(missing_ok=True)
+        except OSError as exc:
+            LOGGER.warning("Could not remove autosave: %s", exc)
+
+    def _offer_autosave_recovery(self) -> None:
+        path = self._autosave_path()
+        if not path.exists():
+            return
+        reply = QMessageBox.question(
+            self,
+            "Recover Unsaved Work",
+            "A workspace snapshot from a previous session was found "
+            "(the app may not have closed cleanly).\n\nRestore it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                self._apply_workspace_document(read_json_file(path))
+                self._workspace_dirty = True
+                self._update_title()
+            except (OSError, ValueError, KeyError) as exc:
+                QMessageBox.warning(
+                    self, "Recovery Failed", f"Could not restore snapshot:\n{exc}"
+                )
+                return  # keep the file for manual inspection
+        self._discard_autosave()
+
     def _update_workspace_dirty(self) -> None:
         if not self._has_unsaved_changes:
             self._workspace_dirty = False
@@ -478,6 +530,7 @@ class App(QMainWindow):
             self._has_unsaved_changes = False
             self._remember_workspace_path(self._workspace_path)
             self._update_title()
+            self._discard_autosave()
             return True
         except (OSError, TypeError, ValueError) as exc:
             QMessageBox.critical(self, "Workspace Error", str(exc))
@@ -716,6 +769,7 @@ class App(QMainWindow):
                     shutdown()
                 except Exception as exc:  # noqa: BLE001
                     report_error("Page shutdown failed", exc)
+        self._discard_autosave()
         event.accept()
 
     def showEvent(self, event) -> None:
@@ -724,6 +778,8 @@ class App(QMainWindow):
         if hasattr(self, "_startup_done"):
             return
         self._startup_done = True
+
+        QTimer.singleShot(200, self._offer_autosave_recovery)
 
         # Auto-fetch repository metadata on startup if setting is enabled
         if self._settings.get("auto_fetch_on_startup", False):
