@@ -3850,8 +3850,17 @@ class PolylineView(
                 cy,
                 float(meta.get("rx", 1.0)),
                 float(meta.get("ry", 1.0)),
-                rotation=float(meta.get("rotation", 0.0)),
             )
+            rot = math.radians(float(meta.get("rotation", 0.0) or 0.0))
+            if abs(rot) > 1e-9:
+                ca, sa = math.cos(rot), math.sin(rot)
+                new_points = [
+                    (
+                        cx + (x - cx) * ca - (y - cy) * sa,
+                        cy + (x - cx) * sa + (y - cy) * ca,
+                    )
+                    for x, y in new_points
+                ]
         elif kind == "arc" and key == "radius" and value > 0:
             meta["radius"] = float(value)
             a0 = math.radians(float(meta.get("start_angle", 0.0)))

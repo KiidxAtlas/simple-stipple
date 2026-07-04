@@ -722,13 +722,16 @@ class SelectTool(CanvasTool):
             v._notify()
             hit = v._find_nearest_vertex(pos.x(), pos.y())
             target_kind = v._entities[target].kind
+            # Parametric shapes never vertex-drag in select mode: every rim
+            # point of a circle/ellipse is a "vertex", which made plain
+            # drag-to-move nearly impossible. Resize via the frame handles
+            # or the properties panel; vertex editing lives in Edit mode.
             if (
                 hit is not None
                 and hit[0] == target
-                and (
-                    was_selected_before
-                    or target_kind in {"arc", "circle", "ellipse", "rectangle"}
-                )
+                and was_selected_before
+                and target_kind
+                not in {"arc", "circle", "ellipse", "rectangle", "polygon"}
                 and not v._is_locked(target)
             ):
                 pi, vi = hit

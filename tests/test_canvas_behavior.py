@@ -858,3 +858,23 @@ def test_text_carries_params_and_rebuilds(qapp):
     assert new_min_y == pytest.approx(old_min_y, abs=0.5)
     assert v.undo()
     assert v.text_params_at(0)["text"] == "Hi"
+
+
+def test_selected_circle_drags_as_move_not_vertex_edit(qapp):
+    """Dragging a circle by its rim must move it, not distort its points —
+    every rim point is a 'vertex', which used to hijack the drag."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("circle")
+    click_world(v, 50.0, 50.0)
+    click_world(v, 60.0, 50.0)
+    v.set_mode("select")
+    click_world(v, 60.0, 50.0)  # select it (click on rim)
+    assert v.get_selection_indices() == [0]
+    before = bbox(v._entities[0].points)
+    drag_world(v, 60.0, 50.0, 75.0, 65.0)  # grab the rim, drag
+    after = bbox(v._entities[0].points)
+    # same size (moved, not distorted)
+    assert after[2] - after[0] == pytest.approx(before[2] - before[0], abs=1e-6)
+    assert after[3] - after[1] == pytest.approx(before[3] - before[1], abs=1e-6)
+    assert after[0] != pytest.approx(before[0])

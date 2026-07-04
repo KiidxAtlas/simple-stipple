@@ -76,3 +76,21 @@ def test_panel_rotate_via_field(qapp):
 
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(10 * math.sqrt(2), abs=1e-6)
+
+
+def test_panel_edits_ellipse_radius(qapp):
+    canvas, panel = make_panel(qapp, [])
+    from tests.test_canvas_behavior import click_world
+
+    canvas.set_mode("draw")
+    canvas._set_draw_primitive("ellipse")
+    click_world(canvas, 50.0, 50.0)
+    click_world(canvas, 70.0, 60.0)
+    canvas.set_mode("select")
+    canvas.set_selection([0])
+    panel.refresh()
+    assert "rx" in panel._param_edits
+    panel._param_edits["rx"].setText("30")
+    panel._commit_param("rx")  # crashed with TypeError before the fix
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(60.0, abs=0.3)
