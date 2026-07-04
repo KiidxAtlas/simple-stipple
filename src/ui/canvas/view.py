@@ -43,6 +43,7 @@ from shapely.geometry import (
     Polygon,
 )
 from shapely.ops import split as shapely_split
+from shapely.ops import unary_union
 
 from src.backend.geometry.primitives import (
     build_circle_poly,
@@ -3403,6 +3404,88 @@ class PolylineView(
         self._notify()
         self._fire_poly_change()
         return True
+
+    def boolean_selected(self, op: str) -> int:
+        """Boolean operation on the closed shapes in the selection.
+
+        ``union`` welds overlapping shapes, ``subtract`` cuts the later
+        shapes out of the first (lowest-index) shape, ``intersect`` keeps
+        the common area, ``divide`` splits the union into its faces.
+        Results are plain closed polylines (holes become separate loops so
+        laser paths stay cuttable). Returns the number of result shapes.
+        """
+        indices = [
+            i
+            for i in self._mutable_selected_indices()
+            if len(self._entities[i].points) >= 4
+            and self._is_poly_closed(self._entities[i].points)
+        ]
+        if len(indices) < 2:
+            self._show_flash("Select 2+ closed shapes", 1100)
+            return 0
+        try:
+            shapes = []
+            for i in indices:
+                pg = Polygon(self._entities[i].points[:-1]).buffer(0)
+                if not pg.is_empty:
+                    shapes.append(pg)
+            if len(shapes) < 2:
+                self._show_flash("Shapes are degenerate", 1100)
+                return 0
+            if op == "union":
+                result = unary_union(shapes)
+            elif op == "subtract":
+                result = shapes[0]
+                for other in shapes[1:]:
+                    result = result.difference(other)
+            elif op == "intersect":
+                result = shapes[0]
+                for other in shapes[1:]:
+                    result = result.intersection(other)
+            elif op == "divide":
+                cutters = unary_union([pg.boundary for pg in shapes])
+                from shapely.ops import polygonize
+
+                result = MultiPolygon(list(polygonize(cutters)))
+            else:
+                return 0
+        except GEOSException:
+            self._show_flash("Boolean operation failed", 1200)
+            return 0
+
+        rings: list[list[tuple[float, float]]] = []
+
+        def _collect(geom) -> None:
+            if geom.is_empty:
+                return
+            if isinstance(geom, Polygon):
+                ext = [(float(x), float(y)) for x, y in geom.exterior.coords]
+                if len(ext) >= 4:
+                    rings.append(ext)
+                for hole in geom.interiors:
+                    ring = [(float(x), float(y)) for x, y in hole.coords]
+                    if len(ring) >= 4:
+                        rings.append(ring)
+            elif isinstance(geom, (MultiPolygon, GeometryCollection)):
+                for g in geom.geoms:
+                    _collect(g)
+
+        _collect(result)
+        if not rings:
+            self._show_flash("No area left after operation", 1200)
+            return 0
+
+        self._push_undo()
+        self._compact_entities(set(indices))
+        new_sel: set[int] = set()
+        for ring in rings:
+            new_sel.add(self._append_entity(ring))
+        self._sel = new_sel
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        self._show_flash(f"{op.capitalize()}: {len(rings)} shape(s)", 1000)
+        return len(rings)
 
     def selection_geometry(self) -> dict[str, Any] | None:
         """Bbox + single-entity parameters for the properties panel."""

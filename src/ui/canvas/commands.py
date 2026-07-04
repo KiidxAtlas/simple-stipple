@@ -210,6 +210,37 @@ COMMANDS: tuple[Command, ...] = (
         category="Path",
         when=lambda v: v.get_mode() == "select",
     ),
+    # ── Boolean ─────────────────────────────────────────────────────────────
+    Command(
+        "boolean.union",
+        "Union (Weld)",
+        lambda v: v.boolean_selected("union"),
+        "Ctrl+U",
+        category="Boolean",
+        when=_sel_or_edit,
+    ),
+    Command(
+        "boolean.subtract",
+        "Subtract",
+        lambda v: v.boolean_selected("subtract"),
+        "Ctrl+Shift+U",
+        category="Boolean",
+        when=_sel_or_edit,
+    ),
+    Command(
+        "boolean.intersect",
+        "Intersect",
+        lambda v: v.boolean_selected("intersect"),
+        category="Boolean",
+        when=_sel_or_edit,
+    ),
+    Command(
+        "boolean.divide",
+        "Divide",
+        lambda v: v.boolean_selected("divide"),
+        category="Boolean",
+        when=_sel_or_edit,
+    ),
     # ── Modes ───────────────────────────────────────────────────────────────
     Command(
         "mode.draw",

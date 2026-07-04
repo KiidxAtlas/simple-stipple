@@ -382,6 +382,19 @@ class DxfCanvas(PolylineView):
                 lambda: _run_transform(self._send_selected_to_draft),
             )
 
+        if len(self._sel) >= 2:
+            bool_menu = menu.addMenu("Boolean")
+            for cmd_id in (
+                "boolean.union",
+                "boolean.subtract",
+                "boolean.intersect",
+                "boolean.divide",
+            ):
+                bool_menu.addAction(
+                    canvas_commands.menu_text(cmd_id),
+                    lambda _c=cmd_id: canvas_commands.run(self, _c),
+                )
+
         arrange_menu = menu.addMenu("Arrange")
         for label, mode in (
             ("Align left", "left"),
