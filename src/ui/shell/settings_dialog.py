@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -17,9 +18,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.settings import save_settings
+from src.settings import DEFAULT_RADIAL_MENU_TOOLS, save_settings
 from src.ui.core.factories import section_label, sep, surface_frame
 from src.ui.shell.keybindings_dialog import KeybindingsDialog
+from src.ui.shell.radial_menu_dialog import RadialMenuDialog
+from src.ui.units import DEFAULT_UNIT_SYSTEM
 
 
 class SettingsDialog(QDialog):
@@ -53,6 +56,7 @@ class SettingsDialog(QDialog):
         self._settings: dict = settings or {}
         self._entries: dict[str, QLineEdit] = {}
         self._toggles: dict[str, QCheckBox] = {}
+        self._unit_combo: QComboBox | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -119,8 +123,24 @@ class SettingsDialog(QDialog):
         for key, label, default in self._TOGGLE_FIELDS:
             self._add_toggle(behavior_layout, key, label, default)
 
+        unit_row = QHBoxLayout()
+        unit_row.addWidget(QLabel("Display units"))
+        self._unit_combo = QComboBox()
+        self._unit_combo.addItem("Millimeters (mm)", "mm")
+        self._unit_combo.addItem("Inches (in)", "in")
+        current_unit = self._settings.get("unit_system", DEFAULT_UNIT_SYSTEM)
+        idx = self._unit_combo.findData(current_unit)
+        self._unit_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        unit_row.addWidget(self._unit_combo)
+        unit_row.addStretch()
+        behavior_layout.addLayout(unit_row)
+
         kb_row = QHBoxLayout()
         kb_row.addStretch()
+        radial_btn = QPushButton("Customize radial menu\u2026")
+        radial_btn.setToolTip('Choose which tools appear in the "Q" quick menu')
+        radial_btn.clicked.connect(self._open_radial_menu)
+        kb_row.addWidget(radial_btn)
         kb_btn = QPushButton("Edit shortcuts\u2026")
         kb_btn.setToolTip("Customize keyboard shortcuts")
         kb_btn.clicked.connect(self._open_keybindings)
@@ -149,6 +169,12 @@ class SettingsDialog(QDialog):
         dlg = KeybindingsDialog(self, keybindings=self._settings.get("keybindings", {}))
         if dlg.exec():
             self._settings["keybindings"] = dlg.get_keybindings()
+
+    def _open_radial_menu(self) -> None:
+        current = self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+        dlg = RadialMenuDialog(self, tools=current)
+        if dlg.exec():
+            self._settings["radial_menu_tools"] = dlg.get_tools()
 
     def _add_row(
         self, layout: QVBoxLayout, key: str, label: str, browse: bool = False
@@ -223,6 +249,9 @@ class SettingsDialog(QDialog):
 
         for key, toggle in self._toggles.items():
             self._settings[key] = toggle.isChecked()
+
+        if self._unit_combo is not None:
+            self._settings["unit_system"] = self._unit_combo.currentData()
 
         save_settings(self._settings)
         self.accept()

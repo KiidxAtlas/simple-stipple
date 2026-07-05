@@ -13,18 +13,45 @@ _SETTINGS_FILE = user_data_dir() / "settings.json"
 _LOG = logging.getLogger(__name__)
 
 
+# =============================================================================
+# Default keybindings for the app-level actions — workspace, app, canvas-mode
+# switches, page tabs, and window management. These are the ids App._shortcut()
+# resolves for its QActions.
+#
+# Every OTHER rebindable action (undo/redo, selection, path/boolean ops, tool
+# modes, view/grid controls, draw-primitive shortcuts, ...) is a canvas
+# Command in src/ui/canvas/commands.py — its default lives on Command.shortcut,
+# not here, so there is exactly one place that owns each shortcut's default.
+# src.ui.canvas.commands.apply_keybindings() reads the "keybindings" dict
+# (this table merged with the user's overrides) to make those live too.
+#
+# Multi-key combinations (e.g. "Ctrl+Shift+D", "Meta+[") are fully supported
+# by the Qt key sequence parser used throughout the codebase.
+# =============================================================================
+
 DEFAULT_KEYBINDINGS: dict[str, str] = {
+    # ── Workspace ────────────────────────────────────────────────────────────────
     "workspace.new": "Ctrl+N",
+    "workspace.new_window": "Ctrl+Shift+N",
     "workspace.open": "Ctrl+O",
     "workspace.save": "Ctrl+S",
     "workspace.save_as": "Ctrl+Shift+S",
+
+    # ── Application ───────────────────────────────────────────────────────────────
     "app.settings": "Ctrl+,",
     "app.command_palette": "Meta+K",
+    "window.fullscreen": "F11",
+
+    # ── Canvas modes (single-key shortcuts; also drive the equivalent
+    # commands.py Command when the canvas itself has focus) ───────────────────────
     "canvas.select_mode": "S",
     "canvas.draw_mode": "D",
     "canvas.edit_mode": "E",
     "canvas.measure": "M",
+    "canvas.dimension": "Shift+M",
     "canvas.fit": "F",
+
+    # ── Page tabs ─────────────────────────────────────────────────────────────────
     "tab.draft": "Alt+1",
     "tab.pattern": "Alt+2",
     "tab.trace": "Alt+3",
@@ -39,6 +66,72 @@ if _platform.system() == "Darwin":
     for k, v in list(DEFAULT_KEYBINDINGS.items()):
         if v.startswith("Ctrl"):
             DEFAULT_KEYBINDINGS[k] = v.replace("Ctrl", "Meta", 1)
+
+
+# =============================================================================
+# Radial ("Q") quick menu — which commands show up as wedges, and in what
+# order. Every wedge id is a real src.ui.canvas.commands.Command id, so the
+# full pool is "every command the canvas knows how to run" — no separate
+# action list to keep in sync. Customizable via RadialMenuDialog /
+# settings["radial_menu_tools"]; see DxfCanvas.set_radial_menu_tools().
+#
+# Command.label is often too long/descriptive for a small wedge ("Duplicate
+# with Offset", "Union (Weld)") — RADIAL_MENU_SHORT_LABELS overrides just the
+# on-wheel text for those; anything not listed here uses Command.label as-is
+# (and gets elided if it still doesn't fit, see DxfCanvas._paint_radial_menu).
+# =============================================================================
+
+DEFAULT_RADIAL_MENU_TOOLS: tuple[str, ...] = (
+    "canvas.polyline",
+    "canvas.rectangle",
+    "canvas.circle",
+    "canvas.polygon",
+    "canvas.line",
+    "canvas.arc",
+    "mode.pen",
+)
+
+RADIAL_MENU_SHORT_LABELS: dict[str, str] = {
+    "edit.duplicate_offset": "Dup + Offset",
+    "edit.array_grid": "Grid Array",
+    "edit.array_radial": "Radial Array",
+    "edit.delete": "Delete",
+    "select.none": "Deselect",
+    "select.invert": "Invert",
+    "group.dissolve": "Ungroup",
+    "path.close": "Close Path",
+    "path.open": "Open Path",
+    "path.offset": "Offset",
+    "construction.toggle": "Construction",
+    "vertex.round": "Round Corner",
+    "vertex.chamfer": "Chamfer",
+    "text.add": "Add Text",
+    "text.attach_to_path": "Text on Path",
+    "path.simplify": "Simplify",
+    "path.smooth": "Smooth",
+    "path.fit_curve": "Fit Curve",
+    "boolean.union": "Union",
+    "mode.draw": "Draw",
+    "mode.edit": "Edit",
+    "mode.pen": "Pen",
+    "mode.trim": "Trim",
+    "mode.extend": "Extend",
+    "mode.dimension": "Dimension",
+    "canvas.polyline": "Polyline",
+    "canvas.line": "Line",
+    "canvas.rectangle": "Rectangle",
+    "canvas.circle": "Circle",
+    "canvas.ellipse": "Ellipse",
+    "canvas.arc": "Arc",
+    "canvas.spline": "Spline",
+    "canvas.polygon": "Polygon",
+    "view.fit": "Fit",
+    "view.rulers": "Rulers",
+    "grid.toggle": "Grid",
+    "grid.snap": "Snap",
+    "grid.coarser": "Grid +",
+    "grid.finer": "Grid −",
+}
 
 
 def _migrate_settings(data: dict) -> dict:

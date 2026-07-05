@@ -22,6 +22,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.units import from_display
+from src.ui.units import suffix as unit_suffix
+from src.ui.units import to_display
+
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]
     "circle": [("radius", "Radius")],
@@ -81,11 +85,13 @@ class CanvasPropertiesPanel(QWidget):
         self._y = _num_edit(lambda: self._commit_pos())
         self._w = _num_edit(lambda: self._commit_size("w"))
         self._h = _num_edit(lambda: self._commit_size("h"))
-        for row, (label, edit) in enumerate(
+        self._axis_labels: dict[str, QLabel] = {}
+        for row, (axis, edit) in enumerate(
             (("X", self._x), ("Y", self._y), ("W", self._w), ("H", self._h))
         ):
-            lbl = QLabel(label)
+            lbl = QLabel(axis)
             lbl.setStyleSheet("color: #8b949e;")
+            self._axis_labels[axis] = lbl
             grid.addWidget(lbl, row // 2, (row % 2) * 2)
             grid.addWidget(edit, row // 2, (row % 2) * 2 + 1)
         # keep the label/field pairs packed to the left instead of spreading
@@ -135,9 +141,15 @@ class CanvasPropertiesPanel(QWidget):
 
     # ── Refresh ───────────────────────────────────────────────────────────
 
+    def _unit(self) -> str:
+        return getattr(self._canvas, "_unit_system", "mm")
+
     def refresh(self) -> None:
         self._updating = True
         try:
+            unit = self._unit()
+            for axis, lbl in self._axis_labels.items():
+                lbl.setText(f"{axis} ({unit_suffix(unit)})")
             info = self._canvas.selection_geometry()
             enabled = info is not None
             self._fields_container.setVisible(enabled)
@@ -156,10 +168,10 @@ class CanvasPropertiesPanel(QWidget):
                 self._summary.setText(kind.capitalize())
             else:
                 self._summary.setText(f"{count} shapes")
-            self._x.setText(f"{info['x']:.2f}")
-            self._y.setText(f"{info['y']:.2f}")
-            self._w.setText(f"{info['w']:.2f}")
-            self._h.setText(f"{info['h']:.2f}")
+            self._x.setText(f"{to_display(info['x'], unit):.2f}")
+            self._y.setText(f"{to_display(info['y'], unit):.2f}")
+            self._w.setText(f"{to_display(info['w'], unit):.2f}")
+            self._h.setText(f"{to_display(info['h'], unit):.2f}")
             self._set_param_rows(info.get("index"), kind, info.get("meta") or {})
         finally:
             self._updating = False
@@ -221,9 +233,12 @@ class CanvasPropertiesPanel(QWidget):
     def _commit_pos(self) -> None:
         if self._updating:
             return
+        unit = self._unit()
         x = self._value(self._x)
         y = self._value(self._y)
-        if self._canvas.move_selection_to(x, y):
+        x_mm = from_display(x, unit) if x is not None else None
+        y_mm = from_display(y, unit) if y is not None else None
+        if self._canvas.move_selection_to(x_mm, y_mm):
             self.refresh()
 
     def _commit_size(self, axis: str) -> None:
@@ -233,10 +248,11 @@ class CanvasPropertiesPanel(QWidget):
         if value is None or value <= 0:
             self.refresh()
             return
+        value_mm = from_display(value, self._unit())
         if axis == "w":
-            self._canvas._set_selected_width(value)
+            self._canvas._set_selected_width(value_mm)
         else:
-            self._canvas._set_selected_height(value)
+            self._canvas._set_selected_height(value_mm)
         self.refresh()
 
     def _commit_rotation(self) -> None:

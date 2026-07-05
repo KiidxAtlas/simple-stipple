@@ -14,13 +14,16 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QWidget,
 )
 
 from src.ui.canvas.text_shapes import install_font_file, load_user_fonts, user_fonts_dir
+from src.ui.units import from_display
+from src.ui.units import suffix as unit_suffix
+from src.ui.units import to_display
 
 
 class AddTextDialog(QDialog):
@@ -31,17 +34,20 @@ class AddTextDialog(QDialog):
     stay available in future sessions.
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, unit: str = "mm") -> None:
         super().__init__(parent)
         self.setWindowTitle("Add Text")
         self.setMinimumWidth(420)
+        self._unit = unit if unit in ("mm", "in") else "mm"
         # Make any fonts previously dropped into the fonts folder available.
         load_user_fonts()
 
         form = QFormLayout(self)
 
-        self._text_edit = QLineEdit()
-        self._text_edit.setPlaceholderText("Text to place…")
+        self._text_edit = QPlainTextEdit()
+        self._text_edit.setPlaceholderText("Text to place… (Enter for a new line)")
+        self._text_edit.setTabChangesFocus(True)
+        self._text_edit.setFixedHeight(70)
         form.addRow("Text", self._text_edit)
         # (see set_values for prefilled editing of existing text)
 
@@ -58,10 +64,12 @@ class AddTextDialog(QDialog):
         form.addRow("Font", font_row)
 
         self._height_spin = QDoubleSpinBox()
-        self._height_spin.setRange(0.5, 1000.0)
-        self._height_spin.setValue(10.0)
-        self._height_spin.setSuffix(" mm")
-        self._height_spin.setDecimals(1)
+        self._height_spin.setRange(
+            to_display(0.5, self._unit), to_display(1000.0, self._unit)
+        )
+        self._height_spin.setValue(to_display(10.0, self._unit))
+        self._height_spin.setSuffix(f" {unit_suffix(self._unit)}")
+        self._height_spin.setDecimals(1 if self._unit == "mm" else 3)
         form.addRow("Height", self._height_spin)
 
         style_row = QHBoxLayout()
@@ -107,19 +115,21 @@ class AddTextDialog(QDialog):
             f'font-family: "{family}"; font-size: 28px; '
             f"font-weight: {weight}; font-style: {style};"
         )
-        self._preview.setText(self._text_edit.text() or "Preview")
+        self._preview.setText(self._text_edit.toPlainText() or "Preview")
 
     def set_values(self, values: dict) -> None:
         """Prefill the dialog for editing an existing text entity."""
         self.setWindowTitle("Edit Text")
-        self._text_edit.setText(str(values.get("text", "")))
+        self._text_edit.setPlainText(str(values.get("text", "")))
         family = str(values.get("family", ""))
         if family:
             from PySide6.QtGui import QFont
 
             self._font_combo.setCurrentFont(QFont(family))
         try:
-            self._height_spin.setValue(float(values.get("height_mm", 10.0)))
+            self._height_spin.setValue(
+                to_display(float(values.get("height_mm", 10.0)), self._unit)
+            )
         except (TypeError, ValueError):
             pass
         self._bold_cb.setChecked(bool(values.get("bold", False)))
@@ -143,9 +153,9 @@ class AddTextDialog(QDialog):
 
     def values(self) -> dict:
         return {
-            "text": self._text_edit.text(),
+            "text": self._text_edit.toPlainText(),
             "family": self._font_combo.currentFont().family(),
-            "height_mm": float(self._height_spin.value()),
+            "height_mm": from_display(float(self._height_spin.value()), self._unit),
             "bold": self._bold_cb.isChecked(),
             "italic": self._italic_cb.isChecked(),
         }

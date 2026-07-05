@@ -713,6 +713,19 @@ QTreeWidget::branch:open:has-children:!has-siblings,
 QTreeWidget::branch:open:has-children:has-siblings {
     image: url({ICONS_DIR}/chevron_down.svg);
 }
+/* Renaming a layer/shape (F2 or double-click) opens a real QLineEdit as
+   the inline editor, sized to fit inside the tree row — but it still
+   picks up the generic QLineEdit's 5px vertical padding + border above,
+   which is taller than the row, clipping the typed text top and bottom.
+   Cut it down to fit. */
+QTreeWidget QLineEdit {
+    padding: 0px 2px;
+    margin: 0px;
+    border: 1px solid #2f81f7;
+    border-radius: 3px;
+    background: #0d1117;
+    color: #e6edf3;
+}
 
 /* ── QTextEdit (git log) ─────────────────────────────── */
 QTextEdit {

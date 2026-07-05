@@ -16,8 +16,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QMouseEvent, QPen
 
 from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
 from src.constants import DRAG_THRESH
@@ -242,6 +242,110 @@ class MeasureTool(CanvasTool):
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             mx, my = v._angle_snap(*v._measure_anchor, mx, my)
         v._measure_hover = (mx, my)
+        v._cursor_wx, v._cursor_wy = mx, my
+        v._redraw()
+        return True
+
+    def release(self, event: QMouseEvent) -> bool:
+        return True
+
+
+class DimensionTool(CanvasTool):
+    """Persistent drafting-dimension placement (any mode): click p1, click
+    p2 (same snap + Shift-angle-snap as MeasureTool), then click again to
+    set how far the dimension line sits from the measured segment and
+    finalize it into ``v._dimensions`` — a reference overlay like ruler
+    guides (view-state only, never undo-tracked or DXF-exported)."""
+
+    def press(self, event: QMouseEvent) -> bool:
+        v = self.v
+        pos = event.position()
+        wx, wy = v._c2w(pos.x(), pos.y())
+
+        if v._dim_pending_p1 is not None and v._dim_pending_p2 is not None:
+            pending = {
+                "p1": v._dim_pending_p1,
+                "p2": v._dim_pending_p2,
+                "offset": v._dim_pending_offset,
+            }
+            v._dimensions.append(
+                {
+                    "p1": v._dim_pending_p1,
+                    "p2": v._dim_pending_p2,
+                    "offset": v._dimension_offset_at(pending, wx, wy),
+                }
+            )
+            v._dim_pending_p1 = None
+            v._dim_pending_p2 = None
+            v._notify()
+            v._redraw()
+            return True
+
+        allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        snap_result = v._resolve_snap(
+            pos.x(),
+            pos.y(),
+            wx,
+            wy,
+            allow_polyline=allow_snap,
+            allow_grid=allow_snap,
+            reference_point=v._dim_pending_p1,
+        )
+        if snap_result is not None:
+            wx, wy = snap_result[0], snap_result[1]
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if shift and v._dim_pending_p1 is not None:
+            wx, wy = v._angle_snap(*v._dim_pending_p1, wx, wy)
+
+        if v._dim_pending_p1 is None:
+            v._dim_pending_p1 = (wx, wy)
+        else:
+            v._dim_pending_p2 = (wx, wy)
+            v._dim_pending_offset = 5.0
+        v._redraw()
+        return True
+
+    def move(self, event: QMouseEvent) -> bool:
+        v = self.v
+        pos = event.position()
+        wx, wy = v._c2w(pos.x(), pos.y())
+        if v._dim_pending_p1 is not None and v._dim_pending_p2 is not None:
+            # Third stage: live-preview the offset as the cursor moves.
+            pending = {
+                "p1": v._dim_pending_p1,
+                "p2": v._dim_pending_p2,
+                "offset": v._dim_pending_offset,
+            }
+            v._dim_pending_offset = v._dimension_offset_at(pending, wx, wy)
+            v._redraw()
+            return True
+
+        # Placing p1 or p2: resolve + preview the same snap press() will
+        # commit, so the rubber-band line (and the snap-ring indicator)
+        # show exactly where the click will land — matching MeasureTool.
+        allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        snap_result = v._resolve_snap(
+            pos.x(),
+            pos.y(),
+            wx,
+            wy,
+            allow_polyline=allow_snap,
+            allow_grid=allow_snap,
+            reference_point=v._dim_pending_p1,
+        )
+        if snap_result is not None:
+            mx, my = snap_result[0], snap_result[1]
+            v._hover_snap = (mx, my)
+            v._hover_snap_type = snap_result[2]
+        else:
+            mx, my = wx, wy
+            v._hover_snap = None
+            v._hover_snap_type = None
+        if (
+            bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            and v._dim_pending_p1 is not None
+        ):
+            mx, my = v._angle_snap(*v._dim_pending_p1, mx, my)
         v._cursor_wx, v._cursor_wy = mx, my
         v._redraw()
         return True
@@ -591,6 +695,105 @@ class DrawTool(CanvasTool):
         else:
             v._finish_draw()
         return True
+
+
+class PenTool(CanvasTool):
+    """Bezier pen: click places a corner anchor (straight segments in/out);
+    click-and-drag places a smooth anchor with a symmetric tangent handle
+    sized by the drag vector. Double-click or Enter finalizes the curve as
+    a ``kind="bezier"`` entity; Escape cancels the in-progress curve."""
+
+    def press(self, event: QMouseEvent) -> bool:
+        v = self.v
+        pos = event.position()
+        wx, wy = v._c2w(pos.x(), pos.y())
+        allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        snap_result = v._resolve_snap(
+            pos.x(), pos.y(), wx, wy, allow_polyline=allow_snap, allow_grid=allow_snap
+        )
+        if snap_result is not None:
+            wx, wy = snap_result[0], snap_result[1]
+        v._pen_pts.append((wx, wy))
+        v._pen_tangents.append((0.0, 0.0))
+        v._pen_dragging = True
+        v._pen_press_screen = (pos.x(), pos.y())
+        v._redraw()
+        return True
+
+    def move(self, event: QMouseEvent) -> bool:
+        v = self.v
+        pos = event.position()
+        wx, wy = v._c2w(pos.x(), pos.y())
+        if v._pen_dragging and v._pen_pts:
+            anchor = v._pen_pts[-1]
+            v._pen_tangents[-1] = (wx - anchor[0], wy - anchor[1])
+        v._cursor_wx, v._cursor_wy = wx, wy
+        v._redraw()
+        return True
+
+    def release(self, event: QMouseEvent) -> bool:
+        v = self.v
+        if v._pen_dragging and v._pen_press_screen is not None and v._pen_tangents:
+            pos = event.position()
+            dx = pos.x() - v._pen_press_screen[0]
+            dy = pos.y() - v._pen_press_screen[1]
+            if math.hypot(dx, dy) < DRAG_THRESH:
+                # No real drag happened: a plain click makes a corner anchor.
+                v._pen_tangents[-1] = (0.0, 0.0)
+        v._pen_dragging = False
+        v._pen_press_screen = None
+        v._redraw()
+        return True
+
+    def double_click(self, event: QMouseEvent) -> bool:
+        self.v._finish_pen()
+        return True
+
+    def key(self, event) -> bool:
+        k = event.key()
+        if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.v._finish_pen()
+            return True
+        if k == Qt.Key.Key_Escape:
+            self.v._cancel_pen()
+            return True
+        return False
+
+    def paint_overlay(self, painter) -> None:
+        from src.backend.geometry.spline import build_bezier_poly
+
+        v = self.v
+        pts = v._pen_pts
+        if not pts:
+            return
+        pen_color = QColor("#2f81f7")
+        painter.setPen(QPen(pen_color, 1.6))
+        if len(pts) >= 2:
+            preview = build_bezier_poly(pts, v._pen_tangents, segments=16)
+            path_pts = [v._w2c(*p) for p in preview]
+            for a, b in zip(path_pts, path_pts[1:]):
+                painter.drawLine(QPointF(*a), QPointF(*b))
+        # Rubber-band segment from the last anchor to the live cursor.
+        if v._cursor_wx is not None and v._cursor_wy is not None:
+            last = v._w2c(*pts[-1])
+            cur = v._w2c(v._cursor_wx, v._cursor_wy)
+            painter.setPen(QPen(pen_color, 1.0, Qt.PenStyle.DashLine))
+            painter.drawLine(QPointF(*last), QPointF(*cur))
+        # Anchors + tangent handles.
+        for i, (ax, ay) in enumerate(pts):
+            sx, sy = v._w2c(ax, ay)
+            painter.setPen(QPen(pen_color, 1.4))
+            painter.setBrush(QColor("#0d1117"))
+            painter.drawEllipse(QPointF(sx, sy), 3.5, 3.5)
+            tx, ty = v._pen_tangents[i]
+            if abs(tx) > 1e-9 or abs(ty) > 1e-9:
+                hx, hy = v._w2c(ax + tx, ay + ty)
+                hx2, hy2 = v._w2c(ax - tx, ay - ty)
+                painter.setPen(QPen(QColor("#56d4dd"), 1.0))
+                painter.drawLine(QPointF(hx2, hy2), QPointF(hx, hy))
+                painter.setBrush(QColor("#56d4dd"))
+                painter.drawEllipse(QPointF(hx, hy), 2.5, 2.5)
+                painter.drawEllipse(QPointF(hx2, hy2), 2.5, 2.5)
 
 
 class TrimExtendTool(CanvasTool):

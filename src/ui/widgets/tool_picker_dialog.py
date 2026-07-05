@@ -19,6 +19,7 @@ TOOL_SPECS = [
     ("Arc", "arc"),
     ("Polyline", "polyline"),
     ("Spline", "spline"),
+    ("Bezier Pen", "bezier"),
     ("Rectangle", "rectangle"),
     ("Circle", "circle"),
     ("Ellipse", "ellipse"),
@@ -80,6 +81,25 @@ class ToolButton(QPushButton):
                 icon_rect.top() + 2,
             )
             painter.drawPath(path)
+        elif self._tool == "bezier":
+            p0 = QPointF(icon_rect.left() + 1, icon_rect.bottom() - 2)
+            p1 = QPointF(icon_rect.right() - 1, icon_rect.top() + 2)
+            c1 = QPointF(icon_rect.left() + 5, icon_rect.top() + 1)
+            c2 = QPointF(icon_rect.right() - 5, icon_rect.bottom() - 1)
+            path = QPainterPath()
+            path.moveTo(p0)
+            path.cubicTo(c1, c2, p1)
+            painter.drawPath(path)
+            # Handle lines + anchor/control dots, to read as "pen tool"
+            # rather than the plain smooth-curve "spline" icon.
+            painter.drawLine(p0, c1)
+            painter.drawLine(p1, c2)
+            painter.setBrush(_TOOL_ICON_COLOR)
+            for pt in (p0, p1):
+                painter.drawEllipse(pt, 1.6, 1.6)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for pt in (c1, c2):
+                painter.drawEllipse(pt, 1.3, 1.3)
         elif self._tool == "rectangle":
             painter.drawRect(icon_rect.adjusted(1, 2, -1, -2))
         elif self._tool == "circle":
@@ -158,7 +178,7 @@ class ToolPickerDialog(QDialog):
         root.addLayout(grid)
         root.setContentsMargins(16, 16, 16, 16)
 
-        self.setFixedSize(280, 360)
+        self.setFixedSize(280, 440)
 
     def _on_tool_clicked(self, tool: str) -> None:
         self._selected_tool = tool

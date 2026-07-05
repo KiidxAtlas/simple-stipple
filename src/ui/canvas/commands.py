@@ -34,6 +34,15 @@ class Command:
     when: Callable[[Any], bool] | None = None
     # Hide from the generated shortcuts reference (e.g. near-duplicates).
     hidden: bool = False
+    # Some commands are reachable both as a canvas Command (this table) and
+    # as a window-level QAction in app.py (e.g. draw/edit mode, measure, fit)
+    # — the two must share one settings slot so a rebind applies to both and
+    # they can never silently collide. Empty means "use id".
+    settings_key: str = ""
+
+    @property
+    def keybinding_id(self) -> str:
+        return self.settings_key or self.id
 
 
 def _sel_or_edit(v: Any) -> bool:
@@ -123,11 +132,102 @@ def _round_corner(v: Any) -> None:
     )
 
 
+def _chamfer_corner(v: Any) -> None:
+    hv = v._hover_vert
+    if hv is None:
+        v._show_flash("Hover a corner first, then chamfer it", 1400)
+        return
+    pi, vi = hv
+    v._show_hud_prompt(
+        "Chamfer distance (mm)",
+        1.0,
+        lambda d: v._chamfer_vertex(pi, vi, d),
+        minimum=0.01,
+    )
+
+
+def _simplify_selected(v: Any) -> None:
+    if not v._sel:
+        v._show_flash("Select a polyline to simplify", 900)
+        return
+
+    def _apply(tolerance: float) -> None:
+        n = v.simplify_selected(tolerance)
+        v._show_flash(
+            f"Simplified {n} shape(s)" if n else "No simplification possible", 900
+        )
+
+    v._show_hud_prompt("Simplify tolerance (mm)", 0.2, _apply, minimum=0.001)
+
+
+def _smooth_selected(v: Any) -> None:
+    if not v._sel:
+        v._show_flash("Select a polyline to smooth", 900)
+        return
+
+    def _apply(iterations: float) -> None:
+        n = v.smooth_selected(int(iterations))
+        v._show_flash(f"Smoothed {n} shape(s)" if n else "No change", 900)
+
+    v._show_hud_prompt("Smooth iterations", 2.0, _apply, minimum=1.0)
+
+
+def _fit_selected_to_curve(v: Any) -> None:
+    if not v._sel:
+        v._show_flash("Select a polyline to fit to a curve", 900)
+        return
+
+    def _apply(tolerance: float) -> None:
+        n = v.fit_selected_to_curve(tolerance)
+        v._show_flash(f"Fit {n} shape(s) to curve" if n else "Could not fit a curve", 900)
+
+    v._show_hud_prompt("Fit-to-curve tolerance (mm)", 0.3, _apply, minimum=0.001)
+
+
+def _select_draw_primitive(tool: str) -> Callable[[Any], None]:
+    def _run(v: Any) -> None:
+        if v.get_mode() != "draw":
+            v.set_mode("draw")
+        v._set_draw_primitive(tool)
+
+    return _run
+
+
 def _add_text_at_cursor(v: Any) -> None:
     wx, wy = v._cursor_wx, v._cursor_wy
     if wx is None or wy is None:
         wx, wy = v._c2w(v.width() / 2.0, v.height() / 2.0)
     v.prompt_add_text(wx, wy)
+
+
+def _selected_objects(v: Any) -> list[int]:
+    """One representative index per distinct selected object — grouped
+    entities (e.g. a multi-contour text) collapse to a single entry."""
+    groups_seen: set[int] = set()
+    objects: list[int] = []
+    for i in sorted(v._sel):
+        gid = v._entities[i].group if i < len(v._entities) else None
+        if gid is not None:
+            if gid in groups_seen:
+                continue
+            groups_seen.add(gid)
+        objects.append(i)
+    return objects
+
+
+def _attach_text_to_path(v: Any) -> None:
+    objects = _selected_objects(v)
+    if len(objects) != 2:
+        v._show_flash("Select exactly one text object and one path", 1200)
+        return
+    text_candidates = [i for i in objects if v.text_params_at(i) is not None]
+    if len(text_candidates) != 1:
+        v._show_flash("Select exactly one text object and one path", 1200)
+        return
+    text_idx = text_candidates[0]
+    path_idx = next(i for i in objects if i != text_idx)
+    if not v.attach_text_to_path(text_idx, path_idx):
+        v._show_flash("Could not attach text to that path", 1200)
 
 
 COMMANDS: tuple[Command, ...] = (
@@ -171,6 +271,20 @@ COMMANDS: tuple[Command, ...] = (
         lambda v: v._duplicate_selected_with_offset(),
         "Ctrl+Shift+D",
         category="Edit",
+    ),
+    Command(
+        "edit.array_grid",
+        "Array — Grid…",
+        lambda v: v._array_duplicate_grid(),
+        category="Edit",
+        when=lambda v: bool(v._sel),
+    ),
+    Command(
+        "edit.array_radial",
+        "Array — Radial…",
+        lambda v: v._array_duplicate_radial(),
+        category="Edit",
+        when=lambda v: bool(v._sel),
     ),
     Command(
         "edit.delete",
@@ -256,12 +370,47 @@ COMMANDS: tuple[Command, ...] = (
         when=lambda v: v.get_mode() == "edit",
     ),
     Command(
+        "vertex.chamfer",
+        "Chamfer Corner…",
+        _chamfer_corner,
+        category="Path",
+        when=lambda v: v.get_mode() == "edit",
+    ),
+    Command(
+        "path.simplify",
+        "Simplify Path…",
+        _simplify_selected,
+        category="Path",
+        when=_sel_or_edit,
+    ),
+    Command(
+        "path.smooth",
+        "Smooth…",
+        _smooth_selected,
+        category="Path",
+        when=_sel_or_edit,
+    ),
+    Command(
+        "path.fit_curve",
+        "Fit to Curve…",
+        _fit_selected_to_curve,
+        category="Path",
+        when=_sel_or_edit,
+    ),
+    Command(
         "text.add",
         "Add Text…",
         _add_text_at_cursor,
         "T",
         category="Path",
         when=lambda v: v.get_mode() == "select",
+    ),
+    Command(
+        "text.attach_to_path",
+        "Attach Text to Path",
+        _attach_text_to_path,
+        category="Path",
+        when=lambda v: len(v._sel) >= 2,
     ),
     # ── Boolean ─────────────────────────────────────────────────────────────
     Command(
@@ -294,19 +443,32 @@ COMMANDS: tuple[Command, ...] = (
         category="Boolean",
         when=_sel_or_edit,
     ),
-    # ── Modes ───────────────────────────────────────────────────────────────
+    # ── Modes ─────────────────────────────────────────────────────────────────
+    # mode.draw / mode.edit / measure.toggle / mode.dimension / view.fit share
+    # a settings slot with the equivalent app-level QAction in app.py (which
+    # fires when the canvas doesn't have keyboard focus) — settings_key keeps
+    # a rebind of either one in sync instead of the two silently colliding.
     Command(
         "mode.draw",
         "Draw Mode",
         lambda v: v.set_mode("draw" if v.get_mode() != "draw" else "select"),
         "D",
         category="Modes",
+        settings_key="canvas.draw_mode",
     ),
     Command(
         "mode.edit",
         "Edit Mode",
         lambda v: v.set_mode("edit" if v.get_mode() != "edit" else "select"),
         "E",
+        category="Modes",
+        settings_key="canvas.edit_mode",
+    ),
+    Command(
+        "mode.pen",
+        "Pen Tool",
+        lambda v: v.set_mode("pen" if v.get_mode() != "pen" else "select"),
+        "P",
         category="Modes",
     ),
     Command(
@@ -330,6 +492,74 @@ COMMANDS: tuple[Command, ...] = (
         "M",
         category="Modes",
         requires_selectable=False,
+        settings_key="canvas.measure",
+    ),
+    Command(
+        "mode.dimension",
+        "Dimension",
+        lambda v: v.toggle_dimension_mode(),
+        "Shift+M",
+        category="Modes",
+        requires_selectable=False,
+        settings_key="canvas.dimension",
+    ),
+    Command(
+        "canvas.radial_menu",
+        "Radial Quick Menu",
+        lambda v: v._toggle_radial_menu(),
+        "Q",
+        category="Modes",
+        # Opens from any mode/tool — see DxfCanvas.mousePressEvent/
+        # mouseMoveEvent/paintEvent, which handle it ahead of tool dispatch.
+        when=lambda v: hasattr(v, "_toggle_radial_menu"),
+    ),
+    Command(
+        "canvas.polyline",
+        "Polyline Tool",
+        _select_draw_primitive("polyline"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.line",
+        "Line Tool",
+        _select_draw_primitive("line"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.rectangle",
+        "Rectangle Tool",
+        _select_draw_primitive("rectangle"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.circle",
+        "Circle Tool",
+        _select_draw_primitive("circle"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.ellipse",
+        "Ellipse Tool",
+        _select_draw_primitive("ellipse"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.arc",
+        "Arc Tool",
+        _select_draw_primitive("arc"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.spline",
+        "Spline Tool",
+        _select_draw_primitive("spline"),
+        category="Modes",
+    ),
+    Command(
+        "canvas.polygon",
+        "Polygon Tool",
+        _select_draw_primitive("polygon"),
+        category="Modes",
     ),
     # ── View ────────────────────────────────────────────────────────────────
     Command(
@@ -339,6 +569,7 @@ COMMANDS: tuple[Command, ...] = (
         "F",
         category="View",
         requires_selectable=False,
+        settings_key="canvas.fit",
     ),
     Command(
         "view.zoom_in",
@@ -377,7 +608,7 @@ COMMANDS: tuple[Command, ...] = (
         "grid.snap",
         "Snap to Grid",
         _toggle_grid_snap,
-        "S",
+        "Shift+G",
         category="View",
         requires_selectable=False,
     ),
@@ -414,11 +645,53 @@ def _combo(spec: str) -> tuple[int, int]:
     return int(kc.key()), int(kc.keyboardModifiers().value)
 
 
+# User-configured overrides (id -> shortcut spec, "" meaning "unbound"),
+# keyed by Command.keybinding_id. Populated by apply_keybindings(); empty
+# until the app calls it, so importing this module keeps the hardcoded
+# Command.shortcut defaults.
+_OVERRIDES: dict[str, str] = {}
+
+
+def _effective_shortcuts(cmd: Command) -> tuple[str, ...]:
+    if cmd.keybinding_id in _OVERRIDES:
+        override = _OVERRIDES[cmd.keybinding_id]
+        return (override,) if override else ()
+    return tuple(s for s in (cmd.shortcut, *cmd.aliases) if s)
+
+
+def effective_shortcut(cmd_id: str) -> str:
+    """The live shortcut for a command — the user's override if set, else
+    its hardcoded default. Empty string means unbound."""
+    cmd = _BY_ID[cmd_id]
+    specs = _effective_shortcuts(cmd)
+    return specs[0] if specs else ""
+
+
 _KEYMAP: dict[tuple[int, int], Command] = {}
-for _cmd in COMMANDS:
-    for _spec in (_cmd.shortcut, *_cmd.aliases):
-        if _spec:
-            _KEYMAP[_combo(_spec)] = _cmd
+
+
+def _rebuild_keymap() -> None:
+    _KEYMAP.clear()
+    for cmd in COMMANDS:
+        for spec in _effective_shortcuts(cmd):
+            _KEYMAP[_combo(spec)] = cmd
+
+
+_rebuild_keymap()
+
+
+def apply_keybindings(keybindings: dict[str, str] | None) -> None:
+    """Re-resolve every command's live shortcut from user settings (falling
+    back to its hardcoded default when absent), and rebuild the keymap.
+
+    Call at startup and whenever the Settings dialog is applied.
+    """
+    _OVERRIDES.clear()
+    if keybindings:
+        for key, value in keybindings.items():
+            if isinstance(value, str):
+                _OVERRIDES[key] = value.strip()
+    _rebuild_keymap()
 
 
 def match_key(key: int, mods: Qt.KeyboardModifier) -> Command | None:
@@ -453,11 +726,11 @@ def run(view: Any, cmd_id_or_cmd: str | Command) -> bool:
 
 
 def native_shortcut(cmd_id: str) -> str:
-    """Platform-native display string for a command's shortcut (⌘D on mac)."""
-    cmd = _BY_ID[cmd_id]
-    if not cmd.shortcut:
+    """Platform-native display string for a command's live shortcut (⌘D on mac)."""
+    sc = effective_shortcut(cmd_id)
+    if not sc:
         return ""
-    return QKeySequence(cmd.shortcut).toString(QKeySequence.SequenceFormat.NativeText)
+    return QKeySequence(sc).toString(QKeySequence.SequenceFormat.NativeText)
 
 
 def menu_text(cmd_id: str, label: str | None = None) -> str:
@@ -478,12 +751,21 @@ def shortcut_reference_rows() -> list[tuple[str, str]]:
     for cat in seen:
         rows.append((cat, ""))
         for c in COMMANDS:
-            if c.category != cat or c.hidden or not c.shortcut:
+            if c.category != cat or c.hidden:
                 continue
             keys = native_shortcut(c.id)
-            alias = ", ".join(
-                QKeySequence(a).toString(QKeySequence.SequenceFormat.NativeText)
-                for a in c.aliases
+            if not keys:
+                continue
+            # Aliases are only meaningful for the hardcoded default; a user
+            # override replaces them (see _effective_shortcuts).
+            has_override = c.keybinding_id in _OVERRIDES
+            alias = (
+                ""
+                if has_override
+                else ", ".join(
+                    QKeySequence(a).toString(QKeySequence.SequenceFormat.NativeText)
+                    for a in c.aliases
+                )
             )
             rows.append((c.label, f"{keys}{f' / {alias}' if alias else ''}"))
         rows.append(("", ""))

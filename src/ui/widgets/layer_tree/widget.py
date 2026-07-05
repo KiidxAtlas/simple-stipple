@@ -741,7 +741,14 @@ class DxfLayersTree(QFrame):
                         self._shape_keys_by_layer[new_display] = (
                             self._shape_keys_by_layer.pop(old_internal)
                         )
+                    # A connected slot commonly reacts to a rename by
+                    # rebuilding the whole tree (set_layers()), which
+                    # deletes the underlying C++ QTreeWidgetItem — `item`
+                    # is unsafe to touch after this emit. Mirrors the
+                    # shape-rename branch below, which already returns
+                    # right after its own rename emit for the same reason.
                     self.layerRenamed.emit(old_internal, new_display)
+                    return
 
         visible = item.checkState(0) == Qt.CheckState.Checked
         if kind == "layer":

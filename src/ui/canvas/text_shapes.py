@@ -12,7 +12,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PySide6.QtGui import QFont, QFontDatabase, QPainterPath
+from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath
 
 from src.paths import user_data_dir
 
@@ -31,11 +31,11 @@ def text_to_polylines(
     bold: bool = False,
     italic: bool = False,
 ) -> list[Polyline]:
-    """Return closed polyline contours for ``text``.
+    """Return closed polyline contours for ``text`` (``\\n`` starts a new line).
 
     ``height_mm`` is the total height of the rendered text block (cap
-    height plus descenders for mixed-case input). Coordinates are y-up
-    with the block's bottom-left at the origin.
+    height plus descenders for mixed-case input, stacked across every
+    line). Coordinates are y-up with the block's bottom-left at the origin.
     """
     text = str(text)
     if not text.strip() or height_mm <= 0:
@@ -46,8 +46,14 @@ def text_to_polylines(
     font.setBold(bool(bold))
     font.setItalic(bool(italic))
 
+    # QPainterPath.addText does NOT lay embedded newlines out as separate
+    # lines (it places every character on one baseline) — each line needs
+    # its own addText() call at a manually-advanced baseline Y.
+    line_height = QFontMetrics(font).lineSpacing()
     path = QPainterPath()
-    path.addText(0.0, 0.0, font, text)
+    for i, line in enumerate(text.split("\n")):
+        if line:
+            path.addText(0.0, i * line_height, font, line)
     rect = path.boundingRect()
     if rect.height() <= 0:
         return []

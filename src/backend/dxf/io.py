@@ -331,6 +331,21 @@ def _load_dxf_polylines_by_layer_with_report(
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid ELLIPSE in %s: %s", path, exc)
                 invalid_polylines += 1
+        elif dxftype == "SPLINE":
+            try:
+                spline = cast(Any, ent)
+                # Adaptive flattening (same tolerance-based approach as
+                # ARC/CIRCLE above) — smooth regardless of the spline's
+                # size, unlike a fixed segment count.
+                pts = [
+                    (float(p.x), float(p.y)) for p in spline.flattening(0.02)
+                ]
+                is_closed = bool(getattr(spline.dxf, "flags", 0) & spline.CLOSED)
+                _append(layer_name, pts, is_closed)
+                flattened_entities[dxftype] += 1
+            except (AttributeError, TypeError, ValueError) as exc:
+                _LOG.warning("Skipping invalid SPLINE in %s: %s", path, exc)
+                invalid_polylines += 1
         else:
             unsupported_entities[dxftype] += 1
 

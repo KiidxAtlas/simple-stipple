@@ -6,9 +6,9 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSize, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,12 +30,19 @@ from src.backend.document.state import WORKSPACE_FILE_SUFFIX, normalize_workspac
 from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.paths import user_data_dir
-from src.settings import DEFAULT_KEYBINDINGS, load_settings, save_settings
+from src.settings import (
+    DEFAULT_KEYBINDINGS,
+    DEFAULT_RADIAL_MENU_TOOLS,
+    load_settings,
+    save_settings,
+)
 from src.ui.canvas import commands as canvas_commands
 from src.ui.core.factories import info_chip, surface_frame
+from src.ui.core.icons import download_icon, gear_icon
 from src.ui.shell.registry import PageSpec, default_page_specs
 from src.ui.shell.runtime import PageRuntime
 from src.ui.shell.settings_dialog import SettingsDialog
+from src.ui.units import DEFAULT_UNIT_SYSTEM
 from src.ui.widgets.command_palette import CommandPaletteDialog
 from src.ui.widgets.update_dialog import UpdateDialog
 from src.ui.workspace.session import (
@@ -62,6 +69,11 @@ class CommandSpec:
 class App(QMainWindow):
     """Top-level main window coordinating workspace state and cross-tab actions."""
 
+    # Keeps every open window instance alive (Python would otherwise GC a
+    # window with no other referrers as soon as _new_window() returns) and
+    # lets SingleInstanceGuard find/raise an existing window if relaunched.
+    _open_windows: ClassVar[list[App]] = []
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("AA Laser Studio")
@@ -70,6 +82,8 @@ class App(QMainWindow):
 
         self._settings = load_settings()
         self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
+        canvas_commands.apply_keybindings(self._settings.get("keybindings"))
+        self._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
         # Drop missing entries from recent-files MRU lists on startup so menus
         # never offer dead links. Done lazily after settings load so a stale
         # settings file never blocks startup.
@@ -125,6 +139,12 @@ class App(QMainWindow):
             specs=self._page_specs,
         )
         self._init_tab_bindings()
+        self._page_runtime.apply_unit_system(
+            self._settings.get("unit_system", DEFAULT_UNIT_SYSTEM)
+        )
+        self._page_runtime.apply_radial_menu_tools(
+            self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+        )
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
 
@@ -232,7 +252,9 @@ class App(QMainWindow):
             layout.addWidget(btn)
 
         # Settings — visually separated
-        update_btn = QPushButton("↓")
+        update_btn = QPushButton()
+        update_btn.setIcon(download_icon())
+        update_btn.setIconSize(QSize(18, 18))
         update_btn.setFixedSize(30, 30)
         update_btn.setToolTip("Check for updates")
         update_btn.clicked.connect(self._open_update_check)
@@ -246,11 +268,19 @@ class App(QMainWindow):
         palette_btn.clicked.connect(self._open_command_palette)
         layout.addWidget(palette_btn)
 
-        settings_btn = QPushButton("⚙")
+        settings_btn = QPushButton()
+        settings_btn.setIcon(gear_icon())
+        settings_btn.setIconSize(QSize(18, 18))
         settings_btn.setFixedSize(30, 30)
         settings_btn.setToolTip(f"Settings ({self._shortcut('app.settings')})")
         settings_btn.clicked.connect(self._open_settings)
         layout.addWidget(settings_btn)
+
+        help_btn = QPushButton("?")
+        help_btn.setFixedSize(30, 30)
+        help_btn.setToolTip("User Manual")
+        help_btn.clicked.connect(self._show_help)
+        layout.addWidget(help_btn)
 
         return shell
 
@@ -274,6 +304,13 @@ class App(QMainWindow):
         )
         self._new_workspace_action.triggered.connect(self._new_workspace)
         self._workspace_menu.addAction(self._new_workspace_action)
+
+        self._new_window_action = QAction("New Window", self)
+        self._new_window_action.setShortcut(
+            QKeySequence(self._shortcut("workspace.new_window"))
+        )
+        self._new_window_action.triggered.connect(self._new_window)
+        self._workspace_menu.addAction(self._new_window_action)
 
         self._open_workspace_action = QAction("Open Workspace…", self)
         self._open_workspace_action.setShortcut(
@@ -486,6 +523,14 @@ class App(QMainWindow):
         self._workspace_dirty = False
         self._has_unsaved_changes = False
         self._update_title()
+
+    def _new_window(self) -> None:
+        """Open a second, fully independent window — its own workspace
+        path/dirty state, its own PageRuntime — sharing only the on-disk
+        settings/recent-files each window reads at construction time."""
+        window = App()
+        App._open_windows.append(window)
+        window.show()
 
     def _open_workspace(self) -> None:
         if not self._confirm_discard_if_dirty():
@@ -763,6 +808,8 @@ class App(QMainWindow):
                 except Exception as exc:  # noqa: BLE001
                     report_error("Page shutdown failed", exc)
         self._discard_autosave()
+        if self in App._open_windows:
+            App._open_windows.remove(self)
         event.accept()
 
     def showEvent(self, event) -> None:
@@ -861,6 +908,12 @@ class App(QMainWindow):
                 self._new_workspace,
             ),
             CommandSpec(
+                "workspace.new_window",
+                "Workspace: New Window",
+                "new window multi document",
+                self._new_window,
+            ),
+            CommandSpec(
                 "workspace.open",
                 "Workspace: Open",
                 "open workspace file",
@@ -903,10 +956,22 @@ class App(QMainWindow):
                 self._invoke_canvas_measure,
             ),
             CommandSpec(
+                "canvas.dimension",
+                "Canvas: Toggle Dimension Tool",
+                "canvas dimension annotation drafting",
+                self._invoke_canvas_dimension,
+            ),
+            CommandSpec(
                 "canvas.fit",
                 "Canvas: Fit View",
                 "canvas fit zoom",
                 self._invoke_canvas_fit,
+            ),
+            CommandSpec(
+                "window.fullscreen",
+                "Window: Toggle Fullscreen",
+                "fullscreen window maximize",
+                self._toggle_fullscreen,
             ),
         ]
         for spec in self._page_specs:
@@ -921,16 +986,10 @@ class App(QMainWindow):
         return cmds
 
     def _setup_global_shortcuts(self) -> None:
-        # Fixed non-remappable shortcut for command palette (Cmd+K)
-        self._register_action(
-            "command_palette",
-            "Command Palette (Cmd+K)",
-            self._open_command_palette,
-            shortcut="Meta+K",
-        )
         # workspace.* commands are already QActions via _build_workspace_actions
         _MENU_HANDLED = {
             "workspace.new",
+            "workspace.new_window",
             "workspace.open",
             "workspace.save",
             "workspace.save_as",
@@ -973,17 +1032,29 @@ class App(QMainWindow):
     def _invoke_canvas_mode(self, mode: str) -> None:
         canvas = self._active_canvas()
         if canvas is not None and hasattr(canvas, "set_mode"):
-            canvas.set_mode(mode)
+            current = canvas.get_mode() if hasattr(canvas, "get_mode") else None
+            canvas.set_mode(mode if current != mode else "select")
 
     def _invoke_canvas_measure(self) -> None:
         canvas = self._active_canvas()
         if canvas is not None and hasattr(canvas, "toggle_measure"):
             canvas.toggle_measure()
 
+    def _invoke_canvas_dimension(self) -> None:
+        canvas = self._active_canvas()
+        if canvas is not None and hasattr(canvas, "toggle_dimension_mode"):
+            canvas.toggle_dimension_mode()
+
     def _invoke_canvas_fit(self) -> None:
         canvas = self._active_canvas()
         if canvas is not None and hasattr(canvas, "fit"):
             canvas.fit()
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
 
     def _open_command_palette(self) -> None:
         dlg = CommandPaletteDialog(self._build_command_palette_commands(), self)
@@ -1012,7 +1083,15 @@ class App(QMainWindow):
             # Propagate changed settings to tabs that cache paths at init time.
             self._settings = dlg._settings
             self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
+            canvas_commands.apply_keybindings(self._settings.get("keybindings"))
             self._page_runtime.apply_settings(self._settings)
+            self._page_runtime.apply_unit_system(
+                self._settings.get("unit_system", DEFAULT_UNIT_SYSTEM)
+            )
+            self._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+            self._page_runtime.apply_radial_menu_tools(
+                self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+            )
             self._repo_page.sync_from_settings()
 
             for action_id, action in self._global_actions.items():
@@ -1023,6 +1102,9 @@ class App(QMainWindow):
 
             self._new_workspace_action.setShortcut(
                 QKeySequence(self._shortcut("workspace.new"))
+            )
+            self._new_window_action.setShortcut(
+                QKeySequence(self._shortcut("workspace.new_window"))
             )
             self._open_workspace_action.setShortcut(
                 QKeySequence(self._shortcut("workspace.open"))
@@ -1035,6 +1117,12 @@ class App(QMainWindow):
             )
 
             self._configure_auto_fetch_timer()
+
+    def _show_help(self) -> None:
+        """Show the user manual help dialog."""
+        from src.ui.pages.help import HelpDialog
+
+        HelpDialog.show_help(self, self)
 
     def _open_update_check(self) -> None:
         """Open the update check dialog."""

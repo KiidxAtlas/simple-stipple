@@ -33,7 +33,7 @@ from src.backend.geometry.primitives import (
     build_polygon_poly,
     build_rect_poly,
 )
-from src.backend.geometry.spline import build_spline_poly
+from src.backend.geometry.spline import build_bezier_poly, build_spline_poly
 from src.constants import DIM, POLY, Q_BG, SEL
 from src.ui.canvas._constants import BADGE_BG as _BADGE_BG
 from src.ui.canvas._constants import BADGE_DIM as _BADGE_DIM
@@ -55,6 +55,10 @@ from src.ui.canvas._constants import RUBBER_W as _RUBBER_W
 from src.ui.canvas._constants import SELECT_PT as _SELECT_PT
 from src.ui.canvas._constants import SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE
 from src.ui.canvas._constants import SNAP_CLOSE as _SNAP_CLOSE
+from src.ui.units import format_length as _fmt_len
+from src.ui.units import from_display as _from_display
+from src.ui.units import suffix as _unit_suffix
+from src.ui.units import to_display as _to_display
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -105,6 +109,14 @@ if TYPE_CHECKING:
         _grid_spacing: float
         _grid_visible: bool
         _guides: list[tuple[str, float]]
+        _dimensions: list[dict]
+        _dim_pending_p1: tuple[float, float] | None
+        _dim_pending_p2: tuple[float, float] | None
+        _dim_pending_offset: float
+        _selected_dimension: int | None
+        _dimension_drag: int | None
+        _dimension_mode: bool
+        _dbtn_rect: tuple[float, float, float, float]
         _hover_poly: int | None
         _hover_snap: tuple[float, float] | None
         _hover_snap_multi: list[tuple[tuple[float, float], str, tuple[float, float]]]
@@ -126,6 +138,7 @@ if TYPE_CHECKING:
         _sel: set[int]
         _shift_drag: bool
         _show_selection_bbox: bool
+        _unit_system: str
 
         def _on_active_layer(self, e: EntityRecord) -> bool: ...
         def _is_near_start(self) -> bool: ...
@@ -151,6 +164,10 @@ if TYPE_CHECKING:
         def _selection_bounds(
             self, indices: list[int] | None = None
         ) -> tuple[float, float, float, float] | None: ...
+
+        def _dimension_line_points(
+            self, dim: dict
+        ) -> tuple[tuple[float, float], tuple[float, float]] | None: ...
 
         @staticmethod
         def _poly_rect_for_culling(
@@ -330,6 +347,20 @@ class CanvasRenderer(_RendererBase):
                 )
                 if len(render_poly) < 2:
                     continue
+            elif (
+                idx < len(self._entities)
+                and self._entities[idx].kind == "bezier"
+                and len(poly) >= 2
+            ):
+                meta = self._entities[idx].meta if idx < len(self._entities) else None
+                render_poly = build_bezier_poly(
+                    poly,
+                    (meta.get("tangents") or []) if meta else [],
+                    segments=int(meta.get("segments", 16)) if meta else 16,
+                    closed=bool(meta.get("closed", False)) if meta else False,
+                )
+                if len(render_poly) < 2:
+                    continue
             path = QPainterPath()
             sx, sy = self._w2c(*render_poly[0])
             path.moveTo(sx, sy)
@@ -367,6 +398,92 @@ class CanvasRenderer(_RendererBase):
         """Pixels reserved by the top ruler (0 when rulers are hidden)."""
         return self.RULER_PX if self._rulers_visible else 0
 
+    def _paint_dimension_line(
+        self,
+        painter: QPainter,
+        p1: tuple[float, float],
+        p2: tuple[float, float],
+        offset: float,
+        label: str | None,
+        *,
+        color: QColor,
+    ) -> None:
+        """Draw one drafting-style dimension: extension lines from p1/p2 out
+        to a parallel line offset by ``offset`` mm, with arrowheads and a
+        length label at its midpoint."""
+        line = self._dimension_line_points({"p1": p1, "p2": p2, "offset": offset})
+        if line is None:
+            return
+        (lax_w, lay_w), (lbx_w, lby_w) = line
+        ax, ay = self._w2c(*p1)
+        bx, by = self._w2c(*p2)
+        lax, lay = self._w2c(lax_w, lay_w)
+        lbx, lby = self._w2c(lbx_w, lby_w)
+
+        ext_pen = QPen(color, 1.0, Qt.PenStyle.DashLine)
+        painter.setPen(ext_pen)
+        painter.drawLine(QPointF(ax, ay), QPointF(lax, lay))
+        painter.drawLine(QPointF(bx, by), QPointF(lbx, lby))
+
+        dim_pen = QPen(color, 1.4)
+        painter.setPen(dim_pen)
+        painter.drawLine(QPointF(lax, lay), QPointF(lbx, lby))
+
+        # Arrowheads at each end of the dimension line, pointing outward.
+        ddx, ddy = lbx - lax, lby - lay
+        length = math.hypot(ddx, ddy)
+        if length > 1e-6:
+            ux, uy = ddx / length, ddy / length
+            head = 7.0
+            for tx, ty, dxu, dyu in (
+                (lax, lay, -ux, -uy),
+                (lbx, lby, ux, uy),
+            ):
+                perp_x, perp_y = -dyu, dxu
+                p_a = QPointF(tx - dxu * head + perp_x * head * 0.4, ty - dyu * head + perp_y * head * 0.4)
+                p_b = QPointF(tx - dxu * head - perp_x * head * 0.4, ty - dyu * head - perp_y * head * 0.4)
+                painter.drawLine(QPointF(tx, ty), p_a)
+                painter.drawLine(QPointF(tx, ty), p_b)
+
+        if label is not None:
+            mx, my = (lax + lbx) / 2.0, (lay + lby) / 2.0
+            self._draw_badge(painter, mx, my - 12, label, 9)
+
+    def _paint_dimensions(self, painter: QPainter, w: int, h: int) -> None:
+        for i, dim in enumerate(self._dimensions):
+            selected = i == self._selected_dimension
+            dragging = i == self._dimension_drag
+            color = QColor("#f5a623") if (selected or dragging) else QColor("#8957e5")
+            ax, ay = dim["p1"]
+            bx, by = dim["p2"]
+            length_mm = math.hypot(bx - ax, by - ay)
+            label = _fmt_len(length_mm, self._unit_system)
+            self._paint_dimension_line(
+                painter, dim["p1"], dim["p2"], dim["offset"], label, color=color
+            )
+
+        # In-progress placement preview.
+        if self._dim_pending_p1 is not None:
+            if self._dim_pending_p2 is not None:
+                length_mm = math.hypot(
+                    self._dim_pending_p2[0] - self._dim_pending_p1[0],
+                    self._dim_pending_p2[1] - self._dim_pending_p1[1],
+                )
+                label = _fmt_len(length_mm, self._unit_system)
+                self._paint_dimension_line(
+                    painter,
+                    self._dim_pending_p1,
+                    self._dim_pending_p2,
+                    self._dim_pending_offset,
+                    label,
+                    color=QColor("#39c5cf"),
+                )
+            elif self._cursor_wx is not None and self._cursor_wy is not None:
+                ax, ay = self._w2c(*self._dim_pending_p1)
+                cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
+                painter.setPen(QPen(QColor("#39c5cf"), 1.0, Qt.PenStyle.DashLine))
+                painter.drawLine(QPointF(ax, ay), QPointF(cx, cy))
+
     def _paint_guides(self, painter: QPainter, w: int, h: int) -> None:
         if not self._guides:
             return
@@ -383,12 +500,16 @@ class CanvasRenderer(_RendererBase):
                 gx, _ = self._w2c(coord, 0.0)
                 painter.drawLine(QPointF(gx, 0.0), QPointF(gx, float(h)))
                 if dragging:
-                    painter.drawText(QPointF(gx + 4, 34), f"x = {coord:.2f} mm")
+                    painter.drawText(
+                        QPointF(gx + 4, 34), f"x = {_fmt_len(coord, self._unit_system)}"
+                    )
             else:
                 _, gy = self._w2c(0.0, coord)
                 painter.drawLine(QPointF(0.0, gy), QPointF(float(w), gy))
                 if dragging:
-                    painter.drawText(QPointF(28, gy - 4), f"y = {coord:.2f} mm")
+                    painter.drawText(
+                        QPointF(28, gy - 4), f"y = {_fmt_len(coord, self._unit_system)}"
+                    )
             if dragging or selected:
                 painter.setPen(pen)
 
@@ -435,7 +556,10 @@ class CanvasRenderer(_RendererBase):
                 )
                 if is_major:
                     painter.setPen(text_pen)
-                    painter.drawText(QPointF(cx + 2, r - 11), f"{x:g}")
+                    painter.drawText(
+                        QPointF(cx + 2, r - 11),
+                        f"{_to_display(x, self._unit_system):g}",
+                    )
             x += minor
 
         # Left ruler (world Y)
@@ -456,7 +580,9 @@ class CanvasRenderer(_RendererBase):
                     painter.save()
                     painter.translate(r - 12, cy - 2)
                     painter.rotate(-90)
-                    painter.drawText(QPointF(0, 0), f"{y:g}")
+                    painter.drawText(
+                        QPointF(0, 0), f"{_to_display(y, self._unit_system):g}"
+                    )
                     painter.restore()
             y += minor
 
@@ -703,7 +829,10 @@ class CanvasRenderer(_RendererBase):
                     eff_wy3 - self._draw_pts[-1][1],
                 )
             vw = max(self.width(), 100)
-            summary_text = f"Total: {total_len:.2f} mm  |  {len(self._draw_pts)} pts"
+            summary_text = (
+                f"Total: {_fmt_len(total_len, self._unit_system)}  |  "
+                f"{len(self._draw_pts)} pts"
+            )
             self._draw_badge(painter, vw - 100, 50, summary_text, 10)
 
     def _paint_draw_shape_preview(self, painter: QPainter) -> None:
@@ -1302,6 +1431,25 @@ class CanvasRenderer(_RendererBase):
         painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
         self._mbtn_rect = (x1, y1, x2, y2)
 
+    def _paint_dimension_button(self, painter: QPainter, canvas_w: int) -> None:
+        pad, bh, bw, gap = 6, 22, 114, 6
+        label = "\u2715 Dimension [\u21e7M]" if self._dimension_mode else "\u2295 Dimension [\u21e7M]"
+        color = QColor("#8957e5") if self._dimension_mode else QColor(DIM)
+        bg = QColor("#1c1233") if self._dimension_mode else QColor("#14141e")
+        top = pad + self._chrome_top()
+        # Sits immediately to the left of the Measure button.
+        mx1, _my1, _mx2, _my2 = self._mbtn_rect
+        x2 = mx1 - gap
+        x1 = x2 - bw
+        y1, y2 = top, top + bh
+        painter.setPen(QPen(color, 1))
+        painter.setBrush(QBrush(bg))
+        painter.drawRect(QRectF(x1, y1, bw, bh))
+        painter.setFont(_FONT_HEL_10)
+        painter.setPen(color)
+        painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
+        self._dbtn_rect = (x1, y1, x2, y2)
+
     def _paint_measure_overlay(self, painter: QPainter) -> None:
         if self._measure_anchor is None or self._measure_hover is None:
             return
@@ -1356,7 +1504,7 @@ class CanvasRenderer(_RendererBase):
             painter.drawText(
                 QRectF(mx - 100, badge_y - 14, 200, 18),
                 Qt.AlignmentFlag.AlignCenter,
-                f"{dist:.2f} mm  {angle_deg:.1f}\u00b0",
+                f"{_fmt_len(dist, self._unit_system)}  {angle_deg:.1f}\u00b0",
             )
             painter.setPen(_MEASURE_COLOR)
             painter.setFont(_FONT_HEL_9)
@@ -1432,6 +1580,7 @@ class CanvasRenderer(_RendererBase):
         )
 
         self._paint_guides(painter, w, h)
+        self._paint_dimensions(painter, w, h)
         self._paint_ghost_polys(painter, _visible_world)
         self._paint_main_polys(painter, _visible_world)
 
@@ -1649,7 +1798,7 @@ class CanvasRenderer(_RendererBase):
             hint = "[Pan: Space/MMB · F=fit · Cmd/Ctrl+Z=undo · D/E mode · use Precision bar for snap/grid]"
         precision = []
         if self._grid_visible:
-            precision.append(f"grid {self._grid_spacing:g}mm")
+            precision.append(f"grid {_fmt_len(self._grid_spacing, self._unit_system)}")
         if self._grid_snap:
             precision.append("snap")
         if precision:
@@ -1678,10 +1827,14 @@ class CanvasRenderer(_RendererBase):
                 )
 
         # Cursor position
-        if self._cursor_wx is not None:
+        if self._cursor_wx is not None and self._cursor_wy is not None:
             painter.setPen(QColor(DIM))
             painter.setFont(QFont("Helvetica", 10))
-            text = f"{self._cursor_wx:.2f}, {self._cursor_wy:.2f} mm"
+            text = (
+                f"{_to_display(self._cursor_wx, self._unit_system):.2f}, "
+                f"{_to_display(self._cursor_wy, self._unit_system):.2f} "
+                f"{_unit_suffix(self._unit_system)}"
+            )
             fm = QFontMetrics(painter.font())
             tw = fm.horizontalAdvance(text)
             painter.drawText(w - tw - 8, h - 8, text)
@@ -1707,6 +1860,7 @@ class CanvasRenderer(_RendererBase):
 
         # Measure button
         self._paint_measure_button(painter, w)
+        self._paint_dimension_button(painter, w)
 
         painter.end()
 
@@ -1779,24 +1933,35 @@ class CanvasRenderer(_RendererBase):
         callback,
         *,
         minimum: float | None = None,
+        is_length: bool = True,
     ) -> None:
         """Inline numeric prompt near the canvas center: Enter commits,
-        Escape dismisses. Replaces modal QInputDialog for canvas ops."""
+        Escape dismisses. Replaces modal QInputDialog for canvas ops.
+
+        ``is_length`` marks *default*/the parsed value as an mm length that
+        should round-trip through the active display unit (mm/in) — pass
+        ``False`` for non-length values (angles, counts) so they're shown
+        and returned as-is.
+        """
         self._dismiss_hud_prompt()
-        edit = self._make_hud_edit(placeholder=label, width=120, height=22)
-        edit.setText(f"{default:g}")
+        unit = self._unit_system if is_length else None
+        display_label = label.replace("mm", _unit_suffix(unit)) if unit else label
+        display_default = _to_display(default, unit) if unit else default
+        edit = self._make_hud_edit(placeholder=display_label, width=120, height=22)
+        edit.setText(f"{display_default:g}")
         edit.selectAll()
-        edit.setToolTip(label)
+        edit.setToolTip(display_label)
         edit.move(int(self.width() / 2 - 60), int(self.height() / 2 - 11))
         self._hud_prompt_edit = edit
-        self._show_flash(label, 1600)
+        self._show_flash(display_label, 1600)
 
         def _commit() -> None:
             try:
-                value = float(edit.text())
+                raw = float(edit.text())
             except (TypeError, ValueError):
                 self._dismiss_hud_prompt()
                 return
+            value = _from_display(raw, unit) if unit else raw
             if minimum is not None and value < minimum:
                 self._dismiss_hud_prompt()
                 return

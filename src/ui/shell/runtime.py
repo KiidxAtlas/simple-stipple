@@ -120,3 +120,28 @@ class PageRuntime:
         for page in self._page_by_id.values():
             page_any = cast(Any, page)
             page_any._settings = settings
+
+    def apply_unit_system(self, unit: str) -> None:
+        """Push the active display-unit setting to every page's canvas(es)."""
+        for spec in self._specs:
+            page = self.get(spec.page_id)
+            if page is None:
+                continue
+            for canvas_attr in spec.content_canvas_attrs:
+                canvas = getattr(page, canvas_attr, None)
+                set_unit = getattr(canvas, "set_unit_system", None)
+                if callable(set_unit):
+                    set_unit(unit)
+
+    def apply_radial_menu_tools(self, tools: list[str]) -> None:
+        """Push the customized radial ("Q") menu wedge list to every page's
+        canvas(es) that support it (only DxfCanvas does)."""
+        for spec in self._specs:
+            page = self.get(spec.page_id)
+            if page is None:
+                continue
+            for canvas_attr in spec.content_canvas_attrs:
+                canvas = getattr(page, canvas_attr, None)
+                set_tools = getattr(canvas, "set_radial_menu_tools", None)
+                if callable(set_tools):
+                    set_tools(tools)

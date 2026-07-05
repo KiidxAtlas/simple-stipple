@@ -596,6 +596,162 @@ def test_quick_shape_keys_and_radial_toggle(qapp):
     assert not c.quick_shape_enabled
 
 
+def test_radial_menu_is_a_rebindable_command_not_a_hardcoded_key(qapp):
+    """"Q" must resolve through the canvas Command registry (so it shows up
+    in the Keybindings dialog and is rebindable), not a check the tool's
+    key() hook shadows before the registry ever sees it."""
+    from src.ui.canvas import commands as canvas_commands
+
+    cmd = canvas_commands.get("canvas.radial_menu")
+    assert cmd.shortcut == "Q"
+
+    c = make_canvas(qapp, THREE_SQUARES)
+    key(c, Qt.Key.Key_Q)
+    assert c._radial_active
+
+
+def test_radial_menu_hover_highlights_the_wedge_under_the_cursor(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    c._cursor_wx, c._cursor_wy = c._c2w(400, 300)
+    key(c, Qt.Key.Key_Q)
+    assert c._radial_active
+    center = c._radial_center_c
+    n = len(c._radial_tools)
+    slice_deg = 360.0 / n
+
+    # Slice 0 is always centered on angle 0 (straight right of center).
+    move(c, center.x() + 60, center.y())
+    assert c._radial_hover_index == 0
+
+    # Slice 2's center angle, wherever that lands for the current wedge count.
+    ang = math.radians(2 * slice_deg)
+    move(c, center.x() + math.cos(ang) * 60, center.y() - math.sin(ang) * 60)
+    assert c._radial_hover_index == 2
+
+    # Inside the inner hole / outside the outer ring: no slice hovered.
+    move(c, center.x() + 5, center.y())
+    assert c._radial_hover_index is None
+
+
+def test_radial_menu_hover_resets_on_close(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    c._cursor_wx, c._cursor_wy = c._c2w(400, 300)
+    key(c, Qt.Key.Key_Q)
+    center = c._radial_center_c
+    move(c, center.x() + 60, center.y())
+    assert c._radial_hover_index == 0
+
+    key(c, Qt.Key.Key_Escape)
+    assert c._radial_hover_index is None
+
+
+@pytest.mark.parametrize(
+    "idx,expected_mode,expected_primitive",
+    [
+        (0, "draw", "polyline"),
+        (1, "draw", "rectangle"),
+        (2, "draw", "circle"),
+        (3, "draw", "polygon"),
+        (4, "draw", "line"),
+        (5, "draw", "arc"),
+        (6, "pen", None),
+    ],
+)
+def test_radial_menu_wedges_are_the_draw_primitive_tools(
+    qapp, idx, expected_mode, expected_primitive
+):
+    """The wheel is a shape-tool picker now, not a duplicate of D/E/M/F —
+    each wedge switches to draw mode with the matching primitive (or the
+    bezier Pen mode), not the old mode-toggle/quick-shape/size actions."""
+    c = make_canvas(qapp, THREE_SQUARES)
+    c._execute_radial_action(idx)
+    assert c.get_mode() == expected_mode
+    if expected_primitive is not None:
+        assert c._draw_primitive == expected_primitive
+
+
+def test_radial_menu_opens_and_dismisses_from_any_mode(qapp):
+    """Previously the menu only opened in select mode (its press/move/paint
+    lived on DxfSelectTool); it must now work from draw/edit/pen too, since
+    it lives at the DxfCanvas level ahead of tool dispatch."""
+    for mode in ("draw", "edit", "pen", "select"):
+        c = make_canvas(qapp, THREE_SQUARES)
+        c.set_mode(mode)
+        key(c, Qt.Key.Key_Q)
+        assert c._radial_active, f"radial menu did not open in {mode!r} mode"
+        key(c, Qt.Key.Key_Q)
+        assert not c._radial_active
+
+
+def test_radial_menu_tools_are_customizable(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_radial_menu_tools(["canvas.circle", "canvas.arc", "mode.pen"])
+    assert c._radial_tools == ["canvas.circle", "canvas.arc", "mode.pen"]
+    c._execute_radial_action(0)
+    assert c.get_mode() == "draw" and c._draw_primitive == "circle"
+    c._execute_radial_action(2)
+    assert c.get_mode() == "pen"
+
+
+def test_radial_menu_tools_include_the_full_command_registry(qapp):
+    """The pool is "every canvas Command", not just draw primitives — this
+    is the point of the redesign (many more options than the original 6)."""
+    from src.ui.canvas import commands as canvas_commands
+
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_radial_menu_tools(["edit.undo", "clipboard.copy", "boolean.union"])
+    assert c._radial_tools == ["edit.undo", "clipboard.copy", "boolean.union"]
+    non_hidden = [cmd.id for cmd in canvas_commands.COMMANDS if not cmd.hidden]
+    assert len(non_hidden) > 20  # the pool really is much bigger now
+
+
+def test_radial_menu_tools_falls_back_below_minimum(qapp):
+    from src.settings import DEFAULT_RADIAL_MENU_TOOLS
+
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_radial_menu_tools(["canvas.circle", "canvas.arc"])  # only 2 — below the minimum
+    assert c._radial_tools == list(DEFAULT_RADIAL_MENU_TOOLS)
+
+
+def test_radial_menu_tools_drops_unknown_and_dedupes(qapp):
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_radial_menu_tools(
+        ["canvas.circle", "bogus", "canvas.circle", "canvas.arc", "mode.pen"]
+    )
+    assert c._radial_tools == ["canvas.circle", "canvas.arc", "mode.pen"]
+
+
+def test_radial_menu_label_width_budget_never_exceeds_the_disc(qapp):
+    """The chord-based width cap _paint_radial_menu elides labels against
+    must itself never claim more room than the disc actually has — this is
+    the guarantee that stops a long label (e.g. "Duplicate with Offset")
+    from spilling past the wheel's outer edge."""
+    c = make_canvas(qapp, THREE_SQUARES)
+    outer = c._RADIAL_OUTER
+    cy = 300.0
+    for dy in (0.0, outer * 0.5, outer * 0.95, outer, outer * 1.5):
+        chord_half = c._radial_chord_half(cy + dy, cy, outer)
+        assert 0.0 <= chord_half <= outer
+    # Directly above/below center the full diameter is available; near the
+    # top/bottom pole it shrinks to ~0 rather than going negative or over.
+    assert c._radial_chord_half(cy, cy, outer) == pytest.approx(outer)
+    assert c._radial_chord_half(cy + outer, cy, outer) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_radial_menu_paints_long_labels_without_raising(qapp):
+    """Smoke-check the actual paint path with labels long enough to have
+    previously overflowed ("Duplicate with Offset", "Grid Array", ...)."""
+    c = make_canvas(qapp, THREE_SQUARES)
+    c.set_radial_menu_tools(
+        ["edit.duplicate_offset", "edit.array_grid", "boolean.subtract", "select.invert"]
+    )
+    c._cursor_wx, c._cursor_wy = c._c2w(400, 300)
+    key(c, Qt.Key.Key_Q)
+    assert c._radial_active
+    pix = c.grab()  # forces a real paintEvent through _paint_radial_menu
+    assert pix.width() > 0 and pix.height() > 0
+
+
 def test_undo_store_deltas_only_touch_changed_entities(qapp):
     """Delta undo: a move records only the moved entity, not the document."""
     v = make_view(qapp, THREE_SQUARES)
