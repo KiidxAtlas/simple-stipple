@@ -52,7 +52,7 @@ def _toggle_states(icon_name: str, label: str) -> list[StateEntry]:
 class _ResizeHandle(QFrame):
     """Thin drag handle docked to the sidebar's right edge."""
 
-    def __init__(self, sidebar: "DrawSidebar") -> None:
+    def __init__(self, sidebar: DrawSidebar) -> None:
         super().__init__(sidebar)
         self._sidebar = sidebar
         self._dragging = False
