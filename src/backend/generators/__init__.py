@@ -15,19 +15,11 @@ from src.backend.generators.advanced import (
     gen_penrose_tiling,
     gen_reaction_diffuse,
 )
-from src.backend.generators.composite import (
-    gen_braid,
-    gen_custom_tile,
-    gen_image_halftone,
-)
+from src.backend.generators.composite import gen_custom_tile, gen_image_halftone
 from src.backend.generators.curves import (
     gen_celtic_knot,
     gen_concentric_rings,
-    gen_golden_spiral,
-    gen_lissajous,
-    gen_rose_curve,
     gen_sunburst,
-    gen_wave_fill,
 )
 from src.backend.generators.organic import (
     gen_stipple_dots,
@@ -38,8 +30,6 @@ from src.backend.generators.organic import (
 from src.backend.generators.tiling import (
     gen_basketweave,
     gen_brick,
-    gen_diagonal_lines,
-    gen_fish_scale,
     gen_gradient_honeycomb,
     gen_honeycomb,
     gen_mesh,
@@ -53,30 +43,23 @@ __all__ = [
     "apply_invert_fill",
     "apply_mirror",
     "gen_basketweave",
-    "gen_braid",
     "gen_brick",
     "gen_celtic_knot",
     "gen_concentric_rings",
     "gen_custom_tile",
-    "gen_diagonal_lines",
-    "gen_fish_scale",
-    "gen_golden_spiral",
     "gen_gradient_honeycomb",
     "gen_hilbert_curve",
     "gen_honeycomb",
     "gen_image_halftone",
-    "gen_lissajous",
     "gen_mesh",
     "gen_penrose_tiling",
     "gen_reaction_diffuse",
-    "gen_rose_curve",
     "gen_square_grid",
     "gen_stipple_dots",
     "gen_stipple_interlaced",
     "gen_sunburst",
     "gen_topographic",
     "gen_voronoi",
-    "gen_wave_fill",
     "get_generator",
 ]
 

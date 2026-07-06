@@ -110,47 +110,6 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             maximum=1000,
         ),
     ],
-    "Braid": [
-        ParamField(
-            "_braid_strip_w",
-            "Strip width (mm)",
-            "2.0",
-            "Width of each diagonal braid strip",
-            param_key="strip_width",
-            minimum=0.001,
-            maximum=1000,
-        ),
-        ParamField(
-            "_braid_spacing",
-            "Spacing (mm)",
-            "3.0",
-            "Gap between parallel diagonal strips",
-            hint="Creates interlocking ±45° weave effect",
-            param_key="spacing",
-            minimum=0.001,
-            maximum=1000,
-        ),
-    ],
-    "Fish Scale": [
-        ParamField(
-            "_fish_w",
-            "Scale width (mm)",
-            "3.0",
-            "Horizontal span of each fish-scale arc",
-            param_key="sw",
-            minimum=0.001,
-            maximum=1000,
-        ),
-        ParamField(
-            "_fish_h",
-            "Scale height (mm)",
-            "2.0",
-            "Vertical height of each fish-scale arc",
-            param_key="sh",
-            minimum=0.001,
-            maximum=1000,
-        ),
-    ],
     "Stipple Dots": [
         ParamField(
             "_stip_r",
@@ -159,7 +118,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "Radius of each stipple dot",
             param_key="r",
             minimum=0.001,
-            maximum=100,
+            maximum=1000,
         ),
         ParamField(
             "_stip_spacing",

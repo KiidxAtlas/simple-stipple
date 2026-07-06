@@ -6,73 +6,18 @@ import math
 from typing import Any, cast
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import (
-    LineString,  # type: ignore[import-untyped]
-    Polygon,
-)
+from shapely.geometry import Polygon
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
 from src.backend.generators._shared import (
     _PIL_OK,
     _clip_to_outline,
-    _collect_lines,
     _extract_all_rings,
     _hex_verts,
     _PIL_Image,
     merge_and_classify_outlines,
     nested_polygon_region,
 )
-
-
-def gen_braid(
-    outline_poly, strip_width: float, spacing: float
-) -> list[list[tuple[float, float]]]:
-    """Interlocking diagonal weave pattern at ±45° angles.
-
-    Two families of diagonal strips (slope +1 and slope -1) cross over each
-    other to form a tessellating braid. ``strip_width`` is the on-screen width
-    of each strip; ``spacing`` is the perpendicular gap between adjacent
-    strips. The output is a set of polylines clipped to ``outline_poly``.
-    """
-    if strip_width <= 0 or spacing <= 0:
-        return []
-
-    minx, miny, maxx, maxy = outline_poly.bounds
-    w = maxx - minx
-    h = maxy - miny
-    if w <= 0 or h <= 0:
-        return []
-
-    sqrt2 = math.sqrt(2.0)
-    # Perpendicular distance between adjacent strip centres.
-    pitch = strip_width + spacing
-    # Half-length of each diagonal segment so it always overshoots the bounds.
-    half_len = (math.hypot(w, h) + pitch * 4.0) / 2.0
-    # Centre of the bounding box — every diagonal is built around this point.
-    cx = (minx + maxx) / 2.0
-    cy = (miny + maxy) / 2.0
-    # Range of perpendicular offsets needed to cover every corner.
-    span = (math.hypot(w, h) / 2.0) + pitch * 2.0
-
-    result: list[list[tuple[float, float]]] = []
-
-    def _emit(slope_sign: int) -> None:
-        # Unit direction along the diagonal and its perpendicular.
-        dx, dy = 1.0 / sqrt2, slope_sign * 1.0 / sqrt2
-        nx, ny = -dy, dx  # 90° rotation
-        offset = -span
-        while offset <= span:
-            for sub in (-strip_width / 2.0, strip_width / 2.0):
-                ox = cx + (offset + sub) * nx
-                oy = cy + (offset + sub) * ny
-                p1 = (ox - dx * half_len, oy - dy * half_len)
-                p2 = (ox + dx * half_len, oy + dy * half_len)
-                _collect_lines(outline_poly.intersection(LineString([p1, p2])), result)
-            offset += pitch
-
-    _emit(+1)
-    _emit(-1)
-    return result
 
 
 def gen_image_halftone(

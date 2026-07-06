@@ -745,12 +745,14 @@ class DraftPage(BasePage):
         *,
         source_label: str = "Pattern selection",
     ) -> None:
-        """Load polylines from another tab directly into Draft."""
+        """Add polylines sent from another tab into Draft, alongside
+        whatever's already there — this is a "send selection here" action,
+        not a fresh load, so it must not discard the existing draft."""
         if not polys:
             return
         incoming = [[(x, y) for x, y in poly] for poly in polys]
-        self._rt().load_polys(incoming, fit=True)
-        self._canvas._show_flash(f"Loaded {len(incoming)} from {source_label}", 1200)
+        self._rt().add_polys(incoming, fit=True)
+        self._canvas._show_flash(f"Added {len(incoming)} from {source_label}", 1200)
         self._refresh_status()
         self._emit_state_changed()
 

@@ -458,10 +458,15 @@ class EditTool(CanvasTool):
 
 
 class DrawTool(CanvasTool):
-    """Point placement for polylines, primitives, arcs, splines, and text."""
+    """Point placement for polylines, primitives, arcs, splines, text, and
+    the bezier pen — bezier is a ``_draw_primitive`` like any other, not a
+    separate mode, so switching to/from it doesn't hide the draw sidebar or
+    require its own mode-transition bookkeeping."""
 
     def press(self, event: QMouseEvent) -> bool:
         v = self.v
+        if v._draw_primitive == "bezier":
+            return self._bezier_press(event)
         pos = event.position()
         wx, wy = v._c2w(pos.x(), pos.y())
 
@@ -474,7 +479,7 @@ class DrawTool(CanvasTool):
             v.set_mode("select")
             return True
 
-        if v._draw_primitive in {"rectangle", "circle", "ellipse", "polygon"}:
+        if v._draw_primitive in {"rectangle", "circle", "ellipse", "polygon", "slot"}:
             if not v._draw_shape_preview_active:
                 v._draw_shape_preview_active = True
                 v._draw_shape_anchor_w = (wx, wy)
@@ -572,6 +577,8 @@ class DrawTool(CanvasTool):
 
     def move(self, event: QMouseEvent) -> bool:
         v = self.v
+        if v._draw_primitive == "bezier":
+            return self._bezier_move(event)
         pos = event.position()
         wx, wy = v._c2w(pos.x(), pos.y())
         if v._draw_shape_preview_active:
@@ -685,10 +692,15 @@ class DrawTool(CanvasTool):
         return True
 
     def release(self, event: QMouseEvent) -> bool:
+        if self.v._draw_primitive == "bezier":
+            return self._bezier_release(event)
         return True
 
     def double_click(self, event: QMouseEvent) -> bool:
         v = self.v
+        if v._draw_primitive == "bezier":
+            v._finish_pen()
+            return True
         # Double-click finishes and closes the polygon (Fusion 360 behavior)
         if len(v._draw_pts) >= 3:
             v._finish_draw(close=True)
@@ -696,14 +708,25 @@ class DrawTool(CanvasTool):
             v._finish_draw()
         return True
 
+    def key(self, event) -> bool:
+        if self.v._draw_primitive != "bezier":
+            return False
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.v._finish_pen()
+            return True
+        return False
 
-class PenTool(CanvasTool):
-    """Bezier pen: click places a corner anchor (straight segments in/out);
-    click-and-drag places a smooth anchor with a symmetric tangent handle
-    sized by the drag vector. Double-click or Enter finalizes the curve as
-    a ``kind="bezier"`` entity; Escape cancels the in-progress curve."""
+    def paint_overlay(self, painter) -> None:
+        if self.v._draw_primitive == "bezier":
+            self._paint_bezier_overlay(painter)
 
-    def press(self, event: QMouseEvent) -> bool:
+    # ── Bezier pen: click places a corner anchor (straight segments in/out);
+    # click-and-drag places a smooth anchor with a symmetric tangent handle
+    # sized by the drag vector. Enter/double-click finalizes the curve as a
+    # ``kind="bezier"`` entity; Escape (via the shared draw-mode Escape
+    # handler) discards the in-progress curve. ──────────────────────────────
+
+    def _bezier_press(self, event: QMouseEvent) -> bool:
         v = self.v
         pos = event.position()
         wx, wy = v._c2w(pos.x(), pos.y())
@@ -720,7 +743,7 @@ class PenTool(CanvasTool):
         v._redraw()
         return True
 
-    def move(self, event: QMouseEvent) -> bool:
+    def _bezier_move(self, event: QMouseEvent) -> bool:
         v = self.v
         pos = event.position()
         wx, wy = v._c2w(pos.x(), pos.y())
@@ -731,7 +754,7 @@ class PenTool(CanvasTool):
         v._redraw()
         return True
 
-    def release(self, event: QMouseEvent) -> bool:
+    def _bezier_release(self, event: QMouseEvent) -> bool:
         v = self.v
         if v._pen_dragging and v._pen_press_screen is not None and v._pen_tangents:
             pos = event.position()
@@ -745,21 +768,7 @@ class PenTool(CanvasTool):
         v._redraw()
         return True
 
-    def double_click(self, event: QMouseEvent) -> bool:
-        self.v._finish_pen()
-        return True
-
-    def key(self, event) -> bool:
-        k = event.key()
-        if k in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            self.v._finish_pen()
-            return True
-        if k == Qt.Key.Key_Escape:
-            self.v._cancel_pen()
-            return True
-        return False
-
-    def paint_overlay(self, painter) -> None:
+    def _paint_bezier_overlay(self, painter) -> None:
         from src.backend.geometry.spline import build_bezier_poly
 
         v = self.v
@@ -941,7 +950,7 @@ class SelectTool(CanvasTool):
                 and hit[0] == target
                 and was_selected_before
                 and target_kind
-                not in {"arc", "circle", "ellipse", "rectangle", "polygon"}
+                not in {"arc", "circle", "ellipse", "rectangle", "polygon", "slot"}
                 and not v._is_locked(target)
             ):
                 pi, vi = hit

@@ -1,0 +1,416 @@
+"""Draw sidebar revamp: grouped CycleIconButton controls, slot tool,
+polygon side count, and independent snap-category toggles.
+
+Reuses the make_view/click_world/bbox helpers from test_canvas_behavior.py
+rather than duplicating the synthesized-event plumbing.
+"""
+
+from __future__ import annotations
+
+import math
+
+import pytest
+
+pytest.importorskip("PySide6")
+
+from tests.test_canvas_behavior import bbox, click_world, make_view, square
+
+# ── Polyline / Shapes family sidebar cycling ─────────────────────────────────
+
+
+def test_polyline_family_button_cycles_draw_primitive(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    assert v._draw_primitive == "polyline"
+
+    sb._polyline_button.click()
+    assert v._draw_primitive == "spline"
+    sb._polyline_button.click()
+    assert v._draw_primitive == "arc"
+
+
+def test_polyline_family_bezier_state_stays_in_draw_mode(qapp):
+    """Bezier is a draw-mode primitive like polyline/spline/arc, not a
+    separate mode — cycling to it must not hide the sidebar or leave
+    draw mode (regression: overshooting the cycle used to silently hide
+    the panel and switch to a separate pen mode)."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    sb._polyline_button.click()  # spline
+    sb._polyline_button.click()  # arc
+    sb._polyline_button.click()  # bezier
+    assert v.get_mode() == "draw"
+    assert v._draw_primitive == "bezier"
+    assert v._draw_sidebar_visible is True
+
+
+def test_polyline_family_cycles_through_all_four_within_draw_mode(qapp):
+    """Regression test: cycling spline -> arc -> bezier -> polyline must
+    stay in draw mode and keep the sidebar open the whole way through —
+    bezier used to be a separate "pen" mode that silently hid the sidebar
+    when overshot via repeated clicks."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    btn = sb._polyline_button
+
+    expected = ["spline", "arc", "bezier", "polyline"]
+    for want in expected:
+        btn.click()
+        assert v.get_mode() == "draw"
+        assert v._draw_primitive == want
+        assert v._draw_sidebar_visible is True
+        assert btn.current_state_id == want
+
+
+def test_shapes_family_button_cycles_and_draws_slot(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    sb._shapes_button.click()  # rectangle -> slot
+    assert v._draw_primitive == "slot"
+
+    click_world(v, 100.0, 100.0)
+    click_world(v, 130.0, 110.0)
+    assert v.poly_count == 1
+    e = v._entities[0]
+    assert e.kind == "slot"
+    x0, y0, x1, y1 = bbox(e.points)
+    assert (x1 - x0, y1 - y0) == (pytest.approx(30.0, abs=0.5), pytest.approx(10.0, abs=0.5))
+
+
+def test_shapes_family_selecting_polygon_opens_no_prompt(qapp):
+    """Regression test: cycling to (or past) Polygon must not pop any HUD
+    prompt — side count is now a live stepper shown during the actual
+    drag, not a modal fired the instant the tool is selected."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    for _ in range(4):  # rectangle -> slot -> circle -> ellipse -> polygon
+        sb._shapes_button.click()
+    assert v._draw_primitive == "polygon"
+    assert getattr(v, "_hud_prompt_edit", None) is None
+
+
+def test_polygon_side_count_used_when_drawing(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._draw_polygon_sides = 8
+    v._set_draw_primitive("polygon")
+    click_world(v, 100.0, 100.0)
+    click_world(v, 110.0, 110.0)
+    e = v._entities[0]
+    assert e.kind == "polygon"
+    assert e.meta["sides"] == 8
+    # closed polygon points list repeats the first vertex at the end.
+    assert len(e.points) - 1 == 8
+
+
+def test_polygon_is_drawn_center_first_like_circle(qapp):
+    """Regression test: polygon used to be corner-to-corner (bounding-box
+    midpoint as center); it must now behave like circle — first click is
+    the center, drag distance is the radius."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("polygon")
+    click_world(v, 0.0, 0.0)
+    click_world(v, 10.0, 0.0)
+    e = v._entities[0]
+    assert e.meta["center"] == pytest.approx((0.0, 0.0), abs=1e-6)
+    assert e.meta["radius"] == pytest.approx(10.0, abs=1e-6)
+    for x, y in e.points[:-1]:
+        assert math.hypot(x, y) == pytest.approx(10.0, abs=1e-6)
+
+
+def test_polygon_sides_spinbox_live_updates_without_committing(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("polygon")
+    v._draw_shape_preview_active = True
+    v._draw_shape_anchor_w = (0.0, 0.0)
+    v._draw_shape_cursor_w = (10.0, 0.0)
+    v._show_shape_dim_inputs()
+
+    spin = v._draw_shape_sides_spin
+    assert spin is not None
+    assert spin.value() == v._draw_polygon_sides
+
+    spin.setValue(9)
+    assert v._draw_polygon_sides == 9
+    # changing the spinbox must not finalize the shape
+    assert v.poly_count == 0
+    assert v._draw_shape_preview_active is True
+
+
+def test_slot_gets_size_hud_fields_like_rectangle(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("slot")
+    assert v._shape_primitive_active() is True
+    v._draw_shape_preview_active = True
+    v._draw_shape_anchor_w = (0.0, 0.0)
+    v._draw_shape_cursor_w = (20.0, 10.0)
+    v._show_shape_dim_inputs()
+    assert v._draw_shape_w_edit is not None
+    assert v._draw_shape_h_edit is not None
+    # slot has a fixed regular width/length, not a per-vertex side count
+    assert v._draw_shape_sides_spin is None
+
+
+# ── Snapping section toggles ─────────────────────────────────────────────────
+
+
+def test_snap_toggle_buttons_drive_view_flags(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+
+    assert v._snap_master_enabled is True
+    sb._snap_master_button.click()
+    assert v._snap_master_enabled is False
+
+    assert v._grid_snap is False
+    sb._snap_grid_button.click()
+    assert v._grid_snap is True
+
+    assert v._snap_angle_enabled is True
+    sb._snap_angle_button.click()
+    assert v._snap_angle_enabled is False
+
+    assert v._snap_vertex_enabled is True
+    sb._snap_vertex_button.click()
+    assert v._snap_vertex_enabled is False
+
+    assert v._snap_edge_enabled is True
+    sb._snap_edge_button.click()
+    assert v._snap_edge_enabled is False
+
+
+def test_constraint_button_cycles_through_free_h_v_45(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("polyline")
+    sb = v._draw_sidebar
+    assert v._draw_constraint_lock is None
+
+    sb._constraint_button.click()
+    assert v._draw_constraint_lock == "H"
+    sb._constraint_button.click()
+    assert v._draw_constraint_lock == "V"
+    sb._constraint_button.click()
+    assert v._draw_constraint_lock == "45"
+    sb._constraint_button.click()
+    assert v._draw_constraint_lock is None
+
+
+def test_constraint_button_disabled_outside_line_and_polyline(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("rectangle")
+    assert v._draw_sidebar._constraint_button.isEnabled() is False
+
+
+# ── Split / construction / dimension / measure ───────────────────────────────
+
+
+def test_split_and_construction_buttons_toggle_view_state(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+
+    before_split = v._draw_split_enabled
+    sb._split_button.click()
+    assert v._draw_split_enabled is (not before_split)
+
+    assert v._draw_construction_mode is False
+    sb._construction_button.click()
+    assert v._draw_construction_mode is True
+
+
+def test_dimension_and_measure_buttons_toggle_their_modes(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+
+    assert v._dimension_mode is False
+    sb._dimension_button.click()
+    assert v._dimension_mode is True
+
+    assert v._measure_mode is False
+    sb._measure_button.click()
+    assert v._measure_mode is True
+
+
+# ── Contextual polyline-editing action row ───────────────────────────────────
+
+
+def test_polyline_action_buttons_enable_state_tracks_point_count(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    assert sb._finish_button.isEnabled() is False
+    assert sb._close_button.isEnabled() is False
+    assert sb._undo_button.isEnabled() is False
+
+    click_world(v, 0.0, 0.0)
+    click_world(v, 10.0, 0.0)
+    assert sb._undo_button.isEnabled() is True
+    assert sb._finish_button.isEnabled() is True
+    click_world(v, 10.0, 10.0)
+    assert sb._close_button.isEnabled() is True
+
+
+def test_hover_flyout_shows_beside_sidebar_not_overlapping_it(qapp):
+    """Regression test: the flyout used to be centered under the button,
+    which is narrower than most of its labels, so it spilled over and
+    covered neighboring sidebar content. It must now sit fully to the
+    right of the whole panel."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v.show()
+    sb = v._draw_sidebar
+    sb.show()
+
+    btn = sb._polyline_button
+    btn._show_flyout()
+    assert btn._flyout is not None
+    panel_rect = btn._panel_global_rect()
+    assert btn._flyout.x() >= panel_rect.right()
+
+
+def test_flyout_survives_mouse_passing_through_the_gap_to_reach_it(qapp):
+    """Regression test: real mouse movement from the button to the flyout
+    crosses empty space belonging to neither widget (the flyout sits
+    beside the panel, not flush against the button). An immediate
+    leaveEvent check used to hide the flyout while the cursor was still
+    mid-transit; it must now survive as long as the cursor reaches the
+    button or flyout within a short grace period."""
+    from PySide6.QtCore import QEvent, QEventLoop, QTimer
+    from PySide6.QtGui import QCursor
+
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v.show()
+    sb = v._draw_sidebar
+    sb.show()
+    btn = sb._polyline_button
+    btn._show_flyout()
+    flyout = btn._flyout
+    assert flyout is not None
+
+    QCursor.setPos(0, 0)  # cursor leaves into the gap between button and flyout
+    btn.leaveEvent(QEvent(QEvent.Type.Leave))
+    assert btn._flyout is not None  # not torn down immediately
+
+    QCursor.setPos(flyout.mapToGlobal(flyout.rect().center()))  # arrives in time
+    loop = QEventLoop()
+    QTimer.singleShot(300, loop.quit)
+    loop.exec()
+    assert btn._flyout is not None
+
+
+def test_flyout_hides_once_grace_period_elapses_with_cursor_still_away(qapp):
+    from PySide6.QtCore import QEvent, QEventLoop, QTimer
+    from PySide6.QtGui import QCursor
+
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v.show()
+    sb = v._draw_sidebar
+    sb.show()
+    btn = sb._polyline_button
+    btn._show_flyout()
+    assert btn._flyout is not None
+
+    QCursor.setPos(0, 0)
+    btn.leaveEvent(QEvent(QEvent.Type.Leave))
+    loop = QEventLoop()
+    QTimer.singleShot(300, loop.quit)
+    loop.exec()
+    assert btn._flyout is None
+
+
+def test_sidebar_width_is_draggable_and_clamped(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    from src.settings import MAX_DRAW_SIDEBAR_WIDTH, MIN_DRAW_SIDEBAR_WIDTH
+
+    changes = []
+    v.drawSidebarWidthChanged.connect(changes.append)
+
+    sb._apply_width(160)
+    sb._on_width_committed()
+    assert sb.width() == 160
+    assert v._draw_sidebar_width == 160
+    assert changes == [160]
+
+    sb._apply_width(MAX_DRAW_SIDEBAR_WIDTH + 500)
+    assert sb.width() == MAX_DRAW_SIDEBAR_WIDTH
+    sb._apply_width(MIN_DRAW_SIDEBAR_WIDTH - 50)
+    assert sb.width() == MIN_DRAW_SIDEBAR_WIDTH
+
+
+def test_sidebar_sections_can_be_hidden_and_reordered(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    original = v._draw_sidebar
+
+    v.set_draw_sidebar_sections(["shapes", "path"])
+    rebuilt = v._draw_sidebar
+    assert rebuilt is not original
+    assert v._draw_sidebar_sections == ["shapes", "path"]
+    # buttons for hidden sections ("editing" etc.) still exist and are
+    # safely callable — state-sync methods must never crash just because
+    # a section isn't shown.
+    rebuilt.set_polyline_actions_enabled(can_finish=True, can_close=False, can_undo=True)
+    assert rebuilt._finish_button.isEnabled() is True
+
+
+def test_customize_dialog_applies_unchecked_and_reordered_sections(qapp):
+    from PySide6.QtCore import Qt
+
+    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+
+    dlg = DrawSidebarCustomizeDialog(sections=["path", "shapes", "text"])
+    for i in range(dlg._list.count()):
+        item = dlg._list.item(i)
+        if item.data(Qt.ItemDataRole.UserRole) == "text":
+            item.setCheckState(Qt.CheckState.Unchecked)
+    dlg._apply()
+    assert dlg.get_sections() == ["path", "shapes"]
+
+
+def test_customize_dialog_falls_back_to_defaults_without_path_and_shapes(qapp):
+    from PySide6.QtCore import Qt
+
+    from src.settings import DEFAULT_DRAW_SIDEBAR_SECTIONS
+    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+
+    dlg = DrawSidebarCustomizeDialog(sections=["path"])
+    for i in range(dlg._list.count()):
+        item = dlg._list.item(i)
+        if item.data(Qt.ItemDataRole.UserRole) != "path":
+            item.setCheckState(Qt.CheckState.Unchecked)
+    dlg._apply()
+    assert dlg.get_sections() == list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+
+
+def test_smoothing_button_cycles_and_stays_in_sync_with_settings(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    assert v._smoothing_method == "chaikin"
+    assert sb._smoothing_button.current_state_id == "chaikin"
+
+    sb._smoothing_button.click()
+    assert v._smoothing_method == "gaussian"
+    sb._smoothing_button.click()
+    assert v._smoothing_method == "catmull_rom"
+
+    # setting it the way Settings' own combo box does must also update
+    # the sidebar button, not just the other direction.
+    v.set_smoothing_method("chaikin")
+    assert sb._smoothing_button.current_state_id == "chaikin"

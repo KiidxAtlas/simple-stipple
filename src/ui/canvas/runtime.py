@@ -260,6 +260,13 @@ class CanvasRuntime:
         self._canvas.set_polylines_state(polys, fit=fit)
         self._canvas.set_mode("select")
 
+    def add_polys(self, polys: list[list[tuple[float, float]]], *, fit: bool) -> None:
+        """Append polys as new entities without touching whatever's already
+        on the canvas (used for cross-tab "send selection here" actions,
+        as opposed to load_polys which replaces the whole canvas)."""
+        self._canvas.add_polylines_state(polys, fit=fit)
+        self._canvas.set_mode("select")
+
     def load_polys_by_layer(
         self,
         by_layer: dict[str, list[list[tuple[float, float]]]],

@@ -150,11 +150,15 @@ def snap_to_polyline(
     mode: str = "select",
     snap_dist: float = _SNAP_DIST,
     min_scale: float = _MIN_SCALE,
+    allow_vertex: bool = True,
+    allow_edge: bool = True,
 ) -> SnapResult | None:
     """Return the nearest semantic snap on any polyline within snap distance.
 
     Priority order: vertices, midpoints, intersections, centers, perpendicular
-    (when drawing), and finally generic edges.
+    (when drawing), and finally generic edges. ``allow_vertex`` gates the
+    vertex/midpoint/intersection/center "point family"; ``allow_edge`` gates
+    the perpendicular/generic-edge fallback family.
     """
     cwx, cwy = c2w(cx, cy)
     world_r = (snap_dist / max(scale, min_scale)) * 1.6
@@ -168,130 +172,134 @@ def snap_to_polyline(
     )
     excluded = exclude_vertices or set()
 
-    best_dist = snap_dist
-    best_pt: Point | None = None
-    for pi, poly in candidate_polys:
-        for vi, pt in enumerate(poly):
-            if (pi, vi) in excluded:
-                continue
-            sx, sy = w2c(*pt)
-            d = math.hypot(cx - sx, cy - sy)
-            if d < best_dist:
-                best_dist = d
-                best_pt = pt
-    if best_pt is not None:
-        return (best_pt[0], best_pt[1], "vertex")
+    if allow_vertex:
+        best_dist = snap_dist
+        best_pt: Point | None = None
+        for pi, poly in candidate_polys:
+            for vi, pt in enumerate(poly):
+                if (pi, vi) in excluded:
+                    continue
+                sx, sy = w2c(*pt)
+                d = math.hypot(cx - sx, cy - sy)
+                if d < best_dist:
+                    best_dist = d
+                    best_pt = pt
+        if best_pt is not None:
+            return (best_pt[0], best_pt[1], "vertex")
 
-    best_dist = snap_dist
-    best_pt = None
-    for _pi, poly in candidate_polys:
-        n = len(poly)
-        closed = is_poly_closed(poly)
-        seg_count = n if closed else n - 1
-        for vi in range(seg_count):
-            ax, ay = poly[vi]
-            bx, by = poly[(vi + 1) % n]
-            mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-            sx, sy = w2c(mx, my)
-            d = math.hypot(cx - sx, cy - sy)
-            if d < best_dist:
-                best_dist = d
-                best_pt = (mx, my)
-    if best_pt is not None:
-        return (best_pt[0], best_pt[1], "midpoint")
-
-    best_dist = snap_dist
-    best_pt = None
-    segments: list[tuple[Point, Point]] = []
-    for _pi, poly in candidate_polys:
-        n = len(poly)
-        closed = is_poly_closed(poly)
-        seg_count = n if closed else n - 1
-        for vi in range(seg_count):
-            segments.append((poly[vi], poly[(vi + 1) % n]))
-
-    for i in range(len(segments)):
-        a1, a2 = segments[i]
-        for j in range(i + 1, len(segments)):
-            b1, b2 = segments[j]
-            ipt = segment_intersection_point(a1, a2, b1, b2)
-            if ipt is None:
-                continue
-            sx, sy = w2c(*ipt)
-            d = math.hypot(cx - sx, cy - sy)
-            if d < best_dist:
-                best_dist = d
-                best_pt = ipt
-    if best_pt is not None:
-        return (best_pt[0], best_pt[1], "intersection")
-
-    best_dist = snap_dist
-    best_pt = None
-    for _pi, poly in candidate_polys:
-        if not is_poly_closed(poly):
-            continue
-        center = polygon_centroid(poly)
-        sx, sy = w2c(*center)
-        d = math.hypot(cx - sx, cy - sy)
-        if d < best_dist:
-            best_dist = d
-            best_pt = center
-    if best_pt is not None:
-        return (best_pt[0], best_pt[1], "center")
-
-    perp_ref = reference_point
-    if perp_ref is None and mode == "draw" and draw_points:
-        perp_ref = draw_points[-1]
-    if perp_ref is not None:
         best_dist = snap_dist
         best_pt = None
-        last_wx, last_wy = perp_ref
         for _pi, poly in candidate_polys:
             n = len(poly)
             closed = is_poly_closed(poly)
             seg_count = n if closed else n - 1
             for vi in range(seg_count):
-                eax, eay = poly[vi]
-                ebx, eby = poly[(vi + 1) % n]
-                edx, edy = ebx - eax, eby - eay
-                seg_len_sq = edx * edx + edy * edy
-                if seg_len_sq < 1e-12:
-                    continue
-                t_perp = ((last_wx - eax) * edx + (last_wy - eay) * edy) / seg_len_sq
-                if 0.0 <= t_perp <= 1.0:
-                    foot_x = eax + t_perp * edx
-                    foot_y = eay + t_perp * edy
-                    sx, sy = w2c(foot_x, foot_y)
-                    d = math.hypot(cx - sx, cy - sy)
-                    if d < best_dist:
-                        best_dist = d
-                        best_pt = (foot_x, foot_y)
+                ax, ay = poly[vi]
+                bx, by = poly[(vi + 1) % n]
+                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                sx, sy = w2c(mx, my)
+                d = math.hypot(cx - sx, cy - sy)
+                if d < best_dist:
+                    best_dist = d
+                    best_pt = (mx, my)
         if best_pt is not None:
-            return (best_pt[0], best_pt[1], "perpendicular")
+            return (best_pt[0], best_pt[1], "midpoint")
 
-    best_dist = snap_dist
-    best_pt = None
-    for _pi, poly in candidate_polys:
-        n = len(poly)
-        closed = is_poly_closed(poly)
-        seg_count = n if closed else n - 1
-        for vi in range(seg_count):
-            ax, ay = poly[vi]
-            bx, by = poly[(vi + 1) % n]
-            dx, dy = bx - ax, by - ay
-            seg_len_sq = dx * dx + dy * dy
-            if seg_len_sq < 1e-12:
+        best_dist = snap_dist
+        best_pt = None
+        segments: list[tuple[Point, Point]] = []
+        for _pi, poly in candidate_polys:
+            n = len(poly)
+            closed = is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            for vi in range(seg_count):
+                segments.append((poly[vi], poly[(vi + 1) % n]))
+
+        for i in range(len(segments)):
+            a1, a2 = segments[i]
+            for j in range(i + 1, len(segments)):
+                b1, b2 = segments[j]
+                ipt = segment_intersection_point(a1, a2, b1, b2)
+                if ipt is None:
+                    continue
+                sx, sy = w2c(*ipt)
+                d = math.hypot(cx - sx, cy - sy)
+                if d < best_dist:
+                    best_dist = d
+                    best_pt = ipt
+        if best_pt is not None:
+            return (best_pt[0], best_pt[1], "intersection")
+
+        best_dist = snap_dist
+        best_pt = None
+        for _pi, poly in candidate_polys:
+            if not is_poly_closed(poly):
                 continue
-            wwx, wwy = c2w(cx, cy)
-            t = max(0.0, min(1.0, ((wwx - ax) * dx + (wwy - ay) * dy) / seg_len_sq))
-            px, py_ = ax + t * dx, ay + t * dy
-            scx, scy = w2c(px, py_)
-            d = math.hypot(cx - scx, cy - scy)
+            center = polygon_centroid(poly)
+            sx, sy = w2c(*center)
+            d = math.hypot(cx - sx, cy - sy)
             if d < best_dist:
                 best_dist = d
-                best_pt = (px, py_)
-    if best_pt is not None:
-        return (best_pt[0], best_pt[1], "edge")
+                best_pt = center
+        if best_pt is not None:
+            return (best_pt[0], best_pt[1], "center")
+
+    if allow_edge:
+        perp_ref = reference_point
+        if perp_ref is None and mode == "draw" and draw_points:
+            perp_ref = draw_points[-1]
+        if perp_ref is not None:
+            best_dist = snap_dist
+            best_pt = None
+            last_wx, last_wy = perp_ref
+            for _pi, poly in candidate_polys:
+                n = len(poly)
+                closed = is_poly_closed(poly)
+                seg_count = n if closed else n - 1
+                for vi in range(seg_count):
+                    eax, eay = poly[vi]
+                    ebx, eby = poly[(vi + 1) % n]
+                    edx, edy = ebx - eax, eby - eay
+                    seg_len_sq = edx * edx + edy * edy
+                    if seg_len_sq < 1e-12:
+                        continue
+                    t_perp = (
+                        (last_wx - eax) * edx + (last_wy - eay) * edy
+                    ) / seg_len_sq
+                    if 0.0 <= t_perp <= 1.0:
+                        foot_x = eax + t_perp * edx
+                        foot_y = eay + t_perp * edy
+                        sx, sy = w2c(foot_x, foot_y)
+                        d = math.hypot(cx - sx, cy - sy)
+                        if d < best_dist:
+                            best_dist = d
+                            best_pt = (foot_x, foot_y)
+            if best_pt is not None:
+                return (best_pt[0], best_pt[1], "perpendicular")
+
+        best_dist = snap_dist
+        best_pt = None
+        for _pi, poly in candidate_polys:
+            n = len(poly)
+            closed = is_poly_closed(poly)
+            seg_count = n if closed else n - 1
+            for vi in range(seg_count):
+                ax, ay = poly[vi]
+                bx, by = poly[(vi + 1) % n]
+                dx, dy = bx - ax, by - ay
+                seg_len_sq = dx * dx + dy * dy
+                if seg_len_sq < 1e-12:
+                    continue
+                wwx, wwy = c2w(cx, cy)
+                t = max(0.0, min(1.0, ((wwx - ax) * dx + (wwy - ay) * dy) / seg_len_sq))
+                px, py_ = ax + t * dx, ay + t * dy
+                scx, scy = w2c(px, py_)
+                d = math.hypot(cx - scx, cy - scy)
+                if d < best_dist:
+                    best_dist = d
+                    best_pt = (px, py_)
+        if best_pt is not None:
+            return (best_pt[0], best_pt[1], "edge")
     return None
 
 
@@ -317,6 +325,8 @@ def resolve_snap(
     exclude_vertices: set[tuple[int, int]] | None = None,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
+    allow_vertex: bool = True,
+    allow_edge: bool = True,
 ) -> SnapResult | None:
     candidates: list[tuple[float, SnapResult]] = []
     if allow_polyline:
@@ -335,6 +345,8 @@ def resolve_snap(
             draw_points=draw_points,
             exclude_vertices=exclude_vertices,
             mode=mode,
+            allow_vertex=allow_vertex,
+            allow_edge=allow_edge,
         )
         if poly_snap is not None:
             sx, sy = w2c(poly_snap[0], poly_snap[1])
@@ -382,6 +394,7 @@ def resolve_drag_snap(
     segment_intersection_point: SegmentIntersectionPoint,
     mode: str,
     allow_vertex: bool = True,
+    allow_edge: bool = True,
     exclude_vertices: set[tuple[int, int]] | None = None,
     exclude_segments: set[tuple[int, int]] | None = None,
     reference_point: Point | None = None,
@@ -437,60 +450,64 @@ def resolve_drag_snap(
                     )
                 )
 
-        best_dist = _SNAP_DIST
-        best_midpoint: Point | None = None
-        for _pi, poly in candidate_polys:
-            n = len(poly)
-            closed = is_poly_closed(poly)
-            seg_count = n if closed else n - 1
-            for vi in range(seg_count):
-                if (_pi, vi) in excluded_segments:
-                    continue
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                sx, sy = w2c(mx, my)
-                d = math.hypot(cx - sx, cy - sy)
-                if d < best_dist:
-                    best_dist = d
-                    best_midpoint = (mx, my)
-        if best_midpoint is not None:
-            candidates.append(
-                (
-                    best_dist,
-                    (best_midpoint[0], best_midpoint[1], "midpoint"),
+        if allow_vertex:
+            best_dist = _SNAP_DIST
+            best_midpoint: Point | None = None
+            for _pi, poly in candidate_polys:
+                n = len(poly)
+                closed = is_poly_closed(poly)
+                seg_count = n if closed else n - 1
+                for vi in range(seg_count):
+                    if (_pi, vi) in excluded_segments:
+                        continue
+                    ax, ay = poly[vi]
+                    bx, by = poly[(vi + 1) % n]
+                    mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                    sx, sy = w2c(mx, my)
+                    d = math.hypot(cx - sx, cy - sy)
+                    if d < best_dist:
+                        best_dist = d
+                        best_midpoint = (mx, my)
+            if best_midpoint is not None:
+                candidates.append(
+                    (
+                        best_dist,
+                        (best_midpoint[0], best_midpoint[1], "midpoint"),
+                    )
                 )
-            )
 
-        best_dist = _SNAP_DIST
-        best_edge: Point | None = None
-        for _pi, poly in candidate_polys:
-            n = len(poly)
-            closed = is_poly_closed(poly)
-            seg_count = n if closed else n - 1
-            for vi in range(seg_count):
-                if (_pi, vi) in excluded_segments:
-                    continue
-                ax, ay = poly[vi]
-                bx, by = poly[(vi + 1) % n]
-                dx, dy = bx - ax, by - ay
-                seg_len_sq = dx * dx + dy * dy
-                if seg_len_sq < 1e-12:
-                    continue
-                t = max(0.0, min(1.0, ((cwx - ax) * dx + (cwy - ay) * dy) / seg_len_sq))
-                px, py_ = ax + t * dx, ay + t * dy
-                scx, scy = w2c(px, py_)
-                d = math.hypot(cx - scx, cy - scy)
-                if d < best_dist:
-                    best_dist = d
-                    best_edge = (px, py_)
-        if best_edge is not None:
-            candidates.append(
-                (
-                    best_dist,
-                    (best_edge[0], best_edge[1], "edge"),
+        if allow_edge:
+            best_dist = _SNAP_DIST
+            best_edge: Point | None = None
+            for _pi, poly in candidate_polys:
+                n = len(poly)
+                closed = is_poly_closed(poly)
+                seg_count = n if closed else n - 1
+                for vi in range(seg_count):
+                    if (_pi, vi) in excluded_segments:
+                        continue
+                    ax, ay = poly[vi]
+                    bx, by = poly[(vi + 1) % n]
+                    dx, dy = bx - ax, by - ay
+                    seg_len_sq = dx * dx + dy * dy
+                    if seg_len_sq < 1e-12:
+                        continue
+                    t = max(
+                        0.0, min(1.0, ((cwx - ax) * dx + (cwy - ay) * dy) / seg_len_sq)
+                    )
+                    px, py_ = ax + t * dx, ay + t * dy
+                    scx, scy = w2c(px, py_)
+                    d = math.hypot(cx - scx, cy - scy)
+                    if d < best_dist:
+                        best_dist = d
+                        best_edge = (px, py_)
+            if best_edge is not None:
+                candidates.append(
+                    (
+                        best_dist,
+                        (best_edge[0], best_edge[1], "edge"),
+                    )
                 )
-            )
     if allow_grid and grid_snap_enabled:
         grid_x, grid_y = snap_to_grid(wx, wy, grid_spacing)
         sx, sy = w2c(grid_x, grid_y)

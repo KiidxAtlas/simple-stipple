@@ -31,8 +31,11 @@ from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.paths import user_data_dir
 from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_DRAW_SIDEBAR_WIDTH,
     DEFAULT_KEYBINDINGS,
     DEFAULT_RADIAL_MENU_TOOLS,
+    DEFAULT_SMOOTHING_METHOD,
     load_settings,
     save_settings,
 )
@@ -144,6 +147,20 @@ class App(QMainWindow):
         )
         self._page_runtime.apply_radial_menu_tools(
             self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+        )
+        self._page_runtime.apply_smoothing_method(
+            self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD)
+        )
+        self._page_runtime.apply_draw_sidebar_width(
+            self._settings.get("draw_sidebar_width", DEFAULT_DRAW_SIDEBAR_WIDTH)
+        )
+        self._page_runtime.apply_draw_sidebar_sections(
+            self._settings.get(
+                "draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+            )
+        )
+        self._page_runtime.connect_draw_sidebar_width_changed(
+            self._on_draw_sidebar_width_changed
         )
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
@@ -390,6 +407,13 @@ class App(QMainWindow):
         self._draft_page.load_outline_polys(polys, source_label="Pattern selection")
         self._tabs.setCurrentWidget(self._draft_page)
         self._schedule_workspace_dirty_check()
+
+    def _on_draw_sidebar_width_changed(self, width: int) -> None:
+        """Persist a live sidebar-resize drag and echo the new width to
+        every other tab's sidebar so they stay consistent."""
+        self._settings["draw_sidebar_width"] = width
+        save_settings(self._settings)
+        self._page_runtime.apply_draw_sidebar_width(width)
 
     def _use_shape_selection_as_fill_pattern(
         self,
@@ -1088,9 +1112,17 @@ class App(QMainWindow):
             self._page_runtime.apply_unit_system(
                 self._settings.get("unit_system", DEFAULT_UNIT_SYSTEM)
             )
+            self._page_runtime.apply_smoothing_method(
+                self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD)
+            )
             self._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
             self._page_runtime.apply_radial_menu_tools(
                 self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+            )
+            self._page_runtime.apply_draw_sidebar_sections(
+                self._settings.get(
+                    "draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+                )
             )
             self._repo_page.sync_from_settings()
 

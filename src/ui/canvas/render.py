@@ -24,7 +24,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
 )
-from PySide6.QtWidgets import QLineEdit
+from PySide6.QtWidgets import QLineEdit, QSpinBox
 
 from src.backend.geometry.arc import arc_from_center_start_end, arc_from_three_points
 from src.backend.geometry.primitives import (
@@ -33,6 +33,7 @@ from src.backend.geometry.primitives import (
     build_polygon_poly,
     build_rect_poly,
 )
+from src.backend.geometry.shapes import shape_slot
 from src.backend.geometry.spline import build_bezier_poly, build_spline_poly
 from src.constants import DIM, POLY, Q_BG, SEL
 from src.ui.canvas._constants import BADGE_BG as _BADGE_BG
@@ -869,7 +870,13 @@ class CanvasRenderer(_RendererBase):
         elif self._draw_primitive == "ellipse":
             poly = build_ellipse_poly(cx, cy, w / 2.0, h / 2.0)
         elif self._draw_primitive == "polygon":
-            poly = build_polygon_poly(cx, cy, min(w, h) / 2.0, 6)
+            # Center-first, matching circle: anchor = center, cursor = a
+            # rim point. Uses the live-configurable side count so the
+            # ghost actually reflects what the sides stepper is set to.
+            radius = math.hypot(ex - sx, ey - sy)
+            poly = build_polygon_poly(sx, sy, radius, self._draw_polygon_sides)
+        elif self._draw_primitive == "slot":
+            poly = [(px + cx, py + cy) for px, py in shape_slot(w, h)]
         elif self._draw_primitive == "spline":
             pts = list(self._draw_pts)
             if self._cursor_wx is not None and self._cursor_wy is not None:
@@ -1925,6 +1932,30 @@ class CanvasRenderer(_RendererBase):
         edit.installEventFilter(cast("QWidget", self))
         edit.show()
         return edit
+
+    def _make_hud_spinbox(
+        self,
+        *,
+        minimum: int,
+        maximum: int,
+        value: int,
+        width: int = 86,
+        height: int = 24,
+    ) -> QSpinBox:
+        """Create a styled HUD QSpinBox (native up/down arrows + typing +
+        Up/Down keys) parented to the canvas, matching _make_hud_edit's
+        look. Used for live-adjustable integer parameters like polygon
+        side count, where the built-in valueChanged signal gives a
+        step-and-see-it-update interaction for free."""
+        spin = QSpinBox(cast("QWidget", self))
+        spin.setRange(minimum, maximum)
+        spin.setValue(value)
+        spin.setFixedWidth(max(width, 60))
+        spin.setFixedHeight(height)
+        spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        spin.setStyleSheet(self._DIM_STYLE)
+        spin.show()
+        return spin
 
     def _show_hud_prompt(
         self,

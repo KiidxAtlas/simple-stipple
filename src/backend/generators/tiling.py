@@ -85,35 +85,6 @@ def gen_gradient_honeycomb(
     return result
 
 
-def gen_fish_scale(
-    outline_poly, scale_w: float, scale_h: float, n_pts: int = 24
-) -> list[list[tuple[float, float]]]:
-    """Overlapping half-ellipse arcs forming a scallop / fish-scale pattern."""
-    if scale_w <= 0 or scale_h <= 0:
-        return []
-    minx, miny, maxx, maxy = outline_poly.bounds
-    pad = max(scale_w, scale_h) * 1.5
-    result: list[list[tuple[float, float]]] = []
-    row = 0
-    y = miny - pad
-    while y <= maxy + pad:
-        offset = scale_w / 2.0 if row & 1 else 0.0
-        x = minx - pad + offset
-        while x <= maxx + pad:
-            pts = [
-                (
-                    x + (scale_w / 2.0) * math.cos(math.pi - math.pi * i / n_pts),
-                    y + scale_h * math.sin(math.pi * i / n_pts),
-                )
-                for i in range(n_pts + 1)
-            ]
-            _collect_lines(outline_poly.intersection(LineString(pts)), result)
-            x += scale_w
-        y += scale_h * 0.5
-        row += 1
-    return result
-
-
 def gen_brick(
     outline_poly, brick_w: float, brick_h: float, gap: float
 ) -> list[list[tuple[float, float]]]:
@@ -210,40 +181,25 @@ def gen_basketweave(
     return result
 
 
-def gen_diagonal_lines(
-    outline_poly, spacing: float, angle_deg: float = 45.0
-) -> list[list[tuple[float, float]]]:
-    """Single family of evenly-spaced parallel lines at angle_deg, clipped to outline."""
-    if spacing <= 0:
-        return []
-    a = math.radians(angle_deg)
-    dx, dy = math.cos(a), math.sin(a)
-    nx, ny = -dy, dx
-    minx, miny, maxx, maxy = outline_poly.bounds
-    diag = math.hypot(maxx - minx, maxy - miny) + spacing * 4
-    corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
-    projs = [x * nx + y * ny for x, y in corners]
-    p = min(projs) - spacing
-    p_max = max(projs) + spacing
-    result: list[list[tuple[float, float]]] = []
-    while p <= p_max:
-        ox, oy = p * nx, p * ny
-        ln = LineString(
-            [
-                (ox - dx * diag, oy - dy * diag),
-                (ox + dx * diag, oy + dy * diag),
-            ]
-        )
-        _collect_lines(outline_poly.intersection(ln), result)
-        p += spacing
-    return result
-
-
 def gen_square_grid(outline_poly, spacing: float) -> list[list[tuple[float, float]]]:
     """Orthogonal grid of horizontal and vertical lines clipped to outline."""
-    return gen_diagonal_lines(outline_poly, spacing, 0.0) + gen_diagonal_lines(
-        outline_poly, spacing, 90.0
-    )
+    if spacing <= 0:
+        return []
+    minx, miny, maxx, maxy = outline_poly.bounds
+    diag = math.hypot(maxx - minx, maxy - miny) + spacing * 4
+    result: list[list[tuple[float, float]]] = []
+
+    # Horizontal lines (angle 0)
+    for y in range(int(miny), int(maxy + spacing), max(1, int(spacing))):
+        ln = LineString([(minx - diag, y), (maxx + diag, y)])
+        _collect_lines(outline_poly.intersection(ln), result)
+
+    # Vertical lines (angle 90)
+    for x in range(int(minx), int(maxx + spacing), max(1, int(spacing))):
+        ln = LineString([(x, miny - diag), (x, maxy + diag)])
+        _collect_lines(outline_poly.intersection(ln), result)
+
+    return result
 
 
 def gen_mesh(outline_poly, r: float, spacing: float) -> list[list[tuple[float, float]]]:

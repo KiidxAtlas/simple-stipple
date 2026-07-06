@@ -133,6 +133,18 @@ class PageRuntime:
                 if callable(set_unit):
                     set_unit(unit)
 
+    def apply_smoothing_method(self, method: str) -> None:
+        """Push the chosen path-smoothing algorithm to every page's canvas(es)."""
+        for spec in self._specs:
+            page = self.get(spec.page_id)
+            if page is None:
+                continue
+            for canvas_attr in spec.content_canvas_attrs:
+                canvas = getattr(page, canvas_attr, None)
+                set_method = getattr(canvas, "set_smoothing_method", None)
+                if callable(set_method):
+                    set_method(method)
+
     def apply_radial_menu_tools(self, tools: list[str]) -> None:
         """Push the customized radial ("Q") menu wedge list to every page's
         canvas(es) that support it (only DxfCanvas does)."""
@@ -145,3 +157,43 @@ class PageRuntime:
                 set_tools = getattr(canvas, "set_radial_menu_tools", None)
                 if callable(set_tools):
                     set_tools(tools)
+
+    def apply_draw_sidebar_width(self, width: int) -> None:
+        """Push the draw sidebar's width to every page's canvas(es), so
+        resizing it on one tab keeps every tab's sidebar consistent."""
+        for spec in self._specs:
+            page = self.get(spec.page_id)
+            if page is None:
+                continue
+            for canvas_attr in spec.content_canvas_attrs:
+                canvas = getattr(page, canvas_attr, None)
+                set_width = getattr(canvas, "set_draw_sidebar_width", None)
+                if callable(set_width):
+                    set_width(width)
+
+    def connect_draw_sidebar_width_changed(self, slot: Callable[..., Any]) -> None:
+        """Connect every page's canvas(es) drawSidebarWidthChanged signal to
+        ``slot`` — used to persist a live sidebar-resize drag and echo it to
+        every other tab's sidebar."""
+        for spec in self._specs:
+            page = self.get(spec.page_id)
+            if page is None:
+                continue
+            for canvas_attr in spec.content_canvas_attrs:
+                canvas = getattr(page, canvas_attr, None)
+                signal = getattr(canvas, "drawSidebarWidthChanged", None)
+                if signal is not None:
+                    signal.connect(slot)
+
+    def apply_draw_sidebar_sections(self, sections: list[str]) -> None:
+        """Push the customized draw-sidebar section list to every page's
+        canvas(es)."""
+        for spec in self._specs:
+            page = self.get(spec.page_id)
+            if page is None:
+                continue
+            for canvas_attr in spec.content_canvas_attrs:
+                canvas = getattr(page, canvas_attr, None)
+                set_sections = getattr(canvas, "set_draw_sidebar_sections", None)
+                if callable(set_sections):
+                    set_sections(sections)

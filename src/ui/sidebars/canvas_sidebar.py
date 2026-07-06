@@ -1,55 +1,121 @@
-"""Draw sidebar widgets for the interactive canvas.
+"""Draw sidebar — compact, icon-first, grouped controls.
 
-Redesigned with a clean, modern aesthetic: larger touch targets,
-clear visual hierarchy, grouped sections, and intuitive icons.
+Every multi-state control (tool-family pickers, snap toggles, arc mode,
+constraint mode, split, construction) uses ``CycleIconButton``: left-click
+cycles, right-click opens a small modal for direct selection, hovering
+shows a flyout preview of every state. Single-purpose actions (Text,
+Dimension, Measure, the contextual polyline-editing row) use the same
+widget with one state so the visuals stay consistent.
+
+The panel's width is user-resizable (drag the right edge) and its sections
+can be shown/hidden and reordered — see ``src.ui.shell.settings_dialog``'s
+"Customize draw sidebar…" button and
+``src.settings.DEFAULT_DRAW_SIDEBAR_SECTIONS``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QLabel,
-    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
+from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    MAX_DRAW_SIDEBAR_WIDTH,
+    MIN_DRAW_SIDEBAR_WIDTH,
+)
+from src.ui.core.icons import tool_icon
+from src.ui.sidebars.cycle_icon_button import CycleIconButton, StateEntry
+
+
+def _state(icon_name: str, state_id: str, label: str) -> StateEntry:
+    return (state_id, tool_icon(icon_name), label)
+
+
+def _toggle_states(icon_name: str, label: str) -> list[StateEntry]:
+    """A 2-state (off/on) cycle sharing one icon — CycleIconButton's own
+    checked styling communicates on/off, so both states use the same
+    glyph and differ only in id/label."""
+    icon = tool_icon(icon_name)
+    return [("off", icon, f"{label}: Off"), ("on", icon, f"{label}: On")]
+
+
+class _ResizeHandle(QFrame):
+    """Thin drag handle docked to the sidebar's right edge."""
+
+    def __init__(self, sidebar: "DrawSidebar") -> None:
+        super().__init__(sidebar)
+        self._sidebar = sidebar
+        self._dragging = False
+        self.setFixedWidth(6)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setStyleSheet(
+            "QFrame { background: transparent; }"
+            "QFrame:hover { background: rgba(88, 166, 255, 60); }"
+        )
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not self._dragging:
+            return
+        delta = int(event.globalPosition().x() - self.mapToGlobal(QPoint(0, 0)).x())
+        self._sidebar._apply_width(self._sidebar.width() + delta)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self._sidebar._on_width_committed()
+
 
 class DrawSidebar(QFrame):
-    """Simplified draw sidebar with modal tool picker."""
+    """Compact icon-grid draw sidebar."""
 
     def __init__(
         self,
         *,
         parent: QWidget | None,
-        on_draw_clicked: Callable[[], None],
+        on_polyline_family: Callable[[str], None],
+        on_shapes_family: Callable[[str], None],
+        on_text: Callable[[], None],
+        on_arc_mode: Callable[[str], None],
+        on_snap_master: Callable[[bool], None],
+        on_snap_grid: Callable[[bool], None],
+        on_snap_angle: Callable[[bool], None],
+        on_constraint: Callable[[str], None],
+        on_snap_vertex: Callable[[bool], None],
+        on_snap_edge: Callable[[bool], None],
+        on_split: Callable[[bool], None],
+        on_construction: Callable[[bool], None],
+        on_dimension: Callable[[], None],
+        on_measure: Callable[[], None],
+        on_smoothing_method: Callable[[str], None],
         on_finish_open: Callable[[], None],
         on_close_edit: Callable[[], None],
         on_undo_point: Callable[[], None],
-        on_toggle_snap: Callable[[], None],
-        on_toggle_split: Callable[[], None],
-        on_cycle_arc_mode: Callable[[], None],
-        on_cycle_constraint_mode: Callable[[], None],
         on_cancel_draw: Callable[[], None],
         on_back_to_select: Callable[[], None],
+        width: int | None = None,
+        sections: list[str] | None = None,
+        on_width_changed: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__(parent)
-        self._tool_label: QLabel | None = None
-        self.draw_button: QPushButton | None = None
-        self.finish_open_button: QPushButton | None = None
-        self.close_edit_button: QPushButton | None = None
-        self.undo_point_button: QPushButton | None = None
-        self.snap_button: QPushButton | None = None
-        self.split_button: QPushButton | None = None
-        self.arc_mode_button: QPushButton | None = None
-        self.constraint_mode_button: QPushButton | None = None
+
+        self._on_width_changed = on_width_changed
+        self._sections = list(sections) if sections else list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
 
         self.setObjectName("draw-side-panel")
-        # Redesigned stylesheet: larger buttons, better spacing, modern look.
         self.setStyleSheet(
             """
             QFrame#draw-side-panel {
@@ -59,7 +125,7 @@ class DrawSidebar(QFrame):
             }
             QFrame#draw-side-panel QLabel[role='title'] {
                 color: #f0f6fc;
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 700;
                 letter-spacing: 0.5px;
             }
@@ -69,55 +135,6 @@ class DrawSidebar(QFrame):
                 font-weight: 600;
                 letter-spacing: 1px;
                 text-transform: uppercase;
-            }
-            QFrame#draw-side-panel QLabel[role='hint'] {
-                color: #6e7681;
-                font-size: 9px;
-            }
-            QFrame#draw-side-panel QPushButton {
-                min-height: 40px;
-                max-height: 44px;
-                border-radius: 8px;
-                background: #161b22;
-                border: 1px solid #30363d;
-                color: #c9d1d9;
-                font-size: 12px;
-                padding: 0px 6px;
-                text-align: center;
-            }
-            QFrame#draw-side-panel QPushButton#draw-primary-tool {
-                font-size: 22px;
-            }
-            QFrame#draw-side-panel QPushButton:hover {
-                background: #1c2128;
-                border-color: #58a6ff;
-            }
-            QFrame#draw-side-panel QPushButton:pressed {
-                background: #21262d;
-                border-color: #79c0ff;
-            }
-            QFrame#draw-side-panel QPushButton:disabled {
-                background: #0d1117;
-                border-color: #21262d;
-                color: #484f58;
-            }
-            QFrame#draw-side-panel QPushButton[role='primary'] {
-                background: #1f3a6e;
-                border-color: #2f81f7;
-                color: #79c0ff;
-            }
-            QFrame#draw-side-panel QPushButton[role='primary']:hover {
-                background: #264078;
-                border-color: #58a6ff;
-            }
-            QFrame#draw-side-panel QPushButton[role='danger'] {
-                background: #3d1f2e;
-                border-color: #f85149;
-                color: #f85149;
-            }
-            QFrame#draw-side-panel QPushButton[role='danger']:hover {
-                background: #4a2437;
-                border-color: #f85149;
             }
             QFrame#draw-side-panel QScrollBar:vertical {
                 width: 8px;
@@ -139,11 +156,11 @@ class DrawSidebar(QFrame):
             }
             """
         )
-        self.setFixedWidth(172)  # wide enough that button labels never clip
+        self._apply_width(width if width is not None else MIN_DRAW_SIDEBAR_WIDTH + 12)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 2, 6)
+        outer.setSpacing(4)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -152,254 +169,279 @@ class DrawSidebar(QFrame):
 
         content = QWidget(scroll)
         col = QVBoxLayout(content)
-        col.setContentsMargins(4, 4, 4, 4)
+        col.setContentsMargins(2, 2, 2, 2)
         col.setSpacing(8)
 
-        # ── Header ───────────────────────────────────────────────────
-        title = QLabel("Draw Tools")
+        title = QLabel("Draw")
         title.setProperty("role", "title")
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         col.addWidget(title, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        # ── Tool Selector ────────────────────────────────────────────
-        tool_group = QFrame(self)
-        tool_group.setObjectName("tool-group")
-        tool_layout = QVBoxLayout(tool_group)
-        tool_layout.setContentsMargins(4, 4, 4, 4)
-        tool_layout.setSpacing(4)
+        # ── Build every control unconditionally (state-sync methods called
+        # from view.py must never crash just because a section is hidden),
+        # but only *add* a section's frame to the layout — in the
+        # configured order — if it's actually enabled. ─────────────────────
 
-        tool_label = QLabel("TOOL")
-        tool_label.setProperty("role", "section-title")
-        tool_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        tool_layout.addWidget(tool_label, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self.draw_button = QPushButton("➕", self)
-        self.draw_button.setToolTip(
-            "Select drawing tool\n"
-            "Choose from: Polyline, Line, Arc, Circle,\n"
-            "Ellipse, Rectangle, Polygon"
+        # Polyline/Shapes are direct-select icon grids, not cycle buttons:
+        # a cycle button always advances on click, so clicking the tool
+        # that's *already* shown (the common case — you open Draw wanting
+        # the default/last tool) instead switched to the next one. Each
+        # icon here is its own single-state CycleIconButton (same pattern
+        # already used for Text/Dimension/Measure/the editing row below) —
+        # clicking it always re-selects that exact tool, no cycling, and
+        # set_active_tool() drives which one shows checked/highlighted.
+        self._polyline_buttons: dict[str, CycleIconButton] = {
+            tool_id: CycleIconButton(
+                [_state(icon_name, tool_id, label)],
+                (lambda tid: lambda _sid: on_polyline_family(tid))(tool_id),
+            )
+            for tool_id, icon_name, label in (
+                ("polyline", "polyline", "Polyline"),
+                ("spline", "spline", "Spline"),
+                ("arc", "arc", "Arc"),
+                ("bezier", "bezier", "Bezier Pen"),
+            )
+        }
+        self._arc_mode_button = CycleIconButton(
+            [
+                _state("arc", "3point", "Arc: 3-Point"),
+                _state("arc", "center-start-end", "Arc: Center→Start→End"),
+            ],
+            on_arc_mode,
         )
-        self.draw_button.setObjectName("draw-primary-tool")
-        self.draw_button.clicked.connect(on_draw_clicked)
-        self.draw_button.setFixedSize(132, 44)
-        tool_layout.addWidget(self.draw_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self._tool_label = QLabel("—")
-        self._tool_label.setProperty("role", "hint")
-        self._tool_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._tool_label.setStyleSheet(
-            "QLabel { font-size: 10px; color: #6e7681; margin-top: 2px; }"
+        self._shapes_buttons: dict[str, CycleIconButton] = {
+            tool_id: CycleIconButton(
+                [_state(icon_name, tool_id, label)],
+                (lambda tid: lambda _sid: on_shapes_family(tid))(tool_id),
+            )
+            for tool_id, icon_name, label in (
+                ("rectangle", "rectangle", "Rectangle"),
+                ("slot", "slot", "Slot"),
+                ("circle", "circle", "Circle"),
+                ("ellipse", "ellipse", "Ellipse"),
+                ("polygon", "polygon", "Polygon"),
+            )
+        }
+        self._text_button = CycleIconButton(
+            [_state("text", "text", "Text")], lambda _sid: on_text()
         )
-        tool_layout.addWidget(self._tool_label)
-
-        col.addWidget(tool_group)
-
-        # ── Shape Modes ──────────────────────────────────────────────
-        mode_group = QFrame(self)
-        mode_group.setObjectName("mode-group")
-        mode_layout = QVBoxLayout(mode_group)
-        mode_layout.setContentsMargins(4, 4, 4, 4)
-        mode_layout.setSpacing(6)
-
-        mode_hint = QLabel("SHAPE MODE")
-        mode_hint.setProperty("role", "section-title")
-        mode_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        mode_layout.addWidget(mode_hint, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self.arc_mode_button = QPushButton("3-Point", self)
-        self.arc_mode_button.setToolTip(
-            "Arc mode: Three-point\nClick center, start point, end point"
+        self._snap_master_button = CycleIconButton(
+            _toggle_states("master_snap", "All snapping"), self._bool_cb(on_snap_master)
         )
-        self.arc_mode_button.setFixedSize(132, 34)
-        mode_layout.addWidget(
-            self.arc_mode_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        self._snap_grid_button = CycleIconButton(
+            _toggle_states("grid_snap", "Grid snap"), self._bool_cb(on_snap_grid)
         )
-
-        self.constraint_mode_button = QPushButton("Free", self)
-        self.constraint_mode_button.setToolTip(
-            "Draw constraint lock: Free\nHold Shift for horizontal/vertical constraints"
+        self._snap_angle_button = CycleIconButton(
+            _toggle_states("angle_snap", "Angle snap"), self._bool_cb(on_snap_angle)
         )
-        self.constraint_mode_button.setFixedSize(132, 34)
-        mode_layout.addWidget(
-            self.constraint_mode_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        self._constraint_button = CycleIconButton(
+            [
+                _state("constraint", "Free", "Constraint: Free"),
+                _state("constraint", "H", "Constraint: Horizontal"),
+                _state("constraint", "V", "Constraint: Vertical"),
+                _state("constraint", "45", "Constraint: 45°"),
+            ],
+            on_constraint,
         )
-
-        col.addWidget(mode_group)
-
-        # ── Drawing Actions ──────────────────────────────────────────
-        action_group = QFrame(self)
-        action_group.setObjectName("action-group")
-        action_layout = QVBoxLayout(action_group)
-        action_layout.setContentsMargins(4, 4, 4, 4)
-        action_layout.setSpacing(6)
-
-        actions_hint = QLabel("ACTIONS")
-        actions_hint.setProperty("role", "section-title")
-        actions_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        action_layout.addWidget(actions_hint, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self.finish_open_button = QPushButton("✓  Finish", self)
-        self.finish_open_button.setToolTip(
-            "Finish open polyline\nDouble-click, press Enter, or right-click to finish"
+        self._snap_vertex_button = CycleIconButton(
+            _toggle_states("vertex_snap", "Vertex snap"), self._bool_cb(on_snap_vertex)
         )
-        self.finish_open_button.clicked.connect(on_finish_open)
-        self.finish_open_button.setFixedSize(132, 38)
-        action_layout.addWidget(
-            self.finish_open_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        self._snap_edge_button = CycleIconButton(
+            _toggle_states("edge_snap", "Edge snap"), self._bool_cb(on_snap_edge)
         )
-
-        self.close_edit_button = QPushButton("◯  Close", self)
-        self.close_edit_button.setToolTip(
-            "Close polyline and enter edit mode\nConnects end point to start point"
+        self._split_button = CycleIconButton(
+            _toggle_states("split", "Auto-split"), self._bool_cb(on_split)
         )
-        self.close_edit_button.clicked.connect(on_close_edit)
-        self.close_edit_button.setFixedSize(132, 38)
-        action_layout.addWidget(
-            self.close_edit_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        self._construction_button = CycleIconButton(
+            _toggle_states("construction", "Construction"), self._bool_cb(on_construction)
         )
-
-        self.undo_point_button = QPushButton("↶  Undo Pt", self)
-        self.undo_point_button.setToolTip(
-            "Undo last placed point\nRemoves the most recent vertex"
+        self._dimension_button = CycleIconButton(
+            [_state("dimension", "dimension", "Sketch Dimension (Shift+M)")],
+            lambda _sid: on_dimension(),
         )
-        self.undo_point_button.clicked.connect(on_undo_point)
-        self.undo_point_button.setFixedSize(132, 38)
-        action_layout.addWidget(
-            self.undo_point_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        self._measure_button = CycleIconButton(
+            [_state("measure", "measure", "Measure (M)")], lambda _sid: on_measure()
         )
-
-        col.addWidget(action_group)
-
-        # ── Toggles ──────────────────────────────────────────────────
-        toggle_group = QFrame(self)
-        toggle_group.setObjectName("toggle-group")
-        toggle_layout = QVBoxLayout(toggle_group)
-        toggle_layout.setContentsMargins(4, 4, 4, 4)
-        toggle_layout.setSpacing(6)
-
-        toggle_hint = QLabel("TOGGLES")
-        toggle_hint.setProperty("role", "section-title")
-        toggle_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        toggle_layout.addWidget(toggle_hint, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        self.snap_button = QPushButton("◎  Snap", self)
-        self.snap_button.setToolTip(
-            "Midpoint / Object snap\n"
-            "Snaps to vertices, midpoints,\n"
-            "intersections, and centers"
+        self._smoothing_button = CycleIconButton(
+            [
+                _state("smooth_chaikin", "chaikin", "Smoothing: Chaikin"),
+                _state("smooth_gaussian", "gaussian", "Smoothing: Gaussian"),
+                _state("smooth_catmull", "catmull_rom", "Smoothing: Catmull-Rom"),
+            ],
+            on_smoothing_method,
         )
-        self.snap_button.clicked.connect(on_toggle_snap)
-        self.snap_button.setFixedSize(132, 34)
-        toggle_layout.addWidget(
-            self.snap_button, alignment=Qt.AlignmentFlag.AlignHCenter
+        self._finish_button = CycleIconButton(
+            [_state("finish", "finish", "Finish open polyline")],
+            lambda _sid: on_finish_open(),
+        )
+        self._close_button = CycleIconButton(
+            [_state("close_path", "close", "Close into a shape")],
+            lambda _sid: on_close_edit(),
+        )
+        self._undo_button = CycleIconButton(
+            [_state("undo_point", "undo", "Undo last point")],
+            lambda _sid: on_undo_point(),
+        )
+        self._cancel_button = CycleIconButton(
+            [_state("cancel", "cancel", "Cancel draw")], lambda _sid: on_cancel_draw()
+        )
+        self._select_button = CycleIconButton(
+            [_state("select_arrow", "select", "Back to Select")],
+            lambda _sid: on_back_to_select(),
         )
 
-        self.split_button = QPushButton("✂  Split", self)
-        self.split_button.setToolTip(
-            "Toggle auto-split on draw\n"
-            "When enabled, new shapes split\n"
-            "existing ones at intersection"
-        )
-        self.split_button.clicked.connect(on_toggle_split)
-        self.split_button.setFixedSize(132, 34)
-        toggle_layout.addWidget(
-            self.split_button, alignment=Qt.AlignmentFlag.AlignHCenter
-        )
-
-        col.addWidget(toggle_group)
-
-        # ── Navigation ───────────────────────────────────────────────
-        nav_group = QFrame(self)
-        nav_group.setObjectName("nav-group")
-        nav_layout = QVBoxLayout(nav_group)
-        nav_layout.setContentsMargins(4, 4, 4, 4)
-        nav_layout.setSpacing(6)
-
-        nav_hint = QLabel("NAVIGATION")
-        nav_hint.setProperty("role", "section-title")
-        nav_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        nav_layout.addWidget(nav_hint, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        cancel_button = QPushButton("✕  Cancel", self)
-        cancel_button.setProperty("role", "danger")
-        cancel_button.setToolTip("Cancel current draw\nDiscard all placed points")
-        cancel_button.clicked.connect(on_cancel_draw)
-        cancel_button.setFixedSize(132, 38)
-        nav_layout.addWidget(cancel_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        select_button = QPushButton("⎋  Select", self)
-        select_button.setToolTip(
-            "Back to select mode\nExit drawing and return to selection"
-        )
-        select_button.clicked.connect(on_back_to_select)
-        select_button.setFixedSize(132, 38)
-        nav_layout.addWidget(select_button, alignment=Qt.AlignmentFlag.AlignHCenter)
-
-        col.addWidget(nav_group)
+        section_frames: dict[str, QFrame] = {
+            "path": self._section("Path", [self._polyline_button, self._arc_mode_button]),
+            "shapes": self._section("Shapes", [self._shapes_button]),
+            "text": self._section("Text", [self._text_button]),
+            "snapping": self._section(
+                "Snapping",
+                [
+                    self._snap_master_button,
+                    self._snap_grid_button,
+                    self._snap_angle_button,
+                    self._constraint_button,
+                    self._snap_vertex_button,
+                    self._snap_edge_button,
+                ],
+                columns=2,
+            ),
+            "mode": self._section(
+                "Mode", [self._split_button, self._construction_button], columns=2
+            ),
+            "sketch": self._section(
+                "Sketch", [self._dimension_button, self._measure_button], columns=2
+            ),
+            "smoothing": self._section("Smoothing", [self._smoothing_button]),
+            "editing": self._section(
+                "Editing",
+                [
+                    self._finish_button,
+                    self._close_button,
+                    self._undo_button,
+                    self._cancel_button,
+                    self._select_button,
+                ],
+                columns=2,
+            ),
+        }
+        for key in self._sections:
+            frame = section_frames.get(key)
+            if frame is not None:
+                col.addWidget(frame)
 
         col.addStretch()
         scroll.setWidget(content)
-        layout.addWidget(scroll)
+        outer.addWidget(scroll, stretch=1)
+        outer.addWidget(_ResizeHandle(self))
+
+    # -- resize --------------------------------------------------------------
+
+    def _apply_width(self, width: int) -> None:
+        clamped = max(MIN_DRAW_SIDEBAR_WIDTH, min(MAX_DRAW_SIDEBAR_WIDTH, width))
+        self.setFixedWidth(clamped)
+
+    def _on_width_committed(self) -> None:
+        if self._on_width_changed is not None:
+            self._on_width_changed(self.width())
+
+    # -- helpers -------------------------------------------------------------
+
+    @staticmethod
+    def _bool_cb(fn: Callable[[bool], None]) -> Callable[[str], None]:
+        """Adapt a bool-taking callback to a 2-state ("off"/"on")
+        CycleIconButton's str-id contract."""
+        return lambda sid: fn(sid == "on")
+
+    def _section(
+        self, caption: str, buttons: list[CycleIconButton], *, columns: int = 1
+    ) -> QFrame:
+        frame = QFrame(self)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(4)
+
+        label = QLabel(caption)
+        label.setProperty("role", "section-title")
+        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        # Word-wrap defensively: a caption that renders wider than the
+        # sidebar under the real system font shouldn't be able to force
+        # the whole panel wider — wrapping keeps the layout's width fixed.
+        label.setWordWrap(True)
+        label.setMaximumWidth(90)
+        layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(4)
+        for i, btn in enumerate(buttons):
+            grid.addWidget(btn, i // columns, i % columns)
+        grid_wrap = QWidget(frame)
+        grid_wrap.setLayout(grid)
+        layout.addWidget(grid_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+        return frame
+
+    # -- state sync (called from view.py) ------------------------------------
 
     def set_active_tool(self, tool: str) -> None:
-        """Update the tool label to show the currently active tool."""
-        if self._tool_label is not None:
-            # Capitalize for display
-            display_name = tool.replace("_", " ").title()
-            self._tool_label.setText(display_name)
+        # Exactly one tool-family button (if any) should read as "active" —
+        # explicitly un-check the other, otherwise whichever family was
+        # last used stays highlighted forever after switching families.
+        is_polyline = tool in {"polyline", "spline", "arc", "bezier"}
+        is_shape = tool in {"rectangle", "slot", "circle", "ellipse", "polygon"}
+        if is_polyline:
+            self._polyline_button.set_current_state(tool)
+        self._polyline_button.setChecked(is_polyline)
+        if is_shape:
+            self._shapes_button.set_current_state(tool)
+        self._shapes_button.setChecked(is_shape)
 
     def set_polyline_actions_enabled(
         self, *, can_finish: bool, can_close: bool, can_undo: bool
     ) -> None:
-        if self.finish_open_button is not None:
-            self.finish_open_button.setEnabled(can_finish)
-        if self.close_edit_button is not None:
-            self.close_edit_button.setEnabled(can_close)
-        if self.undo_point_button is not None:
-            self.undo_point_button.setEnabled(can_undo)
+        self._finish_button.setEnabled(can_finish)
+        self._close_button.setEnabled(can_close)
+        self._undo_button.setEnabled(can_undo)
 
-    def set_snap_label(self, enabled: bool) -> None:
-        if self.snap_button is not None:
-            self.snap_button.setProperty("role", "primary" if enabled else None)
-            self.snap_button.style().unpolish(self.snap_button)
-            self.snap_button.style().polish(self.snap_button)
+    @staticmethod
+    def _sync_toggle(button: CycleIconButton, enabled: bool) -> None:
+        """Sync a 2-state ("off"/"on") button's index (not just its visual
+        checked state) so the next left-click cycles from the right
+        baseline instead of desyncing from external state changes."""
+        button.set_current_state("on" if enabled else "off")
 
-    def set_split_label(self, enabled: bool) -> None:
-        if self.split_button is not None:
-            self.split_button.setProperty("role", "primary" if enabled else None)
-            self.split_button.style().unpolish(self.split_button)
-            self.split_button.style().polish(self.split_button)
+    def set_snap_master(self, enabled: bool) -> None:
+        self._sync_toggle(self._snap_master_button, enabled)
+
+    def set_snap_grid(self, enabled: bool) -> None:
+        self._sync_toggle(self._snap_grid_button, enabled)
+
+    def set_snap_angle(self, enabled: bool) -> None:
+        self._sync_toggle(self._snap_angle_button, enabled)
+
+    def set_snap_vertex(self, enabled: bool) -> None:
+        self._sync_toggle(self._snap_vertex_button, enabled)
+
+    def set_snap_edge(self, enabled: bool) -> None:
+        self._sync_toggle(self._snap_edge_button, enabled)
+
+    def set_split_enabled(self, enabled: bool) -> None:
+        self._sync_toggle(self._split_button, enabled)
+
+    def set_construction_enabled(self, enabled: bool) -> None:
+        self._sync_toggle(self._construction_button, enabled)
 
     def set_arc_mode(self, mode: str) -> None:
-        if self.arc_mode_button is None:
-            return
-        if mode == "center-start-end":
-            self.arc_mode_button.setText("CSE")
-            self.arc_mode_button.setToolTip(
-                "Arc mode: Center → Start → End\n"
-                "Click center, then start and end points"
-            )
-        else:
-            self.arc_mode_button.setText("3-Point")
-            self.arc_mode_button.setToolTip(
-                "Arc mode: Three-point\nClick center, start point, end point"
-            )
+        self._arc_mode_button.set_current_state(mode)
 
     def set_arc_mode_enabled(self, enabled: bool) -> None:
-        if self.arc_mode_button is not None:
-            self.arc_mode_button.setEnabled(enabled)
+        self._arc_mode_button.setEnabled(enabled)
 
     def set_constraint_mode(self, mode: str | None) -> None:
-        if self.constraint_mode_button is None:
-            return
-        label = mode or "Free"
-        self.constraint_mode_button.setText(label)
-        self.constraint_mode_button.setToolTip(
-            f"Draw constraint lock: {mode}"
-            if mode
-            else "Draw constraint lock: Free\nHold Shift for horizontal/vertical constraints"
-        )
+        self._constraint_button.set_current_state(mode or "Free")
 
     def set_constraint_mode_enabled(self, enabled: bool) -> None:
-        if self.constraint_mode_button is not None:
-            self.constraint_mode_button.setEnabled(enabled)
+        self._constraint_button.setEnabled(enabled)
+
+    def set_smoothing_method(self, method: str) -> None:
+        self._smoothing_button.set_current_state(method)

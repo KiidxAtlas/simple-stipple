@@ -193,6 +193,17 @@ def _select_draw_primitive(tool: str) -> Callable[[Any], None]:
     return _run
 
 
+def _toggle_pen(v: Any) -> None:
+    """Bezier pen is a draw-mode primitive, not its own mode — toggle it
+    like the other single-key mode commands (press again to return to
+    select) while still going through the same draw-primitive path as
+    every other draw tool."""
+    if v.get_mode() == "draw" and v._draw_primitive == "bezier":
+        v.set_mode("select")
+    else:
+        _select_draw_primitive("bezier")(v)
+
+
 def _add_text_at_cursor(v: Any) -> None:
     wx, wy = v._cursor_wx, v._cursor_wy
     if wx is None or wy is None:
@@ -466,8 +477,8 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         "mode.pen",
-        "Pen Tool",
-        lambda v: v.set_mode("pen" if v.get_mode() != "pen" else "select"),
+        "Bezier Pen Tool",
+        _toggle_pen,
         "P",
         category="Modes",
     ),

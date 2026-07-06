@@ -269,16 +269,6 @@ class PatternProcessingService:
                 params["gap"],
                 params["angle"],
             )
-        elif pattern == "Basketweave":
-            polys = get_generator("gen_basketweave")(
-                outline, params["strip_w"], params["strip_l"], params["gap"]
-            )
-        elif pattern == "Braid":
-            polys = get_generator("gen_braid")(
-                outline, params["strip_width"], params["spacing"]
-            )
-        elif pattern == "Fish Scale":
-            polys = get_generator("gen_fish_scale")(outline, params["sw"], params["sh"])
         elif pattern == "Stipple Dots":
             if params.get("interlaced"):
                 polys = get_generator("gen_stipple_interlaced")(
@@ -501,7 +491,9 @@ class PatternProcessingService:
             cx = float(_centroid.x)
             cy = float(_centroid.y)
         if abs(rot_deg) > 1e-9:
-            from shapely.affinity import rotate as _shp_rot  # type: ignore[import-untyped]
+            from shapely.affinity import (
+                rotate as _shp_rot,  # type: ignore[import-untyped]
+            )
 
             gen_outline = _shp_rot(active_region, -rot_deg, origin=(cx, cy))
         else:
@@ -622,7 +614,9 @@ class PatternProcessingService:
                     # Polygonize any remaining linework and fill resulting polygons.
                     if pending_lines:
                         try:
-                            from shapely.geometry import LineString as _LS  # type: ignore[import-untyped]
+                            from shapely.geometry import (
+                                LineString as _LS,  # type: ignore[import-untyped]
+                            )
                             from shapely.ops import (  # type: ignore[import-untyped]
                                 linemerge,
                                 polygonize,

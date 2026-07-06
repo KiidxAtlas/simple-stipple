@@ -20,7 +20,7 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import QKeyEvent, QMouseEvent, QPainter, QPixmap, QWheelEvent
-from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QSpinBox, QWidget
 from shapely.errors import GEOSException
 from shapely.geometry import (
     GeometryCollection,
@@ -44,8 +44,14 @@ from src.backend.geometry.primitives import (
     build_polygon_poly,
     build_rect_poly,
 )
+from src.backend.geometry.shapes import shape_slot
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
 from src.constants import DRAG_THRESH
+from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_DRAW_SIDEBAR_WIDTH,
+    DEFAULT_SMOOTHING_METHOD,
+)
 from src.ui.canvas import commands as canvas_commands
 from src.ui.canvas import tools as canvas_tools
 from src.ui.canvas._constants import EDGE_HIT as _EDGE_HIT
@@ -59,7 +65,6 @@ from src.ui.canvas.undo import UndoStore
 from src.ui.core.focus_policy import blur_focused_line_edit
 from src.ui.sidebars.canvas_sidebar import DrawSidebar
 from src.ui.units import DEFAULT_UNIT_SYSTEM
-from src.ui.widgets.tool_picker_dialog import ToolPickerDialog
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 
@@ -81,6 +86,13 @@ def _rehydrate_meta(meta: dict) -> dict:
     return out
 
 
+# Shared across every PolylineView instance (one per tab: Draft, Pattern,
+# Trace, Convert, plus any additional windows) so copy in one tab and paste
+# in another actually round-trips — previously "_clipboard" was a plain
+# per-instance list, so cross-tab copy/paste silently pasted nothing.
+_SHARED_CLIPBOARD: list[dict[str, Any]] = []
+
+
 class PolylineView(
     QWidget,
     CanvasRenderer,
@@ -98,6 +110,7 @@ class PolylineView(
 
     selectionChanged = Signal(int)  # type: ignore[assignment]
     modeChanged = Signal(str)
+    drawSidebarWidthChanged = Signal(int)
 
     def _flagged(self, attr: str) -> set[int]:
         """Indices of entities whose boolean ``attr`` is set."""
@@ -410,6 +423,8 @@ class PolylineView(
         self._rulers_visible: bool = False
         # Display-only unit — all internal storage/geometry stays mm.
         self._unit_system: str = DEFAULT_UNIT_SYSTEM
+        # Algorithm smooth_selected() runs: "chaikin" | "gaussian" | "catmull_rom".
+        self._smoothing_method: str = DEFAULT_SMOOTHING_METHOD
 
         # Fit scale for zoom-% display
         self._fit_scale: float = 1.0
@@ -449,7 +464,6 @@ class PolylineView(
             "edit": canvas_tools.EditTool(self),
             "trim": trim_tool,
             "extend": trim_tool,
-            "pen": canvas_tools.PenTool(self),
         }
         self._measure_tool = canvas_tools.MeasureTool(self)
         self._dimension_tool = canvas_tools.DimensionTool(self)
@@ -458,11 +472,14 @@ class PolylineView(
         self._draw_pts: list[tuple[float, float]] = []
         self._draw_point_snap_types: list[str | None] = []
         self._draw_primitive: str = (
-            "polyline"  # polyline|line|arc|rectangle|circle|ellipse|polygon
+            "polyline"  # polyline|line|arc|rectangle|circle|ellipse|polygon|slot
         )
         self._draw_shape_preview_active: bool = False
         self._draw_shape_anchor_w: tuple[float, float] | None = None
         self._draw_shape_cursor_w: tuple[float, float] | None = None
+        # Side count used the next time a polygon is drawn; adjustable via
+        # a HUD prompt when the Shapes picker lands on "polygon".
+        self._draw_polygon_sides: int = 6
         self._draw_arc_pts: list[tuple[float, float]] = []
         self._draw_arc_mode: str = "3point"
         self._draw_constraint_lock: str | None = None
@@ -503,8 +520,9 @@ class PolylineView(
         self._move_snap_exclude_vertices: set[tuple[int, int]] = set()
         self._move_snap_exclude_segments: set[tuple[int, int]] = set()
 
-        # Clipboard
-        self._clipboard: list[dict[str, Any]] = []
+        # Clipboard is process-wide (see _clipboard property below) — do not
+        # reset it here, or opening a new window/tab mid-session would wipe
+        # whatever the user just copied elsewhere.
 
         # Image bounds reference rectangle
         self._img_bounds: tuple[float, float] | None = None
@@ -544,6 +562,15 @@ class PolylineView(
         self._grid_snap: bool = False
         self._grid_spacing: float = 5.0
 
+        # Independent snap-category toggles (all default on, matching prior
+        # unconditional behavior). Master is a hard kill-switch for every
+        # snap source; vertex/edge gate the two SnapEngine candidate
+        # families; angle gates the Shift-held 45-degree snap.
+        self._snap_master_enabled: bool = True
+        self._snap_vertex_enabled: bool = True
+        self._snap_edge_enabled: bool = True
+        self._snap_angle_enabled: bool = True
+
         # Construction / reference lines: list of ("h", y_world) or ("v", x_world)
 
         # Auto-dimension HUD inputs (Fusion 360 style)
@@ -582,6 +609,11 @@ class PolylineView(
         self._gizmo_meta_snapshot: dict[int, dict[str, Any] | None] = {}
         self._gizmo_drag_moved: bool = False
         self._gizmo_undo_pushed: bool = False
+        # Persistent aspect-ratio lock (properties panel toggle) — unlike
+        # the existing Shift-to-constrain gizmo behavior, this stays on
+        # across both gizmo drags and typed width/height edits until
+        # explicitly turned off.
+        self._aspect_ratio_locked: bool = False
 
         # Auto-constraint detection (H/V)
         self._draw_constraint: str | None = None
@@ -599,6 +631,9 @@ class PolylineView(
         self._draw_sidebar_visible: bool = False
         self._draw_shape_w_edit: QLineEdit | None = None
         self._draw_shape_h_edit: QLineEdit | None = None
+        self._draw_shape_sides_spin: QSpinBox | None = None
+        self._draw_sidebar_width: int = DEFAULT_DRAW_SIDEBAR_WIDTH
+        self._draw_sidebar_sections: list[str] = list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
 
         self._needs_fit = True
         self.setMouseTracking(True)
@@ -711,6 +746,31 @@ class PolylineView(
         else:
             self._redraw()
         self._notify()
+
+    def add_polylines_state(
+        self, polys: list[list[tuple[float, float]]], fit: bool = False
+    ) -> None:
+        """Append polylines as new entities alongside whatever is already on
+        the canvas — unlike ``set_polylines_state``, which replaces
+        everything. Used for cross-tab "send selection to Draft", where the
+        existing draft content must be preserved. Newly added entities end
+        up selected."""
+        if not polys:
+            return
+        self._push_undo()
+        new_indices = {
+            self._append_entity(list(p)) for p in polys if len(p) >= 2
+        }
+        self._sel = new_indices
+        self._sync_shape_storage_from_entities()
+
+        if fit:
+            self._needs_fit = True
+            self._fit()
+        else:
+            self._redraw()
+        self._notify()
+        self._fire_poly_change()
 
     def get_view_state(self) -> dict[str, Any]:
         return {
@@ -1175,6 +1235,10 @@ class PolylineView(
             self._draw_shape_anchor_w = None
             self._draw_shape_cursor_w = None
             self._draw_arc_pts.clear()
+            self._pen_pts.clear()
+            self._pen_tangents.clear()
+            self._pen_dragging = False
+            self._pen_press_screen = None
             self._dismiss_dim_inputs()
         elif self._mode == "edit":
             self._edit_poly = None
@@ -1184,11 +1248,6 @@ class PolylineView(
             self._edit_selected_verts = set()
             self._edit_drag_targets = set()
             self._hover_vert = None
-        elif self._mode == "pen":
-            self._pen_pts.clear()
-            self._pen_tangents.clear()
-            self._pen_dragging = False
-            self._pen_press_screen = None
         self._mode = mode
         if mode in ("draw", "edit"):
             self._measure_mode = False
@@ -1221,11 +1280,29 @@ class PolylineView(
 
     def set_grid_snap(self, enabled: bool) -> None:
         self._grid_snap = bool(enabled)
+        self._refresh_draw_sidebar_state()
         self._redraw()
 
     def set_grid_spacing(self, spacing: float) -> None:
         self._grid_spacing = max(0.001, float(spacing))
         self._redraw()
+
+    def set_snap_master(self, enabled: bool) -> None:
+        self._snap_master_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+        self._redraw()
+
+    def set_snap_vertex(self, enabled: bool) -> None:
+        self._snap_vertex_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_edge(self, enabled: bool) -> None:
+        self._snap_edge_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_angle(self, enabled: bool) -> None:
+        self._snap_angle_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
 
     # ── Inlined from removed mixins (methods actually called from view.py) ──
 
@@ -1503,6 +1580,17 @@ class PolylineView(
                     added += 1
         return added
 
+    @property
+    def _clipboard(self) -> list[dict[str, Any]]:
+        """Process-wide clipboard (module-level _SHARED_CLIPBOARD) so
+        copy/paste works across tabs and windows, not just within the one
+        canvas that did the copying."""
+        return _SHARED_CLIPBOARD
+
+    @_clipboard.setter
+    def _clipboard(self, value: list[dict[str, Any]]) -> None:
+        _SHARED_CLIPBOARD[:] = value
+
     def _copy_selected(self) -> None:
         if not self._sel:
             return
@@ -1719,6 +1807,7 @@ class PolylineView(
             "circle",
             "ellipse",
             "polygon",
+            "slot",
         }
 
     def _is_near_start(self) -> bool:
@@ -2287,6 +2376,11 @@ class PolylineView(
         self._refresh_draw_sidebar_state()
         self._redraw()
 
+    def set_aspect_ratio_locked(self, enabled: bool) -> None:
+        """Keep width/height proportional for both the properties panel's
+        typed W/H fields and gizmo-handle drags, until turned off again."""
+        self._aspect_ratio_locked = bool(enabled)
+
     def get_zoom_percent(self) -> int:
         if self._fit_scale < _MIN_SCALE:
             return 100
@@ -2629,6 +2723,10 @@ class PolylineView(
         self._draw_shape_anchor_w = None
         self._draw_shape_cursor_w = None
         self._draw_arc_pts.clear()
+        self._pen_pts.clear()
+        self._pen_tangents.clear()
+        self._pen_dragging = False
+        self._pen_press_screen = None
         self._dismiss_dim_inputs()
 
         self._edit_dragging = False
@@ -2871,10 +2969,17 @@ class PolylineView(
             return
         self._unit_system = unit
         self._redraw()
+
+    def set_smoothing_method(self, method: str) -> None:
+        """Set the algorithm smooth_selected() runs."""
+        if method not in ("chaikin", "gaussian", "catmull_rom"):
+            return
+        self._smoothing_method = method
         # Piggyback on the existing signal so anything bound to the
         # selection (e.g. the properties panel) re-reads with the new unit,
         # even if the selection itself didn't change.
         self.selectionChanged.emit(len(self._sel))
+        self._refresh_draw_sidebar_state()
 
     _MOVE_SNAP_SAMPLE = 64  # max moving vertices considered per drag event
 
@@ -3485,9 +3590,20 @@ class PolylineView(
             sx = 1.0
         elif handle in ("e", "w"):
             sy = 1.0
-        else:
-            if mods & Qt.KeyboardModifier.ShiftModifier:
-                # Shift = keep aspect (uniform, dominant axis wins)
+        elif mods & Qt.KeyboardModifier.ShiftModifier:
+            # Shift = keep aspect (uniform, dominant axis wins)
+            s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy
+            sx = sy = s
+        if self._aspect_ratio_locked:
+            # Persistent lock (properties panel toggle) overrides the
+            # handle-type/Shift logic above — every handle, edge or
+            # corner, scales both axes together from whichever one the
+            # drag actually moved.
+            if handle in ("n", "s"):
+                sx = sy
+            elif handle in ("e", "w"):
+                sy = sx
+            else:
                 s = sx if abs(sx - 1.0) >= abs(sy - 1.0) else sy
                 sx = sy = s
         if abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4:
@@ -3682,8 +3798,27 @@ class PolylineView(
         self._draw_shape_w_edit.setFocus()
         self._draw_shape_w_edit.selectAll()
 
+        if self._draw_primitive == "polygon":
+            sides_spin = self._make_hud_spinbox(
+                minimum=3, maximum=64, value=self._draw_polygon_sides
+            )
+            sides_spin.setProperty("shape_hud_temp", True)
+            sides_spin.move(int(cx + 16), int(cy + 68))
+            sides_spin.valueChanged.connect(self._on_polygon_sides_spin_changed)
+            self._draw_shape_sides_spin = sides_spin
+
+    def _on_polygon_sides_spin_changed(self, value: int) -> None:
+        """Live-update the polygon ghost as the sides stepper changes —
+        unlike the width/height fields, this never commits the shape."""
+        self._draw_polygon_sides = value
+        self._redraw()
+
     def _dismiss_shape_dim_inputs(self) -> None:
-        for edit in (self._draw_shape_w_edit, self._draw_shape_h_edit):
+        for edit in (
+            self._draw_shape_w_edit,
+            self._draw_shape_h_edit,
+            self._draw_shape_sides_spin,
+        ):
             if edit is None:
                 continue
             if bool(edit.property("shape_hud_temp")):
@@ -3697,6 +3832,10 @@ class PolylineView(
             self._draw_shape_h_edit.property("shape_hud_temp")
         ):
             self._draw_shape_h_edit = None
+        if self._draw_shape_sides_spin is not None and bool(
+            self._draw_shape_sides_spin.property("shape_hud_temp")
+        ):
+            self._draw_shape_sides_spin = None
 
     def _apply_and_commit_shape_preview(self) -> None:
         if not (self._mode == "draw" and self._draw_shape_preview_active):
@@ -4833,16 +4972,20 @@ class PolylineView(
             return False
         if len(indices) == 1 and len(self._entities[indices[0]].points) == 2:
             return self._scale_single_line_extent(indices[0], "h", height)
+        cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
         if cur_h <= 1e-9:
             return False
         fy = height / cur_h
+        fx = fy if (self._aspect_ratio_locked and cur_w > 1e-9) else 1.0
+        cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
         self._demote_selected_entities_to_polylines(indices)
         self._push_undo()
         for idx in indices:
             self._entities[idx].points = [
-                (x, cy + (y - cy) * fy) for x, y in self._entities[idx].points
+                (cx + (x - cx) * fx, cy + (y - cy) * fy)
+                for x, y in self._entities[idx].points
             ]
         self._redraw()
         self._notify()
@@ -4857,15 +5000,19 @@ class PolylineView(
         if len(indices) == 1 and len(self._entities[indices[0]].points) == 2:
             return self._scale_single_line_extent(indices[0], "w", width)
         cur_w = bounds[2] - bounds[0]
+        cur_h = bounds[3] - bounds[1]
         if cur_w <= 1e-9:
             return False
         fx = width / cur_w
+        fy = fx if (self._aspect_ratio_locked and cur_h > 1e-9) else 1.0
         cx = (bounds[0] + bounds[2]) / 2.0
+        cy = (bounds[1] + bounds[3]) / 2.0
         self._demote_selected_entities_to_polylines(indices)
         self._push_undo()
         for idx in indices:
             self._entities[idx].points = [
-                (cx + (x - cx) * fx, y) for x, y in self._entities[idx].points
+                (cx + (x - cx) * fx, cy + (y - cy) * fy)
+                for x, y in self._entities[idx].points
             ]
         self._redraw()
         self._notify()
@@ -5571,6 +5718,8 @@ class PolylineView(
         )
         self._draw_shape_w_edit.setEnabled(enabled)
         self._draw_shape_h_edit.setEnabled(enabled)
+        if self._draw_shape_sides_spin is not None:
+            self._draw_shape_sides_spin.setEnabled(enabled)
         if not enabled:
             return
         if self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
@@ -5768,23 +5917,42 @@ class PolylineView(
     # ── Draw sidebar + shape preview (restored from pre-refactor _draw_mixin) ──
 
     def _build_draw_sidebar(self) -> None:
+        was_visible = self._draw_sidebar_visible
+        if self._draw_sidebar is not None:
+            # Rebuild (e.g. the customize-sections dialog changed the
+            # section list) — drop the old panel/animation cleanly first.
+            self._draw_sidebar.hide()
+            self._draw_sidebar.deleteLater()
+            self._draw_sidebar = None
+            self._draw_sidebar_anim = None
+
         panel = DrawSidebar(
             parent=self,
-            on_draw_clicked=self._on_draw_button_clicked,
+            on_polyline_family=self._on_polyline_family_change,
+            on_shapes_family=self._on_shapes_family_change,
+            on_text=lambda: self._set_draw_primitive("text"),
+            on_arc_mode=self._on_arc_mode_change,
+            on_snap_master=self.set_snap_master,
+            on_snap_grid=self.set_grid_snap,
+            on_snap_angle=self.set_snap_angle,
+            on_constraint=self._on_constraint_change,
+            on_snap_vertex=self.set_snap_vertex,
+            on_snap_edge=self.set_snap_edge,
+            on_split=self._on_split_change,
+            on_construction=self.set_construction_mode,
+            on_dimension=self.toggle_dimension_mode,
+            on_measure=self.toggle_measure,
+            on_smoothing_method=self.set_smoothing_method,
             on_finish_open=lambda: self._finish_draw(close=False),
             on_close_edit=lambda: self._finish_draw(close=True),
             on_undo_point=self._key_backspace,
-            on_toggle_snap=self._toggle_sidebar_snap,
-            on_toggle_split=self._toggle_sidebar_split,
-            on_cycle_arc_mode=self._cycle_arc_mode,
-            on_cycle_constraint_mode=self._cycle_constraint_mode,
             on_cancel_draw=self._cancel_draw_points,
             on_back_to_select=lambda: self.set_mode("select"),
+            width=self._draw_sidebar_width,
+            sections=self._draw_sidebar_sections,
+            on_width_changed=self._on_draw_sidebar_width_changed,
         )
         panel.hide()
-
-        # Create tool picker dialog
-        self._tool_picker_dialog = ToolPickerDialog(parent=self)
 
         anim = QPropertyAnimation(panel, b"pos", self)
         anim.setDuration(150)
@@ -5794,6 +5962,25 @@ class PolylineView(
         self._draw_sidebar = panel
         self._draw_sidebar_anim = anim
         self._refresh_draw_sidebar_state()
+        if was_visible:
+            self._set_draw_sidebar_visible(True, animate=False)
+
+    def _on_draw_sidebar_width_changed(self, width: int) -> None:
+        self._draw_sidebar_width = width
+        self._layout_draw_sidebar()
+        self.drawSidebarWidthChanged.emit(width)
+
+    def set_draw_sidebar_width(self, width: int) -> None:
+        """Apply a width from settings (app startup / another window
+        resized it) without re-emitting drawSidebarWidthChanged."""
+        self._draw_sidebar_width = width
+        if self._draw_sidebar is not None:
+            self._draw_sidebar._apply_width(width)
+            self._layout_draw_sidebar()
+
+    def set_draw_sidebar_sections(self, sections: list[str]) -> None:
+        self._draw_sidebar_sections = list(sections)
+        self._build_draw_sidebar()
 
     def _layout_draw_sidebar(self) -> None:
         if self._draw_sidebar is None:
@@ -5856,8 +6043,14 @@ class PolylineView(
             can_close=has_pts >= 3,
             can_undo=has_pts >= 1,
         )
-        self._draw_sidebar.set_snap_label(self._grid_snap)
-        self._draw_sidebar.set_split_label(self._draw_split_enabled)
+        self._draw_sidebar.set_snap_master(self._snap_master_enabled)
+        self._draw_sidebar.set_snap_grid(self._grid_snap)
+        self._draw_sidebar.set_snap_angle(self._snap_angle_enabled)
+        self._draw_sidebar.set_snap_vertex(self._snap_vertex_enabled)
+        self._draw_sidebar.set_snap_edge(self._snap_edge_enabled)
+        self._draw_sidebar.set_split_enabled(self._draw_split_enabled)
+        self._draw_sidebar.set_construction_enabled(self._draw_construction_mode)
+        self._draw_sidebar.set_smoothing_method(self._smoothing_method)
         self._draw_sidebar.set_active_tool(self._draw_primitive)
         self._draw_sidebar.set_arc_mode(self._draw_arc_mode)
         self._draw_sidebar.set_arc_mode_enabled(self._draw_primitive == "arc")
@@ -5901,8 +6094,23 @@ class PolylineView(
             poly = build_ellipse_poly(cx, cy, w / 2.0, h / 2.0)
             kind = "ellipse"
             meta = {"center": (cx, cy), "rx": w / 2.0, "ry": h / 2.0, "rotation": 0.0}
+        elif self._draw_primitive == "slot":
+            poly = [(px + cx, py + cy) for px, py in shape_slot(w, h)]
+            kind = "slot"
+            meta = {"center": (cx, cy), "length": w, "width": h, "rotation": 0.0}
         elif self._draw_primitive == "polygon":
-            poly = build_polygon_poly(cx, cy, min(w, h) / 2.0, 6)
+            # Center-first, matching circle: first click is center, drag
+            # sets the radius directly (was previously bounding-box corner
+            # to corner, unlike every other radius-based shape).
+            radius = math.hypot(ex - sx, ey - sy)
+            poly = build_polygon_poly(sx, sy, radius, self._draw_polygon_sides)
+            kind = "polygon"
+            meta = {
+                "center": (sx, sy),
+                "radius": radius,
+                "sides": self._draw_polygon_sides,
+                "rotation": 0.0,
+            }
 
         self._draw_shape_preview_active = False
         self._draw_shape_anchor_w = None
@@ -5925,54 +6133,26 @@ class PolylineView(
         if not self._draw_sidebar_visible:
             self._draw_sidebar.hide()
 
-    def _on_draw_button_clicked(self) -> None:
-        """Show the tool picker modal and handle tool selection."""
-        if (
-            hasattr(self, "_tool_picker_dialog")
-            and self._tool_picker_dialog is not None
-        ) and self._tool_picker_dialog.exec() == 1:  # QDialog.Accepted
-            tool = self._tool_picker_dialog.get_selected_tool()
-            if tool == "bezier":
-                # The pen tool is its own mode (draggable tangent handles),
-                # not a "draw" sub-primitive like the other picker entries.
-                self.set_mode("pen")
-            elif tool is not None:
-                self._set_draw_primitive(tool)
+    def _on_polyline_family_change(self, tool: str) -> None:
+        self._set_draw_primitive(tool)
 
-    def _toggle_sidebar_snap(self) -> None:
-        self._grid_snap = not self._grid_snap
-        self._refresh_draw_sidebar_state()
-        self._redraw()
+    def _on_shapes_family_change(self, tool: str) -> None:
+        self._set_draw_primitive(tool)
 
-    def _toggle_sidebar_split(self) -> None:
-        self._draw_split_enabled = not self._draw_split_enabled
-        self._refresh_draw_sidebar_state()
-        self._show_flash("Split: on" if self._draw_split_enabled else "Split: off", 800)
-
-    def _cycle_arc_mode(self) -> None:
+    def _on_arc_mode_change(self, mode: str) -> None:
         if self._draw_primitive != "arc":
             self._set_draw_primitive("arc")
-            return
-        self._draw_arc_mode = (
-            "center-start-end" if self._draw_arc_mode == "3point" else "3point"
-        )
+        self._draw_arc_mode = mode
         self._draw_arc_pts.clear()
         self._refresh_draw_sidebar_state()
         self._show_flash(
-            "Arc: center-start-end"
-            if self._draw_arc_mode == "center-start-end"
-            else "Arc: three-point",
+            "Arc: center-start-end" if mode == "center-start-end" else "Arc: three-point",
             900,
         )
         self._redraw()
 
-    def _cycle_constraint_mode(self) -> None:
-        modes = [None, "H", "V", "45"]
-        try:
-            idx = modes.index(self._draw_constraint_lock)
-        except ValueError:
-            idx = 0
-        self._draw_constraint_lock = modes[(idx + 1) % len(modes)]
+    def _on_constraint_change(self, mode: str) -> None:
+        self._draw_constraint_lock = None if mode == "Free" else mode
         self._refresh_draw_sidebar_state()
         self._show_flash(
             f"Constraint: {self._draw_constraint_lock}"
@@ -5981,6 +6161,11 @@ class PolylineView(
             900,
         )
         self._redraw()
+
+    def _on_split_change(self, enabled: bool) -> None:
+        self._draw_split_enabled = enabled
+        self._refresh_draw_sidebar_state()
+        self._show_flash("Split: on" if enabled else "Split: off", 800)
 
     def _cancel_draw_points(self) -> None:
         if self._mode != "draw":
@@ -6011,13 +6196,19 @@ class PolylineView(
             "circle",
             "ellipse",
             "polygon",
+            "slot",
             "text",
+            "bezier",
         }
         if tool not in valid:
             return
         self._draw_primitive = tool
         self._draw_pts.clear()
         self._draw_arc_pts.clear()
+        self._pen_pts.clear()
+        self._pen_tangents.clear()
+        self._pen_dragging = False
+        self._pen_press_screen = None
         self._draw_shape_preview_active = False
         self._draw_shape_anchor_w = None
         self._draw_shape_cursor_w = None
@@ -6348,17 +6539,31 @@ class PolylineView(
         return normalized
 
     def smooth_selected(self, iterations: int = 2) -> int:
-        """Smooth jagged selected polylines using Chaikin's corner-cutting
-        algorithm — repeatedly cuts corners, rounding sharp vertices into a
-        smooth curve while preserving the overall shape. Closed shapes stay
-        closed; open polylines keep their endpoints fixed. Returns the
-        number of shapes smoothed.
+        """Smooth jagged selected polylines using the configured algorithm
+        (Settings > Application Behavior > Smoothing method):
+
+        - "chaikin" (default): repeated corner-cutting — pulls corners
+          inward on each pass, so the curve approaches but never quite
+          touches the original vertices. Vertices that turn sharper than
+          ~110 degrees are treated as intentional cusps and left alone.
+        - "gaussian": weighted-average of each vertex with its neighbors,
+          repeated per iteration. Keeps the original vertex count instead
+          of doubling it every pass.
+        - "catmull_rom": resamples a centripetal spline that interpolates
+          exactly through every original vertex; ``iterations`` controls
+          resample density instead of pass count. The oversampled curve is
+          decimated afterward so dense/near-collinear input doesn't turn
+          into far more points than the shape actually needs.
+
+        Closed shapes stay closed; open polylines keep their endpoints
+        fixed. Returns the number of shapes smoothed.
         """
         indices = self._mutable_selected_indices()
         to_smooth = [i for i in indices if len(self._entities[i].points) >= 3]
         if not to_smooth:
             return 0
         self._push_undo()
+        method = self._smoothing_method
         count = 0
         for idx in to_smooth:
             poly = self._entities[idx].points
@@ -6366,8 +6571,15 @@ class PolylineView(
             pts = poly[:-1] if closed else list(poly)
             if len(pts) < 3:
                 continue
-            for _ in range(max(1, iterations)):
-                pts = self._chaikin_pass(pts, closed=closed)
+            if method == "gaussian":
+                for _ in range(max(1, iterations)):
+                    pts = self._gaussian_pass(pts, closed=closed)
+            elif method == "catmull_rom":
+                samples = max(2, int(iterations) * 4)
+                pts = self._catmull_rom_smooth(pts, closed=closed, samples_per_segment=samples)
+            else:
+                for _ in range(max(1, iterations)):
+                    pts = self._chaikin_pass(pts, closed=closed)
             if closed:
                 pts.append(pts[0])
             self._entities[idx].points = pts
@@ -6385,27 +6597,189 @@ class PolylineView(
 
     @staticmethod
     def _chaikin_pass(
-        pts: list[tuple[float, float]], *, closed: bool
+        pts: list[tuple[float, float]], *, closed: bool, corner_angle: float = 110.0
     ) -> list[tuple[float, float]]:
         """One Chaikin corner-cutting pass: replaces each corner with two
-        points 1/4 and 3/4 along its adjoining segments."""
+        points 1/4 and 3/4 along its adjoining segments — except vertices
+        that turn sharper than ``corner_angle`` degrees, which read as
+        intentional cusps/points (e.g. lettering serifs) rather than jagged
+        noise, so they pass through unmodified instead of being rounded
+        off. Open-curve endpoints are always preserved."""
         n = len(pts)
+
+        def is_sharp(i: int) -> bool:
+            if closed:
+                prev, curr, nxt = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+            elif i == 0 or i == n - 1:
+                return True
+            else:
+                prev, curr, nxt = pts[i - 1], pts[i], pts[i + 1]
+            v1x, v1y = curr[0] - prev[0], curr[1] - prev[1]
+            v2x, v2y = nxt[0] - curr[0], nxt[1] - curr[1]
+            len1, len2 = math.hypot(v1x, v1y), math.hypot(v2x, v2y)
+            if len1 < 1e-9 or len2 < 1e-9:
+                return False
+            cos_turn = max(-1.0, min(1.0, (v1x * v2x + v1y * v2y) / (len1 * len2)))
+            return math.degrees(math.acos(cos_turn)) > corner_angle
+
+        seg_count = n if closed else n - 1
         out: list[tuple[float, float]] = []
-        if closed:
-            for i in range(n):
-                p0 = pts[i]
-                p1 = pts[(i + 1) % n]
-                out.append((p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25))
-                out.append((p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75))
-        else:
-            out.append(pts[0])
-            for i in range(n - 1):
-                p0 = pts[i]
-                p1 = pts[i + 1]
-                out.append((p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25))
-                out.append((p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75))
-            out.append(pts[-1])
+        for i in range(seg_count):
+            i1 = (i + 1) % n
+            p0, p1 = pts[i], pts[i1]
+            near = (
+                p0
+                if is_sharp(i)
+                else (p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25)
+            )
+            far = (
+                p1
+                if is_sharp(i1)
+                else (p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75)
+            )
+            out.append(near)
+            out.append(far)
+
+        # Preserved corners can make adjoining edges emit the same vertex
+        # twice in a row (once as a "far" point, once as the next edge's
+        # "near" point) — collapse those exact duplicates.
+        deduped: list[tuple[float, float]] = []
+        for p in out:
+            if (
+                not deduped
+                or math.hypot(p[0] - deduped[-1][0], p[1] - deduped[-1][1]) > 1e-9
+            ):
+                deduped.append(p)
+        return deduped
+
+    # 5-tap Gaussian kernel (sigma ~= 0.85), offsets -2..2.
+    _GAUSSIAN_KERNEL: ClassVar[tuple[float, ...]] = (
+        0.06136,
+        0.24477,
+        0.38774,
+        0.24477,
+        0.06136,
+    )
+
+    @classmethod
+    def _gaussian_pass(
+        cls, pts: list[tuple[float, float]], *, closed: bool
+    ) -> list[tuple[float, float]]:
+        """One Gaussian-smoothing pass: replaces each vertex with a weighted
+        average of itself and its neighbors. Unlike Chaikin, vertex count
+        stays fixed; open-curve endpoints are left untouched."""
+        n = len(pts)
+        kernel = cls._GAUSSIAN_KERNEL
+        radius = len(kernel) // 2
+        out: list[tuple[float, float]] = []
+        for i in range(n):
+            if not closed and (i == 0 or i == n - 1):
+                out.append(pts[i])
+                continue
+            sx = sy = wsum = 0.0
+            for k, w in enumerate(kernel):
+                j = i + (k - radius)
+                if closed:
+                    j %= n
+                elif j < 0 or j >= n:
+                    continue
+                sx += pts[j][0] * w
+                sy += pts[j][1] * w
+                wsum += w
+            out.append((sx / wsum, sy / wsum))
         return out
+
+    @staticmethod
+    def _centripetal_point(
+        p0: tuple[float, float],
+        p1: tuple[float, float],
+        p2: tuple[float, float],
+        p3: tuple[float, float],
+        u: float,
+    ) -> tuple[float, float]:
+        """One point on a centripetal (alpha=0.5) Catmull-Rom segment
+        between control points p1 and p2, at local parameter u in [0, 1]
+        (Barry-Goldman formulation). Centripetal parameterization — knot
+        spacing by sqrt(chord length) rather than a flat step — is what
+        keeps the curve from looping/overshooting near sharp turns when
+        input points are unevenly spaced, which hand-traced polylines
+        almost always are."""
+
+        def knot(t_prev: float, a: tuple[float, float], b: tuple[float, float]) -> float:
+            d = math.hypot(b[0] - a[0], b[1] - a[1])
+            return t_prev + max(d, 1e-6) ** 0.5
+
+        t0 = 0.0
+        t1 = knot(t0, p0, p1)
+        t2 = knot(t1, p1, p2)
+        t3 = knot(t2, p2, p3)
+        t = t1 + u * (t2 - t1)
+
+        def lerp(
+            a: tuple[float, float],
+            b: tuple[float, float],
+            ta: float,
+            tb: float,
+            at_t: float,
+        ) -> tuple[float, float]:
+            span = tb - ta
+            f = 0.0 if span <= 1e-9 else (at_t - ta) / span
+            return (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)
+
+        a1 = lerp(p0, p1, t0, t1, t)
+        a2 = lerp(p1, p2, t1, t2, t)
+        a3 = lerp(p2, p3, t2, t3, t)
+        b1 = lerp(a1, a2, t0, t2, t)
+        b2 = lerp(a2, a3, t1, t3, t)
+        return lerp(b1, b2, t1, t2, t)
+
+    @staticmethod
+    def _catmull_rom_smooth(
+        pts: list[tuple[float, float]],
+        *,
+        closed: bool,
+        samples_per_segment: int = 8,
+    ) -> list[tuple[float, float]]:
+        """Resample a centripetal Catmull-Rom spline through ``pts``: unlike
+        the Chaikin and Gaussian passes, the result interpolates exactly
+        through every original vertex instead of pulling corners inward.
+        Returns an (unclosed) point list; the caller re-appends the closure
+        point for closed shapes, matching ``_chaikin_pass``'s convention.
+
+        The raw oversampled curve is then decimated with a small
+        Douglas-Peucker pass — dense, near-collinear input (typical of
+        hand traces) otherwise produces far more points than the curve
+        actually needs, since every original segment gets the same fixed
+        sample count regardless of how short or straight it already is.
+        """
+        n = len(pts)
+        if n < 3:
+            return list(pts)
+
+        def at(i: int) -> tuple[float, float]:
+            if closed:
+                return pts[i % n]
+            return pts[max(0, min(n - 1, i))]
+
+        out: list[tuple[float, float]] = []
+        seg_count = n if closed else n - 1
+        total_len = 0.0
+        for i in range(seg_count):
+            p0, p1, p2, p3 = at(i - 1), at(i), at(i + 1), at(i + 2)
+            total_len += math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+            for s in range(samples_per_segment):
+                u = s / samples_per_segment
+                out.append(PolylineView._centripetal_point(p0, p1, p2, p3, u))
+        if not closed:
+            out.append(pts[-1])
+
+        avg_spacing = total_len / max(1, seg_count)
+        tolerance = max(avg_spacing * 0.05, 1e-4)
+        try:
+            simplified = LineString(out).simplify(tolerance, preserve_topology=False)
+            return [(float(x), float(y)) for x, y in simplified.coords]
+        except (GEOSException, ValueError):
+            return out
 
     def simplify_selected(self, tolerance: float = 0.2) -> int:
         """Reduce vertex count on selected polylines via Douglas-Peucker

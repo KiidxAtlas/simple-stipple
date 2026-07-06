@@ -67,7 +67,8 @@ def test_too_few_anchors_returns_input_unchanged():
 
 def test_plain_clicks_place_corner_anchors_with_zero_tangent(qapp):
     v = make_view(qapp, [])
-    v.set_mode("pen")
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
     click(v, *v._w2c(0.0, 0.0))
     click(v, *v._w2c(10.0, 0.0))
     click(v, *v._w2c(10.0, 10.0))
@@ -77,7 +78,8 @@ def test_plain_clicks_place_corner_anchors_with_zero_tangent(qapp):
 
 def test_click_drag_places_a_smooth_anchor_with_a_handle(qapp):
     v = make_view(qapp, [])
-    v.set_mode("pen")
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
     drag_world(v, 0.0, 0.0, 5.0, 5.0)  # drag well past the click threshold
     assert len(v._pen_pts) == 1
     tx, ty = v._pen_tangents[0]
@@ -86,7 +88,8 @@ def test_click_drag_places_a_smooth_anchor_with_a_handle(qapp):
 
 def test_enter_finalizes_curve_as_bezier_entity(qapp):
     v = make_view(qapp, [])
-    v.set_mode("pen")
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
     click(v, *v._w2c(0.0, 0.0))
     click(v, *v._w2c(10.0, 0.0))
     click(v, *v._w2c(20.0, 10.0))
@@ -104,7 +107,8 @@ def test_enter_finalizes_curve_as_bezier_entity(qapp):
 
 def test_escape_cancels_without_creating_an_entity(qapp):
     v = make_view(qapp, [])
-    v.set_mode("pen")
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
     click(v, *v._w2c(0.0, 0.0))
     click(v, *v._w2c(10.0, 0.0))
 
@@ -117,7 +121,8 @@ def test_bezier_entity_renders_via_build_bezier_poly(qapp):
     """A bezier entity's stored points are the sparse anchors; render.py
     must re-tessellate through meta['tangents'], not draw them as-is."""
     v = make_view(qapp, [])
-    v.set_mode("pen")
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
     drag_world(v, 0.0, 0.0, 0.0, 5.0)
     click(v, *v._w2c(20.0, 0.0))
 
@@ -136,7 +141,8 @@ def test_bezier_entity_renders_via_build_bezier_poly(qapp):
 
 def test_rotate_selected_bezier_also_rotates_its_tangents(qapp):
     v = make_view(qapp, [])
-    v.set_mode("pen")
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
     drag_world(v, 0.0, 0.0, 5.0, 0.0)  # handle pointing along +X
     click(v, *v._w2c(10.0, 0.0))
 
@@ -157,17 +163,29 @@ def test_rotate_selected_bezier_also_rotates_its_tangents(qapp):
     assert after == pytest.approx((0.0, 5.0), abs=0.5)
 
 
-def test_tool_picker_bezier_entry_switches_to_pen_mode(qapp):
-    """Picking "Bezier Pen" from the draw-mode tool picker must switch the
-    canvas into pen mode, not set it as a draw-mode sub-primitive."""
-    from src.ui.widgets.tool_picker_dialog import TOOL_SPECS
-
-    assert ("Bezier Pen", "bezier") in TOOL_SPECS
-
+def test_polyline_family_bezier_entry_stays_in_draw_mode(qapp):
+    """Picking "Bezier Pen" from the Polyline-family sidebar cycle is just
+    another draw-mode primitive, like polyline/spline/arc — it must not
+    switch to a separate mode or hide the draw sidebar."""
     v = make_view(qapp, [])
     v.set_mode("draw")
-    v._tool_picker_dialog._selected_tool = "bezier"
-    tool = v._tool_picker_dialog.get_selected_tool()
-    if tool == "bezier":
-        v.set_mode("pen")
-    assert v.get_mode() == "pen"
+    v._on_polyline_family_change("bezier")
+    assert v.get_mode() == "draw"
+    assert v._draw_primitive == "bezier"
+    assert v._draw_sidebar_visible is True
+
+
+def test_escape_in_bezier_exits_to_select_like_other_primitives(qapp):
+    """Escape while sketching a bezier curve discards it and exits to
+    select mode, matching Escape's behavior for every other draw
+    primitive (polyline, arc, ...) rather than a bezier-specific carve-out."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("bezier")
+    click(v, *v._w2c(0.0, 0.0))
+    click(v, *v._w2c(10.0, 0.0))
+
+    key(v, Qt.Key.Key_Escape)
+    assert v._pen_pts == []
+    assert v.poly_count == 0
+    assert v.get_mode() == "select"

@@ -123,6 +123,19 @@ def test_load_round_trip(qapp):
     assert state[0][0] == (0.0, 0.0)
 
 
+def test_add_polylines_state_preserves_existing_entities(qapp):
+    """add_polylines_state (used by cross-tab "send selection to Draft")
+    must append, not replace — unlike set_polylines_state, which is a
+    fresh load and legitimately wipes everything."""
+    v = make_view(qapp, THREE_SQUARES)
+    assert v.poly_count == 3
+    v.add_polylines_state([square(100, 100)], fit=True)
+    assert v.poly_count == 4
+    assert v.get_selection_indices() == [3]
+    # the original three squares are untouched
+    assert [tuple(p) for p in v._entities[0].points] == THREE_SQUARES[0]
+
+
 def test_entity_records_round_trip(qapp):
     v = make_view(qapp, THREE_SQUARES)
     ents = v._entities
@@ -274,6 +287,20 @@ def test_copy_paste_and_duplicate(qapp):
     assert v.poly_count == 5
     assert v.undo() and v.undo()
     assert v.poly_count == 3
+
+
+def test_clipboard_is_shared_across_canvas_instances(qapp):
+    """Copy/paste must work across tabs — each tab has its own PolylineView
+    instance, so the clipboard can't be plain per-instance state or a copy
+    in one tab silently pastes nothing in another."""
+    draft = make_view(qapp, THREE_SQUARES)
+    draft.set_selection([0])
+    draft._copy_selected()
+
+    pattern = make_view(qapp, [])  # a different tab's canvas
+    assert pattern.poly_count == 0
+    pattern._paste_clipboard()
+    assert pattern.poly_count == 1
 
 
 def test_cut_removes_and_paste_restores_geometry(qapp):
@@ -654,15 +681,16 @@ def test_radial_menu_hover_resets_on_close(qapp):
         (3, "draw", "polygon"),
         (4, "draw", "line"),
         (5, "draw", "arc"),
-        (6, "pen", None),
+        (6, "draw", "bezier"),
     ],
 )
 def test_radial_menu_wedges_are_the_draw_primitive_tools(
     qapp, idx, expected_mode, expected_primitive
 ):
     """The wheel is a shape-tool picker now, not a duplicate of D/E/M/F —
-    each wedge switches to draw mode with the matching primitive (or the
-    bezier Pen mode), not the old mode-toggle/quick-shape/size actions."""
+    each wedge switches to draw mode with the matching primitive (bezier
+    pen included — it's a draw primitive, not its own mode), not the old
+    mode-toggle/quick-shape/size actions."""
     c = make_canvas(qapp, THREE_SQUARES)
     c._execute_radial_action(idx)
     assert c.get_mode() == expected_mode
@@ -672,9 +700,9 @@ def test_radial_menu_wedges_are_the_draw_primitive_tools(
 
 def test_radial_menu_opens_and_dismisses_from_any_mode(qapp):
     """Previously the menu only opened in select mode (its press/move/paint
-    lived on DxfSelectTool); it must now work from draw/edit/pen too, since
+    lived on DxfSelectTool); it must now work from draw/edit too, since
     it lives at the DxfCanvas level ahead of tool dispatch."""
-    for mode in ("draw", "edit", "pen", "select"):
+    for mode in ("draw", "edit", "select"):
         c = make_canvas(qapp, THREE_SQUARES)
         c.set_mode(mode)
         key(c, Qt.Key.Key_Q)
@@ -690,7 +718,7 @@ def test_radial_menu_tools_are_customizable(qapp):
     c._execute_radial_action(0)
     assert c.get_mode() == "draw" and c._draw_primitive == "circle"
     c._execute_radial_action(2)
-    assert c.get_mode() == "pen"
+    assert c.get_mode() == "draw" and c._draw_primitive == "bezier"
 
 
 def test_radial_menu_tools_include_the_full_command_registry(qapp):
@@ -1094,3 +1122,69 @@ def test_move_drag_snaps_to_guides_by_geometry(qapp):
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     # one of the square's edges landed exactly on the guide
     assert any(abs(edge - 50.0) < 1e-6 for edge in (x0, x1))
+
+
+def test_smooth_selected_default_is_chaikin(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    before_count = len(v._entities[0].points)
+    assert v.smooth_selected(iterations=1) == 1
+    # Chaikin roughly doubles vertex count per pass on a closed shape.
+    assert len(v._entities[0].points) > before_count * 1.5
+
+
+def test_smooth_selected_gaussian_preserves_vertex_count(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    v.set_smoothing_method("gaussian")
+    before_count = len(v._entities[0].points)
+    assert v.smooth_selected(iterations=2) == 1
+    assert len(v._entities[0].points) == before_count
+
+
+def test_smooth_selected_catmull_rom_interpolates_original_vertices(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    v.set_smoothing_method("catmull_rom")
+    original = [tuple(p) for p in v._entities[0].points[:-1]]  # drop closure dup
+    assert v.smooth_selected(iterations=2) == 1
+    result = [tuple(p) for p in v._entities[0].points]
+    for ox, oy in original:
+        assert any(
+            math.hypot(rx - ox, ry - oy) < 1e-6 for rx, ry in result
+        ), f"original vertex {(ox, oy)} not found in smoothed result"
+
+
+def test_set_smoothing_method_rejects_unknown_value(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_smoothing_method("bogus")
+    assert v._smoothing_method == "chaikin"
+
+
+def test_smooth_selected_chaikin_preserves_sharp_spike(qapp):
+    """A deliberate spike (like a lettering serif) should survive a Chaikin
+    pass even though ordinary right-angle corners on the same path do not."""
+    spike = [(0, 0), (10, 0), (10, 10), (15, 10), (10, 15), (10, 25), (0, 25)]
+    v = make_view(qapp, [spike])
+    v.set_selection([0])
+    v.smooth_selected(iterations=1)
+    result = [tuple(p) for p in v._entities[0].points]
+    assert any(math.hypot(x - 15, y - 10) < 1e-6 for x, y in result)
+    # the 90-degree corners are not spikes, so they should have been cut
+    assert not any(math.hypot(x - 10, y - 10) < 1e-6 for x, y in result)
+
+
+def test_smooth_selected_catmull_rom_decimates_dense_straight_runs(qapp):
+    """Dense, mostly-straight input (typical of a hand/image trace) should
+    not balloon into a fixed samples-per-segment multiple of the input
+    point count — the near-collinear runs should get decimated back down."""
+    dense = [(i * 0.5, 0.0) for i in range(30)] + [
+        (14.5 + i * 0.5, i * 0.5) for i in range(1, 30)
+    ]
+    dense.append(dense[0])  # close it so it round-trips through load()
+    v = make_view(qapp, [dense])
+    v.set_selection([0])
+    v.set_smoothing_method("catmull_rom")
+    naive_upper_bound = (len(dense) - 1) * 8
+    v.smooth_selected(iterations=2)
+    assert len(v._entities[0].points) < naive_upper_bound / 4

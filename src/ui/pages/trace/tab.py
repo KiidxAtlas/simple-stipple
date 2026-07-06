@@ -12,6 +12,7 @@ from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -25,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.dxf.io import write_polylines_dxf
-from src.backend.io import image_to_outlines
+from src.backend.io import TraceCancelled, image_to_outlines
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.canvas.modules import (
     CanvasGridModule,
@@ -40,6 +41,7 @@ from src.ui.core.factories import (
     sidebar_panel,
     surface_frame,
 )
+from src.ui.pages.trace.defaults import trace_default
 from src.ui.pages.trace.form import (
     PathField,
     TextField,
@@ -70,6 +72,7 @@ class TracePage(BasePage):
     _trace_done = Signal(object)  # (display_img, polys, img_w_px, img_h_px, width_mm)
     _trace_error = Signal(object)
     _trace_progress = Signal(int, str)  # (percent, label)
+    _trace_cancelled = Signal(int)  # (trace_token)
     sendSelectedToDraftRequested = Signal(object)
     sendSelectedToPatternRequested = Signal(object)
 
@@ -87,6 +90,7 @@ class TracePage(BasePage):
         self._trace_done.connect(self._handle_trace_done)
         self._trace_error.connect(self._handle_trace_error)
         self._trace_progress.connect(self._on_trace_progress)
+        self._trace_cancelled.connect(self._handle_trace_cancelled)
         self._last_out: str | None = None
         self._last_display_img = None
         self._last_width_mm: float = 0.0
@@ -96,6 +100,10 @@ class TracePage(BasePage):
         self._img_aspect: float = 1.0
         self._aspect_locked: bool = True
         self._trace_revision: int = 0
+        # Only the trace right after a *new* image is chosen should
+        # re-frame the view — every later retrace while tweaking sliders
+        # must leave the user's current zoom/pan alone.
+        self._needs_view_fit: bool = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -150,6 +158,7 @@ class TracePage(BasePage):
             if path.lower().endswith(self._IMAGE_EXTENSIONS):
                 self._img_edit.setText(path)
                 self._img_path = path
+                self._needs_view_fit = True
                 self._load_thumbnail(path)
                 record_recent(self._settings, KIND_IMAGE, path)
                 self._schedule_trace()
@@ -213,6 +222,28 @@ class TracePage(BasePage):
         )
         layout.addWidget(self._trace_settings_section)
 
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(6)
+        self._reload_btn = QPushButton("Reload Preview")
+        self._reload_btn.setToolTip(
+            "Force an immediate retrace with the current settings.\n"
+            "Use this if the live preview ever stops updating."
+        )
+        self._reload_btn.clicked.connect(self._force_reload_trace)
+        action_row.addWidget(self._reload_btn, stretch=1)
+        self._smooth_btn = QPushButton("Smooth Curves…")
+        self._smooth_btn.setToolTip(
+            "Fit every traced outline to a smooth bezier curve, rounding "
+            "off pixel-staircase noise while keeping real corners sharp.\n"
+            "Applies once to the current trace — tweak a setting and "
+            "retrace to start over from the raw outline. Undo (Ctrl+Z) "
+            "reverts it."
+        )
+        self._smooth_btn.clicked.connect(self._smooth_traced_curves)
+        action_row.addWidget(self._smooth_btn, stretch=1)
+        layout.addLayout(action_row)
+
         self._status = QLabel("")
         self._status.setWordWrap(True)
         self._status.setVisible(False)
@@ -272,39 +303,42 @@ class TracePage(BasePage):
 
     def _init_trace_form_fields(self) -> None:
         self._blur = self._mk_entry(
-            "1.5",
+            trace_default(self._settings, "blur"),
             "Gaussian blur radius applied before thresholding / edge detection",
             on_change=self._on_blur_text,
         )
         self._thresh_entry = self._mk_entry(
-            "128",
+            trace_default(self._settings, "threshold"),
             "Brightness cutoff: pixels darker than this become outlines",
             on_change=self._on_thresh_text,
         )
         self._canny_low = self._mk_entry(
-            "50",
+            trace_default(self._settings, "canny_low"),
             "Lower hysteresis threshold for Canny edge detection.\nEdges below this value are discarded.",
         )
         self._canny_high = self._mk_entry(
-            "150",
+            trace_default(self._settings, "canny_high"),
             "Upper hysteresis threshold for Canny edge detection.\nEdges above this value are always kept.",
         )
         self._simplify = self._mk_entry(
-            "2.0", "Tolerance for polygon simplification (higher = fewer points)"
+            trace_default(self._settings, "simplify"),
+            "Tolerance for polygon simplification (higher = fewer points)",
         )
         self._min_area = self._mk_entry(
-            "100", "Discard contours smaller than this area"
+            trace_default(self._settings, "min_area"),
+            "Discard contours smaller than this area",
         )
         self._max_area = self._mk_entry(
-            "",
+            trace_default(self._settings, "max_area"),
             "Discard contours larger than this area (leave empty for no limit)",
             placeholder="none",
         )
         self._close_r = self._mk_entry(
-            "1", "Morphological closing to fill small gaps in edges"
+            trace_default(self._settings, "close_r"),
+            "Morphological closing to fill small gaps in edges",
         )
         self._width_mm = self._mk_entry(
-            "50.0",
+            trace_default(self._settings, "width_mm"),
             "Target output width in millimetres",
             on_change=self._on_width_changed,
         )
@@ -314,7 +348,7 @@ class TracePage(BasePage):
             on_change=self._on_height_changed,
         )
         self._max_res = self._mk_entry(
-            "1200",
+            trace_default(self._settings, "max_res"),
             "Maximum pixel dimension when loading the image.\nHigher values give finer detail but are slower.",
         )
 
@@ -651,6 +685,7 @@ class TracePage(BasePage):
         if path:
             self._img_edit.setText(path)
             self._img_path = path
+            self._needs_view_fit = True
             self._load_thumbnail(path)
             self._schedule_trace()
             self._emit_state_changed()
@@ -658,6 +693,7 @@ class TracePage(BasePage):
     def _load_image_from_recent(self, path: str) -> None:
         self._img_edit.setText(path)
         self._img_path = path
+        self._needs_view_fit = True
         self._load_thumbnail(path)
         record_recent(self._settings, KIND_IMAGE, path)
         self._schedule_trace()
@@ -754,6 +790,56 @@ class TracePage(BasePage):
         self._preview_timer.start(220)
         self._emit_state_changed()
 
+    def _force_reload_trace(self) -> None:
+        """Manual escape hatch: bypass the live-preview debounce and any
+        stuck in-flight/cancelled state, then start a fresh retrace right
+        away with the current settings."""
+        if not self._img_path:
+            self._set_status("No image loaded.", "#f85149")
+            return
+        self._trace_revision += 1
+        self._cancel_event.set()
+        self._preview_timer.stop()
+        self._running = False
+        self._trace_pending = False
+        self._start_trace_thread()
+
+    def _smooth_traced_curves(self) -> None:
+        """Fit every traced outline to a smooth bezier curve, on demand.
+
+        Deliberately manual/one-shot rather than automatic on every live-
+        preview retrace: an earlier attempt at auto-smoothing on every
+        settings tweak ran this synchronously on the GUI thread after each
+        retrace (causing UI freezes) and used a single fixed tolerance
+        regardless of the image (producing a triangulated mess on complex
+        shapes). Now that the raw trace itself is far cleaner (mask
+        supersampling + illumination-corrected thresholding), a one-shot
+        manual pass at a user-chosen tolerance gives much better results,
+        and Ctrl+Z reverts it if it doesn't look right.
+        """
+        if not self._canvas.get_polylines_state():
+            self._set_status("Nothing to smooth yet — trace an image first.", "#f85149")
+            return
+        tolerance, ok = QInputDialog.getDouble(
+            self,
+            "Smooth Traced Curves",
+            "Smoothing tolerance (mm) — higher smooths more but can round "
+            "off fine detail:",
+            0.3,
+            0.01,
+            10.0,
+            2,
+        )
+        if not ok:
+            return
+        self._canvas.select_all()
+        count = self._canvas.fit_selected_to_curve(tolerance)
+        self._canvas.deselect_all()
+        if count:
+            self._set_status(f"Smoothed {count} shape(s).", "#3fb950")
+        else:
+            self._set_status("Nothing could be smoothed.", "#f85149")
+
     def _start_trace_thread(self) -> None:
         if not self._img_path:
             return
@@ -776,11 +862,20 @@ class TracePage(BasePage):
             edge_mode_cb=self._edge_mode_cb,
             outer_only_cb=self._outer_only_cb,
         )
-        kwargs = build_trace_kwargs(
-            fields,
-            parse_float_field=self._parse_float_field,
-            on_progress=lambda pct, lbl: self._trace_progress.emit(pct, lbl),
-        )
+        try:
+            kwargs = build_trace_kwargs(
+                fields,
+                parse_float_field=self._parse_float_field,
+                on_progress=lambda pct, lbl: self._trace_progress.emit(pct, lbl),
+            )
+        except ValueError:
+            # _parse_float_field (like every other page's) raises on an
+            # invalid/empty field rather than returning None — a field can
+            # go transiently empty mid-edit (e.g. select-all then retype)
+            # right when the debounce timer fires. The status bar already
+            # got the error message from parse_float_field_with_feedback;
+            # just skip this retrace instead of crashing the app.
+            return
         if kwargs is None:
             return
 
@@ -812,15 +907,24 @@ class TracePage(BasePage):
     ) -> None:
         try:
             if cancel_event and cancel_event.is_set():
+                self._trace_cancelled.emit(trace_token)
                 return
             if not img_path:
                 raise RuntimeError("No image selected.")
-            result = image_to_outlines(img_path, **kwargs)
+            result = image_to_outlines(
+                img_path,
+                cancel_check=(cancel_event.is_set if cancel_event else None),
+                **kwargs,
+            )
             if cancel_event and cancel_event.is_set():
+                self._trace_cancelled.emit(trace_token)
                 return
             self._trace_done.emit((trace_token, *result, kwargs["width_mm"]))
+        except TraceCancelled:
+            self._trace_cancelled.emit(trace_token)
         except (RuntimeError, OSError, ValueError, TypeError) as exc:
             if cancel_event and cancel_event.is_set():
+                self._trace_cancelled.emit(trace_token)
                 return
             self._trace_error.emit((trace_token, str(exc)))
 
@@ -856,7 +960,8 @@ class TracePage(BasePage):
             except (OSError, ValueError) as exc:
                 LOGGER.debug("Failed to apply traced background image: %s", exc)
         if polys:
-            self._canvas.load(polys)
+            self._canvas.set_polylines_state(polys, fit=self._needs_view_fit)
+            self._needs_view_fit = False
             self._set_status(
                 f"{count} contour(s) extracted  ·  "
                 f"{img_w_px}×{img_h_px} px → "
@@ -864,7 +969,7 @@ class TracePage(BasePage):
                 "#3fb950",
             )
         else:
-            self._canvas.load([])
+            self._canvas.set_polylines_state([], fit=False)
             self._set_status(
                 "No contours found. Try adjusting threshold or inverting.",
                 "#f85149",
@@ -884,6 +989,24 @@ class TracePage(BasePage):
         self._progress.setValue(0)
         self._set_status(f"Error: {msg}", "#f85149")
         self._update_trace_action_states()
+        if self._trace_pending and self._img_path:
+            self._trace_pending = False
+            self._preview_timer.start(0)
+
+    def _handle_trace_cancelled(self, _trace_token: int) -> None:
+        """A stale, superseded trace bailed out early instead of running to
+        completion (see cancel_check in image_to_outlines). This still has
+        to reset _running and drain _trace_pending exactly like the done/
+        error handlers do — without it, _running never clears and every
+        future retrace request just silently sets _trace_pending and
+        returns forever, since _start_trace_thread refuses to start a new
+        thread while _running is (permanently, wrongly) True. That's the
+        actual "stops updating after enough rapid changes" freeze.
+        """
+        self._running = False
+        self._progress.setVisible(False)
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
         if self._trace_pending and self._img_path:
             self._trace_pending = False
             self._preview_timer.start(0)

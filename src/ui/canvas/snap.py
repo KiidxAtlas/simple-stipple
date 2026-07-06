@@ -49,11 +49,15 @@ class SnapEngine:
         reference_point: tuple[float, float] | None = None,
     ) -> SnapResult | None:
         v = self.v
+        if not getattr(v, "_snap_master_enabled", True):
+            return None
         polylines = [e.points for e in v._entities]
         # Snapping targets include ALL entities, even those on non-active
         # layers. Users should be able to snap TO shapes on other layers
         # while still only being able to SELECT on the active layer.
         hidden_polys: set[int] = set()  # no exclusions for snapping
+        vertex_enabled = allow_vertex and getattr(v, "_snap_vertex_enabled", True)
+        edge_enabled = getattr(v, "_snap_edge_enabled", True)
         if drag:
             best = resolve_drag_snap(
                 cx,
@@ -62,7 +66,8 @@ class SnapEngine:
                 wy,
                 allow_polyline=allow_polyline,
                 allow_grid=allow_grid,
-                allow_vertex=allow_vertex,
+                allow_vertex=vertex_enabled,
+                allow_edge=edge_enabled,
                 exclude_vertices=exclude_vertices,
                 exclude_segments=exclude_segments,
                 grid_snap_enabled=v._grid_snap,
@@ -87,6 +92,8 @@ class SnapEngine:
                 wy,
                 allow_polyline=allow_polyline,
                 allow_grid=allow_grid,
+                allow_vertex=vertex_enabled,
+                allow_edge=edge_enabled,
                 grid_snap_enabled=v._grid_snap,
                 grid_spacing=v._grid_spacing,
                 polylines=polylines,
@@ -106,12 +113,16 @@ class SnapEngine:
         return best
 
     def angle(self, ax: float, ay: float, wx: float, wy: float) -> tuple[float, float]:
+        if not getattr(self.v, "_snap_angle_enabled", True):
+            return (wx, wy)
         return angle_snap(ax, ay, wx, wy)
 
     # ── Candidate sources ─────────────────────────────────────────────────
 
     def _shape_candidate(self, cx: float, cy: float) -> SnapResult | None:
         v = self.v
+        if not getattr(v, "_snap_vertex_enabled", True):
+            return None  # shape center/start/end points are "vertex family"
         best: SnapResult | None = None
         best_dist = float("inf")
         # Shape snapping works across ALL layers — shapes on non-active

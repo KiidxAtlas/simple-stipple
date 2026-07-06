@@ -134,6 +134,54 @@ RADIAL_MENU_SHORT_LABELS: dict[str, str] = {
 }
 
 
+# =============================================================================
+# Smoothing method — which algorithm view.smooth_selected() runs. Chosen in
+# Settings > Application Behavior; consumed by src.ui.canvas.view.
+# =============================================================================
+
+DEFAULT_SMOOTHING_METHOD = "chaikin"
+
+SMOOTHING_METHODS: tuple[tuple[str, str], ...] = (
+    ("chaikin", "Chaikin (corner-cutting)"),
+    ("gaussian", "Gaussian (neighbor averaging)"),
+    ("catmull_rom", "Catmull-Rom (spline through points)"),
+)
+
+
+# =============================================================================
+# Draw sidebar layout — user-resizable width and, optionally, which
+# sections show and in what order. Consumed by src.ui.sidebars.canvas_sidebar
+# and src.ui.canvas.view.
+# =============================================================================
+
+DEFAULT_DRAW_SIDEBAR_WIDTH = 108
+MIN_DRAW_SIDEBAR_WIDTH = 96
+MAX_DRAW_SIDEBAR_WIDTH = 220
+
+DEFAULT_DRAW_SIDEBAR_SECTIONS: tuple[str, ...] = (
+    "path",
+    "shapes",
+    "text",
+    "snapping",
+    "mode",
+    "sketch",
+    "smoothing",
+    "editing",
+)
+
+# (section key, display label) — used by the sidebar customize dialog.
+DRAW_SIDEBAR_SECTION_LABELS: tuple[tuple[str, str], ...] = (
+    ("path", "Path (Polyline/Spline/Arc/Bezier)"),
+    ("shapes", "Shapes (Rectangle/Slot/Circle/Ellipse/Polygon)"),
+    ("text", "Text"),
+    ("snapping", "Snapping"),
+    ("mode", "Split / Construction"),
+    ("sketch", "Sketch (Dimension/Measure)"),
+    ("smoothing", "Smoothing method"),
+    ("editing", "Contextual editing actions"),
+)
+
+
 def _migrate_settings(data: dict) -> dict:
     """Upgrade legacy settings keys to current names."""
     keybindings = data.get("keybindings")

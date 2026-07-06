@@ -45,6 +45,48 @@ def test_panel_resizes_selection(qapp):
     assert x1 - x0 == pytest.approx(40.0)
 
 
+def test_aspect_lock_toggle_syncs_with_canvas_flag(qapp):
+    canvas, panel = make_panel(qapp, [square(0, 0)])
+    assert panel._aspect_lock_btn.isChecked() is False
+    panel._aspect_lock_btn.setChecked(True)
+    assert canvas._aspect_ratio_locked is True
+    panel._aspect_lock_btn.setChecked(False)
+    assert canvas._aspect_ratio_locked is False
+
+
+def test_aspect_lock_keeps_width_and_height_proportional(qapp):
+    canvas, panel = make_panel(qapp, [square(0, 0, s=10.0)])  # 10x10 square
+    canvas.set_selection([0])
+    panel._aspect_lock_btn.setChecked(True)
+
+    panel._w.setText("40")
+    panel._commit_size("w")
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(40.0)
+    assert y1 - y0 == pytest.approx(40.0)  # height followed width proportionally
+
+    panel._h.setText("20")
+    panel._commit_size("h")
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert y1 - y0 == pytest.approx(20.0)
+    assert x1 - x0 == pytest.approx(20.0)  # width followed height back down
+
+
+def test_aspect_lock_applies_to_gizmo_edge_drag(qapp):
+    from PySide6.QtCore import Qt
+
+    canvas, panel = make_panel(qapp, [square(0, 0, s=10.0)])
+    canvas.fit()
+    canvas.set_selection([0])
+    canvas.set_aspect_ratio_locked(True)
+
+    assert canvas._start_gizmo_drag("scale-e", 10.0, 5.0)
+    canvas._apply_handle_scale(20.0, 5.0, Qt.KeyboardModifier.NoModifier)
+    x0, y0, x1, y1 = bbox(canvas._entities[0].points)
+    assert x1 - x0 == pytest.approx(20.0, abs=0.01)
+    assert y1 - y0 == pytest.approx(20.0, abs=0.01)  # edge-only drag still scaled H
+
+
 def test_panel_edits_circle_radius(qapp):
     canvas, panel = make_panel(qapp, [])
     from tests.test_canvas_behavior import click_world

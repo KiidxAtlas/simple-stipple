@@ -7,6 +7,7 @@ from typing import Any
 
 from src.backend.document.graph import DocumentGraph
 from src.backend.document.migration import polylines_from_graph
+from src.ui.pages.trace.defaults import trace_default
 
 
 def get_trace_workspace_state(page: Any) -> dict:
@@ -47,22 +48,29 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
     image_path = str(state.get("image_path", "")).strip()
     page._img_path = image_path or None
     page._img_edit.setText(str(state.get("image_path", "")))
-    page._blur.setText(str(state.get("blur", "1.5")))
-    page._thresh_entry.setText(str(state.get("threshold", "128")))
+    settings = page._settings
+    page._blur.setText(str(state.get("blur", trace_default(settings, "blur"))))
+    page._thresh_entry.setText(
+        str(state.get("threshold", trace_default(settings, "threshold")))
+    )
     page._auto_thresh_cb.setChecked(bool(state.get("auto_threshold", True)))
     page._update_thresh_controls()
     page._invert_cb.setChecked(bool(state.get("invert", False)))
     page._edge_mode_cb.setChecked(bool(state.get("edge_mode", False)))
-    page._canny_low.setText(str(state.get("canny_low", "50")))
-    page._canny_high.setText(str(state.get("canny_high", "150")))
+    page._canny_low.setText(
+        str(state.get("canny_low", trace_default(settings, "canny_low")))
+    )
+    page._canny_high.setText(
+        str(state.get("canny_high", trace_default(settings, "canny_high")))
+    )
     page._outer_only_cb.setChecked(bool(state.get("outer_only", False)))
-    page._simplify.setText(str(state.get("simplify", "2.0")))
-    page._min_area.setText(str(state.get("min_area", "100")))
-    page._max_area.setText(str(state.get("max_area", "")))
-    page._close_r.setText(str(state.get("close_r", "1")))
-    page._width_mm.setText(str(state.get("width_mm", "50.0")))
+    page._simplify.setText(str(state.get("simplify", trace_default(settings, "simplify"))))
+    page._min_area.setText(str(state.get("min_area", trace_default(settings, "min_area"))))
+    page._max_area.setText(str(state.get("max_area", trace_default(settings, "max_area"))))
+    page._close_r.setText(str(state.get("close_r", trace_default(settings, "close_r"))))
+    page._width_mm.setText(str(state.get("width_mm", trace_default(settings, "width_mm"))))
     page._height_mm.setText(str(state.get("height_mm", "---")))
-    page._max_res.setText(str(state.get("max_res", "1200")))
+    page._max_res.setText(str(state.get("max_res", trace_default(settings, "max_res"))))
     page._lock_cb.setChecked(bool(state.get("aspect_locked", True)))
     page._bg_visible_cb.setChecked(bool(state.get("bg_visible", True)))
     try:
@@ -106,6 +114,9 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
         page._canvas.set_image_bounds(page._last_width_mm, page._last_height_mm)
     if polys and state.get("canvas_view"):
         page._canvas.set_view_state(state["canvas_view"])
+    # The view was just established above (restored or fresh-fit) — the next
+    # retrace from a settings tweak must preserve it, not re-fit.
+    page._needs_view_fit = not polys
     if image_path and page._bg_visible_cb.isChecked() and page._last_width_mm > 0:
         page._restore_background_from_path(image_path)
     elif not page._bg_visible_cb.isChecked():

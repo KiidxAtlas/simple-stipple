@@ -97,6 +97,19 @@ class CanvasPropertiesPanel(QWidget):
         # keep the label/field pairs packed to the left instead of spreading
         # across the panel width
         grid.setColumnStretch(4, 1)
+
+        self._aspect_lock_btn = QPushButton("\U0001f517")  # 🔗
+        self._aspect_lock_btn.setCheckable(True)
+        self._aspect_lock_btn.setFixedWidth(26)
+        self._aspect_lock_btn.setToolTip(
+            "Lock aspect ratio\nKeeps width/height proportional for both "
+            "typed W/H edits and gizmo-handle drags"
+        )
+        self._aspect_lock_btn.setStyleSheet(
+            "QPushButton:checked { background: #1f3a6e; border: 1px solid #2f81f7; }"
+        )
+        self._aspect_lock_btn.toggled.connect(self._on_aspect_lock_toggled)
+        grid.addWidget(self._aspect_lock_btn, 1, 4)
         grid.setColumnMinimumWidth(2, 18)
         fields_root.addLayout(grid)
 
@@ -150,6 +163,9 @@ class CanvasPropertiesPanel(QWidget):
             unit = self._unit()
             for axis, lbl in self._axis_labels.items():
                 lbl.setText(f"{axis} ({unit_suffix(unit)})")
+            self._aspect_lock_btn.setChecked(
+                getattr(self._canvas, "_aspect_ratio_locked", False)
+            )
             info = self._canvas.selection_geometry()
             enabled = info is not None
             self._fields_container.setVisible(enabled)
@@ -254,6 +270,11 @@ class CanvasPropertiesPanel(QWidget):
         else:
             self._canvas._set_selected_height(value_mm)
         self.refresh()
+
+    def _on_aspect_lock_toggled(self, checked: bool) -> None:
+        if self._updating:
+            return
+        self._canvas.set_aspect_ratio_locked(checked)
 
     def _commit_rotation(self) -> None:
         if self._updating:

@@ -18,8 +18,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.settings import DEFAULT_RADIAL_MENU_TOOLS, save_settings
+from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_RADIAL_MENU_TOOLS,
+    DEFAULT_SMOOTHING_METHOD,
+    SMOOTHING_METHODS,
+    save_settings,
+)
 from src.ui.core.factories import section_label, sep, surface_frame
+from src.ui.pages.trace.defaults import TRACE_DEFAULT_FIELDS, trace_default
+from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
 from src.ui.shell.keybindings_dialog import KeybindingsDialog
 from src.ui.shell.radial_menu_dialog import RadialMenuDialog
 from src.ui.units import DEFAULT_UNIT_SYSTEM
@@ -56,7 +64,9 @@ class SettingsDialog(QDialog):
         self._settings: dict = settings or {}
         self._entries: dict[str, QLineEdit] = {}
         self._toggles: dict[str, QCheckBox] = {}
+        self._trace_default_entries: dict[str, QLineEdit] = {}
         self._unit_combo: QComboBox | None = None
+        self._smoothing_combo: QComboBox | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -135,18 +145,62 @@ class SettingsDialog(QDialog):
         unit_row.addStretch()
         behavior_layout.addLayout(unit_row)
 
+        smoothing_row = QHBoxLayout()
+        smoothing_row.addWidget(QLabel("Smoothing method"))
+        self._smoothing_combo = QComboBox()
+        for value, label in SMOOTHING_METHODS:
+            self._smoothing_combo.addItem(label, value)
+        current_smoothing = self._settings.get(
+            "smoothing_method", DEFAULT_SMOOTHING_METHOD
+        )
+        idx = self._smoothing_combo.findData(current_smoothing)
+        self._smoothing_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._smoothing_combo.setToolTip(
+            "Algorithm used by the Smooth path command (right-click a "
+            "selected path, or the 'path.smooth' shortcut)"
+        )
+        smoothing_row.addWidget(self._smoothing_combo)
+        smoothing_row.addStretch()
+        behavior_layout.addLayout(smoothing_row)
+
         kb_row = QHBoxLayout()
         kb_row.addStretch()
         radial_btn = QPushButton("Customize radial menu\u2026")
         radial_btn.setToolTip('Choose which tools appear in the "Q" quick menu')
         radial_btn.clicked.connect(self._open_radial_menu)
         kb_row.addWidget(radial_btn)
+        sidebar_btn = QPushButton("Customize draw sidebar\u2026")
+        sidebar_btn.setToolTip("Choose which sections show in the Draw sidebar")
+        sidebar_btn.clicked.connect(self._open_draw_sidebar_customize)
+        kb_row.addWidget(sidebar_btn)
         kb_btn = QPushButton("Edit shortcuts\u2026")
         kb_btn.setToolTip("Customize keyboard shortcuts")
         kb_btn.clicked.connect(self._open_keybindings)
         kb_row.addWidget(kb_btn)
         behavior_layout.addLayout(kb_row)
         content_layout.addWidget(behavior_card)
+
+        # ── Trace Defaults ────────────────────────────────────────
+        trace_card = surface_frame("panel")
+        trace_layout = QVBoxLayout(trace_card)
+        trace_layout.setContentsMargins(12, 12, 12, 12)
+        trace_layout.setSpacing(6)
+        section_label(trace_layout, "Trace Defaults")
+        trace_hint = QLabel(
+            "Values a newly opened image or a cleared workspace starts "
+            "with on the Trace page. Leave a field blank to use the "
+            "built-in default."
+        )
+        trace_hint.setProperty("role", "hint")
+        trace_hint.setWordWrap(True)
+        trace_layout.addWidget(trace_hint)
+        for key, label, tooltip in TRACE_DEFAULT_FIELDS:
+            _row, entry = self._add_text_row(
+                trace_layout, label, trace_default(self._settings, key)
+            )
+            entry.setToolTip(tooltip)
+            self._trace_default_entries[key] = entry
+        content_layout.addWidget(trace_card)
 
         content_layout.addStretch()
         sep(layout)
@@ -175,6 +229,14 @@ class SettingsDialog(QDialog):
         dlg = RadialMenuDialog(self, tools=current)
         if dlg.exec():
             self._settings["radial_menu_tools"] = dlg.get_tools()
+
+    def _open_draw_sidebar_customize(self) -> None:
+        current = self._settings.get(
+            "draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+        )
+        dlg = DrawSidebarCustomizeDialog(self, sections=current)
+        if dlg.exec():
+            self._settings["draw_sidebar_sections"] = dlg.get_sections()
 
     def _add_row(
         self, layout: QVBoxLayout, key: str, label: str, browse: bool = False
@@ -250,8 +312,23 @@ class SettingsDialog(QDialog):
         for key, toggle in self._toggles.items():
             self._settings[key] = toggle.isChecked()
 
+        trace_defaults = dict(self._settings.get("trace_defaults") or {})
+        for key, entry in self._trace_default_entries.items():
+            v = entry.text().strip()
+            if v:
+                trace_defaults[key] = v
+            elif key in trace_defaults:
+                del trace_defaults[key]
+        if trace_defaults:
+            self._settings["trace_defaults"] = trace_defaults
+        elif "trace_defaults" in self._settings:
+            del self._settings["trace_defaults"]
+
         if self._unit_combo is not None:
             self._settings["unit_system"] = self._unit_combo.currentData()
+
+        if self._smoothing_combo is not None:
+            self._settings["smoothing_method"] = self._smoothing_combo.currentData()
 
         save_settings(self._settings)
         self.accept()
