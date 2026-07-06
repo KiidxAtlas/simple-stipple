@@ -31,10 +31,15 @@ from src.backend.io import read_json_file, write_json_file_atomic
 from src.error_reporting import report_error
 from src.paths import user_data_dir
 from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
+    DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
     DEFAULT_DRAW_SIDEBAR_WIDTH,
     DEFAULT_KEYBINDINGS,
     DEFAULT_RADIAL_MENU_TOOLS,
+    DEFAULT_SIMPLIFY_TOLERANCE,
+    DEFAULT_SMOOTH_ITERATIONS,
     DEFAULT_SMOOTHING_METHOD,
     load_settings,
     save_settings,
@@ -151,16 +156,52 @@ class App(QMainWindow):
         self._page_runtime.apply_smoothing_method(
             self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD)
         )
+        self._page_runtime.apply_smooth_iterations(
+            self._settings.get("smooth_iterations", DEFAULT_SMOOTH_ITERATIONS)
+        )
+        self._page_runtime.apply_simplify_tolerance(
+            self._settings.get("simplify_tolerance", DEFAULT_SIMPLIFY_TOLERANCE)
+        )
         self._page_runtime.apply_draw_sidebar_width(
             self._settings.get("draw_sidebar_width", DEFAULT_DRAW_SIDEBAR_WIDTH)
+        )
+        self._page_runtime.apply_draw_sidebar_height(
+            self._settings.get("draw_sidebar_height")
         )
         self._page_runtime.apply_draw_sidebar_sections(
             self._settings.get(
                 "draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
             )
         )
+        self._page_runtime.apply_draw_sidebar_path_tools(
+            self._settings.get(
+                "draw_sidebar_path_tools", list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
+            )
+        )
+        self._page_runtime.apply_draw_sidebar_shape_tools(
+            self._settings.get(
+                "draw_sidebar_shape_tools", list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+            )
+        )
+        self._page_runtime.apply_draw_sidebar_always_visible(
+            self._settings.get(
+                "draw_sidebar_always_visible", DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE
+            )
+        )
         self._page_runtime.connect_draw_sidebar_width_changed(
             self._on_draw_sidebar_width_changed
+        )
+        self._page_runtime.connect_draw_sidebar_height_changed(
+            self._on_draw_sidebar_height_changed
+        )
+        self._page_runtime.connect_smoothing_method_changed(
+            self._on_smoothing_method_changed
+        )
+        self._page_runtime.connect_smooth_iterations_changed(
+            self._on_smooth_iterations_changed
+        )
+        self._page_runtime.connect_simplify_tolerance_changed(
+            self._on_simplify_tolerance_changed
         )
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
@@ -414,6 +455,36 @@ class App(QMainWindow):
         self._settings["draw_sidebar_width"] = width
         save_settings(self._settings)
         self._page_runtime.apply_draw_sidebar_width(width)
+
+    def _on_draw_sidebar_height_changed(self, height: int) -> None:
+        """Persist a live sidebar-resize drag and echo the new height to
+        every other tab's sidebar so they stay consistent."""
+        self._settings["draw_sidebar_height"] = height
+        save_settings(self._settings)
+        self._page_runtime.apply_draw_sidebar_height(height)
+
+    def _on_smoothing_method_changed(self, method: str) -> None:
+        """Persist a sidebar-driven smoothing-method change and echo it to
+        every other tab, matching Settings dialog's own persistence."""
+        self._settings["smoothing_method"] = method
+        save_settings(self._settings)
+        self._page_runtime.apply_smoothing_method(method)
+
+    def _on_smooth_iterations_changed(self, iterations: int) -> None:
+        """Remember the last value typed into the Smooth HUD prompt so the
+        user doesn't have to retype it every time, and echo it to every
+        other tab."""
+        self._settings["smooth_iterations"] = iterations
+        save_settings(self._settings)
+        self._page_runtime.apply_smooth_iterations(iterations)
+
+    def _on_simplify_tolerance_changed(self, tolerance: float) -> None:
+        """Remember the last value typed into the Simplify HUD prompt so
+        the user doesn't have to retype it every time, and echo it to
+        every other tab."""
+        self._settings["simplify_tolerance"] = tolerance
+        save_settings(self._settings)
+        self._page_runtime.apply_simplify_tolerance(tolerance)
 
     def _use_shape_selection_as_fill_pattern(
         self,
@@ -1115,6 +1186,12 @@ class App(QMainWindow):
             self._page_runtime.apply_smoothing_method(
                 self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD)
             )
+            self._page_runtime.apply_smooth_iterations(
+                self._settings.get("smooth_iterations", DEFAULT_SMOOTH_ITERATIONS)
+            )
+            self._page_runtime.apply_simplify_tolerance(
+                self._settings.get("simplify_tolerance", DEFAULT_SIMPLIFY_TOLERANCE)
+            )
             self._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
             self._page_runtime.apply_radial_menu_tools(
                 self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
@@ -1122,6 +1199,21 @@ class App(QMainWindow):
             self._page_runtime.apply_draw_sidebar_sections(
                 self._settings.get(
                     "draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+                )
+            )
+            self._page_runtime.apply_draw_sidebar_path_tools(
+                self._settings.get(
+                    "draw_sidebar_path_tools", list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
+                )
+            )
+            self._page_runtime.apply_draw_sidebar_shape_tools(
+                self._settings.get(
+                    "draw_sidebar_shape_tools", list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+                )
+            )
+            self._page_runtime.apply_draw_sidebar_always_visible(
+                self._settings.get(
+                    "draw_sidebar_always_visible", DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE
                 )
             )
             self._repo_page.sync_from_settings()

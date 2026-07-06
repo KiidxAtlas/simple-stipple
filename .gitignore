@@ -269,3 +269,4 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 tauri-nuxt/
+_rewrite/

@@ -18,58 +18,58 @@ from tests.test_canvas_behavior import bbox, click_world, make_view, square
 # ── Polyline / Shapes family sidebar cycling ─────────────────────────────────
 
 
-def test_polyline_family_button_cycles_draw_primitive(qapp):
+def test_polyline_family_buttons_select_draw_primitive_directly(qapp):
+    """Path icons are direct-select, not cycling: clicking a tool's own
+    icon selects that exact primitive regardless of what's currently
+    active."""
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
     assert v._draw_primitive == "polyline"
 
-    sb._polyline_button.click()
+    sb._polyline_buttons["spline"].click()
     assert v._draw_primitive == "spline"
-    sb._polyline_button.click()
+    sb._polyline_buttons["arc"].click()
+    assert v._draw_primitive == "arc"
+    # clicking the already-active tool re-selects it, it does not cycle on
+    sb._polyline_buttons["arc"].click()
     assert v._draw_primitive == "arc"
 
 
-def test_polyline_family_bezier_state_stays_in_draw_mode(qapp):
+def test_polyline_family_bezier_button_stays_in_draw_mode(qapp):
     """Bezier is a draw-mode primitive like polyline/spline/arc, not a
-    separate mode — cycling to it must not hide the sidebar or leave
-    draw mode (regression: overshooting the cycle used to silently hide
-    the panel and switch to a separate pen mode)."""
+    separate mode — selecting it must not hide the sidebar or leave draw
+    mode (regression: it used to be a separate pen mode that silently hid
+    the panel)."""
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
-    sb._polyline_button.click()  # spline
-    sb._polyline_button.click()  # arc
-    sb._polyline_button.click()  # bezier
+    sb._polyline_buttons["bezier"].click()
     assert v.get_mode() == "draw"
     assert v._draw_primitive == "bezier"
     assert v._draw_sidebar_visible is True
 
 
-def test_polyline_family_cycles_through_all_four_within_draw_mode(qapp):
-    """Regression test: cycling spline -> arc -> bezier -> polyline must
-    stay in draw mode and keep the sidebar open the whole way through —
-    bezier used to be a separate "pen" mode that silently hid the sidebar
-    when overshot via repeated clicks."""
+def test_polyline_family_each_button_selects_its_own_primitive(qapp):
+    """Regression test: selecting any Path icon must stay in draw mode and
+    keep the sidebar open — bezier used to be a separate "pen" mode that
+    silently hid the sidebar."""
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
-    btn = sb._polyline_button
 
-    expected = ["spline", "arc", "bezier", "polyline"]
-    for want in expected:
-        btn.click()
+    for want in ("spline", "arc", "bezier", "polyline"):
+        sb._polyline_buttons[want].click()
         assert v.get_mode() == "draw"
         assert v._draw_primitive == want
         assert v._draw_sidebar_visible is True
-        assert btn.current_state_id == want
 
 
-def test_shapes_family_button_cycles_and_draws_slot(qapp):
+def test_shapes_family_button_selects_slot_directly(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
-    sb._shapes_button.click()  # rectangle -> slot
+    sb._shapes_buttons["slot"].click()
     assert v._draw_primitive == "slot"
 
     click_world(v, 100.0, 100.0)
@@ -82,14 +82,13 @@ def test_shapes_family_button_cycles_and_draws_slot(qapp):
 
 
 def test_shapes_family_selecting_polygon_opens_no_prompt(qapp):
-    """Regression test: cycling to (or past) Polygon must not pop any HUD
-    prompt — side count is now a live stepper shown during the actual
-    drag, not a modal fired the instant the tool is selected."""
+    """Regression test: selecting Polygon must not pop any HUD prompt —
+    side count is now a live stepper shown during the actual drag, not a
+    modal fired the instant the tool is selected."""
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
-    for _ in range(4):  # rectangle -> slot -> circle -> ellipse -> polygon
-        sb._shapes_button.click()
+    sb._shapes_buttons["polygon"].click()
     assert v._draw_primitive == "polygon"
     assert getattr(v, "_hud_prompt_edit", None) is None
 
@@ -273,7 +272,7 @@ def test_hover_flyout_shows_beside_sidebar_not_overlapping_it(qapp):
     sb = v._draw_sidebar
     sb.show()
 
-    btn = sb._polyline_button
+    btn = sb._constraint_button
     btn._show_flyout()
     assert btn._flyout is not None
     panel_rect = btn._panel_global_rect()
@@ -295,7 +294,7 @@ def test_flyout_survives_mouse_passing_through_the_gap_to_reach_it(qapp):
     v.show()
     sb = v._draw_sidebar
     sb.show()
-    btn = sb._polyline_button
+    btn = sb._constraint_button
     btn._show_flyout()
     flyout = btn._flyout
     assert flyout is not None
@@ -320,7 +319,7 @@ def test_flyout_hides_once_grace_period_elapses_with_cursor_still_away(qapp):
     v.show()
     sb = v._draw_sidebar
     sb.show()
-    btn = sb._polyline_button
+    btn = sb._constraint_button
     btn._show_flyout()
     assert btn._flyout is not None
 
@@ -351,6 +350,51 @@ def test_sidebar_width_is_draggable_and_clamped(qapp):
     assert sb.width() == MAX_DRAW_SIDEBAR_WIDTH
     sb._apply_width(MIN_DRAW_SIDEBAR_WIDTH - 50)
     assert sb.width() == MIN_DRAW_SIDEBAR_WIDTH
+
+
+def test_resize_handle_drag_uses_stable_delta_from_press(qapp):
+    """Regression test: the handle used to compute delta as
+    (event global x) - (handle's own global x), which drifts every time the
+    sidebar itself resizes (the handle moves with it), making the drag
+    non-functional in practice. It must track delta from the fixed
+    press-time anchor instead."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from src.ui.sidebars.canvas_sidebar import _ResizeHandle
+
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+    handle = next(c for c in sb.children() if isinstance(c, _ResizeHandle))
+    start_width = sb.width()
+
+    def move_event(global_x: float) -> QMouseEvent:
+        return QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(0, 0),
+            QPointF(global_x, 0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(0, 0),
+        QPointF(500.0, 0),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    handle.mousePressEvent(press)
+    handle.mouseMoveEvent(move_event(540.0))
+    assert sb.width() == start_width + 40
+    # a second move from the SAME press must add to the press-time width,
+    # not compound on top of the previous move (which the old "distance
+    # from handle's own origin" math effectively did once the handle moved).
+    handle.mouseMoveEvent(move_event(520.0))
+    assert sb.width() == start_width + 20
 
 
 def test_sidebar_sections_can_be_hidden_and_reordered(qapp):
@@ -398,6 +442,62 @@ def test_customize_dialog_falls_back_to_defaults_without_path_and_shapes(qapp):
     assert dlg.get_sections() == list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
 
 
+def test_customize_dialog_hides_and_reorders_individual_path_shape_icons(qapp):
+    """The per-icon lists (not just whole sections) must round-trip through
+    the dialog and drive which Path/Shapes icons the sidebar actually
+    builds sections from."""
+    from PySide6.QtCore import Qt
+
+    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+
+    dlg = DrawSidebarCustomizeDialog(
+        path_tools=["polyline", "spline", "arc", "bezier"],
+        shape_tools=["rectangle", "slot", "circle", "ellipse", "polygon"],
+    )
+    for i in range(dlg._path_list.count()):
+        item = dlg._path_list.item(i)
+        if item.data(Qt.ItemDataRole.UserRole) == "bezier":
+            item.setCheckState(Qt.CheckState.Unchecked)
+    for i in range(dlg._shape_list.count()):
+        item = dlg._shape_list.item(i)
+        if item.data(Qt.ItemDataRole.UserRole) == "ellipse":
+            item.setCheckState(Qt.CheckState.Unchecked)
+    dlg._apply()
+    assert "bezier" not in dlg.get_path_tools()
+    assert "ellipse" not in dlg.get_shape_tools()
+
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v.set_draw_sidebar_path_tools(dlg.get_path_tools())
+    v.set_draw_sidebar_shape_tools(dlg.get_shape_tools())
+    sb = v._draw_sidebar
+    assert "bezier" not in sb._path_tools
+    assert "ellipse" not in sb._shape_tools
+    # the button objects still exist (state-sync must never crash), they
+    # just aren't added to the section's layout.
+    assert "bezier" in sb._polyline_buttons
+    assert "ellipse" in sb._shapes_buttons
+
+
+def test_customize_dialog_path_shape_lists_require_at_least_one_checked(qapp):
+    from PySide6.QtCore import Qt
+
+    from src.settings import (
+        DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
+        DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
+    )
+    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+
+    dlg = DrawSidebarCustomizeDialog()
+    for i in range(dlg._path_list.count()):
+        dlg._path_list.item(i).setCheckState(Qt.CheckState.Unchecked)
+    for i in range(dlg._shape_list.count()):
+        dlg._shape_list.item(i).setCheckState(Qt.CheckState.Unchecked)
+    dlg._apply()
+    assert dlg.get_path_tools() == list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
+    assert dlg.get_shape_tools() == list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+
+
 def test_smoothing_button_cycles_and_stays_in_sync_with_settings(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
@@ -414,3 +514,41 @@ def test_smoothing_button_cycles_and_stays_in_sync_with_settings(qapp):
     # the sidebar button, not just the other direction.
     v.set_smoothing_method("chaikin")
     assert sb._smoothing_button.current_state_id == "chaikin"
+
+
+def test_sidebar_smoothing_change_emits_persistence_signal(qapp):
+    """Regression test: picking a method from the sidebar used to call the
+    silent set_smoothing_method() directly, so nothing ever told app.py to
+    save it to settings.json or echo it to other tabs. The sidebar's
+    callback must fire smoothingMethodChanged so app.py can persist it."""
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    sb = v._draw_sidebar
+
+    seen: list[str] = []
+    v.smoothingMethodChanged.connect(seen.append)
+
+    sb._smoothing_button.click()
+    assert v._smoothing_method == "gaussian"
+    assert seen == ["gaussian"]
+
+    # the plain settings-apply path (used at startup / echoed from other
+    # tabs) must NOT re-emit the signal, or persisting would loop forever.
+    v.set_smoothing_method("catmull_rom")
+    assert seen == ["gaussian"]
+
+
+def test_draw_sidebar_always_visible_keeps_panel_shown_outside_draw_mode(qapp):
+    v = make_view(qapp, [])
+    assert v._draw_sidebar_visible is False
+
+    v.set_draw_sidebar_always_visible(True)
+    assert v._draw_sidebar_visible is True
+
+    v.set_mode("draw")
+    assert v._draw_sidebar_visible is True
+    v.set_mode("select")
+    assert v._draw_sidebar_visible is True  # stays shown, override active
+
+    v.set_draw_sidebar_always_visible(False)
+    assert v._draw_sidebar_visible is False  # not in draw mode, so it hides

@@ -1161,6 +1161,64 @@ def test_set_smoothing_method_rejects_unknown_value(qapp):
     assert v._smoothing_method == "chaikin"
 
 
+def test_smooth_command_prompt_seeds_from_and_remembers_last_value(qapp):
+    """Regression test: the Smooth HUD prompt used to always show a
+    hardcoded "2", forcing the user to retype their preferred value every
+    time. It must now seed from (and update) v._smooth_iterations."""
+    from src.ui.canvas.commands import _smooth_selected
+
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    assert v._smooth_iterations == 2
+
+    _smooth_selected(v)
+    assert v._hud_prompt_edit.text() == "2"
+    v._hud_prompt_edit.setText("5")
+    v._hud_prompt_edit.returnPressed.emit()
+    assert v._smooth_iterations == 5
+
+    # next time the prompt opens, it remembers "5" instead of "2".
+    v.set_selection([0])
+    _smooth_selected(v)
+    assert v._hud_prompt_edit.text() == "5"
+
+
+def test_simplify_command_prompt_seeds_from_and_remembers_last_value(qapp):
+    from src.ui.canvas.commands import _simplify_selected
+
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    assert v._simplify_tolerance == pytest.approx(0.2)
+
+    _simplify_selected(v)
+    assert v._hud_prompt_edit.text() == "0.2"
+    v._hud_prompt_edit.setText("1.5")
+    v._hud_prompt_edit.returnPressed.emit()
+    assert v._simplify_tolerance == pytest.approx(1.5)
+
+    v.set_selection([0])
+    _simplify_selected(v)
+    assert v._hud_prompt_edit.text() == "1.5"
+
+
+def test_smooth_iterations_change_emits_persistence_signal(qapp):
+    from src.ui.canvas.commands import _smooth_selected
+
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    seen: list[int] = []
+    v.smoothIterationsChanged.connect(seen.append)
+
+    _smooth_selected(v)
+    v._hud_prompt_edit.setText("7")
+    v._hud_prompt_edit.returnPressed.emit()
+    assert seen == [7]
+
+    # the plain settings-apply path must NOT re-emit, or persisting loops.
+    v.set_smooth_iterations(3)
+    assert seen == [7]
+
+
 def test_smooth_selected_chaikin_preserves_sharp_spike(qapp):
     """A deliberate spike (like a lettering serif) should survive a Chaikin
     pass even though ordinary right-angle corners on the same path do not."""

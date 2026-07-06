@@ -23,3 +23,4 @@ def test_build_preview_polys_square_grid():
     assert res["fill"] == []
     assert len(res["display"]) == len(res["outline"]) + len(res["pattern"])
     assert res["count"] == 21
+

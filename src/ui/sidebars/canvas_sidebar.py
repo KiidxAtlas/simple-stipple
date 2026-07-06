@@ -17,11 +17,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QVBoxLayout,
@@ -29,8 +30,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
+    MAX_DRAW_SIDEBAR_HEIGHT,
     MAX_DRAW_SIDEBAR_WIDTH,
+    MIN_DRAW_SIDEBAR_HEIGHT,
     MIN_DRAW_SIDEBAR_WIDTH,
 )
 from src.ui.core.icons import tool_icon
@@ -56,6 +61,8 @@ class _ResizeHandle(QFrame):
         super().__init__(sidebar)
         self._sidebar = sidebar
         self._dragging = False
+        self._drag_start_global_x = 0.0
+        self._drag_start_width = 0
         self.setFixedWidth(6)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setStyleSheet(
@@ -66,17 +73,54 @@ class _ResizeHandle(QFrame):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
+            self._drag_start_global_x = event.globalPosition().x()
+            self._drag_start_width = self._sidebar.width()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if not self._dragging:
             return
-        delta = int(event.globalPosition().x() - self.mapToGlobal(QPoint(0, 0)).x())
-        self._sidebar._apply_width(self._sidebar.width() + delta)
+        delta = event.globalPosition().x() - self._drag_start_global_x
+        self._sidebar._apply_width(int(self._drag_start_width + delta))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
             self._sidebar._on_width_committed()
+
+
+class _BottomResizeHandle(QFrame):
+    """Thin drag handle docked to the sidebar's bottom edge — vertical
+    resize, mirrors _ResizeHandle's horizontal drag math."""
+
+    def __init__(self, sidebar: DrawSidebar) -> None:
+        super().__init__(sidebar)
+        self._sidebar = sidebar
+        self._dragging = False
+        self._drag_start_global_y = 0.0
+        self._drag_start_height = 0
+        self.setFixedHeight(6)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setStyleSheet(
+            "QFrame { background: transparent; }"
+            "QFrame:hover { background: rgba(88, 166, 255, 60); }"
+        )
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_start_global_y = event.globalPosition().y()
+            self._drag_start_height = self._sidebar.height()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not self._dragging:
+            return
+        delta = event.globalPosition().y() - self._drag_start_global_y
+        self._sidebar._apply_height(int(self._drag_start_height + delta))
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self._sidebar._on_height_committed()
 
 
 class DrawSidebar(QFrame):
@@ -108,12 +152,22 @@ class DrawSidebar(QFrame):
         on_back_to_select: Callable[[], None],
         width: int | None = None,
         sections: list[str] | None = None,
+        path_tools: list[str] | None = None,
+        shape_tools: list[str] | None = None,
         on_width_changed: Callable[[int], None] | None = None,
+        on_height_changed: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__(parent)
 
         self._on_width_changed = on_width_changed
+        self._on_height_changed = on_height_changed
         self._sections = list(sections) if sections else list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+        self._path_tools = [
+            t for t in (path_tools or []) if t in DEFAULT_DRAW_SIDEBAR_PATH_TOOLS
+        ] or list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
+        self._shape_tools = [
+            t for t in (shape_tools or []) if t in DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS
+        ] or list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
 
         self.setObjectName("draw-side-panel")
         self.setStyleSheet(
@@ -290,9 +344,14 @@ class DrawSidebar(QFrame):
             lambda _sid: on_back_to_select(),
         )
 
+        path_buttons = [self._polyline_buttons[t] for t in self._path_tools]
+        if "arc" in self._path_tools:
+            path_buttons.append(self._arc_mode_button)
+        shape_buttons = [self._shapes_buttons[t] for t in self._shape_tools]
+
         section_frames: dict[str, QFrame] = {
-            "path": self._section("Path", [self._polyline_button, self._arc_mode_button]),
-            "shapes": self._section("Shapes", [self._shapes_button]),
+            "path": self._section("Path", path_buttons, columns=2),
+            "shapes": self._section("Shapes", shape_buttons, columns=2),
             "text": self._section("Text", [self._text_button]),
             "snapping": self._section(
                 "Snapping",
@@ -332,8 +391,13 @@ class DrawSidebar(QFrame):
 
         col.addStretch()
         scroll.setWidget(content)
-        outer.addWidget(scroll, stretch=1)
-        outer.addWidget(_ResizeHandle(self))
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(scroll, stretch=1)
+        row.addWidget(_ResizeHandle(self))
+        outer.addLayout(row, stretch=1)
+        outer.addWidget(_BottomResizeHandle(self))
 
     # -- resize --------------------------------------------------------------
 
@@ -344,6 +408,14 @@ class DrawSidebar(QFrame):
     def _on_width_committed(self) -> None:
         if self._on_width_changed is not None:
             self._on_width_changed(self.width())
+
+    def _apply_height(self, height: int) -> None:
+        clamped = max(MIN_DRAW_SIDEBAR_HEIGHT, min(MAX_DRAW_SIDEBAR_HEIGHT, height))
+        self.setFixedHeight(clamped)
+
+    def _on_height_committed(self) -> None:
+        if self._on_height_changed is not None:
+            self._on_height_changed(self.height())
 
     # -- helpers -------------------------------------------------------------
 
@@ -384,17 +456,12 @@ class DrawSidebar(QFrame):
     # -- state sync (called from view.py) ------------------------------------
 
     def set_active_tool(self, tool: str) -> None:
-        # Exactly one tool-family button (if any) should read as "active" —
-        # explicitly un-check the other, otherwise whichever family was
-        # last used stays highlighted forever after switching families.
-        is_polyline = tool in {"polyline", "spline", "arc", "bezier"}
-        is_shape = tool in {"rectangle", "slot", "circle", "ellipse", "polygon"}
-        if is_polyline:
-            self._polyline_button.set_current_state(tool)
-        self._polyline_button.setChecked(is_polyline)
-        if is_shape:
-            self._shapes_button.set_current_state(tool)
-        self._shapes_button.setChecked(is_shape)
+        # Each Path/Shapes icon is single-state now (no cycling) — the only
+        # sync needed is which one shows checked/highlighted.
+        for tool_id, btn in self._polyline_buttons.items():
+            btn.setChecked(tool_id == tool)
+        for tool_id, btn in self._shapes_buttons.items():
+            btn.setChecked(tool_id == tool)
 
     def set_polyline_actions_enabled(
         self, *, can_finish: bool, can_close: bool, can_undo: bool

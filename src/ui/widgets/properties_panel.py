@@ -294,11 +294,11 @@ class CanvasPropertiesPanel(QWidget):
         self.refresh()
 
     def _smooth(self) -> None:
-        self._canvas.smooth_selected()
+        self._canvas.smooth_selected(self._canvas._smooth_iterations)
         self.refresh()
 
     def _simplify(self) -> None:
-        self._canvas.simplify_selected()
+        self._canvas.simplify_selected(self._canvas._simplify_tolerance)
         self.refresh()
 
     def _commit_param(self, key: str) -> None:

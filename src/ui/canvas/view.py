@@ -48,8 +48,13 @@ from src.backend.geometry.shapes import shape_slot
 from src.backend.shapes.factory import ShapeFactory, transform_legacy_meta
 from src.constants import DRAG_THRESH
 from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
+    DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
     DEFAULT_DRAW_SIDEBAR_WIDTH,
+    DEFAULT_SIMPLIFY_TOLERANCE,
+    DEFAULT_SMOOTH_ITERATIONS,
     DEFAULT_SMOOTHING_METHOD,
 )
 from src.ui.canvas import commands as canvas_commands
@@ -111,6 +116,10 @@ class PolylineView(
     selectionChanged = Signal(int)  # type: ignore[assignment]
     modeChanged = Signal(str)
     drawSidebarWidthChanged = Signal(int)
+    drawSidebarHeightChanged = Signal(int)
+    smoothingMethodChanged = Signal(str)
+    smoothIterationsChanged = Signal(int)
+    simplifyToleranceChanged = Signal(float)
 
     def _flagged(self, attr: str) -> set[int]:
         """Indices of entities whose boolean ``attr`` is set."""
@@ -425,6 +434,10 @@ class PolylineView(
         self._unit_system: str = DEFAULT_UNIT_SYSTEM
         # Algorithm smooth_selected() runs: "chaikin" | "gaussian" | "catmull_rom".
         self._smoothing_method: str = DEFAULT_SMOOTHING_METHOD
+        # Seed values for the Smooth/Simplify HUD prompts — remembers the
+        # last value typed so the user doesn't retype it every time.
+        self._smooth_iterations: int = DEFAULT_SMOOTH_ITERATIONS
+        self._simplify_tolerance: float = DEFAULT_SIMPLIFY_TOLERANCE
 
         # Fit scale for zoom-% display
         self._fit_scale: float = 1.0
@@ -633,7 +646,11 @@ class PolylineView(
         self._draw_shape_h_edit: QLineEdit | None = None
         self._draw_shape_sides_spin: QSpinBox | None = None
         self._draw_sidebar_width: int = DEFAULT_DRAW_SIDEBAR_WIDTH
+        self._draw_sidebar_height: int | None = None  # None => auto-fit available space
         self._draw_sidebar_sections: list[str] = list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+        self._draw_sidebar_path_tools: list[str] = list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
+        self._draw_sidebar_shape_tools: list[str] = list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+        self._draw_sidebar_always_visible: bool = DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE
 
         self._needs_fit = True
         self.setMouseTracking(True)
@@ -2981,6 +2998,34 @@ class PolylineView(
         self.selectionChanged.emit(len(self._sel))
         self._refresh_draw_sidebar_state()
 
+    def _on_smoothing_method_changed(self, method: str) -> None:
+        """User picked a smoothing method from this tab's sidebar — apply it
+        here and let app.py persist + re-broadcast to every other tab."""
+        self.set_smoothing_method(method)
+        self.smoothingMethodChanged.emit(method)
+
+    def set_smooth_iterations(self, iterations: int) -> None:
+        """Apply a remembered iteration count from settings (startup, or
+        echoed from another tab) without re-emitting the change signal."""
+        self._smooth_iterations = int(iterations)
+
+    def _on_smooth_iterations_changed(self, iterations: int) -> None:
+        """User typed a new value into the Smooth HUD prompt — remember it
+        here and let app.py persist + re-broadcast to every other tab."""
+        self.set_smooth_iterations(iterations)
+        self.smoothIterationsChanged.emit(self._smooth_iterations)
+
+    def set_simplify_tolerance(self, tolerance: float) -> None:
+        """Apply a remembered tolerance from settings (startup, or echoed
+        from another tab) without re-emitting the change signal."""
+        self._simplify_tolerance = float(tolerance)
+
+    def _on_simplify_tolerance_changed(self, tolerance: float) -> None:
+        """User typed a new value into the Simplify HUD prompt — remember it
+        here and let app.py persist + re-broadcast to every other tab."""
+        self.set_simplify_tolerance(tolerance)
+        self.simplifyToleranceChanged.emit(self._simplify_tolerance)
+
     _MOVE_SNAP_SAMPLE = 64  # max moving vertices considered per drag event
 
     def _entity_center(self, idx: int) -> tuple[float, float] | None:
@@ -4948,7 +4993,7 @@ class PolylineView(
         """
         (ax, ay), (bx, by) = self._entities[idx].points
         extent = abs(bx - ax) if axis == "w" else abs(by - ay)
-        if extent <= 1e-9:
+        if extent <= 1e-6:
             self._show_flash(
                 "Line has no {} — change its angle first".format(
                     "width" if axis == "w" else "height"
@@ -4956,7 +5001,7 @@ class PolylineView(
                 1100,
             )
             return False
-        f = target / extent
+        f = max(1e-4, min(1e4, target / extent))
         self._push_undo()
         self._entities[idx].points[1] = (ax + (bx - ax) * f, ay + (by - ay) * f)
         self._sync_line_meta_from_poly(idx)
@@ -4974,10 +5019,10 @@ class PolylineView(
             return self._scale_single_line_extent(indices[0], "h", height)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
-        if cur_h <= 1e-9:
+        if cur_h <= 1e-6:
             return False
-        fy = height / cur_h
-        fx = fy if (self._aspect_ratio_locked and cur_w > 1e-9) else 1.0
+        fy = max(1e-4, min(1e4, height / cur_h))
+        fx = fy if (self._aspect_ratio_locked and cur_w > 1e-6) else 1.0
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
         self._demote_selected_entities_to_polylines(indices)
@@ -5001,10 +5046,10 @@ class PolylineView(
             return self._scale_single_line_extent(indices[0], "w", width)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
-        if cur_w <= 1e-9:
+        if cur_w <= 1e-6:
             return False
-        fx = width / cur_w
-        fy = fx if (self._aspect_ratio_locked and cur_h > 1e-9) else 1.0
+        fx = max(1e-4, min(1e4, width / cur_w))
+        fy = fx if (self._aspect_ratio_locked and cur_h > 1e-6) else 1.0
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
         self._demote_selected_entities_to_polylines(indices)
@@ -5942,7 +5987,7 @@ class PolylineView(
             on_construction=self.set_construction_mode,
             on_dimension=self.toggle_dimension_mode,
             on_measure=self.toggle_measure,
-            on_smoothing_method=self.set_smoothing_method,
+            on_smoothing_method=self._on_smoothing_method_changed,
             on_finish_open=lambda: self._finish_draw(close=False),
             on_close_edit=lambda: self._finish_draw(close=True),
             on_undo_point=self._key_backspace,
@@ -5950,7 +5995,10 @@ class PolylineView(
             on_back_to_select=lambda: self.set_mode("select"),
             width=self._draw_sidebar_width,
             sections=self._draw_sidebar_sections,
+            path_tools=self._draw_sidebar_path_tools,
+            shape_tools=self._draw_sidebar_shape_tools,
             on_width_changed=self._on_draw_sidebar_width_changed,
+            on_height_changed=self._on_draw_sidebar_height_changed,
         )
         panel.hide()
 
@@ -5978,9 +6026,43 @@ class PolylineView(
             self._draw_sidebar._apply_width(width)
             self._layout_draw_sidebar()
 
+    def _on_draw_sidebar_height_changed(self, height: int) -> None:
+        self._draw_sidebar_height = height
+        self._layout_draw_sidebar()
+        self.drawSidebarHeightChanged.emit(height)
+
+    def set_draw_sidebar_height(self, height: int | None) -> None:
+        """Apply a height from settings (app startup / another window
+        resized it) without re-emitting drawSidebarHeightChanged. ``None``
+        reverts to auto-fitting the available space."""
+        self._draw_sidebar_height = height
+        if self._draw_sidebar is not None and height is not None:
+            self._draw_sidebar._apply_height(height)
+        self._layout_draw_sidebar()
+
     def set_draw_sidebar_sections(self, sections: list[str]) -> None:
         self._draw_sidebar_sections = list(sections)
         self._build_draw_sidebar()
+
+    def set_draw_sidebar_path_tools(self, tools: list[str]) -> None:
+        self._draw_sidebar_path_tools = list(tools)
+        self._build_draw_sidebar()
+
+    def set_draw_sidebar_shape_tools(self, tools: list[str]) -> None:
+        self._draw_sidebar_shape_tools = list(tools)
+        self._build_draw_sidebar()
+
+    def set_draw_sidebar_always_visible(self, enabled: bool) -> None:
+        self._draw_sidebar_always_visible = enabled
+        self._set_draw_sidebar_visible(self._mode == "draw" or enabled)
+
+    def _draw_sidebar_target_height(self, y: int) -> int:
+        """Auto-fit height (available canvas space) unless the user has
+        manually dragged the sidebar's own bottom-edge handle, in which
+        case that override sticks until they resize it again."""
+        if self._draw_sidebar_height is not None:
+            return self._draw_sidebar_height
+        return min(430, max(260, self.height() - y - 8))
 
     def _layout_draw_sidebar(self) -> None:
         if self._draw_sidebar is None:
@@ -5988,8 +6070,7 @@ class PolylineView(
         left = self._chrome_left()
         top = self._chrome_top()
         y = top + 8
-        target_h = max(260, self.height() - y - 8)
-        self._draw_sidebar.setFixedHeight(min(430, target_h))
+        self._draw_sidebar.setFixedHeight(self._draw_sidebar_target_height(y))
         x = (
             left + 8
             if self._draw_sidebar_visible
@@ -6000,6 +6081,8 @@ class PolylineView(
     def _set_draw_sidebar_visible(self, visible: bool, *, animate: bool = True) -> None:
         if self._draw_sidebar is None or self._draw_sidebar_anim is None:
             return
+        if self._draw_sidebar_always_visible:
+            visible = True
         if self._draw_sidebar_visible == visible and self._draw_sidebar.isVisible():
             self._refresh_draw_sidebar_state()
             return
@@ -6010,7 +6093,7 @@ class PolylineView(
         y = self._chrome_top() + 8
         hidden_x = left - self._draw_sidebar.width() + 20
         shown_x = left + 8
-        self._draw_sidebar.setFixedHeight(min(430, max(260, self.height() - y - 8)))
+        self._draw_sidebar.setFixedHeight(self._draw_sidebar_target_height(y))
 
         if not animate:
             if visible:
@@ -6134,9 +6217,13 @@ class PolylineView(
             self._draw_sidebar.hide()
 
     def _on_polyline_family_change(self, tool: str) -> None:
+        if self._mode != "draw":
+            self.set_mode("draw")
         self._set_draw_primitive(tool)
 
     def _on_shapes_family_change(self, tool: str) -> None:
+        if self._mode != "draw":
+            self.set_mode("draw")
         self._set_draw_primitive(tool)
 
     def _on_arc_mode_change(self, mode: str) -> None:

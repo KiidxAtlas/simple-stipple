@@ -152,12 +152,15 @@ def _simplify_selected(v: Any) -> None:
         return
 
     def _apply(tolerance: float) -> None:
+        v._on_simplify_tolerance_changed(tolerance)
         n = v.simplify_selected(tolerance)
         v._show_flash(
             f"Simplified {n} shape(s)" if n else "No simplification possible", 900
         )
 
-    v._show_hud_prompt("Simplify tolerance (mm)", 0.2, _apply, minimum=0.001)
+    v._show_hud_prompt(
+        "Simplify tolerance (mm)", v._simplify_tolerance, _apply, minimum=0.001
+    )
 
 
 def _smooth_selected(v: Any) -> None:
@@ -166,10 +169,13 @@ def _smooth_selected(v: Any) -> None:
         return
 
     def _apply(iterations: float) -> None:
+        v._on_smooth_iterations_changed(int(iterations))
         n = v.smooth_selected(int(iterations))
         v._show_flash(f"Smoothed {n} shape(s)" if n else "No change", 900)
 
-    v._show_hud_prompt("Smooth iterations", 2.0, _apply, minimum=1.0)
+    v._show_hud_prompt(
+        "Smooth iterations", float(v._smooth_iterations), _apply, minimum=1.0
+    )
 
 
 def _fit_selected_to_curve(v: Any) -> None:

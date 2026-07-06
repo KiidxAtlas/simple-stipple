@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,8 +20,13 @@ from PySide6.QtWidgets import (
 )
 
 from src.settings import (
+    DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
+    DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
+    DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
     DEFAULT_RADIAL_MENU_TOOLS,
+    DEFAULT_SIMPLIFY_TOLERANCE,
+    DEFAULT_SMOOTH_ITERATIONS,
     DEFAULT_SMOOTHING_METHOD,
     SMOOTHING_METHODS,
     save_settings,
@@ -67,6 +73,8 @@ class SettingsDialog(QDialog):
         self._trace_default_entries: dict[str, QLineEdit] = {}
         self._unit_combo: QComboBox | None = None
         self._smoothing_combo: QComboBox | None = None
+        self._smooth_iterations_edit: QLineEdit | None = None
+        self._simplify_tolerance_edit: QLineEdit | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -163,6 +171,38 @@ class SettingsDialog(QDialog):
         smoothing_row.addStretch()
         behavior_layout.addLayout(smoothing_row)
 
+        defaults_row = QHBoxLayout()
+        defaults_row.addWidget(QLabel("Smooth iterations"))
+        self._smooth_iterations_edit = QLineEdit(
+            str(self._settings.get("smooth_iterations", DEFAULT_SMOOTH_ITERATIONS))
+        )
+        self._smooth_iterations_edit.setValidator(QIntValidator(1, 50))
+        self._smooth_iterations_edit.setMaximumWidth(60)
+        self._smooth_iterations_edit.setToolTip(
+            "Default seeded into the Smooth command's HUD prompt"
+        )
+        defaults_row.addWidget(self._smooth_iterations_edit)
+        defaults_row.addSpacing(16)
+        defaults_row.addWidget(QLabel("Simplify tolerance (mm)"))
+        self._simplify_tolerance_edit = QLineEdit(
+            str(self._settings.get("simplify_tolerance", DEFAULT_SIMPLIFY_TOLERANCE))
+        )
+        self._simplify_tolerance_edit.setValidator(QDoubleValidator(0.001, 1000.0, 3))
+        self._simplify_tolerance_edit.setMaximumWidth(70)
+        self._simplify_tolerance_edit.setToolTip(
+            "Default seeded into the Simplify command's HUD prompt"
+        )
+        defaults_row.addWidget(self._simplify_tolerance_edit)
+        defaults_row.addStretch()
+        behavior_layout.addLayout(defaults_row)
+
+        self._add_toggle(
+            behavior_layout,
+            "draw_sidebar_always_visible",
+            "Keep draw sidebar always visible",
+            DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
+        )
+
         kb_row = QHBoxLayout()
         kb_row.addStretch()
         radial_btn = QPushButton("Customize radial menu\u2026")
@@ -234,9 +274,22 @@ class SettingsDialog(QDialog):
         current = self._settings.get(
             "draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
         )
-        dlg = DrawSidebarCustomizeDialog(self, sections=current)
+        current_path_tools = self._settings.get(
+            "draw_sidebar_path_tools", list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
+        )
+        current_shape_tools = self._settings.get(
+            "draw_sidebar_shape_tools", list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+        )
+        dlg = DrawSidebarCustomizeDialog(
+            self,
+            sections=current,
+            path_tools=current_path_tools,
+            shape_tools=current_shape_tools,
+        )
         if dlg.exec():
             self._settings["draw_sidebar_sections"] = dlg.get_sections()
+            self._settings["draw_sidebar_path_tools"] = dlg.get_path_tools()
+            self._settings["draw_sidebar_shape_tools"] = dlg.get_shape_tools()
 
     def _add_row(
         self, layout: QVBoxLayout, key: str, label: str, browse: bool = False
@@ -329,6 +382,22 @@ class SettingsDialog(QDialog):
 
         if self._smoothing_combo is not None:
             self._settings["smoothing_method"] = self._smoothing_combo.currentData()
+
+        if self._smooth_iterations_edit is not None:
+            try:
+                self._settings["smooth_iterations"] = int(
+                    self._smooth_iterations_edit.text()
+                )
+            except ValueError:
+                pass
+
+        if self._simplify_tolerance_edit is not None:
+            try:
+                self._settings["simplify_tolerance"] = float(
+                    self._simplify_tolerance_edit.text()
+                )
+            except ValueError:
+                pass
 
         save_settings(self._settings)
         self.accept()

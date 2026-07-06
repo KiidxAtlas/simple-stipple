@@ -21,10 +21,11 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QCursor, QEnterEvent, QIcon
+from PySide6.QtGui import QColor, QCursor, QEnterEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
     QMenu,
     QPushButton,
     QVBoxLayout,
@@ -120,6 +121,15 @@ class CycleIconButton(QPushButton):
         self._hover_timer.timeout.connect(self._show_flyout)
         self._flyout: QFrame | None = None
 
+        # Belt-and-suspenders auto-hide: leaveEvent-triggered scheduling
+        # covers the common case, but the flyout is a separate frameless
+        # top-level window, and Qt doesn't always deliver a clean leaveEvent
+        # when the cursor crosses between two disjoint top-level surfaces
+        # quickly. Poll while visible so it can never get stuck open.
+        self._flyout_watchdog = QTimer(self)
+        self._flyout_watchdog.setInterval(150)
+        self._flyout_watchdog.timeout.connect(self._hide_flyout_unless_still_hovered)
+
     # -- public API --------------------------------------------------------
 
     @property
@@ -145,6 +155,7 @@ class CycleIconButton(QPushButton):
     def _on_left_click(self) -> None:
         if not self._states:
             return
+        self._hide_flyout()
         self._current_index = (self._current_index + 1) % len(self._states)
         self._update_visuals()
         self._on_change(self._states[self._current_index][0])
@@ -165,6 +176,7 @@ class CycleIconButton(QPushButton):
             super().mouseReleaseEvent(event)
 
     def _show_context_menu(self, pos: QPoint) -> None:
+        self._hide_flyout()
         menu = QMenu(self)
         menu.setStyleSheet(
             """
@@ -238,6 +250,7 @@ class CycleIconButton(QPushButton):
         self._hide_flyout()
 
     def _hide_flyout(self) -> None:
+        self._flyout_watchdog.stop()
         if self._flyout is not None:
             self._flyout.hide()
             self._flyout.deleteLater()
@@ -256,28 +269,34 @@ class CycleIconButton(QPushButton):
         flyout.setStyleSheet(
             """
             QFrame#cycle-flyout {
-                background: #161b22;
-                border: 1px solid #30363d;
+                background: #21262d;
+                border: 2px solid #58a6ff;
                 border-radius: 8px;
             }
             QFrame#cycle-flyout QPushButton {
                 background: transparent;
                 border: none;
-                color: #c9d1d9;
-                font-size: 10px;
-                padding: 5px 16px;
+                color: #e6edf3;
+                font-size: 12px;
+                padding: 7px 18px;
                 text-align: center;
             }
             QFrame#cycle-flyout QPushButton:hover {
-                background: #1c2128;
+                background: #30363d;
                 color: #79c0ff;
             }
             QFrame#cycle-flyout QPushButton[role="flyout-current"] {
                 color: #79c0ff;
-                font-weight: 600;
+                font-weight: 700;
             }
             """
         )
+
+        shadow = QGraphicsDropShadowEffect(flyout)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 180))
+        flyout.setGraphicsEffect(shadow)
 
         layout = QVBoxLayout(flyout)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -313,6 +332,7 @@ class CycleIconButton(QPushButton):
 
         flyout.show()
         self._flyout = flyout
+        self._flyout_watchdog.start()
 
     def _panel_global_rect(self) -> QRect:
         """Global geometry of the enclosing sidebar panel (the ancestor
@@ -326,6 +346,3 @@ class CycleIconButton(QPushButton):
             widget = widget.parentWidget()
         top_left = self.mapToGlobal(self.rect().topLeft())
         return QRect(top_left, self.size())
-
-        flyout.show()
-        self._flyout = flyout

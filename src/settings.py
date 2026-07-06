@@ -147,6 +147,12 @@ SMOOTHING_METHODS: tuple[tuple[str, str], ...] = (
     ("catmull_rom", "Catmull-Rom (spline through points)"),
 )
 
+# Defaults seeded into the Smooth/Simplify HUD prompts (path.smooth /
+# path.simplify commands), so the user doesn't have to retype the same
+# value every time. Whatever they last typed is remembered here too.
+DEFAULT_SMOOTH_ITERATIONS = 2
+DEFAULT_SIMPLIFY_TOLERANCE = 0.2
+
 
 # =============================================================================
 # Draw sidebar layout — user-resizable width and, optionally, which
@@ -157,6 +163,9 @@ SMOOTHING_METHODS: tuple[tuple[str, str], ...] = (
 DEFAULT_DRAW_SIDEBAR_WIDTH = 108
 MIN_DRAW_SIDEBAR_WIDTH = 96
 MAX_DRAW_SIDEBAR_WIDTH = 220
+MIN_DRAW_SIDEBAR_HEIGHT = 200
+MAX_DRAW_SIDEBAR_HEIGHT = 900
+DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE = False
 
 DEFAULT_DRAW_SIDEBAR_SECTIONS: tuple[str, ...] = (
     "path",
@@ -179,6 +188,31 @@ DRAW_SIDEBAR_SECTION_LABELS: tuple[tuple[str, str], ...] = (
     ("sketch", "Sketch (Dimension/Measure)"),
     ("smoothing", "Smoothing method"),
     ("editing", "Contextual editing actions"),
+)
+
+# Per-icon customization within the Path/Shapes sections — which tools show
+# and in what order, independent of whether the whole section is shown.
+DEFAULT_DRAW_SIDEBAR_PATH_TOOLS: tuple[str, ...] = ("polyline", "spline", "arc", "bezier")
+DRAW_SIDEBAR_PATH_TOOL_LABELS: tuple[tuple[str, str], ...] = (
+    ("polyline", "Polyline"),
+    ("spline", "Spline"),
+    ("arc", "Arc"),
+    ("bezier", "Bezier Pen"),
+)
+
+DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS: tuple[str, ...] = (
+    "rectangle",
+    "slot",
+    "circle",
+    "ellipse",
+    "polygon",
+)
+DRAW_SIDEBAR_SHAPE_TOOL_LABELS: tuple[tuple[str, str], ...] = (
+    ("rectangle", "Rectangle"),
+    ("slot", "Slot"),
+    ("circle", "Circle"),
+    ("ellipse", "Ellipse"),
+    ("polygon", "Polygon"),
 )
 
 
