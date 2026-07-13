@@ -467,6 +467,38 @@ def test_shift_drag_rubber_band_selects_contained(qapp):
     assert v.get_selection_indices() == [0, 1]
 
 
+def test_edit_mode_band_select_does_not_require_shift(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_mode("edit")
+    drag_world(v, -5.0, -5.0, 15.0, 15.0)  # encloses square(0, 0) only, no modifier
+    assert {pi for pi, _ in v._edit_selected_verts} == {0}
+    assert len(v._edit_selected_verts) >= 4
+
+
+def test_edit_mode_multi_vertex_delete_does_not_corrupt_small_polygon(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_mode("edit")
+    drag_world(v, -5.0, -5.0, 15.0, 15.0)  # band-select all 4 corners, no shift
+    assert len(v._edit_selected_verts) >= 4
+    key(v, Qt.Key.Key_Delete)
+    pts = v._entities[0].points
+    # Deleting every corner of a quad must not strip it below a valid
+    # closed triangle (3 unique points + duplicated closing point).
+    assert len(pts) >= 4
+    assert pts[0] == pts[-1]
+
+
+def test_edit_mode_delete_vertex_keeps_open_polyline_open(qapp):
+    open_line = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (20.0, 10.0)]
+    v = make_view(qapp, [open_line])
+    v.set_mode("edit")
+    click_world(v, 10.0, 0.0)  # select the interior vertex at index 1
+    key(v, Qt.Key.Key_Delete)
+    pts = v._entities[0].points
+    assert len(pts) == 3
+    assert pts[0] != pts[-1]
+
+
 # ── modes / misc ─────────────────────────────────────────────────────────────
 
 

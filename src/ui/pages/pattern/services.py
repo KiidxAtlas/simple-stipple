@@ -408,6 +408,76 @@ class PatternProcessingService:
         """
         return _merge_and_classify_outlines_shared(outline_polys)
 
+    @staticmethod
+    def _partition_polys_by_outline(
+        polys: list[list[tuple[float, float]]],
+        outlines: list[list[tuple[float, float]]],
+    ) -> list[list[list[tuple[float, float]]]]:
+        """Bucket generated pattern shapes by which source outline they fell
+        inside, so each outline can be exported to its own ``pattern_N``
+        layer (mirroring how ``outline_N`` layers are split per border) —
+        while every shape belonging to one outline still lands on a single
+        shared layer rather than one layer per shape.
+        """
+        from shapely.geometry import LineString as _LS
+        from shapely.geometry import Polygon as _Poly
+
+        groups: list[list[list[tuple[float, float]]]] = [[] for _ in outlines]
+        if len(outlines) <= 1:
+            if outlines:
+                groups[0] = list(polys)
+            return groups
+        prepared_outlines = []
+        for o in outlines:
+            try:
+                shp = _Poly(o)
+                if not shp.is_valid:
+                    shp = shp.buffer(0)
+                prepared_outlines.append(_shp_prepared.prep(shp))
+            except Exception:
+                prepared_outlines.append(None)
+
+        for poly in polys:
+            point = None
+            try:
+                if len(poly) >= 3:
+                    shp = _Poly(poly)
+                    if not shp.is_valid:
+                        shp = shp.buffer(0)
+                    if not shp.is_empty:
+                        point = shp.representative_point()
+                if point is None and len(poly) >= 2:
+                    point = _LS(poly).interpolate(0.5, normalized=True)
+            except Exception:
+                point = None
+            if point is None and poly:
+                point = poly[0]
+
+            assigned = False
+            for idx, prep in enumerate(prepared_outlines):
+                if prep is not None and point is not None and prep.contains(point):
+                    groups[idx].append(poly)
+                    assigned = True
+                    break
+            if not assigned:
+                # Fall back to nearest outline centroid so no shape is
+                # silently dropped from the export (e.g. a sliver that
+                # landed exactly on a shared edge after clipping).
+                try:
+                    px, py = (point.x, point.y) if hasattr(point, "x") else point
+                except Exception:
+                    px, py = (0.0, 0.0)
+                best_idx, best_dist = 0, None
+                for idx, o in enumerate(outlines):
+                    ox = sum(p[0] for p in o) / len(o)
+                    oy = sum(p[1] for p in o) / len(o)
+                    d = (ox - px) ** 2 + (oy - py) ** 2
+                    if best_dist is None or d < best_dist:
+                        best_dist = d
+                        best_idx = idx
+                groups[best_idx].append(poly)
+        return groups
+
     def build_pattern_polys(
         self,
         outline_polys: list[list[tuple[float, float]]],
@@ -425,6 +495,7 @@ class PatternProcessingService:
         exclusion_polys: list[list[tuple[float, float]]] | None = None,
         fill_options: dict | None = None,
         fill_polys_out: list[list[tuple[float, float]]] | None = None,
+        outline_groups_out: list[list[list[tuple[float, float]]]] | None = None,
     ) -> list[list[tuple[float, float]]]:
         # An OPEN outline shape acts as an automatic cutout — same treatment
         # as an explicitly marked exclusion/cutout region (user request: "an
@@ -650,6 +721,11 @@ class PatternProcessingService:
             else:
                 base = polys if spec.keep_pattern else []
                 polys = base + fill_strokes
+
+        if outline_groups_out is not None:
+            outline_groups_out.extend(
+                self._partition_polys_by_outline(polys, scaled)
+            )
         return polys
 
     @staticmethod
@@ -700,6 +776,7 @@ class PatternProcessingService:
         exclusion_polys: list[list[tuple[float, float]]] | None = None,
         fill_options: dict | None = None,
         fill_polys_out: list | None = None,
+        zone_groups_out: list[list[list[tuple[float, float]]]] | None = None,
     ) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
         floating_cutouts = self._floating_open_cutouts(zones, all_polys)
         all_polys_out: list[list[tuple[float, float]]] = []
@@ -726,6 +803,8 @@ class PatternProcessingService:
                 fill_polys_out=zone_fill if fill_polys_out is not None else None,
             )
             all_polys_out.extend(zone_generated)
+            if zone_groups_out is not None:
+                zone_groups_out.append(zone_generated)
             if fill_polys_out is not None and zone_fill:
                 fill_polys_out.extend(zone_fill)
             # Always collect the outline so the export can ship it as a

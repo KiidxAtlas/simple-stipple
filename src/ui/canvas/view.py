@@ -2341,18 +2341,36 @@ class PolylineView(
     def _delete_edit_vertices(self, verts: set[tuple[int, int]]) -> int:
         if not verts:
             return 0
-        grouped: dict[int, set[int]] = {}
+        # Group requested vertices per polygon first, then clamp each group
+        # to however many can actually be removed while keeping at least a
+        # triangle (closed) / 3 points (open) — checking each vertex against
+        # the *original* length independently (as this used to) lets a
+        # multi-vertex band-delete strip a small polygon down to 1-2 points,
+        # leaving a degenerate entity that breaks rendering/hit-testing.
+        requested: dict[int, set[int]] = {}
         for pi, vi in verts:
             if self._is_locked(pi):
                 continue
             poly = self._entities[pi].points
             if not (0 <= vi < len(poly)):
                 continue
-            if self._is_poly_closed(poly):
-                if len(poly) - 1 > 3:
-                    grouped.setdefault(pi, set()).add(vi)
-            elif len(poly) > 3:
-                grouped.setdefault(pi, set()).add(vi)
+            requested.setdefault(pi, set()).add(vi)
+
+        grouped: dict[int, set[int]] = {}
+        for pi, vis in requested.items():
+            poly = self._entities[pi].points
+            closed = self._is_poly_closed(poly)
+            available = (len(poly) - 1) if closed else len(poly)
+            max_removable = max(0, available - 3)
+            if max_removable <= 0:
+                continue
+            # The duplicated closing vertex is kept in sync with index 0
+            # after deletion rather than removed directly.
+            candidates = sorted(vi for vi in vis if not (closed and vi == len(poly) - 1))
+            keep = set(candidates[:max_removable])
+            if keep:
+                grouped[pi] = keep
+
         if not grouped:
             return 0
         self._push_undo()
@@ -2361,18 +2379,15 @@ class PolylineView(
             if not (0 <= pi < len(self._entities)):
                 continue
             poly = self._entities[pi].points
-            if self._is_poly_closed(poly):
-                for vi in sorted(grouped[pi], reverse=True):
-                    if 0 <= vi < len(poly):
-                        poly.pop(vi)
-                        deleted += 1
-                if len(poly) >= 4:
-                    poly[-1] = poly[0]
-            else:
-                for vi in sorted(grouped[pi], reverse=True):
-                    if 0 <= vi < len(poly):
-                        poly.pop(vi)
-                        deleted += 1
+            closed = self._is_poly_closed(poly)
+            for vi in sorted(grouped[pi], reverse=True):
+                if 0 <= vi < len(poly):
+                    poly.pop(vi)
+                    deleted += 1
+            # Only closed polygons need the closing point re-stitched to the
+            # (possibly now different) first point — doing this for open
+            # polylines too used to force-close them on every deletion.
+            if closed and len(poly) >= 4:
                 poly[-1] = poly[0]
         self._edit_selected_verts.clear()
         object.__setattr__(self, "_edit_drag_targets", set())

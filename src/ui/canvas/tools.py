@@ -363,48 +363,45 @@ class EditTool(CanvasTool):
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         hit = v._find_nearest_vertex(pos.x(), pos.y())
 
-        if shift:
-            if hit is not None:
-                if hit in v._edit_selected_verts:
-                    v._edit_selected_verts.discard(hit)
-                else:
-                    v._edit_selected_verts.add(hit)
-                v._redraw()
-                return True
+        if shift and hit is not None:
+            if hit in v._edit_selected_verts:
+                v._edit_selected_verts.discard(hit)
+            else:
+                v._edit_selected_verts.add(hit)
+            v._redraw()
+            return True
+
+        if hit is None:
+            # Empty space: default drag behavior is box selection (matches
+            # Select mode). Shift adds to the current vertex selection;
+            # a plain drag replaces it.
             v._shift_drag = True
             v._band_start = pos
+            v._band_additive = shift
             v._lmb_prev = pos
             v._lmb_press = None
             return True
 
-        if hit is not None:
-            pi, vi = hit
-            if v._is_locked(pi):
-                return True
-            if pi < 0 or pi >= len(v._entities):
-                return True
-            if vi < 0 or vi >= len(v._entities[pi].points):
-                return True
-            v._edit_poly = pi
-            v._edit_vert = vi
-            v._edit_dragging = True
-            v._edit_drag_moved = False
-            v._edit_undo_pushed = False
-            v._edit_drag_anchor = v._entities[pi].points[vi]
-            if hit in v._edit_selected_verts and len(v._edit_selected_verts) > 1:
-                v._edit_drag_targets = set(v._edit_selected_verts)
-            else:
-                v._edit_selected_verts = {hit}
-                v._edit_drag_targets = v._linked_vertices(pi, vi)
-            v._edit_linked_verts = set(v._edit_drag_targets)
-            v._redraw()
+        pi, vi = hit
+        if v._is_locked(pi):
             return True
-
-        if v._edit_selected_verts:
-            v._edit_selected_verts.clear()
-            v._redraw()
-        v._lmb_press = pos
-        v._lmb_prev = pos
+        if pi < 0 or pi >= len(v._entities):
+            return True
+        if vi < 0 or vi >= len(v._entities[pi].points):
+            return True
+        v._edit_poly = pi
+        v._edit_vert = vi
+        v._edit_dragging = True
+        v._edit_drag_moved = False
+        v._edit_undo_pushed = False
+        v._edit_drag_anchor = v._entities[pi].points[vi]
+        if hit in v._edit_selected_verts and len(v._edit_selected_verts) > 1:
+            v._edit_drag_targets = set(v._edit_selected_verts)
+        else:
+            v._edit_selected_verts = {hit}
+            v._edit_drag_targets = v._linked_vertices(pi, vi)
+        v._edit_linked_verts = set(v._edit_drag_targets)
+        v._redraw()
         return True
 
     def move(self, event: QMouseEvent) -> bool:
@@ -430,9 +427,10 @@ class EditTool(CanvasTool):
             bx, by = v._band_start.x(), v._band_start.y()
             x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
             y1c, y2c = min(by, pos.y()), max(by, pos.y())
-            v._select_edit_vertices_in_rect(x1c, y1c, x2c, y2c, additive=True)
+            v._select_edit_vertices_in_rect(x1c, y1c, x2c, y2c, additive=v._band_additive)
             v._shift_drag = False
             v._band_start = None
+            v._band_additive = False
             v._lmb_prev = None
             v._redraw()
             return True

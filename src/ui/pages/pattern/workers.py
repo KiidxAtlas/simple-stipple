@@ -19,6 +19,22 @@ from src.backend.dxf.io import write_polylines_dxf
 LOGGER = logging.getLogger(__name__)
 
 
+def _pattern_layer_plan(
+    groups: list[list[list[tuple[float, float]]]],
+) -> tuple[str | None, dict[str, list[list[tuple[float, float]]]]]:
+    """Decide DXF layer names for generated pattern shapes.
+
+    One outline keeps the classic shared "pattern" layer. Multiple outlines
+    each get their own "pattern_N" layer (mirroring "outline_N") so laser/
+    CAM software still treats each outline's whole fill as a single job —
+    not one job per individual shape — while still separating outlines.
+    """
+    non_empty = [g for g in groups if g]
+    if len(non_empty) <= 1:
+        return "pattern", {}
+    return None, {f"pattern_{i + 1}": g for i, g in enumerate(groups) if g}
+
+
 def run_generate(
     active: list[list[tuple[float, float]]],
     out_path: str,
@@ -47,6 +63,7 @@ def run_generate(
         if cancel_event and cancel_event.is_set():
             return
         fill_polys: list[list[tuple[float, float]]] = []
+        outline_groups: list[list[list[tuple[float, float]]]] = []
         polys = pattern_service.build_pattern_polys(
             active,
             pattern=pattern,
@@ -62,13 +79,20 @@ def run_generate(
             exclusion_polys=exclusion_polys,
             fill_options=fill_options,
             fill_polys_out=fill_polys,
+            outline_groups_out=outline_groups,
         )
         if cancel_event and cancel_event.is_set():
             return
         close = pattern_service.should_close_pattern(pattern)
-        extra: dict[str, list] = {}
+        pattern_layer, pattern_extra = _pattern_layer_plan(outline_groups)
+        extra: dict[str, list] = dict(pattern_extra)
         if fill_polys:
             extra["fill"] = fill_polys
+        # When the pattern was split per-outline (pattern_extra non-empty),
+        # every shape already went into extra_layers — the main polylines
+        # list must stay empty or they'd be written twice (once bare, once
+        # under pattern_N).
+        main_polys = [] if pattern_extra else polys
         # Always emit the outline as its own layer so the DXF reliably ships
         # with the documented three-layer split (outline / pattern / fill).
         # This holds regardless of the include_border checkbox or whether the
@@ -79,14 +103,13 @@ def run_generate(
                 active, scale[0], scale[1], orig_w=orig_w, orig_h=orig_h
             )
         write_polylines_dxf(
-            polys,
+            main_polys,
             out_path,
             close=close,
             open_paths=open_paths,
             border_polys=effective_border,
-            pattern_layer="pattern",
+            pattern_layer=pattern_layer,
             border_layer_prefix="outline",
-            entity_names=[f"pattern_{i + 1:04d}" for i in range(len(polys))],
             extra_layers=extra or None,
         )
         count = len(polys) + len(fill_polys)
@@ -129,6 +152,7 @@ def run_generate_zones(
     """
     try:
         fill_polys: list[list[tuple[float, float]]] = []
+        zone_groups: list[list[list[tuple[float, float]]]] = []
         all_polys, border_polys = pattern_service.build_zone_pattern_polys(
             zones,
             include_border=include_border,
@@ -142,21 +166,23 @@ def run_generate_zones(
             exclusion_polys=exclusion_polys,
             fill_options=fill_options,
             fill_polys_out=fill_polys,
+            zone_groups_out=zone_groups,
         )
         if cancel_event and cancel_event.is_set():
             return
-        extra: dict[str, list] = {}
+        pattern_layer, pattern_extra = _pattern_layer_plan(zone_groups)
+        extra: dict[str, list] = dict(pattern_extra)
         if fill_polys:
             extra["fill"] = fill_polys
+        main_polys = [] if pattern_extra else all_polys
         write_polylines_dxf(
-            all_polys,
+            main_polys,
             out_path,
             close=True,
             open_paths=open_paths,
             border_polys=border_polys if border_polys else None,
-            pattern_layer="pattern",
+            pattern_layer=pattern_layer,
             border_layer_prefix="outline",
-            entity_names=[f"pattern_{i + 1:04d}" for i in range(len(all_polys))],
             extra_layers=extra or None,
         )
         count = len(all_polys)
