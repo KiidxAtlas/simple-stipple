@@ -13,10 +13,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.error_reporting import report_error
+from src.infra.error_reporting import report_error
 
 
 class CommandPaletteDialog(QDialog):
+    _recent_command_indices: list[int] = []
+
     def __init__(
         self,
         commands: list[dict],
@@ -61,14 +63,33 @@ class CommandPaletteDialog(QDialog):
         self._refresh_list()
         self._query.setFocus()
 
+    def keyPressEvent(self, event) -> None:
+        """Move the highlighted row with Up/Down.
+
+        The query QLineEdit holds focus throughout (so typing keeps
+        filtering) and doesn't consume arrow keys itself, so without this
+        override Up/Down did nothing — a non-first match was only pickable
+        by mouse, despite the dialog's own hint text implying full keyboard
+        operation.
+        """
+        key = event.key()
+        if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+            count = self._list.count()
+            if count:
+                row = self._list.currentRow()
+                row = (row + 1) % count if key == Qt.Key.Key_Down else (row - 1) % count
+                self._list.setCurrentRow(row)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def _refresh_list(self) -> None:
         text = self._query.text().strip().lower()
         prev_item = self._list.currentItem()
-        prev_idx = (
-            prev_item.data(Qt.ItemDataRole.UserRole) if prev_item is not None else None
-        )
+        prev_idx = prev_item.data(Qt.ItemDataRole.UserRole) if prev_item is not None else None
         self._list.clear()
         first_row_for_prev: int | None = None
+        matches: list[tuple[int, int, dict]] = []
         for idx, cmd in enumerate(self._commands):
             hay = " ".join(
                 [
@@ -77,8 +98,16 @@ class CommandPaletteDialog(QDialog):
                     str(cmd.get("keywords", "")),
                 ]
             ).lower()
-            if text and text not in hay:
+            score = self._match_score(text, hay)
+            if score is None:
                 continue
+            recent_rank = (
+                self._recent_command_indices.index(idx)
+                if idx in self._recent_command_indices
+                else 10_000
+            )
+            matches.append((score * 10_000 + recent_rank, idx, cmd))
+        for _score, idx, cmd in sorted(matches, key=lambda item: item[0]):
             title = str(cmd.get("title", ""))
             shortcut = str(cmd.get("shortcut", "")).strip()
             label = f"{title}    [{shortcut}]" if shortcut else title
@@ -97,6 +126,29 @@ class CommandPaletteDialog(QDialog):
         else:
             self._list.setCurrentRow(0)
 
+    @staticmethod
+    def _match_score(query: str, haystack: str) -> int | None:
+        """Token-aware fuzzy subsequence score; lower is a better match."""
+        if not query:
+            return 0
+        total = 0
+        for token in query.split():
+            direct = haystack.find(token)
+            if direct >= 0:
+                total += direct
+                continue
+            position = -1
+            gaps = 0
+            for char in token:
+                next_position = haystack.find(char, position + 1)
+                if next_position < 0:
+                    return None
+                if position >= 0:
+                    gaps += next_position - position - 1
+                position = next_position
+            total += 100 + gaps
+        return total
+
     def _run_selected(self) -> None:
         item = self._list.currentItem()
         if item is None:
@@ -107,6 +159,10 @@ class CommandPaletteDialog(QDialog):
             self.reject()
             return
         callback = self._commands[idx].get("run")
+        if idx in self._recent_command_indices:
+            self._recent_command_indices.remove(idx)
+        self._recent_command_indices.insert(0, idx)
+        del self._recent_command_indices[12:]
         # Accept first so failures don't leave the modal dialog stuck.
         self.accept()
         if callable(callback):

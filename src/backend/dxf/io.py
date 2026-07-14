@@ -6,7 +6,8 @@ import logging
 import math
 import re
 from collections import Counter
-from typing import Any, NamedTuple, cast
+from collections.abc import Iterable
+from typing import Any, NamedTuple, Protocol, cast
 
 import ezdxf  # type: ignore[attr-defined]
 from ezdxf.math import ConstructionArc  # type: ignore[attr-defined]
@@ -14,7 +15,7 @@ from shapely.geometry import Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
-from src.backend.shapes.factory import shape_from_legacy_meta
+from src.backend.shapes import shape_from_meta
 
 _LOG = logging.getLogger(__name__)
 OUTLINE_CLOSE_TOLERANCE_MM = 2.0
@@ -54,7 +55,7 @@ def _normalize_polyline_for_dxf(
         try:
             x = float(p[0])
             y = float(p[1])
-        except Exception:
+        except (TypeError, ValueError, IndexError):
             continue
         if math.isfinite(x) and math.isfinite(y):
             finite.append((x, y))
@@ -74,8 +75,7 @@ def _normalize_polyline_for_dxf(
     # Pass 2: detect closure (first ~ last) and strip the trailing copy.
     first, last = cleaned[0], cleaned[-1]
     naturally_closed = (
-        abs(first[0] - last[0]) <= closure_eps
-        and abs(first[1] - last[1]) <= closure_eps
+        abs(first[0] - last[0]) <= closure_eps and abs(first[1] - last[1]) <= closure_eps
     )
     if naturally_closed and len(cleaned) >= 3:
         cleaned = cleaned[:-1]
@@ -99,6 +99,7 @@ class DxfImportReport(NamedTuple):
     unsupported_entities: dict[str, int]
     invalid_polylines: int
     layer_counts: dict[str, int]
+    units: str = "Unitless"
 
     @property
     def ignored_entities(self) -> int:
@@ -107,6 +108,36 @@ class DxfImportReport(NamedTuple):
     @property
     def has_issues(self) -> bool:
         return self.ignored_entities > 0
+
+    @property
+    def skipped_by_reason(self) -> dict[str, int]:
+        """Machine-readable diagnostics suitable for UI and telemetry."""
+        reasons = {
+            f"unsupported:{kind}": count for kind, count in self.unsupported_entities.items()
+        }
+        if self.invalid_polylines:
+            reasons["invalid:geometry"] = self.invalid_polylines
+        return reasons
+
+
+class _DxfEntity(Protocol):
+    """Narrow adapter boundary for the dynamically typed ezdxf entities."""
+
+    dxf: Any
+    vertices: Iterable[Any]
+    is_closed: bool
+    is_2d_polyline: bool
+    closed: bool
+    CLOSED: int
+
+    def dxftype(self) -> str: ...
+    def get_points(self) -> Iterable[Any]: ...
+    def flattening(self, distance: float) -> Iterable[Any]: ...
+
+
+def _dxf_entity(value: object) -> _DxfEntity:
+    """Contain ezdxf's missing static types at one audited boundary."""
+    return cast(_DxfEntity, value)
 
 
 def _ezdxf_readfile(path: str):
@@ -126,8 +157,7 @@ def _polyline_points_closed(
         return []
     result = list(pts)
     if closed and (
-        abs(result[-1][0] - result[0][0]) > 1e-6
-        or abs(result[-1][1] - result[0][1]) > 1e-6
+        abs(result[-1][0] - result[0][0]) > 1e-6 or abs(result[-1][1] - result[0][1]) > 1e-6
     ):
         result.append(result[0])
     return result
@@ -221,6 +251,15 @@ def _load_dxf_polylines_by_layer_with_report(
             ),
         )
     msp = doc.modelspace()
+    unit_code = int(doc.header.get("$INSUNITS", 0) or 0)
+    unit_name = {
+        0: "Unitless",
+        1: "Inches",
+        2: "Feet",
+        4: "Millimeters",
+        5: "Centimeters",
+        6: "Meters",
+    }.get(unit_code, f"DXF unit code {unit_code}")
     by_layer: dict[str, list[list[tuple[float, float]]]] = {}
     flattened_entities: Counter[str] = Counter()
     unsupported_entities: Counter[str] = Counter()
@@ -237,15 +276,16 @@ def _load_dxf_polylines_by_layer_with_report(
         total_supported += 1
 
     for ent in msp:
-        dxftype = ent.dxftype()
+        entity = _dxf_entity(ent)
+        dxftype = entity.dxftype()
         try:
-            layer_name = str(ent.dxf.layer).strip() or "0"
+            layer_name = str(entity.dxf.layer).strip() or "0"
         except (AttributeError, ValueError, TypeError):
             layer_name = "0"
         layer_counts[layer_name] += 1
         if dxftype == "LWPOLYLINE":
             try:
-                lw = cast(Any, ent)
+                lw = entity
                 pts = [(float(p[0]), float(p[1])) for p in lw.get_points()]
                 _append(layer_name, pts, bool(lw.is_closed))
             except (AttributeError, TypeError, ValueError) as exc:
@@ -253,14 +293,11 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
         elif dxftype == "POLYLINE":
             try:
-                poly = cast(Any, ent)
+                poly = entity
                 if not poly.is_2d_polyline:
                     unsupported_entities["POLYLINE (3D)"] += 1
                     continue
-                pts = [
-                    (float(v.dxf.location.x), float(v.dxf.location.y))
-                    for v in poly.vertices
-                ]
+                pts = [(float(v.dxf.location.x), float(v.dxf.location.y)) for v in poly.vertices]
                 _append(layer_name, pts, bool(poly.is_closed))
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid POLYLINE in %s: %s", path, exc)
@@ -268,7 +305,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 continue
         elif dxftype == "LINE":
             try:
-                line = cast(Any, ent)
+                line = entity
                 start = (float(line.dxf.start.x), float(line.dxf.start.y))
                 end = (float(line.dxf.end.x), float(line.dxf.end.y))
                 _append(layer_name, [start, end], False)
@@ -278,7 +315,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
         elif dxftype == "ARC":
             try:
-                arc = cast(Any, ent)
+                arc = entity
                 center = (float(arc.dxf.center.x), float(arc.dxf.center.y))
                 radius = float(arc.dxf.radius)
                 pts = _arc_points(
@@ -295,7 +332,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
         elif dxftype == "CIRCLE":
             try:
-                circle = cast(Any, ent)
+                circle = entity
                 center = (float(circle.dxf.center.x), float(circle.dxf.center.y))
                 radius = float(circle.dxf.radius)
                 pts = _arc_points(
@@ -312,7 +349,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
         elif dxftype == "ELLIPSE":
             try:
-                ellipse = cast(Any, ent)
+                ellipse = entity
                 center = (float(ellipse.dxf.center.x), float(ellipse.dxf.center.y))
                 major_axis = (
                     float(ellipse.dxf.major_axis.x),
@@ -333,13 +370,11 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
         elif dxftype == "SPLINE":
             try:
-                spline = cast(Any, ent)
+                spline = entity
                 # Adaptive flattening (same tolerance-based approach as
                 # ARC/CIRCLE above) — smooth regardless of the spline's
                 # size, unlike a fixed segment count.
-                pts = [
-                    (float(p.x), float(p.y)) for p in spline.flattening(0.02)
-                ]
+                pts = [(float(p.x), float(p.y)) for p in spline.flattening(0.02)]
                 is_closed = bool(getattr(spline.dxf, "flags", 0) & spline.CLOSED)
                 _append(layer_name, pts, is_closed)
                 flattened_entities[dxftype] += 1
@@ -357,6 +392,7 @@ def _load_dxf_polylines_by_layer_with_report(
             unsupported_entities=dict(sorted(unsupported_entities.items())),
             invalid_polylines=invalid_polylines,
             layer_counts=dict(sorted(layer_counts.items())),
+            units=unit_name,
         ),
     )
 
@@ -390,9 +426,7 @@ def summarize_dxf_import_report(report: DxfImportReport) -> str | None:
     """Format a short human-readable description of skipped DXF content."""
     parts: list[str] = []
     if report.layer_counts:
-        layers = ", ".join(
-            f"{name} × {count}" for name, count in report.layer_counts.items()
-        )
+        layers = ", ".join(f"{name} × {count}" for name, count in report.layer_counts.items())
         parts.append(f"layers: {layers}")
     if report.flattened_entities:
         details = ", ".join(
@@ -542,7 +576,7 @@ def write_polylines_dxf(
                 if kind == "ellipse" and "rotation" not in meta and "angle" in meta:
                     # Legacy files stored the ellipse rotation under "angle".
                     meta = {**meta, "rotation": meta["angle"]}
-                shape = shape_from_legacy_meta(kind, meta)
+                shape = shape_from_meta(kind, meta)
                 if shape is not None and shape.to_dxf(msp, entity_attrs or None):
                     continue
 
@@ -560,29 +594,23 @@ def write_polylines_dxf(
             )
 
     if border_polys:
-        # Pre-normalize so layer suffixes (_1, _2…) reflect the *valid*
-        # borders only — otherwise a single surviving border could be
-        # named "outline_2" with no "outline_1" anywhere in the file.
-        valid_borders: list[list[tuple[float, float]]] = []
+        # Every outline is its own entity, but they all share one layer —
+        # laser/CAM software treats a layer as a single job, and splitting
+        # outlines across outline_1/outline_2/… made it run each outline
+        # as a separate job instead of cutting them together.
+        if border_layer_prefix not in doc.layers:
+            doc.layers.add(border_layer_prefix, color=3)
         for c in border_polys:
             coords, is_closed = _normalize_polyline_for_dxf(
                 c,
                 force_close=not bool(open_paths),
             )
             if len(coords) >= 3 and (open_paths or is_closed):
-                valid_borders.append(coords)
-        count = len(valid_borders)
-        for idx, coords in enumerate(valid_borders):
-            layer_name = border_layer_prefix
-            if count > 1:
-                layer_name = f"{border_layer_prefix}_{idx + 1}"
-            if layer_name not in doc.layers:
-                doc.layers.add(layer_name, color=3)
-            msp.add_lwpolyline(
-                coords,
-                close=(False if open_paths else True),
-                dxfattribs={"layer": layer_name},
-            )
+                msp.add_lwpolyline(
+                    coords,
+                    close=(False if open_paths else True),
+                    dxfattribs={"layer": border_layer_prefix},
+                )
 
     if extra_layers:
         # Each entry produces its own DXF layer. Polylines are written as
@@ -629,6 +657,6 @@ def write_polylines_dxf(
             f"{details}. The file was not written."
         )
 
-    from ..io.persistence import atomic_write_via
+    from ..persistence import atomic_write_via
 
     atomic_write_via(out_path, lambda p: doc.saveas(str(p)))

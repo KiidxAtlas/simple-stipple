@@ -65,9 +65,7 @@ def test_layer_color_change_signal_emits(qapp):
         ]
     )
     received = []
-    tree.layerColorChangeRequested.connect(
-        lambda layer, color: received.append((layer, color))
-    )
+    tree.layerColorChangeRequested.connect(lambda layer, color: received.append((layer, color)))
     tree.layerColorChangeRequested.emit("Layer 1", "#3fb950")
     assert received == [("Layer 1", "#3fb950")]
 

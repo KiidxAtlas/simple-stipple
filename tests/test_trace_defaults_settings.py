@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from src.ui.pages.trace.defaults import TRACE_DEFAULTS, trace_default
+from src.ui.pages.trace.form import TRACE_DEFAULTS, trace_default
 
 
 def test_trace_default_falls_back_to_the_built_in_value_when_unset():
@@ -49,8 +49,8 @@ def test_clearing_the_workspace_reapplies_the_configured_default(qapp):
 
 
 def test_settings_dialog_save_persists_a_trace_default_override(qapp, monkeypatch):
-    import src.ui.shell.settings_dialog as settings_dialog_mod
-    from src.ui.shell.settings_dialog import SettingsDialog
+    import src.ui.widgets.settings_dialog as settings_dialog_mod
+    from src.ui.widgets.settings_dialog import SettingsDialog
 
     monkeypatch.setattr(settings_dialog_mod, "save_settings", lambda d: None)
 
@@ -58,17 +58,23 @@ def test_settings_dialog_save_persists_a_trace_default_override(qapp, monkeypatc
     # which would silently swap in an unrelated fresh dict if `settings`
     # itself were empty/falsy, same as the real app (load_settings() always
     # returns a dict with some defaults already populated).
+    #
+    # SettingsDialog deep-copies its settings on construction (so Cancel
+    # can't leak sub-dialog changes into the caller's live dict — see
+    # SettingsDialog.__init__) — the caller adopts the result via
+    # `dlg._settings` after Accept, same as the real app's `_open_settings`.
     settings: dict = {"unit_system": "mm"}
     dlg = SettingsDialog(None, settings)
     dlg._trace_default_entries["max_res"].setText("3000")
     dlg._save()
 
-    assert settings["trace_defaults"]["max_res"] == "3000"
+    assert dlg._settings["trace_defaults"]["max_res"] == "3000"
+    assert "trace_defaults" not in settings  # caller's own dict is untouched
 
 
 def test_settings_dialog_save_clears_override_when_field_left_blank(qapp, monkeypatch):
-    import src.ui.shell.settings_dialog as settings_dialog_mod
-    from src.ui.shell.settings_dialog import SettingsDialog
+    import src.ui.widgets.settings_dialog as settings_dialog_mod
+    from src.ui.widgets.settings_dialog import SettingsDialog
 
     monkeypatch.setattr(settings_dialog_mod, "save_settings", lambda d: None)
 
@@ -77,4 +83,4 @@ def test_settings_dialog_save_clears_override_when_field_left_blank(qapp, monkey
     dlg._trace_default_entries["max_res"].setText("")
     dlg._save()
 
-    assert "max_res" not in settings.get("trace_defaults", {})
+    assert "max_res" not in dlg._settings.get("trace_defaults", {})

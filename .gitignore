@@ -1,5 +1,4 @@
-# Claude Code / AI agent artifacts
-.claude/
+# AI agent artifacts
 .claire/
 memory/
 MEMORY.md
@@ -270,3 +269,5 @@ __marimo__/
 .streamlit/secrets.toml
 tauri-nuxt/
 _rewrite/
+v3/
+v2/

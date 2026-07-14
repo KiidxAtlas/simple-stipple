@@ -288,8 +288,6 @@ def _build_pattern_page() -> str:
     <li><strong>Parameter Controls:</strong> Dynamic widgets that change based on the selected pattern (size, gap, spacing, etc.).</li>
     <li><strong>Fill Mode:</strong> Choose how to fill the pattern area — None, Lines (parallel hatch), or Crosshatch (crossed ±45° lines).</li>
     <li><strong>Presets Manager:</strong> Save, load, and manage pattern presets for quick recall.</li>
-    <li><strong>Tile Library:</strong> Load pre-made tile patterns from DXF files for repeating tiling effects.</li>
-    <li><strong>Halftone Controls:</strong> Generate image-based halftone patterns from imported images.</li>
     <li><strong>Generate / Preview Buttons:</strong> Generate the full pattern or show a live preview.</li>
     <li><strong>Export Button:</strong> Save the result as a DXF file.</li>
 </ul>
@@ -325,23 +323,19 @@ def _build_pattern_page() -> str:
 </table>
 
 <h3 class="subheading">Presets System</h3>
-<p><strong>Built-in presets:</strong> Honeycomb (Fine/Standard/Bold), Stipple (Dense/Open), Diagonal Lines (Hatch/Cross), Brick, Wave, Mesh, Voronoi, Hilbert Curve.</p>
+<p><strong>Built-in presets:</strong> Honeycomb (Fine/Standard/Bold), Stipple (Dense/Open), Brick, Mesh, and Voronoi.</p>
 <p><strong>Custom presets:</strong> Save your current pattern + all parameters as a named preset. Export/import presets as JSON files (<code>simple-stipple-presets/v1</code> format).</p>
-
-<h3 class="subheading">Halftone &amp; Tile Library</h3>
-<p><strong>Halftone:</strong> Generate patterns from images using halftoning — converting pixel brightness into varying dot sizes or line densities.</p>
-<p><strong>Tile Library:</strong> Load pre-made tile patterns from DXF files for repeating tiling effects across your pattern area.</p>
 """
 
 
 def _build_pattern_types() -> str:
-    """All 20+ pattern types with parameters."""
+    """Available pattern types and parameters."""
     return """
 <h2 id="pattern-types" class="section-heading">
-    Pattern Types — Complete Guide (20+)
+    Pattern Types — Complete Guide
 </h2>
 
-<p>Simple Stipple includes <strong>20+ pattern generators</strong>, each with unique characteristics.</p>
+<p>Simple Stipple includes geometric, organic, and custom-tile pattern generators.</p>
 
 <h3 class="subheading">Geometric Patterns</h3>
 
@@ -369,23 +363,11 @@ def _build_pattern_types() -> str:
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Mortar gap (default: 0.5 mm)</td></tr>
 </table>
 
-<h4 class="panel-title">Square Grid</h4>
-<p>A simple orthogonal grid pattern. Clean, minimal, and versatile.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Grid spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Distance between grid lines (default: 1.0 mm)</td></tr>
-</table>
-
 <h4 class="panel-title">Mesh</h4>
 <p>A grid of circles arranged in a regular pattern, creating an elegant mesh effect.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Circle radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each circle (default: 0.35 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Grid spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance (default: 1.2 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Concentric Rings</h4>
-<p>Series of concentric circles or polygons offset inward from the outline boundary.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Ring spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Distance between successive rings (default: 1.5 mm)</td></tr>
 </table>
 
 <h3 class="subheading">Organic / Curved Patterns</h3>
@@ -397,20 +379,6 @@ def _build_pattern_types() -> str:
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale height (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Vertical height (default: 2.0 mm)</td></tr>
 </table>
 
-<h4 class="panel-title">Wave Fill</h4>
-<p>Sine-wave rows that create a flowing, organic texture.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Row spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Vertical distance between rows (default: 1.5 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Amplitude (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Peak-to-centre height (default: 0.5 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Wavelength (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Length of one full wave cycle (default: 3.0 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Sunburst</h4>
-<p>Radiating lines from a central point, creating a dramatic sunburst effect.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spoke spacing (°)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Angular spacing — 5° gives ~36 spokes (default: 5.0°)</td></tr>
-</table>
-
 <h4 class="panel-title">Topographic</h4>
 <p>Inward-offset contour lines that simulate topographic map elevation lines.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
@@ -419,36 +387,12 @@ def _build_pattern_types() -> str:
 
 <h3 class="subheading">Mathematical / Fractal Patterns</h3>
 
-<h4 class="panel-title">Hilbert Curve</h4>
-<p>A space-filling fractal curve. Higher orders produce denser, more intricate paths.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Order</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Recursion depth, 1–8 (default: 5). Higher = denser.</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Margin (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Inset from outline bounds (default: 1.0 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Reaction Diffusion</h4>
-<p>Simulates the Gray-Scott reaction-diffusion model, producing organic labyrinthine patterns.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Preset</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">labyrinth, spots, stripes, or maze (default: labyrinth)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Simulation grid cell size (default: 0.8 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Iterations</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Simulation steps (default: 1200)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Threshold</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Contour extraction threshold, 0–1 (default: 0.22)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed for reproducibility (default: 42)</td></tr>
-</table>
-
 <h4 class="panel-title">Voronoi</h4>
 <p>A Voronoi diagram partitioning the outline into irregular polygonal cells.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell count</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Number of random cells (default: 60)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Inset distance between cells (default: 0.15 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed (default: 42)</td></tr>
-</table>
-
-<h4 class="panel-title">Penrose Tiling</h4>
-<p>An aperiodic kite-and-dart tiling (P2 symmetry) that never repeats.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Tile size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Approximate tile size (default: 3.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between tiles (default: 0.1 mm)</td></tr>
 </table>
 
 <h3 class="subheading">Decorative / Woven Patterns</h3>
@@ -476,46 +420,6 @@ def _build_pattern_types() -> str:
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Interlaced</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Use offset grid instead of Poisson-disk (checkbox)</td></tr>
 </table>
 
-<h4 class="panel-title">Diagonal Lines</h4>
-<p>Simple parallel diagonal lines at a configurable angle.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Line spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Distance between lines (default: 1.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Angle (°)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Angle of the lines (default: 45°)</td></tr>
-</table>
-
-<h3 class="subheading">Advanced / Artistic Patterns</h3>
-
-<h4 class="panel-title">Celtic Knot</h4>
-<p>A grid-based Celtic knot pattern with over-under crossings at intersections.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Grid cell size (default: 5.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Line width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of the knot band (default: 1.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap at crossings (default: 0.2 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Lissajous</h4>
-<p>Lissajous curves repeated in rows, creating complex interference patterns.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Freq X / Freq Y</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Horizontal and vertical frequencies (default: 3, 2)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Row spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Vertical offset between curves (default: 2.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Amplitude (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Peak amplitude (default: 5.0 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Golden Spiral</h4>
-<p>A logarithmic spiral based on the golden ratio (φ).</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Turns</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Number of spiral turns (default: 4.5)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing hint (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Controls point density (default: 1.5 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Direction</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">ccw (counter-clockwise) or cw (clockwise)</td></tr>
-</table>
-
-<h4 class="panel-title">Rose Curve</h4>
-<p>Rhodonea rose curves — mathematical flower-like patterns.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Petals</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Number of rose petals (default: 7)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Copies</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Overlay count with phase offsets (default: 2)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Margin (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Inset from outline bounds (default: 1.0 mm)</td></tr>
-</table>
 """
 
 
@@ -595,9 +499,11 @@ def _build_convert_page() -> str:
 <h4 class='panel-title'>DXF Repair</h4>
 <p>Repair and fix common DXF issues:</p>
 <ul>
+    <li><strong>Single or batch:</strong> Repair one file or every DXF directly inside a selected folder.</li>
     <li><strong>Fix open polylines:</strong> Attempt to close unclosed paths.</li>
     <li><strong>Remove duplicates:</strong> Eliminate duplicate vertices and overlapping segments.</li>
     <li><strong>Simplify geometry:</strong> Reduce unnecessary vertices while preserving shape.</li>
+    <li><strong>Important:</strong> Repair is a normalized export: supported entities are flattened to polylines and written on layer 0.</li>
 </ul>
 
 <h3 class="subheading">Status Messages</h3>
@@ -662,7 +568,7 @@ def _build_repo_page() -> str:
 def _build_canvas_commands() -> str:
     """Canvas command reference from the actual registry."""
     try:
-        from src.ui.canvas import commands as cmd_mod
+        from src.ui.canvas.interaction import commands as cmd_mod
 
         rows = cmd_mod.shortcut_reference_rows()
     except Exception:  # noqa: BLE001 — graceful fallback if commands module unavailable
@@ -812,11 +718,10 @@ def _build_troubleshooting() -> str:
 <h3 class="subheading">Common Issues</h3>
 
 <h4 class='panel-title'>Pattern generation is slow</h4>
-<p>Complex patterns (especially Reaction Diffusion, Hilbert Curve at high orders, and Voronoi with many cells) can take time. Try:</p>
+<p>Complex patterns (especially Voronoi with many cells) can take time. Try:</p>
 <ul>
-    <li>Reducing the cell count or iteration count</li>
+    <li>Reducing the cell count</li>
     <li>Using a smaller outline area</li>
-    <li>Lowering the pattern order (for Hilbert Curve)</li>
 </ul>
 
 <h4 class='panel-title'>Pattern doesn't fill the outline</h4>
@@ -974,7 +879,7 @@ def build_help_html() -> str:
         border: 1px solid #30363d;
         border-radius: 4px;
         padding: 1px 6px;
-        font-family: Menlo, Consolas, monospace;
+        font-family: Menlo, Consolas, Courier;
         font-size: 12px;
         color: #e6edf3;
     }}
@@ -983,7 +888,7 @@ def build_help_html() -> str:
         border: 1px solid #30363d;
         border-radius: 3px;
         padding: 1px 4px;
-        font-family: Menlo, Consolas, monospace;
+        font-family: Menlo, Consolas, Courier;
         color: #79c0ff;
     }}
 </style>
@@ -1034,9 +939,7 @@ class HelpDialog(QDialog):
     - Content is generated dynamically from the command registry
     """
 
-    def __init__(
-        self, parent: QWidget | None = None, main_window: QMainWindow | None = None
-    ):
+    def __init__(self, parent: QWidget | None = None, main_window: QMainWindow | None = None):
         super().__init__(parent, Qt.WindowType.Window)
         self._main_window = main_window
         self.setWindowTitle("AA Laser Studio — User Manual")
@@ -1128,7 +1031,7 @@ class HelpDialog(QDialog):
         # (bogus) family name — Qt falls back to its default font, which on
         # some platforms is monospace. Use the families-list constructor,
         # matching the family fallback chain the rest of the app uses.
-        font = QFont(["SF Pro Text", "Helvetica Neue", "Arial"], 13)
+        font = QFont(["Arial", "Helvetica Neue"], 13)
         self._content.setFont(font)
 
         splitter.addWidget(self._content)

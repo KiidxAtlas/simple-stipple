@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simple-stipple"
-version = "0.2.5"
+version = "0.3.0"
 description = ""
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,12 +15,17 @@ dependencies = [
     "Pillow>=10.0.0",
     "opencv-python-headless>=4.8",
     "scipy>=1.10",
-    "isort>=8.0.1",
+    "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",
+    "ruff>=0.12",
+    "mypy>=1.16",
+    "pytest-qt>=4.5",
+    "hypothesis>=6.135",
+    "pytest-benchmark>=5.1",
 ]
 build = [
     "pyinstaller>=6.0",
@@ -30,11 +35,27 @@ cad = [
 ]
 
 [project.scripts]
-simple-stipple = "src.launcher:main"
+simple-stipple = "src.infra.launcher:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B007", "B905"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+exclude = ["src/simple_stipple.egg-info"]
 
 [tool.setuptools]
 include-package-data = true

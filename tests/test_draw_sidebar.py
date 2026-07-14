@@ -13,7 +13,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from tests.test_canvas_behavior import bbox, click_world, make_view, square
+from tests.test_canvas_behavior import bbox, click_world, make_view
 
 # ── Polyline / Shapes family sidebar cycling ─────────────────────────────────
 
@@ -81,6 +81,26 @@ def test_shapes_family_button_selects_slot_directly(qapp):
     assert (x1 - x0, y1 - y0) == (pytest.approx(30.0, abs=0.5), pytest.approx(10.0, abs=0.5))
 
 
+def test_new_shape_tools_remain_visible_with_an_old_custom_list(qapp):
+    v = make_view(qapp, [])
+    v.set_draw_sidebar_shape_tools(["circle"])
+    tools = v._draw_sidebar._shape_tools
+    assert tools[:2] == ["rounded_rectangle", "star"]
+    assert "circle" in tools
+
+
+def test_shape_sidebar_uses_distinct_matching_icons(qapp):
+    """Rounded Rectangle and Star must not reuse Rectangle/Polygon glyphs."""
+    from src.ui.components import tool_icon
+
+    def pixels(icon):
+        image = icon.pixmap(20, 20).toImage()
+        return bytes(image.constBits())
+
+    assert pixels(tool_icon("rounded_rectangle")) != pixels(tool_icon("rectangle"))
+    assert pixels(tool_icon("star")) != pixels(tool_icon("polygon"))
+
+
 def test_shapes_family_selecting_polygon_opens_no_prompt(qapp):
     """Regression test: selecting Polygon must not pop any HUD prompt —
     side count is now a live stepper shown during the actual drag, not a
@@ -143,6 +163,26 @@ def test_polygon_sides_spinbox_live_updates_without_committing(qapp):
     assert v._draw_shape_preview_active is True
 
 
+def test_star_point_count_is_independent_and_used_when_drawing(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    v._set_draw_primitive("star")
+    v._draw_shape_preview_active = True
+    v._draw_shape_anchor_w = (100.0, 100.0)
+    v._draw_shape_cursor_w = (110.0, 100.0)
+    v._show_shape_dim_inputs()
+    spin = v._draw_shape_sides_spin
+    assert spin is not None
+    assert spin.value() == 5
+    spin.setValue(8)
+    assert v._draw_star_points == 8
+    v._commit_shape_preview()
+    entity = v._entities[0]
+    assert entity.kind == "star"
+    assert entity.meta["points"] == 8
+    assert len(entity.points) == 17
+
+
 def test_slot_gets_size_hud_fields_like_rectangle(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
@@ -158,33 +198,8 @@ def test_slot_gets_size_hud_fields_like_rectangle(qapp):
     assert v._draw_shape_sides_spin is None
 
 
-# ── Snapping section toggles ─────────────────────────────────────────────────
-
-
-def test_snap_toggle_buttons_drive_view_flags(qapp):
-    v = make_view(qapp, [])
-    v.set_mode("draw")
-    sb = v._draw_sidebar
-
-    assert v._snap_master_enabled is True
-    sb._snap_master_button.click()
-    assert v._snap_master_enabled is False
-
-    assert v._grid_snap is False
-    sb._snap_grid_button.click()
-    assert v._grid_snap is True
-
-    assert v._snap_angle_enabled is True
-    sb._snap_angle_button.click()
-    assert v._snap_angle_enabled is False
-
-    assert v._snap_vertex_enabled is True
-    sb._snap_vertex_button.click()
-    assert v._snap_vertex_enabled is False
-
-    assert v._snap_edge_enabled is True
-    sb._snap_edge_button.click()
-    assert v._snap_edge_enabled is False
+# ── Constraint (snap master/grid/vertex/edge/angle toggles now live only
+# in the Precision bar — see test_precision_bar.py) ──────────────────────────
 
 
 def test_constraint_button_cycles_through_free_h_v_45(qapp):
@@ -211,10 +226,11 @@ def test_constraint_button_disabled_outside_line_and_polyline(qapp):
     assert v._draw_sidebar._constraint_button.isEnabled() is False
 
 
-# ── Split / construction / dimension / measure ───────────────────────────────
+# ── Split / dimension (construction/measure now live only in the
+# Precision bar — see test_precision_bar.py) ─────────────────────────────────
 
 
-def test_split_and_construction_buttons_toggle_view_state(qapp):
+def test_split_button_toggles_view_state(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
@@ -223,12 +239,8 @@ def test_split_and_construction_buttons_toggle_view_state(qapp):
     sb._split_button.click()
     assert v._draw_split_enabled is (not before_split)
 
-    assert v._draw_construction_mode is False
-    sb._construction_button.click()
-    assert v._draw_construction_mode is True
 
-
-def test_dimension_and_measure_buttons_toggle_their_modes(qapp):
+def test_dimension_button_toggles_its_mode(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
@@ -236,10 +248,6 @@ def test_dimension_and_measure_buttons_toggle_their_modes(qapp):
     assert v._dimension_mode is False
     sb._dimension_button.click()
     assert v._dimension_mode is True
-
-    assert v._measure_mode is False
-    sb._measure_button.click()
-    assert v._measure_mode is True
 
 
 # ── Contextual polyline-editing action row ───────────────────────────────────
@@ -335,7 +343,7 @@ def test_sidebar_width_is_draggable_and_clamped(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
-    from src.settings import MAX_DRAW_SIDEBAR_WIDTH, MIN_DRAW_SIDEBAR_WIDTH
+    from src.infra.settings import MAX_DRAW_SIDEBAR_WIDTH, MIN_DRAW_SIDEBAR_WIDTH
 
     changes = []
     v.drawSidebarWidthChanged.connect(changes.append)
@@ -361,7 +369,7 @@ def test_resize_handle_drag_uses_stable_delta_from_press(qapp):
     from PySide6.QtCore import QEvent, QPointF, Qt
     from PySide6.QtGui import QMouseEvent
 
-    from src.ui.sidebars.canvas_sidebar import _ResizeHandle
+    from src.ui.widgets.draw_sidebar import _ResizeHandle
 
     v = make_view(qapp, [])
     v.set_mode("draw")
@@ -416,7 +424,7 @@ def test_sidebar_sections_can_be_hidden_and_reordered(qapp):
 def test_customize_dialog_applies_unchecked_and_reordered_sections(qapp):
     from PySide6.QtCore import Qt
 
-    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog(sections=["path", "shapes", "text"])
     for i in range(dlg._list.count()):
@@ -430,8 +438,8 @@ def test_customize_dialog_applies_unchecked_and_reordered_sections(qapp):
 def test_customize_dialog_falls_back_to_defaults_without_path_and_shapes(qapp):
     from PySide6.QtCore import Qt
 
-    from src.settings import DEFAULT_DRAW_SIDEBAR_SECTIONS
-    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+    from src.infra.settings import DEFAULT_DRAW_SIDEBAR_SECTIONS
+    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog(sections=["path"])
     for i in range(dlg._list.count()):
@@ -448,7 +456,7 @@ def test_customize_dialog_hides_and_reorders_individual_path_shape_icons(qapp):
     builds sections from."""
     from PySide6.QtCore import Qt
 
-    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog(
         path_tools=["polyline", "spline", "arc", "bezier"],
@@ -482,11 +490,11 @@ def test_customize_dialog_hides_and_reorders_individual_path_shape_icons(qapp):
 def test_customize_dialog_path_shape_lists_require_at_least_one_checked(qapp):
     from PySide6.QtCore import Qt
 
-    from src.settings import (
+    from src.infra.settings import (
         DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
         DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
     )
-    from src.ui.shell.draw_sidebar_customize_dialog import DrawSidebarCustomizeDialog
+    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog()
     for i in range(dlg._path_list.count()):
@@ -496,6 +504,18 @@ def test_customize_dialog_path_shape_lists_require_at_least_one_checked(qapp):
     dlg._apply()
     assert dlg.get_path_tools() == list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
     assert dlg.get_shape_tools() == list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+
+
+def test_context_menu_customize_can_hide_sections_but_keeps_view(qapp):
+    from PySide6.QtCore import Qt
+
+    from src.ui.widgets.customize_dialogs import ContextMenuCustomizeDialog
+
+    dlg = ContextMenuCustomizeDialog(sections=["create", "transform", "view"])
+    for i in range(dlg._list.count()):
+        dlg._list.item(i).setCheckState(Qt.CheckState.Unchecked)
+    dlg._apply()
+    assert dlg.get_sections() == ["view"]
 
 
 def test_smoothing_button_cycles_and_stays_in_sync_with_settings(qapp):

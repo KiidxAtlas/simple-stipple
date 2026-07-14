@@ -1,6 +1,6 @@
 /* ── Global font ─────────────────────────────────────── */
 * {
-    font-family: "SF Pro Text", "Helvetica Neue", "Arial", "Apple Color Emoji", "Segoe UI Emoji";
+    font-family: "Arial";
     font-size: 13px;
 }
 
@@ -214,9 +214,42 @@ QPushButton[role="danger"]:hover {
     background: rgba(248, 81, 73, 0.16);
     border-color: #f85149;
 }
+QPushButton[role="secondary"], QToolButton {
+    background: transparent;
+    border-color: #303a47;
+    color: #c9d1d9;
+}
+QPushButton[role="secondary"]:hover, QToolButton:hover {
+    background: #212b37;
+    border-color: #58a6ff;
+}
+QPushButton[role="mode-button"] {
+    min-width: 64px;
+    background: transparent;
+    border-color: transparent;
+    color: #8b949e;
+    font-weight: 600;
+}
+QPushButton[role="mode-button"][active="true"] {
+    background: #1f3a6e;
+    border-color: #2f81f7;
+    color: #ffffff;
+}
+QToolButton {
+    min-height: 24px;
+    padding: 3px 9px;
+    border: 1px solid #303a47;
+    border-radius: 6px;
+}
+QToolButton[active="true"] {
+    background: #1f3a6e;
+    border-color: #2f81f7;
+    color: #ffffff;
+}
 
 /* ── Input fields ────────────────────────────────────── */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    min-height: 20px;
     padding: 5px 8px;
     border-radius: 6px;
     border: 1px solid #2b3440;
@@ -251,8 +284,48 @@ QComboBox::drop-down {
     width: 20px;
 }
 QComboBox::down-arrow {
+    image: url({ICONS_DIR}/chevron_down.svg);
     width: 10px;
     height: 10px;
+}
+QLineEdit:read-only {
+    background: #161b22;
+    color: #8b949e;
+}
+
+QWidget#canvas-toolbar {
+    background: rgba(17, 23, 32, 0.92);
+    border: 1px solid #26303b;
+    border-radius: 8px;
+}
+QWidget#canvas-toolbar QLabel[role="toolbar-sep"] {
+    color: #484f58;
+}
+QLabel[role="toolbar-label"] {
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 700;
+}
+QLabel[role="toolbar-selection"], QLabel[role="status-meta"],
+QLabel[role="status-selection"], QLabel[role="status-zoom"] {
+    color: #8b949e;
+    font-size: 11px;
+}
+QLabel[role="status-mode"], QLabel[role="status-selection"][active="true"] {
+    color: #79c0ff;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel[role="status-detail"], QLabel[role="status-coordinates"] {
+    color: #6e7681;
+    font-size: 10px;
+}
+QLabel[role="status-coordinates"] {
+    font-family: Menlo, Courier;
+}
+QLabel[role="status-separator"] {
+    color: #30363d;
+    font-size: 11px;
 }
 QComboBox QAbstractItemView {
     background: #1c2128;
@@ -647,17 +720,31 @@ QPushButton[role="tool-item"][active="true"]:hover {
 
 /* ── Empty-state labels ──────────────────────────────── */
 QLabel[role="empty-icon"] {
-    color: #30363d;
+    color: #484f58;
     font-size: 36px;
 }
 QLabel[role="empty-title"] {
-    color: #484f58;
+    color: #8b949e;
     font-size: 15px;
     font-weight: 600;
 }
 QLabel[role="empty-hint"] {
-    color: #30363d;
+    color: #6e7681;
     font-size: 11px;
+}
+QWidget[role="empty-state"] {
+    background: #0b0f14;
+}
+QFrame[role="preview-surface"] {
+    background: #0b0f14;
+}
+QFrame#conversion-preview,
+QFrame#conversion-preview QStackedWidget,
+QFrame#conversion-preview QWidget[role="empty-state"] {
+    background: #0b0f14;
+}
+QStackedWidget {
+    background: transparent;
 }
 
 /* ── Tree widgets (layer tree) ────────────────────────── */
@@ -733,7 +820,7 @@ QTextEdit {
     border-radius: 6px;
     background: #0f141b;
     color: #c9d1d9;
-    font-family: Menlo, Courier, monospace;
+    font-family: Menlo, Courier;
     font-size: 11px;
     selection-background-color: #264f78;
 }

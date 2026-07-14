@@ -13,8 +13,8 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 
-from src.settings import DEFAULT_KEYBINDINGS  # noqa: E402
-from src.ui.canvas import commands as canvas_commands  # noqa: E402
+from src.infra.settings import DEFAULT_KEYBINDINGS  # noqa: E402
+from src.ui.canvas.interaction import commands as canvas_commands  # noqa: E402
 
 
 def test_default_keymap_has_no_collisions():
@@ -63,7 +63,11 @@ def test_apply_keybindings_overrides_a_command_shortcut(qapp):
         key(v2, Qt.Key.Key_G)
         assert not v2._grid_visible  # "G" alone no longer bound
 
-        key(v2, Qt.Key.Key_G, mods=Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+        key(
+            v2,
+            Qt.Key.Key_G,
+            mods=Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        )
         assert v2._grid_visible  # the new binding works
     finally:
         canvas_commands.apply_keybindings(None)
@@ -105,14 +109,12 @@ def test_mode_draw_shares_settings_slot_with_canvas_draw_mode():
         ("view.fit", "canvas.fit"),
     ],
 )
-def test_unified_mode_commands_point_at_their_app_level_settings_key(
-    cmd_id, settings_key
-):
+def test_unified_mode_commands_point_at_their_app_level_settings_key(cmd_id, settings_key):
     assert canvas_commands.get(cmd_id).keybinding_id == settings_key
 
 
 def test_keybindings_dialog_has_one_row_per_settings_slot(qapp):
-    from src.ui.shell.keybindings_dialog import _KEYBINDING_FIELDS
+    from src.ui.widgets.keybindings_dialog import _KEYBINDING_FIELDS
 
     keys = [key for key, _label, _group, _default in _KEYBINDING_FIELDS]
     assert len(keys) == len(set(keys))

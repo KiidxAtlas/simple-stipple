@@ -47,8 +47,7 @@ class FillSpec:
     def __post_init__(self) -> None:
         if self.mode not in _VALID_MODES:
             raise ValueError(
-                f"FillSpec.mode must be one of {sorted(_VALID_MODES)!r}, "
-                f"got {self.mode!r}"
+                f"FillSpec.mode must be one of {sorted(_VALID_MODES)!r}, got {self.mode!r}"
             )
         if self.spacing <= 0:
             raise ValueError(f"FillSpec.spacing must be > 0 (got {self.spacing!r})")
@@ -121,12 +120,12 @@ def build_fill_region(polylines: list[list[tuple[float, float]]]) -> Any:
 
     Returns ``None`` if there are no usable closed rings.
 
-    Delegates to ``src.backend.generators._shared.nested_polygon_region`` —
+    Delegates to ``src.backend.pattern._shared.nested_polygon_region`` —
     the SAME even-odd nesting logic is also needed by the custom-tile
     generator, so it lives in the shared backend module; this wrapper is
     kept for existing call sites here.
     """
-    from src.backend.generators._shared import (
+    from src.backend.pattern._shared import (
         nested_polygon_region as _nested_polygon_region_shared,
     )
 

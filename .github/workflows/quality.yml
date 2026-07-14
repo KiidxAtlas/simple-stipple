@@ -1,0 +1,27 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.13"]
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv run ruff check .
+      - run: uv run python -m compileall -q src tests
+      - run: uv run python -c "import src.app; import src.infra.launcher"
+      - run: uv run pytest -q
+      - name: Type-check refactored boundaries
+        run: uv run mypy src/app/page_runtime.py src/ui/pages/task_state.py

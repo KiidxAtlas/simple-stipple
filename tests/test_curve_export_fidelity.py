@@ -13,7 +13,7 @@ from tests.test_canvas_behavior import make_view  # noqa: E402
 
 
 def _spline_view(qapp):
-    from src.ui.canvas.entities import EntityRecord
+    from src.ui.canvas.undo import EntityRecord
 
     v = make_view(qapp, [])
     v._entities = [
@@ -27,7 +27,7 @@ def _spline_view(qapp):
 
 
 def _bezier_view(qapp):
-    from src.ui.canvas.entities import EntityRecord
+    from src.ui.canvas.undo import EntityRecord
 
     v = make_view(qapp, [])
     v._entities = [
@@ -41,7 +41,7 @@ def _bezier_view(qapp):
 
 
 def _arc_view(qapp):
-    from src.ui.canvas.entities import EntityRecord
+    from src.ui.canvas.undo import EntityRecord
 
     # A big arc with only a couple of raw points stored — if consumers used
     # .points directly this would look like a two-segment zig-zag.
@@ -135,6 +135,7 @@ def test_dxf_import_no_longer_drops_native_spline_entities(tmp_path):
     import ezdxf
 
     doc = ezdxf.new("R2010")  # type: ignore[attr-defined]
+    doc.header["$INSUNITS"] = 4  # millimeters
     msp = doc.modelspace()
     msp.add_spline(
         fit_points=[(0, 0), (10, 20), (30, 20), (40, 0)],
@@ -147,5 +148,6 @@ def test_dxf_import_no_longer_drops_native_spline_entities(tmp_path):
     by_layer, report = load_dxf_polylines_by_layer_with_report(str(path))
     assert report.unsupported_entities == {}
     assert report.flattened_entities.get("SPLINE") == 1
+    assert report.units == "Millimeters"
     all_pts = [p for polys in by_layer.values() for poly in polys for p in poly]
     assert len(all_pts) > 4  # smooth curve, not just the 4 fit points

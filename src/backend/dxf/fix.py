@@ -47,9 +47,7 @@ def _remove_duplicates(
     return result
 
 
-def _simplify_collinear(
-    pts: list[tuple[float, float]], tol: float
-) -> list[tuple[float, float]]:
+def _simplify_collinear(pts: list[tuple[float, float]], tol: float) -> list[tuple[float, float]]:
     """Remove near-collinear interior vertices using Ramer–Douglas–Peucker.
 
     The tolerance is capped at 1 % of the shape's own extent so that small
@@ -111,8 +109,7 @@ def fix_dxf(input_path: str | Path, output_path: str | Path) -> dict:
 
     if import_report.flattened_entities:
         stats["flattened_entity_summary"] = ", ".join(
-            f"{name} × {count}"
-            for name, count in import_report.flattened_entities.items()
+            f"{name} × {count}" for name, count in import_report.flattened_entities.items()
         )
 
     fixed: list[list[tuple[float, float]]] = []
@@ -157,7 +154,7 @@ def fix_dxf(input_path: str | Path, output_path: str | Path) -> dict:
             len(auditor.errors),
         )
 
-    from ..io.persistence import atomic_write_via
+    from ..persistence import atomic_write_via
 
     atomic_write_via(output_path, lambda p: out_doc.saveas(str(p)))
     stats["polylines_out"] = len(fixed)

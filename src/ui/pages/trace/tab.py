@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -26,38 +27,39 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.dxf.io import write_polylines_dxf
-from src.backend.io import TraceCancelled, image_to_outlines
-from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.canvas.modules import (
+from src.backend.trace import TraceCancelled, image_to_outlines
+from src.infra.settings import save_settings
+from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
     CanvasToolbarModule,
+    TraceCanvasPageRuntime,
 )
-from src.ui.canvas.page_runtimes import TraceCanvasPageRuntime
-from src.ui.core.base_page import BasePage
-from src.ui.core.factories import (
+from src.ui.canvas.dxf_canvas import DxfCanvas
+from src.ui.components import (
+    CollapsibleSection,
+    RecentFilesButton,
     content_splitter,
+    make_resettable_line_edit,
     parse_float_field_with_feedback,
     sidebar_panel,
     surface_frame,
 )
-from src.ui.pages.trace.defaults import trace_default
+from src.ui.pages.base import BasePage
 from src.ui.pages.trace.form import (
     PathField,
     TextField,
     TraceFieldBindings,
     build_lazy_section,
     build_trace_kwargs,
+    trace_default,
 )
 from src.ui.pages.trace.session import (
     apply_trace_workspace_state,
     clear_trace_workspace_state,
     get_trace_workspace_state,
 )
-from src.ui.util.dialog_paths import pick_open_file, pick_save_file
-from src.ui.util.recent_files import KIND_IMAGE, record_recent
-from src.ui.widgets.collapsible import CollapsibleSection
-from src.ui.widgets.recent_files_button import RecentFilesButton
+from src.ui.util import KIND_IMAGE, pick_open_file, pick_save_file, record_recent
 from src.ui.widgets.status_strip import CanvasStatusStrip
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
@@ -75,6 +77,7 @@ class TracePage(BasePage):
     _trace_cancelled = Signal(int)  # (trace_token)
     sendSelectedToDraftRequested = Signal(object)
     sendSelectedToPatternRequested = Signal(object)
+    customTileRequested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
@@ -82,6 +85,7 @@ class TracePage(BasePage):
         self._running: bool = False
         self._trace_pending: bool = False
         self._cancel_event = threading.Event()
+        self._trace_thread: threading.Thread | None = None
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -207,9 +211,7 @@ class TracePage(BasePage):
         source_layout.addWidget(self._img_info_lbl)
         self._bg_visible_cb = QCheckBox("Show image in background")
         self._bg_visible_cb.setChecked(True)
-        self._bg_visible_cb.setToolTip(
-            "Display the source image behind the traced outlines"
-        )
+        self._bg_visible_cb.setToolTip("Display the source image behind the traced outlines")
         self._bg_visible_cb.stateChanged.connect(self._on_bg_visible_changed)
         source_layout.addWidget(self._bg_visible_cb)
         layout.addWidget(CollapsibleSection("Source", source_content, expanded=True))
@@ -221,6 +223,25 @@ class TracePage(BasePage):
             expanded=True,
         )
         layout.addWidget(self._trace_settings_section)
+
+        recipe_label = QLabel("TRACE RECIPES")
+        recipe_label.setProperty("role", "section-label")
+        layout.addWidget(recipe_label)
+        recipe_row = QHBoxLayout()
+        self._recipe_combo = QComboBox()
+        self._recipe_combo.setToolTip("Reusable trace settings recipes")
+        self._refresh_trace_recipes()
+        recipe_row.addWidget(self._recipe_combo, stretch=1)
+        self._apply_recipe_btn = QPushButton("Apply")
+        self._apply_recipe_btn.setToolTip("Apply the selected recipe")
+        self._apply_recipe_btn.setEnabled(bool(self._settings.get("trace_recipes")))
+        self._apply_recipe_btn.clicked.connect(self._apply_trace_recipe)
+        recipe_row.addWidget(self._apply_recipe_btn)
+        save_recipe = QPushButton("Save…")
+        save_recipe.setToolTip("Save the current controls as a reusable recipe")
+        save_recipe.clicked.connect(self._save_trace_recipe)
+        recipe_row.addWidget(save_recipe)
+        layout.addLayout(recipe_row)
 
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
@@ -286,9 +307,7 @@ class TracePage(BasePage):
         )
         self._export_sel_action.setEnabled(False)
         _overflow_menu.addSeparator()
-        self._reveal_action = _overflow_menu.addAction(
-            "Show in Finder", self._reveal_in_finder
-        )
+        self._reveal_action = _overflow_menu.addAction("Show in Finder", self._reveal_in_finder)
         self._reveal_action.setEnabled(False)
         _export_overflow_btn.setMenu(_overflow_menu)
         export_row = QHBoxLayout()
@@ -423,6 +442,7 @@ class TracePage(BasePage):
         on_change=None,
     ) -> QLineEdit:
         entry = QLineEdit(default)
+        make_resettable_line_edit(entry, default)
         entry.setToolTip(tooltip)
         entry.setPlaceholderText(placeholder)
         if on_change is None:
@@ -464,9 +484,7 @@ class TracePage(BasePage):
         cw_layout.setContentsMargins(0, 0, 0, 0)
         cw_layout.setSpacing(4)
         cw_layout.addWidget(
-            TextField(
-                "Canny low", entry=self._canny_low, tooltip=self._canny_low.toolTip()
-            )
+            TextField("Canny low", entry=self._canny_low, tooltip=self._canny_low.toolTip())
         )
         cw_layout.addWidget(
             TextField(
@@ -478,9 +496,7 @@ class TracePage(BasePage):
         layout.addWidget(self._canny_widget)
 
         layout.addWidget(
-            TextField(
-                "Width (mm)", entry=self._width_mm, tooltip=self._width_mm.toolTip()
-            )
+            TextField("Width (mm)", entry=self._width_mm, tooltip=self._width_mm.toolTip())
         )
         layout.addWidget(
             TextField(
@@ -498,14 +514,10 @@ class TracePage(BasePage):
 
     def _build_advanced_fields(self, layout: QVBoxLayout) -> None:
         layout.addWidget(
-            TextField(
-                "Simplify (px)", entry=self._simplify, tooltip=self._simplify.toolTip()
-            )
+            TextField("Simplify (px)", entry=self._simplify, tooltip=self._simplify.toolTip())
         )
         layout.addWidget(
-            TextField(
-                "Min area (px²)", entry=self._min_area, tooltip=self._min_area.toolTip()
-            )
+            TextField("Min area (px²)", entry=self._min_area, tooltip=self._min_area.toolTip())
         )
         layout.addWidget(
             TextField(
@@ -517,15 +529,11 @@ class TracePage(BasePage):
             )
         )
         layout.addWidget(
-            TextField(
-                "Closing radius", entry=self._close_r, tooltip=self._close_r.toolTip()
-            )
+            TextField("Closing radius", entry=self._close_r, tooltip=self._close_r.toolTip())
         )
         layout.addWidget(self._outer_only_cb)
         layout.addWidget(
-            TextField(
-                "Max resolution", entry=self._max_res, tooltip=self._max_res.toolTip()
-            )
+            TextField("Max resolution", entry=self._max_res, tooltip=self._max_res.toolTip())
         )
 
     # ── Right panel ───────────────────────────────────────────────────────────
@@ -538,11 +546,10 @@ class TracePage(BasePage):
             on_poly_change=self._on_canvas_geometry_change,
             on_send_selected_to_draft=self._on_send_selected_to_draft,
             on_send_selected_to_pattern=self._on_send_selected_to_pattern,
+            on_use_selected_as_custom_tile=self.customTileRequested.emit,
             draft_profile=True,
         )
-        self._canvas.set_empty_message(
-            "No image loaded\nOpen or drop an image (PNG/JPG) to trace it into outlines"
-        )
+        self._canvas.set_empty_message("No image loaded\nOpen or drop an image to trace")
         self._canvas.set_grid_visible(True)
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(1.0)
@@ -606,6 +613,82 @@ class TracePage(BasePage):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _refresh_trace_recipes(self) -> None:
+        current = self._recipe_combo.currentText() if hasattr(self, "_recipe_combo") else ""
+        self._recipe_combo.clear()
+        names = sorted((self._settings.get("trace_recipes") or {}).keys())
+        if names:
+            self._recipe_combo.addItems(names)
+        else:
+            self._recipe_combo.addItem("No saved recipes")
+        if hasattr(self, "_apply_recipe_btn"):
+            self._apply_recipe_btn.setEnabled(bool(names))
+        if current:
+            self._recipe_combo.setCurrentText(current)
+
+    def _trace_recipe_payload(self) -> dict:
+        state = get_trace_workspace_state(self)
+        keys = {
+            "blur",
+            "threshold",
+            "auto_threshold",
+            "invert",
+            "edge_mode",
+            "canny_low",
+            "canny_high",
+            "outer_only",
+            "simplify",
+            "min_area",
+            "max_area",
+            "close_r",
+            "max_res",
+        }
+        return {key: state[key] for key in keys}
+
+    def _save_trace_recipe(self) -> None:
+        name, ok = QInputDialog.getText(self, "Save Trace Recipe", "Recipe name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        recipes = dict(self._settings.get("trace_recipes") or {})
+        recipes[name] = self._trace_recipe_payload()
+        self._settings["trace_recipes"] = recipes
+        save_settings(self._settings)
+        self._refresh_trace_recipes()
+        self._recipe_combo.setCurrentText(name)
+        self._set_status(f"Saved trace recipe ‘{name}’.", "#3fb950")
+
+    def _apply_trace_recipe(self) -> None:
+        name = self._recipe_combo.currentText()
+        recipe = (self._settings.get("trace_recipes") or {}).get(name)
+        if not isinstance(recipe, dict):
+            return
+        text_fields = {
+            "blur": self._blur,
+            "threshold": self._thresh_entry,
+            "canny_low": self._canny_low,
+            "canny_high": self._canny_high,
+            "simplify": self._simplify,
+            "min_area": self._min_area,
+            "max_area": self._max_area,
+            "close_r": self._close_r,
+            "max_res": self._max_res,
+        }
+        for key, widget in text_fields.items():
+            if key in recipe:
+                widget.setText(str(recipe[key]))
+        checks = {
+            "auto_threshold": self._auto_thresh_cb,
+            "invert": self._invert_cb,
+            "edge_mode": self._edge_mode_cb,
+            "outer_only": self._outer_only_cb,
+        }
+        for key, widget in checks.items():
+            if key in recipe:
+                widget.setChecked(bool(recipe[key]))
+        self._schedule_trace()
+        self._set_status(f"Applied trace recipe ‘{name}’.", "#3fb950")
+
     def _set_status(self, text: str, color: str = "#8b949e") -> None:
         if not text:
             self._status.setVisible(False)
@@ -648,13 +731,13 @@ class TracePage(BasePage):
     def _update_trace_action_states(self) -> None:
         has_image = bool(self._img_path or self._last_display_img is not None)
         has_polys = bool(self._canvas.poly_count) if hasattr(self, "_canvas") else False
-        has_selection = (
-            bool(self._canvas.sel_count) if hasattr(self, "_canvas") else False
-        )
+        has_selection = bool(self._canvas.sel_count) if hasattr(self, "_canvas") else False
         self._bg_visible_cb.setEnabled(has_image)
         self._export_all_btn.setEnabled(has_polys)
         self._export_sel_action.setEnabled(has_selection)
         self._reveal_action.setEnabled(bool(self._last_out))
+        self._reload_btn.setEnabled(has_image)
+        self._smooth_btn.setEnabled(has_polys)
 
     def _parse_float_field(
         self,
@@ -823,8 +906,7 @@ class TracePage(BasePage):
         tolerance, ok = QInputDialog.getDouble(
             self,
             "Smooth Traced Curves",
-            "Smoothing tolerance (mm) — higher smooths more but can round "
-            "off fine detail:",
+            "Smoothing tolerance (mm) — higher smooths more but can round off fine detail:",
             0.3,
             0.01,
             10.0,
@@ -892,11 +974,12 @@ class TracePage(BasePage):
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
         self._set_status("Tracing…")
-        threading.Thread(
+        self._trace_thread = threading.Thread(
             target=self._run_trace,
             args=(self._img_path, kwargs, trace_token, cancel_event),
             daemon=True,
-        ).start()
+        )
+        self._trace_thread.start()
 
     def _run_trace(
         self,
@@ -935,6 +1018,9 @@ class TracePage(BasePage):
         width_mm_val = float(width_mm_val)
         height_mm_val = img_h_px / max(img_w_px, 1) * width_mm_val
         count = len(polys)
+        from src.backend.preflight import analyze_geometry
+
+        diagnostics = analyze_geometry(polys)
 
         self._running = False
         self._progress.setVisible(False)
@@ -965,7 +1051,10 @@ class TracePage(BasePage):
             self._set_status(
                 f"{count} contour(s) extracted  ·  "
                 f"{img_w_px}×{img_h_px} px → "
-                f"{width_mm_val:.1f}×{height_mm_val:.1f} mm",
+                f"{width_mm_val:.1f}×{height_mm_val:.1f} mm · "
+                f"{sum(len(poly) for poly in polys)} vertices · "
+                f"{diagnostics.closed} closed/{diagnostics.open} open · "
+                f"{diagnostics.tiny_paths} tiny",
                 "#3fb950",
             )
         else:
@@ -1062,9 +1151,7 @@ class TracePage(BasePage):
                     bg_layer,
                     TRACE_BG_BLEND_ALPHA,
                 )
-                self._canvas.set_background_image(
-                    faded, self._last_width_mm, self._last_height_mm
-                )
+                self._canvas.set_background_image(faded, self._last_width_mm, self._last_height_mm)
             except (OSError, ValueError) as exc:
                 LOGGER.debug("Failed to toggle background image visibility: %s", exc)
         elif not state:
@@ -1148,18 +1235,14 @@ class TracePage(BasePage):
             )
             self._last_out = out
             self._reveal_action.setEnabled(True)
-            self._set_status(
-                f"Exported {len(records)} shapes → {Path(out).name}", "#3fb950"
-            )
+            self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", "#3fb950")
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_selected(self) -> None:
         selected = self._canvas.get_selection_indices()
         records = [
-            r
-            for r in self._canvas.get_export_dxf_state()
-            if int(r.get("index", -1)) in selected
+            r for r in self._canvas.get_export_dxf_state() if int(r.get("index", -1)) in selected
         ]
         if not records:
             QMessageBox.information(self, "Export Selected", "Nothing is selected.")
@@ -1209,10 +1292,19 @@ class TracePage(BasePage):
                 self._last_height_mm,
             )
         except (OSError, ValueError) as exc:
-            LOGGER.debug(
-                "Failed to restore background image from path '%s': %s", path, exc
-            )
+            LOGGER.debug("Failed to restore background image from path '%s': %s", path, exc)
             self._canvas.clear_background_image()
+
+    def shutdown(self) -> None:
+        """Called by ``App.closeEvent`` before the window tears down.
+
+        Signal the in-flight trace worker (if any) to stop and give it a
+        short window to actually exit, instead of leaving it to run to
+        completion (or crash) against a page that's already being destroyed.
+        """
+        self._cancel_event.set()
+        if self._trace_thread is not None and self._trace_thread.is_alive():
+            self._trace_thread.join(timeout=2.0)
 
     def get_workspace_state(self) -> dict:
         return get_trace_workspace_state(self)

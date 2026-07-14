@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
-from src.ui.core.factories import info_chip
+from src.ui.components import info_chip
 
 
 class CanvasStatusStrip(QFrame):
@@ -21,42 +21,38 @@ class CanvasStatusStrip(QFrame):
         layout.setSpacing(6)
 
         self._mode_label = QLabel("Select")
-        self._mode_label.setStyleSheet(
-            "color: #79c0ff; font-size: 11px; font-weight: 600;"
-        )
+        self._mode_label.setProperty("role", "status-mode")
         layout.addWidget(self._mode_label)
 
         self._readiness_dot = self._dot()
         layout.addWidget(self._readiness_dot)
 
         self._objects_label = QLabel("0 obj")
-        self._objects_label.setStyleSheet("color: #8b949e; font-size: 11px;")
+        self._objects_label.setProperty("role", "status-meta")
         layout.addWidget(self._objects_label)
 
         layout.addWidget(self._dot())
 
         self._selection_label = QLabel("0 sel")
-        self._selection_label.setStyleSheet("color: #8b949e; font-size: 11px;")
+        self._selection_label.setProperty("role", "status-selection")
         layout.addWidget(self._selection_label)
 
         layout.addWidget(self._dot())
 
         self._precision_label = QLabel("Free move")
-        self._precision_label.setStyleSheet("color: #6e7681; font-size: 10px;")
+        self._precision_label.setProperty("role", "status-detail")
         layout.addWidget(self._precision_label)
 
         layout.addStretch()
 
         self._cursor_label = QLabel("")
-        self._cursor_label.setStyleSheet(
-            "color: #6e7681; font-size: 10px; font-family: 'Menlo', 'Courier New';"
-        )
+        self._cursor_label.setProperty("role", "status-coordinates")
         layout.addWidget(self._cursor_label)
 
         layout.addWidget(self._dot())
 
         self._zoom_label = QLabel("100%")
-        self._zoom_label.setStyleSheet("color: #8b949e; font-size: 10px;")
+        self._zoom_label.setProperty("role", "status-zoom")
         self._zoom_label.setToolTip("Zoom level — click for presets")
         self._zoom_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self._zoom_label.mousePressEvent = self._show_zoom_menu  # type: ignore[method-assign]
@@ -73,7 +69,7 @@ class CanvasStatusStrip(QFrame):
     @staticmethod
     def _dot() -> QLabel:
         d = QLabel("·")
-        d.setStyleSheet("color: #30363d; font-size: 11px;")
+        d.setProperty("role", "status-separator")
         return d
 
     def set_snapshot(
@@ -92,9 +88,9 @@ class CanvasStatusStrip(QFrame):
         self._mode_label.setText(mode.title())
         self._objects_label.setText(f"{object_count} obj")
         self._selection_label.setText(f"{selected_count} sel")
-        self._selection_label.setStyleSheet(
-            f"color: {'#79c0ff' if selected_count else '#8b949e'}; font-size: 11px;"
-        )
+        self._selection_label.setProperty("active", bool(selected_count))
+        self._selection_label.style().unpolish(self._selection_label)
+        self._selection_label.style().polish(self._selection_label)
         combined_precision = precision_text
         if topology_text:
             combined_precision = f"{precision_text} · {topology_text}"
@@ -128,9 +124,9 @@ class CanvasStatusStrip(QFrame):
     def set_selection_count(self, count: int) -> None:
         """Lightweight update — change only the selection label without a full snapshot."""
         self._selection_label.setText(f"{count} sel")
-        self._selection_label.setStyleSheet(
-            f"color: {'#79c0ff' if count else '#8b949e'}; font-size: 11px;"
-        )
+        self._selection_label.setProperty("active", bool(count))
+        self._selection_label.style().unpolish(self._selection_label)
+        self._selection_label.style().polish(self._selection_label)
 
 
 __all__ = ["CanvasStatusStrip"]

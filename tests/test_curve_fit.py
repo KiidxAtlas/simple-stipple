@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from src.backend.geometry.curve_fit import fit_polyline_to_bezier
+from src.backend.geometry import fit_polyline_to_bezier
 
 
 def _fit(*args, **kwargs):

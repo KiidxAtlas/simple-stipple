@@ -32,9 +32,7 @@ def test_workspace_document_round_trip(app_window, qapp):
     w = app_window
     draft = _draft_page(w)
     rt = draft._rt()
-    rt.load_polys_by_layer(
-        {"Layer 1": [square(0, 0)], "Cut": [square(30, 0)]}, fit=True
-    )
+    rt.load_polys_by_layer({"Layer 1": [square(0, 0)], "Cut": [square(30, 0)]}, fit=True)
     draft._canvas._entities[1].hidden = True
     rt.rename_shape("Layer 1", 0, "Base")
 
@@ -65,9 +63,7 @@ def test_workspace_document_is_json_serializable(app_window):
 
 def test_autosave_writes_and_recovery_cleans_up(app_window, tmp_path, monkeypatch):
     w = app_window
-    monkeypatch.setattr(
-        type(w), "_autosave_path", staticmethod(lambda: tmp_path / "auto.json")
-    )
+    monkeypatch.setattr(type(w), "_autosave_path", staticmethod(lambda: tmp_path / "auto.json"))
     draft = _draft_page(w)
     draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
     w._workspace_dirty = True
@@ -82,9 +78,7 @@ def test_autosave_writes_and_recovery_cleans_up(app_window, tmp_path, monkeypatc
 
 def test_autosave_skips_when_clean(app_window, tmp_path, monkeypatch):
     w = app_window
-    monkeypatch.setattr(
-        type(w), "_autosave_path", staticmethod(lambda: tmp_path / "auto.json")
-    )
+    monkeypatch.setattr(type(w), "_autosave_path", staticmethod(lambda: tmp_path / "auto.json"))
     w._workspace_dirty = False
     w._autosave_workspace()
     assert not (tmp_path / "auto.json").exists()

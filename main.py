@@ -2,7 +2,7 @@
 
 import sys
 
-from src.launcher import main
+from src.infra.launcher import main
 
 if __name__ == "__main__":
     sys.exit(main())

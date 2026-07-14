@@ -31,7 +31,7 @@ from src.ui.pages.pattern.presets import (
     merge_presets,
     reset_to_builtins,
 )
-from src.ui.util.dialog_paths import pick_open_file, pick_save_file
+from src.ui.util import pick_open_file, pick_save_file
 
 
 class PresetManagerDialog(QDialog):
@@ -47,9 +47,7 @@ class PresetManagerDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._settings = settings
-        self._presets: dict[str, dict] = {
-            name: dict(payload) for name, payload in presets.items()
-        }
+        self._presets: dict[str, dict] = {name: dict(payload) for name, payload in presets.items()}
         self._dirty = False
 
         self.setWindowTitle("Manage Pattern Presets")
@@ -70,15 +68,11 @@ class PresetManagerDialog(QDialog):
         sidebar = QVBoxLayout()
         sidebar.setSpacing(6)
 
-        self._rename_btn = self._make_button(
-            "Rename…", self._rename, "Rename the selected preset"
-        )
+        self._rename_btn = self._make_button("Rename…", self._rename, "Rename the selected preset")
         self._duplicate_btn = self._make_button(
             "Duplicate", self._duplicate, "Copy the selected preset under a new name"
         )
-        self._delete_btn = self._make_button(
-            "Delete", self._delete, "Remove the selected preset"
-        )
+        self._delete_btn = self._make_button("Delete", self._delete, "Remove the selected preset")
         for btn in (self._rename_btn, self._duplicate_btn, self._delete_btn):
             sidebar.addWidget(btn)
         sidebar.addSpacing(12)
@@ -122,8 +116,7 @@ class PresetManagerDialog(QDialog):
         root.addWidget(self._status)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         save_btn = buttons.button(QDialogButtonBox.StandardButton.Save)
         if save_btn is not None:
@@ -165,9 +158,7 @@ class PresetManagerDialog(QDialog):
             pattern = payload.get("pattern", "?")
             item = QListWidgetItem(f"{name}    —  {pattern}")
             item.setData(Qt.ItemDataRole.UserRole, name)
-            tooltip = "\n".join(
-                f"{k}: {v}" for k, v in sorted(payload.items()) if k != "pattern"
-            )
+            tooltip = "\n".join(f"{k}: {v}" for k, v in sorted(payload.items()) if k != "pattern")
             item.setToolTip(tooltip)
             self._list.addItem(item)
         self._list.blockSignals(False)
@@ -212,9 +203,7 @@ class PresetManagerDialog(QDialog):
         name = self._selected_name()
         if name is None:
             return
-        new_name, ok = QInputDialog.getText(
-            self, "Rename preset", "New name:", text=name
-        )
+        new_name, ok = QInputDialog.getText(self, "Rename preset", "New name:", text=name)
         new_name = new_name.strip()
         if not ok or not new_name or new_name == name:
             return
@@ -337,13 +326,9 @@ class PresetManagerDialog(QDialog):
             box = QMessageBox(self)
             box.setWindowTitle("Resolve preset name collisions")
             box.setText(f"{len(collisions)} preset name(s) already exist:\n\n{preview}")
-            keep_btn = box.addButton(
-                "Keep both (rename)", QMessageBox.ButtonRole.AcceptRole
-            )
+            keep_btn = box.addButton("Keep both (rename)", QMessageBox.ButtonRole.AcceptRole)
             box.addButton("Overwrite", QMessageBox.ButtonRole.DestructiveRole)
-            skip_btn = box.addButton(
-                "Skip duplicates", QMessageBox.ButtonRole.RejectRole
-            )
+            skip_btn = box.addButton("Skip duplicates", QMessageBox.ButtonRole.RejectRole)
             box.setDefaultButton(keep_btn)
             box.exec()
             clicked = box.clickedButton()

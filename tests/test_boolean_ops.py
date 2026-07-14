@@ -13,9 +13,15 @@ OVERLAPPING = [square(0, 0), square(5, 5)]  # two 10mm squares overlapping
 
 def test_union_welds(qapp):
     v = make_view(qapp, OVERLAPPING)
+    source_ids = {entity.id for entity in v._entities}
     v.select_all()
     assert v.boolean_selected("union") == 1
     assert v.poly_count == 1
+    result = v._last_operation_result
+    assert result.changed
+    assert set(result.removed_ids) == source_ids
+    assert result.created_ids == result.selected_ids
+    assert {v._entities[index].id for index in v._sel} == set(result.selected_ids)
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     assert (x1 - x0, y1 - y0) == (pytest.approx(15.0), pytest.approx(15.0))
     assert v.undo()

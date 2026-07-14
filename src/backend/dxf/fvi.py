@@ -131,6 +131,6 @@ def convert_fvi_to_dxf(src: Path, dst: Path) -> None:
                 x += ex
                 y += ey
     _flush()
-    from ..io.persistence import atomic_write_via
+    from ..persistence import atomic_write_via
 
     atomic_write_via(dst, lambda p: doc.saveas(str(p)))

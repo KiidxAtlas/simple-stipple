@@ -46,9 +46,7 @@ def test_a_cancelled_trace_resets_running_via_the_cancelled_signal(qapp, tmp_pat
     assert page._running is False
 
 
-def test_repeated_rapid_setting_changes_do_not_permanently_freeze_the_preview(
-    qapp, tmp_path
-):
+def test_repeated_rapid_setting_changes_do_not_permanently_freeze_the_preview(qapp, tmp_path):
     """Simulates the exact failure sequence: a trace is "running", the user
     tweaks another setting (schedule_trace cancels it and marks pending),
     the in-flight worker notices the cancellation and reports back. After

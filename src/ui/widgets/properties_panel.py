@@ -22,14 +22,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.units import from_display
+from src.ui.units import from_display, to_display
 from src.ui.units import suffix as unit_suffix
-from src.ui.units import to_display
 
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]
     "circle": [("radius", "Radius")],
     "polygon": [("radius", "Radius"), ("sides", "Sides")],
+    # Width/height already live in the common W/H row; only expose unique
+    # defining parameters here to avoid a duplicated, noisy inspector.
+    "rounded_rectangle": [("radius", "Corner radius")],
+    "star": [
+        ("radius", "Radius"),
+        ("points", "Points"),
+        ("inner_ratio", "Inner ratio"),
+    ],
     "ellipse": [("rx", "Radius X"), ("ry", "Radius Y")],
     "arc": [("radius", "Radius")],
 }
@@ -63,6 +70,11 @@ class CanvasPropertiesPanel(QWidget):
         self._summary = QLabel("No selection")
         self._summary.setStyleSheet("color: #8b949e;")
         root.addWidget(self._summary)
+
+        self._metrics = QLabel()
+        self._metrics.setProperty("role", "hint-sm")
+        self._metrics.setWordWrap(True)
+        root.addWidget(self._metrics)
 
         self._empty_hint = QLabel(
             "Select a shape to edit its position, size, or\nshape-specific properties."
@@ -163,9 +175,7 @@ class CanvasPropertiesPanel(QWidget):
             unit = self._unit()
             for axis, lbl in self._axis_labels.items():
                 lbl.setText(f"{axis} ({unit_suffix(unit)})")
-            self._aspect_lock_btn.setChecked(
-                getattr(self._canvas, "_aspect_ratio_locked", False)
-            )
+            self._aspect_lock_btn.setChecked(getattr(self._canvas, "_aspect_ratio_locked", False))
             info = self._canvas.selection_geometry()
             enabled = info is not None
             self._fields_container.setVisible(enabled)
@@ -174,6 +184,7 @@ class CanvasPropertiesPanel(QWidget):
                 edit.setEnabled(enabled)
             if info is None:
                 self._summary.setText("No selection")
+                self._metrics.clear()
                 for edit in (self._x, self._y, self._w, self._h):
                     edit.clear()
                 self._set_param_rows(None, None, {})
@@ -184,6 +195,22 @@ class CanvasPropertiesPanel(QWidget):
                 self._summary.setText(kind.capitalize())
             else:
                 self._summary.setText(f"{count} shapes")
+            metric_parts = [f"Length {to_display(info['length'], unit):.3g} {unit_suffix(unit)}"]
+            if info.get("area", 0.0) > 0:
+                area_scale = to_display(1.0, unit) ** 2
+                metric_parts.append(
+                    f"Area {float(info['area']) * area_scale:.3g} {unit_suffix(unit)}²"
+                )
+            if info.get("diameter") is not None:
+                metric_parts.append(
+                    f"Diameter {to_display(float(info['diameter']), unit):.3g} {unit_suffix(unit)}"
+                )
+            if info.get("clearance") is not None:
+                metric_parts.append(
+                    f"Clearance {to_display(float(info['clearance']), unit):.3g} "
+                    f"{unit_suffix(unit)}"
+                )
+            self._metrics.setText(" · ".join(metric_parts))
             self._x.setText(f"{to_display(info['x'], unit):.2f}")
             self._y.setText(f"{to_display(info['y'], unit):.2f}")
             self._w.setText(f"{to_display(info['w'], unit):.2f}")
@@ -229,9 +256,7 @@ class CanvasPropertiesPanel(QWidget):
                 if "length" in self._param_edits:
                     self._param_edits["length"].setText(f"{math.hypot(dx, dy):.2f}")
                 if "angle" in self._param_edits:
-                    self._param_edits["angle"].setText(
-                        f"{math.degrees(math.atan2(dy, dx)):.1f}"
-                    )
+                    self._param_edits["angle"].setText(f"{math.degrees(math.atan2(dy, dx)):.1f}")
             return
         for key, edit in self._param_edits.items():
             value = meta.get(key)

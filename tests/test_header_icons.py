@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from src.ui.core.icons import download_icon, gear_icon  # noqa: E402
+from src.ui.components import download_icon, gear_icon  # noqa: E402
 
 
 def test_gear_icon_renders_a_non_empty_pixmap(qapp):

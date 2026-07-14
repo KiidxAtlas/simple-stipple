@@ -16,15 +16,15 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLineEdit, QMenu
 
-from src.backend.geometry.shapes import (
+from src.backend.geometry import (
     shape_circle,
     shape_polygon,
     shape_rect,
     shape_slot,
 )
-from src.settings import DEFAULT_RADIAL_MENU_TOOLS, RADIAL_MENU_SHORT_LABELS
-from src.ui.canvas import commands as canvas_commands
-from src.ui.canvas import tools as canvas_tools
+from src.infra.settings import DEFAULT_RADIAL_MENU_TOOLS, RADIAL_MENU_SHORT_LABELS
+from src.ui.canvas.interaction import commands as canvas_commands
+from src.ui.canvas.interaction import tools as canvas_tools
 from src.ui.canvas.view import PolylineView
 
 
@@ -36,7 +36,7 @@ class DxfSelectTool(canvas_tools.SelectTool):
     # DxfCanvas.__init__ below), which adds radial-menu/quick-shape state on
     # top of the base PolylineView — narrow the inherited `v` accordingly so
     # those DxfCanvas-only attributes type-check.
-    v: "DxfCanvas"
+    v: DxfCanvas
 
     def press(self, event: QMouseEvent) -> bool:
         c = self.v
@@ -45,9 +45,7 @@ class DxfSelectTool(canvas_tools.SelectTool):
         # (mousePressEvent/mouseMoveEvent/paintEvent below) so the menu opens
         # and works the same regardless of which mode/tool is active — it
         # used to be select-mode-only because it lived here.
-        if c._selectable and not (
-            event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-        ):
+        if c._selectable and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
             hit = c._find_poly_at(pos.x(), pos.y())
             if hit is None:
                 # Clicking a shape on a non-active layer activates that layer
@@ -64,11 +62,7 @@ class DxfSelectTool(canvas_tools.SelectTool):
 
     def move(self, event: QMouseEvent) -> bool:
         c = self.v
-        if (
-            c._selectable
-            and c._shape_drag_active
-            and (event.buttons() & Qt.MouseButton.LeftButton)
-        ):
+        if c._selectable and c._shape_drag_active and (event.buttons() & Qt.MouseButton.LeftButton):
             pos = event.position().toPoint()
             c._shape_end_c = pos
             wx, wy = c._c2w(event.position().x(), event.position().y())
@@ -80,11 +74,7 @@ class DxfSelectTool(canvas_tools.SelectTool):
 
     def release(self, event: QMouseEvent) -> bool:
         c = self.v
-        if (
-            c._selectable
-            and c._shape_drag_active
-            and event.button() == Qt.MouseButton.LeftButton
-        ):
+        if c._selectable and c._shape_drag_active and event.button() == Qt.MouseButton.LeftButton:
             c._finish_shape_drag(event.position().toPoint())
             return True
         return super().release(event)
@@ -150,8 +140,11 @@ class DxfCanvas(PolylineView):
         on_poly_change=None,
         on_send_selected_to_pattern=None,
         on_send_selected_to_draft=None,
-        on_use_selected_as_fill_pattern=None,
+        on_use_selected_as_custom_tile=None,
         on_cutout_toggle=None,
+        on_outline_role_change=None,
+        on_outline_role_explain=None,
+        on_pattern_cell_cutout_toggle=None,
         on_ghost_click=None,
         draft_profile: bool = False,
     ):
@@ -164,10 +157,16 @@ class DxfCanvas(PolylineView):
         )
         self._send_selected_to_pattern_cb = on_send_selected_to_pattern
         self._send_selected_to_draft_cb = on_send_selected_to_draft
-        self._use_selected_as_fill_pattern_cb = on_use_selected_as_fill_pattern
+        self._use_selected_as_custom_tile_cb = on_use_selected_as_custom_tile
         self._on_cutout_toggle = on_cutout_toggle
+        self._on_outline_role_change = on_outline_role_change
+        self._on_outline_role_explain = on_outline_role_explain
+        self._on_pattern_cell_cutout_toggle = on_pattern_cell_cutout_toggle
         self._on_ghost_click = on_ghost_click
         self._cutout_indices: set[int] = set()
+        self._outline_roles: dict[int, str] = {}
+        self._pattern_cell_indices: set[int] = set()
+        self._pattern_cell_cutout_indices: set[int] = set()
         self._draft_profile = bool(draft_profile or selectable)
 
         self._quick_shape_mode: str = "rectangle"
@@ -223,6 +222,27 @@ class DxfCanvas(PolylineView):
         """Mark poly indices as cutout shapes, rendering them in amber."""
         self._cutout_indices = set(indices)
         self.set_accent_polys({idx: self._CUTOUT_COLOR for idx in indices})
+
+    def set_outline_roles(self, roles: dict[int, str]) -> None:
+        self._outline_roles = dict(roles)
+        colors = {
+            "cutout": self._CUTOUT_COLOR,
+            "open_path": "#79c0ff",
+            "ignore": "#6e7681",
+        }
+        self.set_accent_polys(
+            {index: colors[role] for index, role in roles.items() if role in colors}
+        )
+
+    def set_pattern_cell_context(
+        self, indices: set[int], cutout_indices: set[int] | None = None
+    ) -> None:
+        """Identify generated preview cells that can be toggled as fill cutouts."""
+        self._pattern_cell_indices = set(indices)
+        self._pattern_cell_cutout_indices = set(cutout_indices or set())
+        self.set_accent_polys(
+            {index: self._CUTOUT_COLOR for index in self._pattern_cell_cutout_indices}
+        )
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         # Handled here (not in a per-mode tool) so the radial menu opens and
@@ -291,24 +311,42 @@ class DxfCanvas(PolylineView):
             return
 
         menu = QMenu(self)
+        section_enabled = self._context_menu_section_enabled
+
+        def _hide_section(section: str, start: int) -> None:
+            if section_enabled(section):
+                return
+            for action in menu.actions()[start:]:
+                menu.removeAction(action)
+
         # "Create shape" only leads the menu when there is nothing to act on —
         # with a selection or a shape under the cursor, the actions the user
         # actually came for (delete/duplicate/close/group) come first.
         poly_hit_early = self._find_poly_at(cx, cy)
-        if not self._sel and poly_hit_early is None:
+        if not self._sel and poly_hit_early is None and section_enabled("create"):
             shape_menu = menu.addMenu("Create shape")
-            shape_menu.addAction(
-                "Rectangle (drag)", lambda: self.set_quick_shape_mode("rectangle")
-            )
-            shape_menu.addAction(
-                "Circle (drag)", lambda: self.set_quick_shape_mode("circle")
-            )
-            shape_menu.addAction(
-                "Slot (drag)", lambda: self.set_quick_shape_mode("slot")
-            )
-            shape_menu.addAction(
-                "Hexagon (drag)", lambda: self.set_quick_shape_mode("hexagon")
-            )
+            shape_menu.addAction("Rectangle (drag)", lambda: self.set_quick_shape_mode("rectangle"))
+            shape_menu.addAction("Circle (drag)", lambda: self.set_quick_shape_mode("circle"))
+            shape_menu.addAction("Slot (drag)", lambda: self.set_quick_shape_mode("slot"))
+            shape_menu.addAction("Hexagon (drag)", lambda: self.set_quick_shape_mode("hexagon"))
+            advanced_menu = shape_menu.addMenu("Procedural")
+            for label, primitive in (
+                ("Ring", "ring"),
+                ("Gear / sprocket", "gear"),
+                ("Spiral", "spiral"),
+                ("Teardrop", "teardrop"),
+                ("Keyhole", "keyhole"),
+                ("Superellipse / squircle", "superellipse"),
+                ("Rounded star", "rounded_star"),
+                ("Chamfered star", "chamfered_star"),
+                ("Finger-joint box", "finger_joint_box"),
+                ("Dovetail box", "dovetail_box"),
+                ("Tabbed panel", "tabbed_panel"),
+            ):
+                advanced_menu.addAction(
+                    label,
+                    lambda _checked=False, value=primitive: self.create_procedural_primitive(value),
+                )
             menu.addSeparator()
 
         poly_hit = poly_hit_early
@@ -321,7 +359,36 @@ class DxfCanvas(PolylineView):
             else:
                 menu.addAction("Select", lambda: self._ctx_select(idx))
             menu.addAction("Delete", lambda: self._ctx_delete_poly(idx))
-            if callable(self._on_cutout_toggle):
+            if idx in self._pattern_cell_indices and callable(self._on_pattern_cell_cutout_toggle):
+                is_cutout = idx in self._pattern_cell_cutout_indices
+                menu.addAction(
+                    "Restore Pattern Cell Fill" if is_cutout else "Mark Pattern Cell as Cutout",
+                    lambda _checked=False, target=idx: self._on_pattern_cell_cutout_toggle(target),
+                )
+            elif callable(self._on_outline_role_change):
+                role_menu = menu.addMenu("Outline role")
+                current_role = self._outline_roles.get(idx, "boundary")
+                for role, label in (
+                    ("boundary", "Boundary (fillable)"),
+                    ("cutout", "Cutout (subtract)"),
+                    ("open_path", "Open path (do not fill)"),
+                    ("ignore", "Ignore in generation"),
+                ):
+                    action = role_menu.addAction(label)
+                    action.setCheckable(True)
+                    action.setChecked(role == current_role)
+                    action.triggered.connect(
+                        lambda _checked=False, value=role, target=idx: self._on_outline_role_change(
+                            target, value
+                        )
+                    )
+                if callable(self._on_outline_role_explain):
+                    role_menu.addSeparator()
+                    role_menu.addAction(
+                        "Explain this role…",
+                        lambda _checked=False, target=idx: self._on_outline_role_explain(target),
+                    )
+            if callable(self._on_cutout_toggle) and not callable(self._on_outline_role_change):
                 is_cutout = idx in self._cutout_indices
                 cutout_label = "Remove Cutout" if is_cutout else "Mark as Cutout"
                 cutout_toggle = self._on_cutout_toggle
@@ -338,9 +405,7 @@ class DxfCanvas(PolylineView):
                     sel_snapshot = set(self._sel)
                     menu.addAction(
                         bulk_label,
-                        lambda _cb=cutout_toggle, _sel=sel_snapshot: [
-                            _cb(i) for i in _sel
-                        ],
+                        lambda _cb=cutout_toggle, _sel=sel_snapshot: [_cb(i) for i in _sel],
                     )
             menu.addSeparator()
 
@@ -371,15 +436,12 @@ class DxfCanvas(PolylineView):
             *,
             is_length: bool = True,
         ) -> None:
-            self._show_hud_prompt(
-                label, default, callback, minimum=minimum, is_length=is_length
-            )
+            self._show_hud_prompt(label, default, callback, minimum=minimum, is_length=is_length)
 
-        if self._sel:
+        if self._sel and section_enabled("selected"):
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
-            menu.addAction(
-                canvas_commands.menu_text("edit.duplicate"), self.duplicate_selected
-            )
+            menu.addAction("Move to Coordinate…", self.show_coordinate_entry)
+            menu.addAction(canvas_commands.menu_text("edit.duplicate"), self.duplicate_selected)
             menu.addAction(
                 canvas_commands.menu_text("edit.array_grid"),
                 self.array_duplicate_grid,
@@ -396,8 +458,7 @@ class DxfCanvas(PolylineView):
             open_count = sum(
                 1
                 for i in self._sel
-                if i < len(self._entities)
-                and not self._is_poly_closed(self._entities[i].points)
+                if i < len(self._entities) and not self._is_poly_closed(self._entities[i].points)
             )
             if open_count:
                 label = "Close path"
@@ -430,31 +491,162 @@ class DxfCanvas(PolylineView):
                     )
                 ),
             )
-            if len(self._sel) >= 2:
-                menu.addAction(
-                    canvas_commands.menu_text("group.create"), self._group_selected
+            menu.addAction(
+                canvas_commands.menu_text("path.recognize_shapes"),
+                lambda: _run_transform(self.recognize_selected_shapes),
+            )
+            path_menu = menu.addMenu("Path Direction & Sampling")
+            for command_id in (
+                "path.reverse",
+                "path.set_start",
+                "path.resample_spacing",
+                "path.resample_count",
+                "path.fit_line",
+                "path.fit_circle",
+                "path.fit_arc",
+            ):
+                action = path_menu.addAction(canvas_commands.menu_text(command_id))
+                action.setEnabled(canvas_commands.can_run(self, command_id))
+                action.triggered.connect(
+                    lambda _checked=False, value=command_id: canvas_commands.run(self, value)
                 )
+            vertex_hit = self._find_nearest_vertex(cx, cy)
+            if (
+                vertex_hit is not None
+                and vertex_hit[0] in self._sel
+                and self._entities[vertex_hit[0]].kind == "bezier"
+            ):
+                entity_index, anchor_index = vertex_hit
+                metadata = self._entities[entity_index].meta or {}
+                node_types = list(metadata.get("node_types", []))
+                current_type = (
+                    str(node_types[anchor_index]) if anchor_index < len(node_types) else "symmetric"
+                )
+                node_menu = menu.addMenu("Bézier node")
+                for mode, label in (
+                    ("corner", "Corner — independent handles"),
+                    ("smooth", "Smooth — aligned handles"),
+                    ("symmetric", "Symmetric — linked handles"),
+                ):
+                    action = node_menu.addAction(label)
+                    action.setCheckable(True)
+                    action.setChecked(mode == current_type)
+                    action.triggered.connect(
+                        lambda _checked=False, value=mode, ei=entity_index, ai=anchor_index: (
+                            self.set_bezier_node_type(ei, ai, value)
+                        )
+                    )
+            if len(self._sel) >= 2:
+                menu.addAction(canvas_commands.menu_text("group.create"), self._group_selected)
             if any(self._group_of(i) is not None for i in self._sel):
-                menu.addAction(
-                    canvas_commands.menu_text("group.dissolve"), self._ungroup_selected
+                menu.addAction(canvas_commands.menu_text("group.dissolve"), self._ungroup_selected)
+            constraints_menu = menu.addMenu("Constraints")
+            for command_id in (
+                "constraint.horizontal",
+                "constraint.vertical",
+                "constraint.parallel",
+                "constraint.perpendicular",
+                "constraint.equal_length",
+                "constraint.coincident",
+                "constraint.fixed",
+            ):
+                action = constraints_menu.addAction(canvas_commands.menu_text(command_id))
+                action.setEnabled(canvas_commands.can_run(self, command_id))
+                action.triggered.connect(
+                    lambda _checked=False, value=command_id: canvas_commands.run(self, value)
+                )
+            constraints_menu.addSeparator()
+            constraints_menu.addAction(
+                canvas_commands.menu_text("constraint.remove"),
+                self.remove_constraints_for_selection,
+            )
+            construct_menu = menu.addMenu("Construct")
+            for command_id in (
+                "construct.xline",
+                "construct.ray",
+                "construct.bisector",
+                "construct.centerline",
+                "construct.circle_3point",
+                "construct.point_tangents",
+                "construct.common_tangents",
+            ):
+                action = construct_menu.addAction(canvas_commands.menu_text(command_id))
+                action.setEnabled(canvas_commands.can_run(self, command_id))
+                action.triggered.connect(
+                    lambda _checked=False, value=command_id: canvas_commands.run(self, value)
+                )
+        section_start = len(menu.actions())
+        if not self._sel:
+            menu.addAction("Select all", self.select_all)
+        symbols_menu = menu.addMenu("Symbols")
+        if self._sel:
+            symbols_menu.addAction("Create from selection…", self.create_symbol_from_selection)
+            if self._symbol_library:
+                symbols_menu.addSeparator()
+        if self._symbol_library:
+            insert_menu = symbols_menu.addMenu("Insert")
+            manage_menu = symbols_menu.addMenu("Manage")
+            for symbol_name in sorted(self._symbol_library, key=str.casefold):
+                insert_menu.addAction(
+                    symbol_name,
+                    lambda _checked=False, name=symbol_name: self.insert_symbol_named(name),
+                )
+                item_menu = manage_menu.addMenu(symbol_name)
+                item_menu.addAction(
+                    "Rename…",
+                    lambda _checked=False, name=symbol_name: self.prompt_rename_symbol(name),
+                )
+                item_menu.addAction(
+                    "Delete",
+                    lambda _checked=False, name=symbol_name: self.delete_symbol(name),
                 )
         else:
-            menu.addAction("Select all", self.select_all)
+            empty_action = symbols_menu.addAction("No saved symbols")
+            empty_action.setEnabled(False)
 
         menu.addAction(
-            "Use as outline", lambda: _run_transform(self._send_selected_to_pattern)
+            canvas_commands.menu_text("select.lasso", "Lasso selection"),
+            self.arm_lasso_selection,
         )
-        if callable(getattr(self, "_use_selected_as_fill_pattern_cb", None)):
+
+        select_menu = menu.addMenu("Select by geometry")
+        select_menu.addAction("Open paths", self.select_open_paths)
+        select_menu.addAction("Closed paths", self.select_closed_paths)
+        select_menu.addSeparator()
+        for label, category in (
+            ("Parametric shapes", "parametric"),
+            ("Generic paths", "generic_paths"),
+            ("Text", "text"),
+            ("Construction geometry", "construction"),
+        ):
+            select_menu.addAction(
+                label, lambda _checked=False, value=category: self.select_geometry_category(value)
+            )
+        select_menu.addAction("Invert selection", self._invert_selection)
+        _hide_section("selection", section_start)
+
+        section_start = len(menu.actions())
+        menu.addAction("Use as outline", lambda: _run_transform(self._send_selected_to_pattern))
+        if callable(self._use_selected_as_custom_tile_cb):
             menu.addAction(
-                "Use as pattern fill",
-                lambda: _run_transform(self._use_selected_as_fill_pattern),
+                "Use as Custom Tile",
+                lambda: _run_transform(self._use_selected_as_custom_tile),
             )
         if callable(getattr(self, "_send_selected_to_draft_cb", None)):
             menu.addAction(
                 "Send to Draft",
                 lambda: _run_transform(self._send_selected_to_draft),
             )
+        health_action = menu.addAction(
+            "Hide Geometry Health" if self._geometry_health_visible else "Show Geometry Health"
+        )
+        health_action.triggered.connect(
+            lambda: self.set_geometry_health_visible(not self._geometry_health_visible)
+        )
+        menu.addAction("Geometry Preflight…", self._show_geometry_preflight)
+        _hide_section("share_diagnostics", section_start)
 
+        section_start = len(menu.actions())
         if len(self._sel) >= 2:
             bool_menu = menu.addMenu("Boolean")
             for cmd_id in (
@@ -467,7 +659,9 @@ class DxfCanvas(PolylineView):
                     canvas_commands.menu_text(cmd_id),
                     lambda _c=cmd_id: canvas_commands.run(self, _c),
                 )
+        _hide_section("boolean", section_start)
 
+        section_start = len(menu.actions())
         arrange_menu = menu.addMenu("Arrange")
         for label, mode in (
             ("Align left", "left"),
@@ -517,19 +711,19 @@ class DxfCanvas(PolylineView):
         ):
             arrange_menu.addAction(
                 label,
-                lambda _t=title, _p=prompt, _d=default, _a=axis, _m=dist_mode: (
-                    _run_transform(
-                        lambda: _run_prompted_transform(
-                            _t,
-                            _p,
-                            _d,
-                            0.0,
-                            lambda value: self._distribute_selected(_a, value, mode=_m),
-                        )
+                lambda _t=title, _p=prompt, _d=default, _a=axis, _m=dist_mode: _run_transform(
+                    lambda: _run_prompted_transform(
+                        _t,
+                        _p,
+                        _d,
+                        0.0,
+                        lambda value: self._distribute_selected(_a, value, mode=_m),
                     )
                 ),
             )
+        _hide_section("arrange", section_start)
 
+        section_start = len(menu.actions())
         transform_menu = menu.addMenu("Transform")
         transform_menu.addAction(
             "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0))
@@ -583,6 +777,10 @@ class DxfCanvas(PolylineView):
             canvas_commands.menu_text("mode.extend", "Extend to meet…"),
             lambda: canvas_commands.run(self, "mode.extend"),
         )
+        transform_menu.addAction(
+            canvas_commands.menu_text("mode.knife", "Knife tool"),
+            lambda: canvas_commands.run(self, "mode.knife"),
+        )
         transform_menu.addSeparator()
         transform_menu.addAction(
             "Explode to segments",
@@ -592,14 +790,26 @@ class DxfCanvas(PolylineView):
             "Merge segments to object",
             lambda: _run_transform(self.merge_selected_segments_to_objects),
         )
+        _hide_section("transform", section_start)
 
+        section_start = len(menu.actions())
         wx_txt, wy_txt = self._c2w(cx, cy)
         menu.addAction(
             canvas_commands.menu_text("text.add", "Add text…"),
             lambda: self.prompt_add_text(wx_txt, wy_txt),
         )
+        _hide_section("text", section_start)
 
+        section_start = len(menu.actions())
         menu.addSeparator()
+        menu.addAction(
+            canvas_commands.menu_text("view.previous"),
+            lambda: canvas_commands.run(self, "view.previous"),
+        )
+        menu.addAction(
+            canvas_commands.menu_text("view.next"),
+            lambda: canvas_commands.run(self, "view.next"),
+        )
         menu.addAction(canvas_commands.menu_text("view.fit", "Fit view"), self.fit)
         grid_action = menu.addAction("Show grid")
         grid_action.setCheckable(True)
@@ -619,6 +829,7 @@ class DxfCanvas(PolylineView):
             canvas_commands.menu_text("mode.edit", "Edit"),
             lambda: self.set_mode("edit"),
         )
+        _hide_section("view", section_start)
         menu.popup(self.mapToGlobal(QPoint(int(cx), int(cy))))
 
     def _show_size_hud(self) -> None:
@@ -816,9 +1027,7 @@ class DxfCanvas(PolylineView):
                 painter.drawLine(QPointF(cx, cy - ra), QPointF(cx, cy + ra))
 
         if cmd_id in ("canvas.rectangle",):
-            painter.drawRoundedRect(
-                QRectF(cx - half, cy - half * 0.7, size, size * 0.7), 2.0, 2.0
-            )
+            painter.drawRoundedRect(QRectF(cx - half, cy - half * 0.7, size, size * 0.7), 2.0, 2.0)
         elif cmd_id == "canvas.circle":
             painter.drawEllipse(QPointF(cx, cy), half, half)
         elif cmd_id == "canvas.polygon":
@@ -897,22 +1106,34 @@ class DxfCanvas(PolylineView):
             painter.drawArc(QRectF(cx - half, cy - half, size, size), 250 * 16, 260 * 16)
             self._draw_arrowhead(painter, cx + half * 0.75, cy - half * 0.55, -20, color)
         elif cmd_id == "clipboard.cut":
-            painter.drawLine(QPointF(cx - half, cy - half), QPointF(cx + half * 0.2, cy + half * 0.3))
-            painter.drawLine(QPointF(cx - half, cy + half), QPointF(cx + half * 0.2, cy - half * 0.3))
+            painter.drawLine(
+                QPointF(cx - half, cy - half), QPointF(cx + half * 0.2, cy + half * 0.3)
+            )
+            painter.drawLine(
+                QPointF(cx - half, cy + half), QPointF(cx + half * 0.2, cy - half * 0.3)
+            )
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(QPointF(cx - half, cy - half), 2.2, 2.2)
             painter.drawEllipse(QPointF(cx - half, cy + half), 2.2, 2.2)
             painter.drawLine(QPointF(cx + half * 0.2, cy), QPointF(cx + half, cy))
         elif cmd_id == "clipboard.copy":
-            painter.drawRoundedRect(QRectF(cx - half, cy - half * 0.75, size * 0.75, size * 0.75), 2.0, 2.0)
+            painter.drawRoundedRect(
+                QRectF(cx - half, cy - half * 0.75, size * 0.75, size * 0.75), 2.0, 2.0
+            )
             painter.drawRoundedRect(
                 QRectF(cx - half * 0.25, cy - half * 0.15, size * 0.75, size * 0.75), 2.0, 2.0
             )
         elif cmd_id == "clipboard.paste":
-            painter.drawRoundedRect(QRectF(cx - half * 0.7, cy - half * 0.8, size * 0.7, size), 1.5, 1.5)
-            painter.drawRoundedRect(QRectF(cx - half * 0.3, cy - half, size * 0.3, size * 0.25), 1.0, 1.0)
+            painter.drawRoundedRect(
+                QRectF(cx - half * 0.7, cy - half * 0.8, size * 0.7, size), 1.5, 1.5
+            )
+            painter.drawRoundedRect(
+                QRectF(cx - half * 0.3, cy - half, size * 0.3, size * 0.25), 1.0, 1.0
+            )
         elif cmd_id in ("edit.duplicate", "edit.duplicate_offset"):
-            painter.drawRoundedRect(QRectF(cx - half, cy - half * 0.2, size * 0.65, size * 0.65), 2.0, 2.0)
+            painter.drawRoundedRect(
+                QRectF(cx - half, cy - half * 0.2, size * 0.65, size * 0.65), 2.0, 2.0
+            )
             painter.drawRoundedRect(
                 QRectF(cx - half * 0.35, cy - half, size * 0.65, size * 0.65), 2.0, 2.0
             )
@@ -927,7 +1148,9 @@ class DxfCanvas(PolylineView):
             for k in range(5):
                 a = math.radians(72 * k - 90)
                 painter.drawEllipse(
-                    QPointF(cx + math.cos(a) * half * 0.75, cy + math.sin(a) * half * 0.75), 2.0, 2.0
+                    QPointF(cx + math.cos(a) * half * 0.75, cy + math.sin(a) * half * 0.75),
+                    2.0,
+                    2.0,
                 )
         elif cmd_id == "edit.delete":
             painter.drawLine(QPointF(cx - half, cy - half), QPointF(cx + half, cy + half))
@@ -943,7 +1166,9 @@ class DxfCanvas(PolylineView):
             painter.setPen(pen)
             painter.drawRect(QRectF(cx - half, cy - half * 0.7, size, size * 0.7))
             painter.setPen(QPen(color, 1.4))
-            painter.drawLine(QPointF(cx - half, cy + half * 0.7), QPointF(cx + half, cy - half * 0.7))
+            painter.drawLine(
+                QPointF(cx - half, cy + half * 0.7), QPointF(cx + half, cy - half * 0.7)
+            )
         elif cmd_id == "select.invert":
             painter.drawRect(QRectF(cx - half, cy - half * 0.5, size * 0.45, size * 0.9))
             painter.setBrush(color)
@@ -971,7 +1196,9 @@ class DxfCanvas(PolylineView):
             pen = painter.pen()
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
-            painter.drawLine(QPointF(cx - half, cy + half * 0.5), QPointF(cx + half, cy - half * 0.5))
+            painter.drawLine(
+                QPointF(cx - half, cy + half * 0.5), QPointF(cx + half, cy - half * 0.5)
+            )
         elif cmd_id in ("vertex.round", "vertex.chamfer"):
             path = QPainterPath()
             path.moveTo(cx - half, cy - half * 0.6)
@@ -988,7 +1215,9 @@ class DxfCanvas(PolylineView):
             font.setPointSizeF(size * 0.62)
             font.setBold(True)
             painter.setFont(font)
-            painter.drawText(QRectF(cx - half, cy - half, size, size), Qt.AlignmentFlag.AlignCenter, "A")
+            painter.drawText(
+                QRectF(cx - half, cy - half, size, size), Qt.AlignmentFlag.AlignCenter, "A"
+            )
             if cmd_id == "text.attach_to_path":
                 painter.drawArc(QRectF(cx - half, cy + half * 0.3, size, size), 200 * 16, 140 * 16)
         elif cmd_id == "path.simplify":
@@ -1020,8 +1249,12 @@ class DxfCanvas(PolylineView):
             path = QPainterPath()
             path.moveTo(jagged[0][0], jagged[0][1])
             path.cubicTo(
-                cx - half * 0.3, cy - half * 0.7, cx + half * 0.3, cy + half * 0.7,
-                jagged[-1][0], jagged[-1][1],
+                cx - half * 0.3,
+                cy - half * 0.7,
+                cx + half * 0.3,
+                cy + half * 0.7,
+                jagged[-1][0],
+                jagged[-1][1],
             )
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
@@ -1047,8 +1280,12 @@ class DxfCanvas(PolylineView):
                 x = cx - half + (size / 4.0) * k
                 painter.drawLine(QPointF(x, cy - half * 0.45), QPointF(x, cy - half * 0.1))
         elif cmd_id == "mode.dimension":
-            painter.drawLine(QPointF(cx - half, cy - half * 0.6), QPointF(cx - half, cy + half * 0.6))
-            painter.drawLine(QPointF(cx + half, cy - half * 0.6), QPointF(cx + half, cy + half * 0.6))
+            painter.drawLine(
+                QPointF(cx - half, cy - half * 0.6), QPointF(cx - half, cy + half * 0.6)
+            )
+            painter.drawLine(
+                QPointF(cx + half, cy - half * 0.6), QPointF(cx + half, cy + half * 0.6)
+            )
             painter.drawLine(QPointF(cx - half, cy), QPointF(cx + half, cy))
             self._draw_arrowhead(painter, cx - half, cy, 0, color, size=3.0)
             self._draw_arrowhead(painter, cx + half, cy, 180, color, size=3.0)
@@ -1059,19 +1296,29 @@ class DxfCanvas(PolylineView):
                     QPointF(cx + sx * half, cy + sy * half),
                 )
         elif cmd_id in ("view.zoom_in", "view.zoom_out"):
-            painter.drawEllipse(QPointF(cx - half * 0.15, cy - half * 0.15), half * 0.55, half * 0.55)
+            painter.drawEllipse(
+                QPointF(cx - half * 0.15, cy - half * 0.15), half * 0.55, half * 0.55
+            )
             painter.drawLine(
                 QPointF(cx + half * 0.25, cy + half * 0.25), QPointF(cx + half, cy + half)
             )
             r = half * 0.55 * 0.5
-            painter.drawLine(QPointF(cx - half * 0.15 - r, cy - half * 0.15), QPointF(cx - half * 0.15 + r, cy - half * 0.15))
+            painter.drawLine(
+                QPointF(cx - half * 0.15 - r, cy - half * 0.15),
+                QPointF(cx - half * 0.15 + r, cy - half * 0.15),
+            )
             if cmd_id == "view.zoom_in":
-                painter.drawLine(QPointF(cx - half * 0.15, cy - half * 0.15 - r), QPointF(cx - half * 0.15, cy - half * 0.15 + r))
+                painter.drawLine(
+                    QPointF(cx - half * 0.15, cy - half * 0.15 - r),
+                    QPointF(cx - half * 0.15, cy - half * 0.15 + r),
+                )
         elif cmd_id == "view.rulers":
             painter.drawLine(QPointF(cx - half, cy), QPointF(cx + half, cy))
             for k in range(5):
                 x = cx - half + (size / 4.0) * k
-                painter.drawLine(QPointF(x, cy), QPointF(x, cy - (half * 0.5 if k % 2 == 0 else half * 0.25)))
+                painter.drawLine(
+                    QPointF(x, cy), QPointF(x, cy - (half * 0.5 if k % 2 == 0 else half * 0.25))
+                )
         elif cmd_id in ("grid.toggle", "grid.snap", "grid.coarser", "grid.finer"):
             step = size / (2.0 if cmd_id == "grid.coarser" else 4.0)
             x = cx - half
@@ -1094,7 +1341,9 @@ class DxfCanvas(PolylineView):
             font.setPointSizeF(size * 0.44)
             font.setBold(True)
             painter.setFont(font)
-            painter.drawText(QRectF(cx - half, cy - half, size, size), Qt.AlignmentFlag.AlignCenter, initials)
+            painter.drawText(
+                QRectF(cx - half, cy - half, size, size), Qt.AlignmentFlag.AlignCenter, initials
+            )
         painter.restore()
 
     @staticmethod

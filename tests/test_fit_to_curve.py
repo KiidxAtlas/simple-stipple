@@ -68,7 +68,7 @@ def test_fit_selected_to_curve_no_selection_is_a_noop(qapp):
 
 
 def test_path_fit_curve_and_path_smooth_are_registered_commands():
-    from src.ui.canvas import commands as canvas_commands
+    from src.ui.canvas.interaction import commands as canvas_commands
 
     fit_cmd = canvas_commands.get("path.fit_curve")
     smooth_cmd = canvas_commands.get("path.smooth")
@@ -77,7 +77,7 @@ def test_path_fit_curve_and_path_smooth_are_registered_commands():
 
 
 def test_path_fit_curve_appears_in_radial_menu_pool():
-    from src.ui.shell.radial_menu_dialog import _POOL
+    from src.ui.widgets.customize_dialogs import _POOL
 
     assert "path.fit_curve" in _POOL
     assert "path.smooth" in _POOL

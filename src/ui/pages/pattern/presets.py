@@ -45,19 +45,24 @@ _DEFAULTS_COMMON: dict[str, str | bool] = {
     "scale_w": "",
     "scale_h": "",
     "ar_locked": True,
-    "interlace": False,
-    "invert_fill": False,
     "include_border": True,
     "border_fade": "0",
-    "mirror_v": False,
-    "mirror_h": False,
+    "density_mode": "Uniform",
+    "density_strength": "0.75",
+    "density_angle": "0",
+    "density_reverse": False,
     "fill_mode": "none",
     "fill_spacing": "0.5",
     "fill_angle": "0",
+    "fill_inset": "0",
     # UI default is to keep pattern strokes by default; presets should match.
     "fill_keep_outline": True,
     "fill_target_outline": False,
     "fill_target_pattern": True,
+    "minimum_segment": "0",
+    "minimum_area": "0",
+    "optimize_paths": True,
+    "preview_quality": "balanced",
 }
 
 
@@ -75,35 +80,17 @@ def _preset(pattern: str, **overrides: str | bool | float) -> dict:
 
 
 BUILTIN_PRESETS: dict[str, dict] = {
+    "★ Flow — Gentle": _preset(
+        "Flow Lines", flow_spacing="3", flow_amplitude="2", flow_wavelength="18", flow_angle="0"
+    ),
     "★ Honeycomb — Fine": _preset("Honeycomb", hex_r="1.2", hex_gap="0.3"),
     "★ Honeycomb — Standard": _preset("Honeycomb", hex_r="2.5", hex_gap="0.5"),
     "★ Honeycomb — Bold": _preset("Honeycomb", hex_r="5.0", hex_gap="0.8"),
-    "★ Stipple — Dense": _preset(
-        "Stipple Dots", stip_r="0.2", stip_spacing="0.8", stip_layout=True
-    ),
-    "★ Stipple — Open": _preset(
-        "Stipple Dots", stip_r="0.4", stip_spacing="2.5", stip_layout=False
-    ),
-    "★ Diagonal — Hatch": _preset(
-        "Diagonal Lines", diag_spacing="1.5", diag_angle="45"
-    ),
-    "★ Diagonal — Cross": _preset(
-        "Diagonal Lines", diag_spacing="2.0", diag_angle="30"
-    ),
+    "★ Stipple — Dense": _preset("Stipple Dots", stip_r="0.2", stip_spacing="0.8"),
+    "★ Stipple — Open": _preset("Stipple Dots", stip_r="0.4", stip_spacing="2.5"),
     "★ Brick — Standard": _preset("Brick", brick_w="20", brick_h="8", brick_gap="0.6"),
-    "★ Wave — Gentle": _preset(
-        "Wave Fill", wave_spacing="2.5", wave_amplitude="1.0", wave_wavelength="10"
-    ),
-    "★ Wave — Tight": _preset(
-        "Wave Fill", wave_spacing="1.5", wave_amplitude="0.6", wave_wavelength="5"
-    ),
     "★ Mesh — Light": _preset("Mesh", mesh_r="0.5", mesh_spacing="2.5"),
-    "★ Voronoi — Cells": _preset(
-        "Voronoi", vor_cells="120", vor_gap="0.4", vor_seed="42"
-    ),
-    "★ Hilbert — Order 5": _preset(
-        "Hilbert Curve", hilbert_order="5", hilbert_margin="1.0"
-    ),
+    "★ Voronoi — Cells": _preset("Voronoi", vor_cells="120", vor_gap="0.4", vor_seed="42"),
 }
 
 
@@ -123,6 +110,15 @@ def _coerce_payload(payload: object) -> dict | None:
         # Only allow JSON-friendly leaf types so we never store stray Qt objects.
         if isinstance(value, (str, int, float, bool)) or value is None:
             out[key] = value
+        elif key == "custom_tile_polys" and isinstance(value, list):
+            try:
+                out[key] = [
+                    [[float(point[0]), float(point[1])] for point in poly]
+                    for poly in value
+                    if isinstance(poly, list)
+                ]
+            except (TypeError, ValueError, IndexError):
+                continue
         else:
             # Skip unknown values rather than failing the whole preset.
             continue
@@ -162,11 +158,7 @@ def serialize_presets(presets: dict[str, dict]) -> dict:
 
 def deserialize_presets(data: object) -> dict[str, dict]:
     """Accept either a v1 envelope or a raw ``{name: payload}`` mapping."""
-    if (
-        isinstance(data, dict)
-        and "presets" in data
-        and isinstance(data["presets"], dict)
-    ):
+    if isinstance(data, dict) and "presets" in data and isinstance(data["presets"], dict):
         return _coerce_preset_map(data["presets"])
     return _coerce_preset_map(data)
 

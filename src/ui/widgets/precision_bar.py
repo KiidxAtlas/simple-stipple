@@ -1,11 +1,21 @@
-"""Persistent precision/grid controls widget."""
+"""Compact grid and object-snap controls for canvas pages."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPushButton,
+    QToolButton,
+)
+
+from src.ui.components import clear_line_edit_error, set_line_edit_error
 
 
 class CanvasPrecisionBar(QFrame):
@@ -24,10 +34,6 @@ class CanvasPrecisionBar(QFrame):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(4)
 
-        label = QLabel("Precision")
-        label.setStyleSheet("color: #8b949e; font-size: 10px; font-weight: 700;")
-        layout.addWidget(label)
-
         self._grid_btn = QPushButton("Grid")
         self._grid_btn.setMinimumHeight(24)
         self._grid_btn.setCheckable(True)
@@ -35,21 +41,34 @@ class CanvasPrecisionBar(QFrame):
         self._grid_btn.clicked.connect(self._toggle_grid)
         layout.addWidget(self._grid_btn)
 
-        self._construction_btn = QPushButton("Guides")
-        self._construction_btn.setMinimumHeight(24)
-        self._construction_btn.setCheckable(True)
-        self._construction_btn.setToolTip("Toggle construction guide lines")
-        self._construction_btn.clicked.connect(self._toggle_construction)
-        layout.addWidget(self._construction_btn)
+        self._snap_btn = QToolButton()
+        self._snap_btn.setText("Snap")
+        self._snap_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._snap_btn.setToolTip(
+            "Choose which geometric constraints are active (hold Alt to bypass)"
+        )
+        self._snap_menu = QMenu(self._snap_btn)
+        self._snap_actions = {}
+        for key, label_text, setter in (
+            ("snap_master", "Enable snapping", "set_snap_master"),
+            ("grid_snap", "Grid points", "set_grid_snap"),
+            ("snap_vertex", "Vertices and centers", "set_snap_vertex"),
+            ("snap_edge", "Edges and midpoints", "set_snap_edge"),
+            ("snap_tangent", "Tangents", "set_snap_tangent"),
+            ("snap_extension", "Edge extensions", "set_snap_extension"),
+            ("snap_angle", "Angle constraints", "set_snap_angle"),
+        ):
+            action = self._snap_menu.addAction(label_text)
+            action.setCheckable(True)
+            action.toggled.connect(lambda checked, method=setter: self._set_snap(method, checked))
+            self._snap_actions[key] = action
+            if key == "snap_master":
+                self._snap_menu.addSeparator()
+        self._snap_btn.setMenu(self._snap_menu)
+        layout.addWidget(self._snap_btn)
 
-        self._measure_btn = QPushButton("Measure")
-        self._measure_btn.setMinimumHeight(24)
-        self._measure_btn.setCheckable(True)
-        self._measure_btn.setToolTip("Toggle distance measurement tool")
-        self._measure_btn.clicked.connect(self._toggle_measure)
-        layout.addWidget(self._measure_btn)
-
-        layout.addWidget(QLabel("Grid mm"))
+        self._spacing_label = QLabel("Spacing")
+        layout.addWidget(self._spacing_label)
         self._spacing = QLineEdit()
         self._spacing.setFixedWidth(64)
         self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -84,15 +103,33 @@ class CanvasPrecisionBar(QFrame):
         self.setVisible(True)
         state = self._canvas.get_precision_state()
         grid_on = bool(state.get("grid_visible", False))
-        construction_on = bool(state.get("construction_mode", False))
-        measure_on = bool(state.get("measure_mode", False))
         spacing = float(state.get("grid_spacing", 1.0))
 
         self._grid_btn.setChecked(grid_on)
-        self._construction_btn.setChecked(construction_on)
-        self._measure_btn.setChecked(measure_on)
+        snap_on = bool(state.get("snap_master", True))
+        self._snap_btn.setProperty("active", snap_on)
+        self._snap_btn.style().unpolish(self._snap_btn)
+        self._snap_btn.style().polish(self._snap_btn)
+        for key, action in self._snap_actions.items():
+            action.blockSignals(True)
+            action.setChecked(bool(state.get(key, False if key == "grid_snap" else True)))
+            action.blockSignals(False)
 
         self._spacing.setText(f"{spacing:g}")
+        show_spacing = grid_on or bool(state.get("grid_snap", False))
+        for widget in (
+            self._spacing_label,
+            self._spacing,
+            self._spacing_dec,
+            self._spacing_inc,
+        ):
+            widget.setVisible(show_spacing)
+
+    def _set_snap(self, method: str, enabled: bool) -> None:
+        canvas = self._canvas
+        if canvas is not None and hasattr(canvas, method):
+            getattr(canvas, method)(enabled)
+            self._after_change()
 
     def _after_change(self) -> None:
         self.refresh()
@@ -103,41 +140,16 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is None:
             return
-        if hasattr(canvas, "set_grid_visible") and hasattr(
-            canvas, "get_precision_state"
-        ):
+        if hasattr(canvas, "set_grid_visible") and hasattr(canvas, "get_precision_state"):
             state = canvas.get_precision_state()
             canvas.set_grid_visible(not bool(state.get("grid_visible", False)))
-            self._after_change()
-
-    def _toggle_construction(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "set_construction_mode") and hasattr(
-            canvas, "get_precision_state"
-        ):
-            state = canvas.get_precision_state()
-            canvas.set_construction_mode(
-                not bool(state.get("construction_mode", False))
-            )
-            self._after_change()
-
-    def _toggle_measure(self) -> None:
-        canvas = self._canvas
-        if canvas is None:
-            return
-        if hasattr(canvas, "toggle_measure"):
-            canvas.toggle_measure()
             self._after_change()
 
     def _scale_spacing(self, factor: float) -> None:
         canvas = self._canvas
         if canvas is None:
             return
-        if not hasattr(canvas, "get_precision_state") or not hasattr(
-            canvas, "set_grid_spacing"
-        ):
+        if not hasattr(canvas, "get_precision_state") or not hasattr(canvas, "set_grid_spacing"):
             return
         current = float(canvas.get_precision_state().get("grid_spacing", 1.0))
         canvas.set_grid_spacing(max(0.1, min(100.0, current * factor)))
@@ -152,8 +164,12 @@ class CanvasPrecisionBar(QFrame):
         try:
             value = float(self._spacing.text().strip())
         except ValueError:
-            self.refresh()
+            set_line_edit_error(self._spacing, "Grid spacing must be a number.")
             return
+        if value <= 0:
+            set_line_edit_error(self._spacing, "Grid spacing must be greater than zero.")
+            return
+        clear_line_edit_error(self._spacing)
         canvas.set_grid_spacing(max(0.1, min(100.0, value)))
         self._after_change()
 

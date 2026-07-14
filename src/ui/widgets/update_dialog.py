@@ -19,14 +19,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.core.factories import section_label, sep, surface_frame
-from src.updates import (
+from src.infra.updates import (
     UpdateInfo,
     check_for_updates,
     download_update,
     get_current_version,
     get_releases_page_url,
 )
+from src.ui.components import section_label, sep, surface_frame
 
 _LOG = logging.getLogger(__name__)
 
@@ -69,9 +69,7 @@ class UpdateDownloadThread(QThread):
 class UpdateDialog(QDialog):
     """Dialog for viewing and installing updates."""
 
-    def __init__(
-        self, parent: QWidget | None = None, update_info: UpdateInfo | None = None
-    ):
+    def __init__(self, parent: QWidget | None = None, update_info: UpdateInfo | None = None):
         super().__init__(parent)
         self.setWindowTitle("Check for Updates")
         self.resize(600, 500)
@@ -133,9 +131,7 @@ class UpdateDialog(QDialog):
     def _start_background_check(self, layout: QVBoxLayout) -> None:
         """Start background update check."""
         self._check_thread = UpdateCheckThread()
-        self._check_thread.checkComplete.connect(
-            lambda info: self._on_check_complete(info, layout)
-        )
+        self._check_thread.checkComplete.connect(lambda info: self._on_check_complete(info, layout))
         self._check_thread.start()
 
     def _on_check_complete(self, info: UpdateInfo | None, layout: QVBoxLayout) -> None:
@@ -193,9 +189,7 @@ class UpdateDialog(QDialog):
         # Release notes
         if info.release_notes:
             notes_label = QLabel("Release Notes:")
-            notes_label.setStyleSheet(
-                "color: #e6edf3; font-size: 12px; font-weight: 600;"
-            )
+            notes_label.setStyleSheet("color: #e6edf3; font-size: 12px; font-weight: 600;")
             card_layout.addWidget(notes_label)
 
             notes = QTextEdit()

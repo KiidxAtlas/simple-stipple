@@ -22,7 +22,7 @@ def _system_family() -> str:
 
 
 def test_multiline_text_stacks_vertically_not_side_by_side(qapp):
-    from src.ui.canvas.text_shapes import text_to_polylines
+    from src.ui.canvas.mixins.hud_text import text_to_polylines
 
     family = _system_family()
     one_line = text_to_polylines("Hi", family=family, height_mm=10.0)
@@ -39,7 +39,7 @@ def test_multiline_text_stacks_vertically_not_side_by_side(qapp):
 
 
 def test_multiline_text_contour_count_matches_glyphs(qapp):
-    from src.ui.canvas.text_shapes import text_to_polylines
+    from src.ui.canvas.mixins.hud_text import text_to_polylines
 
     family = _system_family()
     hi = text_to_polylines("Hi", family=family, height_mm=10.0)

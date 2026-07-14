@@ -136,9 +136,7 @@ def run_audit() -> tuple[AuditSummary, list[AuditIssue]]:
 
             if isinstance(node, ast.ClassDef) and _is_public(node.name):
                 public_symbols += 1
-                typed_public_symbols += (
-                    1  # classes are counted as typed by definition here
-                )
+                typed_public_symbols += 1  # classes are counted as typed by definition here
                 if ast.get_docstring(node):
                     documented_public_symbols += 1
 
@@ -175,9 +173,7 @@ def main() -> int:
 
     if issues:
         print("\n=== Issues ===")
-        for issue in sorted(
-            issues, key=lambda item: (str(item.path), item.line, item.kind)
-        ):
+        for issue in sorted(issues, key=lambda item: (str(item.path), item.line, item.kind)):
             rel = issue.path.relative_to(ROOT)
             print(f"[{issue.kind}] {rel}:{issue.line} - {issue.detail}")
         print(f"\nTotal issues: {len(issues)}")

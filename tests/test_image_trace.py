@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
-from src.backend.io.image_trace import (
+from src.backend.trace import (
     _build_mask,
     _correct_illumination,
     _find_contours,
@@ -66,9 +66,7 @@ def test_chain_approx_simple_yields_far_fewer_points_than_none_for_a_diagonal_ed
     run to its two endpoints — same shape, dramatically fewer raw vertices
     for simplify_contours() to start from."""
     mask = _diagonal_triangle_mask()
-    simple_contours, _ = cv2.findContours(
-        mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
-    )
+    simple_contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     none_contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
     assert len(simple_contours[0]) < len(none_contours[0])
 
@@ -188,8 +186,13 @@ def test_supersampled_trace_stays_fast_on_a_realistic_image():
 
     start = time.monotonic()
     _, polys, _w, _h = image_to_outlines(
-        path, blur_radius=1.5, threshold=128, simplify_tol=2.0, min_area_px=50,
-        width_mm=50.0, max_px=1200,
+        path,
+        blur_radius=1.5,
+        threshold=128,
+        simplify_tol=2.0,
+        min_area_px=50,
+        width_mm=50.0,
+        max_px=1200,
     )
     elapsed = time.monotonic() - start
     assert polys

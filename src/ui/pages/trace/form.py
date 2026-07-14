@@ -1,4 +1,15 @@
-"""Image trace form components and run-configuration logic."""
+"""Image trace form components, run-configuration logic, and persistent
+user-configurable defaults for new Trace sessions.
+
+Merged from the former ``defaults.py`` — small and tightly related to the
+form fields it configures. The defaults are the values a freshly-opened
+image (or a cleared workspace) starts with — e.g. "Max resolution" or
+"Simplify tolerance" — as opposed to per-workspace saved state
+(``src/ui/pages/trace/session.py``), which restores whatever was last used
+on a specific, already-traced workspace file. Editable from the Settings
+dialog under "Trace Defaults"; stored in ``settings["trace_defaults"]`` as
+the same string a ``QLineEdit`` holds.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.widgets.collapsible import CollapsibleSection
+from src.ui.components import CollapsibleSection
 
 
 class TextField(QWidget):
@@ -163,20 +174,14 @@ def build_trace_kwargs(
     canny_low_val = 50
     canny_high_val = 150
     if edge_mode:
-        canny_l = parse_float_field(
-            fields.canny_low, "Canny low", minimum=1.0, maximum=255.0
-        )
-        canny_h = parse_float_field(
-            fields.canny_high, "Canny high", minimum=1.0, maximum=255.0
-        )
+        canny_l = parse_float_field(fields.canny_low, "Canny low", minimum=1.0, maximum=255.0)
+        canny_h = parse_float_field(fields.canny_high, "Canny high", minimum=1.0, maximum=255.0)
         assert canny_l is not None
         assert canny_h is not None
         canny_low_val = int(canny_l)
         canny_high_val = int(canny_h)
 
-    max_res = parse_float_field(
-        fields.max_res, "Max resolution", minimum=64.0, maximum=8000.0
-    )
+    max_res = parse_float_field(fields.max_res, "Max resolution", minimum=64.0, maximum=8000.0)
     assert max_res is not None
 
     return {
@@ -197,10 +202,68 @@ def build_trace_kwargs(
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Persistent, user-configurable defaults for new Trace sessions
+# ══════════════════════════════════════════════════════════════════════════
+
+#: (settings key, display label, tooltip) for every editable numeric default.
+TRACE_DEFAULT_FIELDS: tuple[tuple[str, str, str], ...] = (
+    (
+        "max_res",
+        "Max resolution (px)",
+        "Maximum pixel dimension when loading the image.",
+    ),
+    (
+        "blur",
+        "Blur radius",
+        "Gaussian blur radius applied before thresholding / edge detection.",
+    ),
+    (
+        "simplify",
+        "Simplify tolerance",
+        "Tolerance for polygon simplification (higher = fewer points).",
+    ),
+    ("min_area", "Min area (px²)", "Discard contours smaller than this area."),
+    ("close_r", "Closing radius", "Morphological closing to fill small gaps in edges."),
+    (
+        "width_mm",
+        "Default width (mm)",
+        "Target output width in millimetres for a newly loaded image.",
+    ),
+)
+
+#: Built-in fallback used when a key has never been set in trace_defaults.
+TRACE_DEFAULTS: dict[str, str] = {
+    "blur": "1.2",
+    "threshold": "128",
+    "canny_low": "50",
+    "canny_high": "150",
+    "simplify": "1.5",
+    "min_area": "10",
+    "max_area": "",
+    "close_r": "1",
+    "width_mm": "50.0",
+    "height_mm": "50.0",
+    "max_res": "2200",
+}
+
+
+def trace_default(settings: dict | None, key: str) -> str:
+    """Return the configured default for *key*, falling back to the
+    built-in value if the user has never overridden it."""
+    overrides = (settings or {}).get("trace_defaults") or {}
+    if key in overrides:
+        return str(overrides[key])
+    return TRACE_DEFAULTS[key]
+
+
 __all__ = [
     "PathField",
+    "TRACE_DEFAULTS",
+    "TRACE_DEFAULT_FIELDS",
     "TextField",
     "TraceFieldBindings",
     "build_lazy_section",
     "build_trace_kwargs",
+    "trace_default",
 ]

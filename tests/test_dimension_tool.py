@@ -61,6 +61,17 @@ def test_escape_cancels_in_progress_dimension(qapp):
     key(v, Qt.Key.Key_Escape)
     assert v._dim_pending_p1 is None
     assert len(v._dimensions) == 0
+    # Escape backs all the way out of dimension mode, not just the
+    # in-progress placement — the tool shouldn't stay armed.
+    assert v._dimension_mode is False
+
+
+def test_escape_exits_idle_dimension_mode(qapp):
+    v = make_view(qapp, [])
+    v.toggle_dimension_mode()
+    assert v._dimension_mode is True
+    key(v, Qt.Key.Key_Escape)
+    assert v._dimension_mode is False
 
 
 def test_delete_removes_selected_dimension(qapp):

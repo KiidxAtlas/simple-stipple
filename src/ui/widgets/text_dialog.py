@@ -20,10 +20,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.canvas.text_shapes import install_font_file, load_user_fonts, user_fonts_dir
-from src.ui.units import from_display
+from src.ui.canvas.mixins.hud_text import (
+    install_font_file,
+    load_user_fonts,
+    user_fonts_dir,
+)
+from src.ui.units import from_display, to_display
 from src.ui.units import suffix as unit_suffix
-from src.ui.units import to_display
 
 
 class AddTextDialog(QDialog):
@@ -64,9 +67,7 @@ class AddTextDialog(QDialog):
         form.addRow("Font", font_row)
 
         self._height_spin = QDoubleSpinBox()
-        self._height_spin.setRange(
-            to_display(0.5, self._unit), to_display(1000.0, self._unit)
-        )
+        self._height_spin.setRange(to_display(0.5, self._unit), to_display(1000.0, self._unit))
         self._height_spin.setValue(to_display(10.0, self._unit))
         self._height_spin.setSuffix(f" {unit_suffix(self._unit)}")
         self._height_spin.setDecimals(1 if self._unit == "mm" else 3)
@@ -127,9 +128,7 @@ class AddTextDialog(QDialog):
 
             self._font_combo.setCurrentFont(QFont(family))
         try:
-            self._height_spin.setValue(
-                to_display(float(values.get("height_mm", 10.0)), self._unit)
-            )
+            self._height_spin.setValue(to_display(float(values.get("height_mm", 10.0)), self._unit))
         except (TypeError, ValueError):
             pass
         self._bold_cb.setChecked(bool(values.get("bold", False)))

@@ -1,7 +1,7 @@
 """Layer tree — re-exports all public symbols."""
 
-from .controller import CanvasLayerSidebarController
-from .model import (
+from .logic import (
+    CanvasLayerSidebarController,
     LayerRowsBuilder,
     LayerTreeRow,
     LayerTreeState,

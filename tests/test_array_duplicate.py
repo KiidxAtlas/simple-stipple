@@ -33,14 +33,12 @@ def test_array_grid_creates_expected_copies_and_positions(qapp):
 
     corners = {_bbox(e.points)[:2] for e in v._entities}
     expected = {
-        (origin_x0 + col * 20.0, origin_y0 + row * 20.0)
-        for row in range(2)
-        for col in range(3)
+        (origin_x0 + col * 20.0, origin_y0 + row * 20.0) for row in range(2) for col in range(3)
     }
     for ex, ey in expected:
-        assert any(
-            abs(cx - ex) < 0.01 and abs(cy - ey) < 0.01 for cx, cy in corners
-        ), f"missing grid cell at ({ex}, {ey})"
+        assert any(abs(cx - ex) < 0.01 and abs(cy - ey) < 0.01 for cx, cy in corners), (
+            f"missing grid cell at ({ex}, {ey})"
+        )
 
 
 def test_array_grid_1x1_is_a_noop(qapp):
@@ -69,9 +67,9 @@ def test_array_radial_creates_expected_copies_and_positions(qapp):
         angle = 2.0 * math.pi * i / 4
         ex = origin_x0 + 50.0 * math.cos(angle)
         ey = origin_y0 + 50.0 * math.sin(angle)
-        assert any(
-            abs(cx - ex) < 0.01 and abs(cy - ey) < 0.01 for cx, cy in corners
-        ), f"missing radial copy at ({ex}, {ey})"
+        assert any(abs(cx - ex) < 0.01 and abs(cy - ey) < 0.01 for cx, cy in corners), (
+            f"missing radial copy at ({ex}, {ey})"
+        )
 
 
 def test_array_duplicate_undoes_as_one_step(qapp):

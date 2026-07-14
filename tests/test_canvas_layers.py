@@ -15,16 +15,14 @@ from tests.test_canvas_behavior import (
 
 def make_rig(qapp):
     """DxfCanvas + CanvasRuntime with two layers, one square on each."""
+    from src.ui.canvas.canvas_runtime import CanvasRuntime
     from src.ui.canvas.dxf_canvas import DxfCanvas
-    from src.ui.canvas.runtime import CanvasRuntime
 
     canvas = DxfCanvas()
     canvas.resize(800, 600)
     canvas.set_rulers_visible(False)  # keep edge clicks out of the rulers
     rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
-    rt.load_polys_by_layer(
-        {"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True
-    )
+    rt.load_polys_by_layer({"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True)
     return canvas, rt
 
 
@@ -46,17 +44,15 @@ def test_inactive_layer_not_selectable(qapp):
 def test_click_inactive_shape_activates_its_layer(qapp):
     """DxfCanvas routes clicks on inactive-layer shapes to the ghost-click
     callback with the entity index."""
+    from src.ui.canvas.canvas_runtime import CanvasRuntime
     from src.ui.canvas.dxf_canvas import DxfCanvas
-    from src.ui.canvas.runtime import CanvasRuntime
 
     clicked = []
     canvas = DxfCanvas(on_ghost_click=lambda idx: clicked.append(idx))
     canvas.resize(800, 600)
     canvas.set_rulers_visible(False)
     rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
-    rt.load_polys_by_layer(
-        {"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True
-    )
+    rt.load_polys_by_layer({"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True)
     click_world(canvas, 35.0, 0.0)
     assert clicked == [1]
     # the draft page handler then switches layer + selects:
@@ -150,8 +146,8 @@ def test_records_round_trip_with_layers(qapp):
     canvas._entities[1].hidden = True
     records = canvas.get_entity_records()
 
+    from src.ui.canvas.canvas_runtime import CanvasRuntime
     from src.ui.canvas.dxf_canvas import DxfCanvas
-    from src.ui.canvas.runtime import CanvasRuntime
 
     c2 = DxfCanvas()
     c2.resize(800, 600)
@@ -160,49 +156,6 @@ def test_records_round_trip_with_layers(qapp):
     c2.set_layer_model(["Layer 1", "Layer 2"], "Layer 1")
     assert [e.layer for e in c2._entities] == ["Layer 1", "Layer 2"]
     assert c2._entities[1].hidden
-
-
-def test_legacy_document_graph_migration(qapp):
-    """Old workspace snapshots (DocumentGraph + local-index buckets) load
-    into the per-entity model."""
-    from src.ui.canvas.dxf_canvas import DxfCanvas
-    from src.ui.canvas.runtime import CanvasRuntime
-
-    canvas = DxfCanvas()
-    canvas.resize(800, 600)
-    rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
-    legacy = {
-        "layers": {
-            "geometry": {
-                "id": 1,
-                "polylines": [],
-                "entity_refs": [],
-                "dirty": False,
-                "records": None,
-            },
-            "Layer 1": {
-                "id": 2,
-                "polylines": [square(0, 0)],
-                "entity_refs": [],
-                "dirty": False,
-                "records": None,
-            },
-            "Cut": {
-                "id": 3,
-                "polylines": [square(30, 0), square(60, 0)],
-                "entity_refs": [],
-                "dirty": False,
-                "records": None,
-            },
-        },
-        "layer_order": ["geometry", "Layer 1", "Cut"],
-        "active_layer": "Cut",
-    }
-    rt.restore_graph_state(legacy)
-    assert canvas.poly_count == 3
-    assert canvas.active_layer == "Cut"
-    assert sorted(canvas.layer_names()) == ["Cut", "Layer 1"]
-    assert [e.layer for e in canvas._entities] == ["Layer 1", "Cut", "Cut"]
 
 
 def test_export_records_carry_layer(qapp):
@@ -299,8 +252,8 @@ def test_layer_color_persists_through_view_state(qapp):
     canvas, rt = make_rig(qapp)
     canvas.set_layer_color("Cut", "#3fb950")
     state = canvas.get_view_state()
+    from src.ui.canvas.canvas_runtime import CanvasRuntime
     from src.ui.canvas.dxf_canvas import DxfCanvas
-    from src.ui.canvas.runtime import CanvasRuntime
 
     c2 = DxfCanvas()
     c2.resize(800, 600)

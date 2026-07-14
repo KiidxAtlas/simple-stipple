@@ -24,7 +24,7 @@ def _assert_points_approx(actual, expected, abs_tol=1e-6):
 
 
 def test_straight_segment_when_tangents_are_zero():
-    from src.backend.geometry.spline import build_bezier_poly
+    from src.backend.geometry import build_bezier_poly
 
     poly = build_bezier_poly([(0.0, 0.0), (10.0, 0.0)], [(0.0, 0.0), (0.0, 0.0)])
     # A zero-handle cubic degenerates to the straight line — every sampled
@@ -35,17 +35,15 @@ def test_straight_segment_when_tangents_are_zero():
 
 
 def test_curve_bulges_toward_a_nonzero_tangent():
-    from src.backend.geometry.spline import build_bezier_poly
+    from src.backend.geometry import build_bezier_poly
 
-    poly = build_bezier_poly(
-        [(0.0, 0.0), (10.0, 0.0)], [(0.0, 5.0), (0.0, 5.0)], segments=32
-    )
+    poly = build_bezier_poly([(0.0, 0.0), (10.0, 0.0)], [(0.0, 5.0), (0.0, 5.0)], segments=32)
     ys = [y for _x, y in poly]
     assert max(ys) > 0.5  # curve bulges up, away from the straight segment
 
 
 def test_closed_flag_adds_a_return_segment():
-    from src.backend.geometry.spline import build_bezier_poly
+    from src.backend.geometry import build_bezier_poly
 
     anchors = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]
     tangents = [(0.0, 0.0)] * 3
@@ -56,10 +54,26 @@ def test_closed_flag_adds_a_return_segment():
 
 
 def test_too_few_anchors_returns_input_unchanged():
-    from src.backend.geometry.spline import build_bezier_poly
+    from src.backend.geometry import build_bezier_poly
 
     assert build_bezier_poly([], []) == []
     assert build_bezier_poly([(1.0, 2.0)], [(0.0, 0.0)]) == [(1.0, 2.0)]
+
+
+def test_independent_handles_control_each_side_without_forced_mirroring():
+    from src.backend.geometry import build_bezier_poly
+
+    anchors = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
+    poly = build_bezier_poly(
+        anchors,
+        [],
+        segments=16,
+        handles_out=[(0.0, 6.0), (0.0, 0.0), (0.0, 0.0)],
+        handles_in=[(0.0, 0.0), (0.0, 0.0), (0.0, -6.0)],
+    )
+
+    assert max(y for _x, y in poly[:17]) > 0.5
+    assert min(y for _x, y in poly[16:]) < -0.5
 
 
 # ── Interactive pen tool ─────────────────────────────────────────────────────
@@ -101,6 +115,9 @@ def test_enter_finalizes_curve_as_bezier_entity(qapp):
     _assert_points_approx(ent.points, [(0.0, 0.0), (10.0, 0.0), (20.0, 10.0)])
     assert ent.meta is not None
     assert len(ent.meta["tangents"]) == 3
+    assert len(ent.meta["handles_in"]) == 3
+    assert len(ent.meta["handles_out"]) == 3
+    assert ent.meta["node_types"] == ["corner", "corner", "corner"]
     # The tool resets for the next curve.
     assert v._pen_pts == []
 
@@ -131,11 +148,9 @@ def test_bezier_entity_renders_via_build_bezier_poly(qapp):
     assert len(ent.points) == 2  # sparse anchors only
     assert ent.meta is not None
 
-    from src.backend.geometry.spline import build_bezier_poly
+    from src.backend.geometry import build_bezier_poly
 
-    tessellated = build_bezier_poly(
-        ent.points, ent.meta["tangents"], segments=ent.meta["segments"]
-    )
+    tessellated = build_bezier_poly(ent.points, ent.meta["tangents"], segments=ent.meta["segments"])
     assert len(tessellated) > len(ent.points)  # actually a curve, not a line
 
 
@@ -161,6 +176,38 @@ def test_rotate_selected_bezier_also_rotates_its_tangents(qapp):
     after = meta["tangents"][0]
     # A +90 degree rotation of a vector pointing along +X now points +Y.
     assert after == pytest.approx((0.0, 5.0), abs=0.5)
+    assert meta["handles_out"][0] == pytest.approx((0.0, 5.0), abs=0.5)
+
+
+def test_bezier_node_modes_link_or_break_handle_pairs(qapp):
+    v = make_view(qapp, [])
+    v._append_entity(
+        [(0.0, 0.0), (10.0, 0.0)],
+        kind="bezier",
+        meta={
+            "tangents": [(3.0, 0.0), (3.0, 0.0)],
+            "handles_out": [(3.0, 0.0), (3.0, 0.0)],
+            "handles_in": [(-3.0, 0.0), (-3.0, 0.0)],
+            "node_types": ["symmetric", "symmetric"],
+            "segments": 16,
+            "closed": False,
+        },
+    )
+
+    assert v._set_bezier_handle(0, 0, "out", (0.0, 4.0))
+    meta = v._entities[0].meta
+    assert meta is not None
+    assert meta["handles_out"][0] == pytest.approx((0.0, 4.0))
+    assert meta["handles_in"][0] == pytest.approx((0.0, -4.0))
+
+    assert v._set_bezier_handle(0, 0, "out", (5.0, 1.0), break_pair=True)
+    assert meta["node_types"][0] == "corner"
+    assert meta["handles_out"][0] == pytest.approx((5.0, 1.0))
+    assert meta["handles_in"][0] == pytest.approx((0.0, -4.0))
+
+    assert v.set_bezier_node_type(0, 0, "smooth")
+    assert meta["node_types"][0] == "smooth"
+    assert math.hypot(*meta["handles_in"][0]) == pytest.approx(4.0)
 
 
 def test_polyline_family_bezier_entry_stays_in_draw_mode(qapp):

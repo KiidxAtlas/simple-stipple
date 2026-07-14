@@ -46,22 +46,293 @@ def make_canvas(qapp, polys=None, size=(800, 600)):
     return c
 
 
+def test_precision_state_exposes_all_user_snap_controls(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_snap_master(False)
+    canvas.set_snap_vertex(False)
+    canvas.set_snap_edge(True)
+    canvas.set_snap_angle(False)
+    canvas.set_grid_snap(True)
+    state = canvas.get_precision_state()
+    assert state["snap_master"] is False
+    assert state["snap_vertex"] is False
+    assert state["snap_edge"] is True
+    assert state["snap_angle"] is False
+    assert state["grid_snap"] is True
+
+
+def test_geometry_health_overlay_is_toggleable_and_persisted(qapp):
+    canvas = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0)]])
+    assert canvas._geometry_health_visible is False
+    canvas.set_geometry_health_visible(True)
+    assert canvas._geometry_health_visible is True
+    state = canvas.get_view_state()
+    other = make_canvas(qapp)
+    other.set_view_state(state)
+    assert other._geometry_health_visible is True
+    other.resize(400, 300)
+    assert not other.grab().isNull()
+
+
+def test_curvature_overlay_is_toggleable_and_persisted(qapp):
+    canvas = make_canvas(qapp, [[(0, 0), (5, 0), (6, 1), (6, 6)]])
+    canvas.set_curvature_visible(True)
+    assert canvas._curvature_visible
+    other = make_canvas(qapp)
+    other.set_view_state(canvas.get_view_state())
+    assert other._curvature_visible
+    assert not canvas.grab().isNull()
+
+
+def test_semantic_selection_filters(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [
+            {"points": [(0, 0), (1, 0)], "kind": "polyline"},
+            {
+                "points": [],
+                "kind": "circle",
+                "meta": {"center": (5, 5), "radius": 2},
+            },
+            {"points": [(0, 2), (1, 2)], "kind": "line", "construction": True},
+        ]
+    )
+    assert canvas.select_geometry_category("parametric") == 1
+    assert canvas._sel == {1}
+    assert canvas.select_geometry_category("construction") == 1
+    assert canvas._sel == {2}
+
+
+def test_selection_geometry_reports_length_area_and_circle_diameter(qapp):
+    canvas = make_canvas(qapp, [[(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)]])
+    canvas.set_selection([0])
+    info = canvas.selection_geometry()
+    assert info is not None
+    assert info["length"] == pytest.approx(30)
+    assert info["area"] == pytest.approx(50)
+
+    canvas.set_entity_records(
+        [{"points": [], "kind": "circle", "meta": {"center": (0, 0), "radius": 4}}]
+    )
+    canvas.set_selection([0])
+    assert canvas.selection_geometry()["diameter"] == pytest.approx(8)
+
+
+def test_selection_geometry_reports_minimum_clearance(qapp):
+    canvas = make_canvas(
+        qapp,
+        [
+            [(0, 0), (2, 0), (2, 2), (0, 2), (0, 0)],
+            [(5, 0), (7, 0), (7, 2), (5, 2), (5, 0)],
+            [(20, 0), (22, 0), (22, 2), (20, 2), (20, 0)],
+        ],
+    )
+    canvas.set_selection([0, 1, 2])
+    info = canvas.selection_geometry()
+    assert info is not None
+    assert info["clearance"] == pytest.approx(3)
+
+
+def test_entity_identity_round_trips_through_canvas_records(qapp):
+    canvas = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0)]])
+    entity_id = canvas._entities[0].id
+    records = canvas.get_entity_records()
+    canvas.set_entity_records(records)
+    assert canvas._entities[0].id == entity_id
+
+
+def test_hidden_geometry_is_not_an_invisible_snap_target(qapp):
+    canvas = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0)], [(50.0, 50.0), (60.0, 50.0)]])
+    canvas.set_hidden_indices([0])
+    cx, cy = canvas._w2c(0.0, 0.0)
+    assert canvas._snap_engine.query(cx, cy, 0.0, 0.0, allow_grid=False) is None
+
+
+def test_extension_snap_projects_beyond_segment_endpoint(qapp):
+    canvas = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0)]])
+    cx, cy = canvas._w2c(15.0, 0.1)
+    result = canvas._snap_engine.query(cx, cy, 15.0, 0.1, allow_grid=False)
+    assert result is not None
+    assert result[:2] == pytest.approx((15.0, 0.0))
+    assert result[2] == "extension"
+
+
+def test_tangent_snap_from_reference_point_to_circle(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [
+            {
+                "points": [],
+                "kind": "circle",
+                "meta": {"center": (0.0, 0.0), "radius": 5.0},
+            }
+        ]
+    )
+    # From (10, 0), tangent points are (2.5, ±sqrt(18.75)).
+    tx, ty = 2.5, math.sqrt(18.75)
+    cx, cy = canvas._w2c(tx, ty)
+    result = canvas._snap_engine.query(
+        cx,
+        cy,
+        tx,
+        ty,
+        allow_grid=False,
+        reference_point=(10.0, 0.0),
+    )
+    assert result is not None
+    assert result[:2] == pytest.approx((tx, ty), abs=1e-6)
+    assert result[2] == "tangent"
+
+
+def test_array_along_path_places_copies_at_both_ends_and_middle(qapp):
+    source = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]
+    path = [(10.0, 10.0), (110.0, 10.0)]
+    canvas = make_canvas(qapp, [source, path])
+    canvas.set_selection([0, 1])
+    canvas._show_hud_prompt = lambda _label, _default, callback, **_kwargs: callback(3.0)
+
+    canvas._array_duplicate_along_path()
+
+    assert len(canvas._entities) == 5
+    centers = []
+    for index in sorted(canvas._sel):
+        points = canvas._entities[index].points
+        centers.append(
+            (
+                (min(x for x, _ in points) + max(x for x, _ in points)) / 2.0,
+                (min(y for _, y in points) + max(y for _, y in points)) / 2.0,
+            )
+        )
+    assert centers == pytest.approx([(10.0, 10.0), (60.0, 10.0), (110.0, 10.0)])
+
+
+def test_rounding_parametric_rectangle_demotes_stale_metadata(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [
+            {
+                "points": [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+                "kind": "rectangle",
+                "meta": {"center": (5.0, 5.0), "width": 10.0, "height": 10.0, "rotation": 0.0},
+            }
+        ]
+    )
+    assert canvas._round_vertex(0, 1, 2.0)
+    entity = canvas._entities[0]
+    assert entity.kind == "polyline"
+    assert entity.meta is None
+    assert canvas._flattened_points(0) == entity.points
+
+
+@pytest.mark.parametrize("tool", ["rounded_rectangle", "star"])
+def test_new_shape_sidebar_tools_can_create_geometry(qapp, tool):
+    canvas = make_canvas(qapp)
+    canvas._on_shapes_family_change(tool)
+    assert canvas._draw_primitive == tool
+    click(canvas, *canvas._w2c(100.0, 100.0))
+    click(canvas, *canvas._w2c(120.0, 112.0))
+    assert len(canvas._entities) == 1
+    assert canvas._entities[0].kind == tool
+    assert len(canvas._entities[0].points) > 8
+
+
+def test_ellipse_quadrant_snap_has_all_four_cardinal_points(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [
+            {
+                "points": [],
+                "kind": "ellipse",
+                "meta": {"center": (0.0, 0.0), "rx": 5.0, "ry": 2.0, "rotation": 0.0},
+            }
+        ]
+    )
+    cx, cy = canvas._w2c(5.0, 0.0)
+    result = canvas._snap_engine.query(cx, cy, 5.0, 0.0, allow_grid=False)
+    assert result is not None
+    assert result[:2] == pytest.approx((5.0, 0.0))
+    assert result[2] == "ellipse_east"
+
+    cx, cy = canvas._w2c(-5.0, 0.0)
+    result = canvas._snap_engine.query(cx, cy, -5.0, 0.0, allow_grid=False)
+    assert result is not None
+    assert result[:2] == pytest.approx((-5.0, 0.0))
+    assert result[2] == "ellipse_west"
+
+
+def test_arc_only_exposes_quadrants_on_its_sweep(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [
+            {
+                "points": [],
+                "kind": "arc",
+                "meta": {
+                    "center": (0.0, 0.0),
+                    "radius": 5.0,
+                    "start_angle": 20.0,
+                    "end_angle": 200.0,
+                },
+            }
+        ]
+    )
+    from src.ui.canvas.snap import ShapeSnapEngine
+
+    candidates = ShapeSnapEngine.get_snap_candidates(canvas._snap_shapes()[0])
+    roles = {role for _x, _y, role in candidates}
+    assert "quadrant_north" in roles
+    assert "quadrant_west" in roles
+    assert "quadrant_south" not in roles
+
+
+def test_circle_nearest_point_snap_is_analytic_not_tessellation_limited(qapp):
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [{"points": [], "kind": "circle", "meta": {"center": (0.0, 0.0), "radius": 5.0}}]
+    )
+    angle = math.radians(17.0)
+    expected = (5.0 * math.cos(angle), 5.0 * math.sin(angle))
+    cx, cy = canvas._w2c(expected[0] + 0.03, expected[1] + 0.03)
+    result = canvas._snap_engine.query(
+        cx, cy, expected[0] + 0.03, expected[1] + 0.03, allow_grid=False
+    )
+    assert result is not None
+    assert result[:2] == pytest.approx(expected, abs=0.05)
+    assert result[2] == "edge"
+
+
+def test_intersection_snap_works_while_dragging(qapp):
+    # Segments deliberately don't have their midpoint/endpoints at the
+    # crossing point (5, 5), so a passing result actually exercises the
+    # intersection candidate rather than coincidentally matching midpoint.
+    canvas = make_canvas(qapp)
+    canvas.set_entity_records(
+        [
+            {"points": [(0.0, 5.0), (9.0, 5.0)], "kind": "polyline"},
+            {"points": [(5.0, 0.0), (5.0, 9.0)], "kind": "polyline"},
+        ]
+    )
+    cx, cy = canvas._w2c(5.05, 5.05)
+    result = canvas._snap_engine.query(
+        cx, cy, 5.05, 5.05, drag=True, allow_grid=False, allow_edge=False
+    )
+    assert result is not None
+    assert result[:2] == pytest.approx((5.0, 5.0))
+    assert result[2] == "intersection"
+
+
 NO_MOD = Qt.KeyboardModifier.NoModifier
 SHIFT = Qt.KeyboardModifier.ShiftModifier
 LMB = Qt.MouseButton.LeftButton
 
 
 def _mouse_event(etype, cx, cy, button=LMB, mods=NO_MOD):
-    buttons = (
-        Qt.MouseButton.NoButton if etype == QEvent.Type.MouseButtonRelease else button
-    )
+    buttons = Qt.MouseButton.NoButton if etype == QEvent.Type.MouseButtonRelease else button
     return QMouseEvent(etype, QPointF(cx, cy), QPointF(cx, cy), button, buttons, mods)
 
 
 def press(view, cx, cy, button=LMB, mods=NO_MOD):
-    view.mousePressEvent(
-        _mouse_event(QEvent.Type.MouseButtonPress, cx, cy, button, mods)
-    )
+    view.mousePressEvent(_mouse_event(QEvent.Type.MouseButtonPress, cx, cy, button, mods))
 
 
 def move(view, cx, cy, button=LMB, mods=NO_MOD):
@@ -69,9 +340,7 @@ def move(view, cx, cy, button=LMB, mods=NO_MOD):
 
 
 def release(view, cx, cy, button=LMB, mods=NO_MOD):
-    view.mouseReleaseEvent(
-        _mouse_event(QEvent.Type.MouseButtonRelease, cx, cy, button, mods)
-    )
+    view.mouseReleaseEvent(_mouse_event(QEvent.Type.MouseButtonRelease, cx, cy, button, mods))
 
 
 def click(view, cx, cy, button=LMB, mods=NO_MOD):
@@ -355,12 +624,35 @@ def test_set_selected_width_scales_uniformly(qapp):
 
 def test_offset_selected_adds_offset_copy(qapp):
     v = make_view(qapp, [square(0, 0)])
+    source_id = v._entities[0].id
     v.set_selection([0])
     assert v.offset_selected(2.0) >= 1
     assert v.poly_count >= 2
+    result = v._last_operation_result
+    assert result.changed
+    assert result.metadata == {"distance": 2.0}
+    assert result.created_ids == result.selected_ids
+    assert source_id not in result.created_ids
+    assert {v._entities[index].id for index in v._sel} == set(result.selected_ids)
     # outward offset of a 10mm square is a 14mm-wide ring (with round joins)
     x0, y0, x1, y1 = bbox(v._entities[-1].points)
     assert x1 - x0 == pytest.approx(14.0, abs=0.5)
+
+
+def test_offset_hud_previews_without_mutating_and_cancel_clears(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    original = [list(entity.points) for entity in v._entities]
+
+    v._prompt_offset_selected()
+    assert v._operation_preview_polys
+    assert [entity.points for entity in v._entities] == original
+    v._hud_prompt_edit.setText("3")
+    preview_width = bbox(v._operation_preview_polys[0])[2] - bbox(v._operation_preview_polys[0])[0]
+    assert preview_width == pytest.approx(16.0, abs=0.5)
+    v._dismiss_hud_prompt()
+    assert not v._operation_preview_polys
+    assert [entity.points for entity in v._entities] == original
 
 
 # ── open / close / explode / merge ───────────────────────────────────────────
@@ -522,6 +814,14 @@ def test_measure_toggle(qapp):
     assert not v._measure_mode
 
 
+def test_escape_exits_idle_measure_mode(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.toggle_measure()
+    assert v._measure_mode
+    key(v, Qt.Key.Key_Escape)
+    assert not v._measure_mode
+
+
 def test_status_summary_counts(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v.set_selection([0, 2])
@@ -620,7 +920,7 @@ def test_command_registry_group_shortcut(qapp):
 
 
 def test_command_registry_no_duplicate_shortcuts(qapp):
-    from src.ui.canvas import commands
+    from src.ui.canvas.interaction import commands
 
     seen = {}
     for c in commands.COMMANDS:
@@ -633,7 +933,7 @@ def test_command_registry_no_duplicate_shortcuts(qapp):
 
 
 def test_shortcut_reference_rows_nonempty(qapp):
-    from src.ui.canvas import commands
+    from src.ui.canvas.interaction import commands
 
     rows = commands.shortcut_reference_rows()
     labels = [r[0] for r in rows]
@@ -656,10 +956,10 @@ def test_quick_shape_keys_and_radial_toggle(qapp):
 
 
 def test_radial_menu_is_a_rebindable_command_not_a_hardcoded_key(qapp):
-    """"Q" must resolve through the canvas Command registry (so it shows up
+    """ "Q" must resolve through the canvas Command registry (so it shows up
     in the Keybindings dialog and is rebindable), not a check the tool's
     key() hook shadows before the registry ever sees it."""
-    from src.ui.canvas import commands as canvas_commands
+    from src.ui.canvas.interaction import commands as canvas_commands
 
     cmd = canvas_commands.get("canvas.radial_menu")
     assert cmd.shortcut == "Q"
@@ -756,7 +1056,7 @@ def test_radial_menu_tools_are_customizable(qapp):
 def test_radial_menu_tools_include_the_full_command_registry(qapp):
     """The pool is "every canvas Command", not just draw primitives — this
     is the point of the redesign (many more options than the original 6)."""
-    from src.ui.canvas import commands as canvas_commands
+    from src.ui.canvas.interaction import commands as canvas_commands
 
     c = make_canvas(qapp, THREE_SQUARES)
     c.set_radial_menu_tools(["edit.undo", "clipboard.copy", "boolean.union"])
@@ -766,7 +1066,7 @@ def test_radial_menu_tools_include_the_full_command_registry(qapp):
 
 
 def test_radial_menu_tools_falls_back_below_minimum(qapp):
-    from src.settings import DEFAULT_RADIAL_MENU_TOOLS
+    from src.infra.settings import DEFAULT_RADIAL_MENU_TOOLS
 
     c = make_canvas(qapp, THREE_SQUARES)
     c.set_radial_menu_tools(["canvas.circle", "canvas.arc"])  # only 2 — below the minimum
@@ -775,9 +1075,7 @@ def test_radial_menu_tools_falls_back_below_minimum(qapp):
 
 def test_radial_menu_tools_drops_unknown_and_dedupes(qapp):
     c = make_canvas(qapp, THREE_SQUARES)
-    c.set_radial_menu_tools(
-        ["canvas.circle", "bogus", "canvas.circle", "canvas.arc", "mode.pen"]
-    )
+    c.set_radial_menu_tools(["canvas.circle", "bogus", "canvas.circle", "canvas.arc", "mode.pen"])
     assert c._radial_tools == ["canvas.circle", "canvas.arc", "mode.pen"]
 
 
@@ -1182,9 +1480,9 @@ def test_smooth_selected_catmull_rom_interpolates_original_vertices(qapp):
     assert v.smooth_selected(iterations=2) == 1
     result = [tuple(p) for p in v._entities[0].points]
     for ox, oy in original:
-        assert any(
-            math.hypot(rx - ox, ry - oy) < 1e-6 for rx, ry in result
-        ), f"original vertex {(ox, oy)} not found in smoothed result"
+        assert any(math.hypot(rx - ox, ry - oy) < 1e-6 for rx, ry in result), (
+            f"original vertex {(ox, oy)} not found in smoothed result"
+        )
 
 
 def test_set_smoothing_method_rejects_unknown_value(qapp):
@@ -1197,7 +1495,7 @@ def test_smooth_command_prompt_seeds_from_and_remembers_last_value(qapp):
     """Regression test: the Smooth HUD prompt used to always show a
     hardcoded "2", forcing the user to retype their preferred value every
     time. It must now seed from (and update) v._smooth_iterations."""
-    from src.ui.canvas.commands import _smooth_selected
+    from src.ui.canvas.interaction.commands import _smooth_selected
 
     v = make_view(qapp, [square(0, 0)])
     v.set_selection([0])
@@ -1216,7 +1514,7 @@ def test_smooth_command_prompt_seeds_from_and_remembers_last_value(qapp):
 
 
 def test_simplify_command_prompt_seeds_from_and_remembers_last_value(qapp):
-    from src.ui.canvas.commands import _simplify_selected
+    from src.ui.canvas.interaction.commands import _simplify_selected
 
     v = make_view(qapp, [square(0, 0)])
     v.set_selection([0])
@@ -1234,7 +1532,7 @@ def test_simplify_command_prompt_seeds_from_and_remembers_last_value(qapp):
 
 
 def test_smooth_iterations_change_emits_persistence_signal(qapp):
-    from src.ui.canvas.commands import _smooth_selected
+    from src.ui.canvas.interaction.commands import _smooth_selected
 
     v = make_view(qapp, [square(0, 0)])
     v.set_selection([0])
@@ -1268,9 +1566,7 @@ def test_smooth_selected_catmull_rom_decimates_dense_straight_runs(qapp):
     """Dense, mostly-straight input (typical of a hand/image trace) should
     not balloon into a fixed samples-per-segment multiple of the input
     point count — the near-collinear runs should get decimated back down."""
-    dense = [(i * 0.5, 0.0) for i in range(30)] + [
-        (14.5 + i * 0.5, i * 0.5) for i in range(1, 30)
-    ]
+    dense = [(i * 0.5, 0.0) for i in range(30)] + [(14.5 + i * 0.5, i * 0.5) for i in range(1, 30)]
     dense.append(dense[0])  # close it so it round-trips through load()
     v = make_view(qapp, [dense])
     v.set_selection([0])
@@ -1278,3 +1574,173 @@ def test_smooth_selected_catmull_rom_decimates_dense_straight_runs(qapp):
     naive_upper_bound = (len(dense) - 1) * 8
     v.smooth_selected(iterations=2)
     assert len(v._entities[0].points) < naive_upper_bound / 4
+
+
+def test_lasso_selection_picks_touched_geometry_once(qapp):
+    v = make_view(qapp, [square(0, 0), square(30, 0)])
+    v.arm_lasso_selection()
+    corners = [v._w2c(x, y) for x, y in ((-2, -2), (12, -2), (12, 12), (-2, 12))]
+    press(v, *corners[0])
+    for point in corners[1:]:
+        move(v, *point)
+    release(v, *corners[0])
+    assert v._sel == {0}
+    assert not v._lasso_select_enabled
+
+
+def test_knife_splits_crossed_open_path_and_undo_restores_it(qapp):
+    v = make_view(
+        qapp,
+        [[(0.0, -10.0), (0.0, 10.0)], [(20.0, -10.0), (20.0, 10.0)]],
+    )
+    original_ids = [entity.id for entity in v._entities]
+    assert v.knife_cut((-5.0, 0.0), (5.0, 0.0))
+    assert len(v._entities) == 3
+    assert v._sel == {0, 1}
+    assert all(entity.kind == "polyline" for entity in v._entities)
+    assert v._entities[0].id == original_ids[0]
+    assert v._entities[1].id not in original_ids
+    assert v._entities[2].id == original_ids[1]
+    assert len({entity.id for entity in v._entities}) == 3
+    v.undo()
+    assert len(v._entities) == 2
+    assert v._entities[0].points == [(0.0, -10.0), (0.0, 10.0)]
+    assert [entity.id for entity in v._entities] == original_ids
+
+
+def test_named_symbol_round_trips_in_view_state_and_inserts_at_cursor(qapp):
+    source = make_view(qapp, [square(10, 20)])
+    source.set_selection([0])
+    source.create_symbol_from_selection()
+    source._hud_prompt_edit.setText("Badge")
+    source._hud_prompt_edit.returnPressed.emit()
+    state = source.get_view_state()
+    assert "Badge" in state["symbols"]
+
+    target = make_view(qapp, [])
+    target.set_view_state(state)
+    target._cursor_wx, target._cursor_wy = 50.0, 60.0
+    target.insert_symbol()
+    target._hud_prompt_edit.setText("badge")  # names are case-insensitive
+    target._hud_prompt_edit.returnPressed.emit()
+    assert len(target._entities) == 1
+    xs = [point[0] for point in target._entities[0].points]
+    ys = [point[1] for point in target._entities[0].points]
+    assert min(xs) == pytest.approx(50.0)
+    assert min(ys) == pytest.approx(60.0)
+
+
+def test_symbols_support_direct_insertion_rename_and_delete(qapp):
+    canvas = make_view(qapp, [square(0, 0)])
+    canvas.set_selection([0])
+    canvas.create_symbol_from_selection()
+    canvas._hud_prompt_edit.setText("Badge")
+    canvas._hud_prompt_edit.returnPressed.emit()
+
+    canvas._cursor_wx, canvas._cursor_wy = 30.0, 40.0
+    assert canvas.insert_symbol_named("badge")
+    assert canvas._last_operation_result.metadata == {"symbol": "Badge"}
+    assert canvas.rename_symbol("Badge", "Marker")
+    assert "Marker" in canvas._symbol_library and "Badge" not in canvas._symbol_library
+    assert canvas.delete_symbol("Marker")
+    assert not canvas._symbol_library
+
+
+def test_repeat_last_command_replays_registry_action(qapp):
+    from src.ui.canvas.interaction import commands
+
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    assert commands.run(v, "edit.duplicate")
+    assert len(v._entities) == 2
+    # A non-repeatable view toggle must not replace the remembered edit.
+    assert commands.run(v, "grid.toggle")
+    assert commands.run(v, "edit.repeat_last")
+    assert len(v._entities) == 3
+
+
+def test_repeat_last_reuses_numeric_operation_parameters(qapp):
+    from src.ui.canvas.interaction import commands
+
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    assert v.offset_selected(2.5) == 1
+    first_offset_id = v._entities[next(iter(v._sel))].id
+
+    assert commands.run(v, "edit.repeat_last")
+    assert len(v._entities) == 3
+    assert v._last_operation_result.metadata == {"distance": 2.5}
+    assert first_offset_id not in v._last_operation_result.created_ids
+
+
+def test_command_availability_accepts_registry_id_for_context_menus(qapp):
+    from src.ui.canvas.interaction import commands
+
+    v = make_canvas(qapp, [[(0, 0), (10, 0)]])
+    v.set_selection([0])
+    assert commands.can_run(v, "path.reverse")
+    assert not commands.can_run(v, "path.morph")
+
+
+def test_context_menu_configuration_removes_optional_sections(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMenu
+
+    canvas = make_canvas(qapp, [])
+    captured: list[QMenu] = []
+    monkeypatch.setattr(QMenu, "popup", lambda menu, _point: captured.append(menu))
+    canvas.set_context_menu_sections(["view"])
+    canvas._rightclick_cb(300.0, 200.0)
+    assert captured
+    labels = [action.text() for action in captured[0].actions() if not action.isSeparator()]
+    assert "Create shape" not in labels
+    assert "Insert Symbol…" not in labels
+    assert "Arrange" not in labels
+    assert "Transform" not in labels
+    assert any(label.startswith("Fit view") for label in labels)
+
+
+def test_context_menu_builds_for_mixed_editor_states(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMenu
+
+    captured: list[QMenu] = []
+    monkeypatch.setattr(QMenu, "popup", lambda menu, _point: captured.append(menu))
+    canvas = make_canvas(qapp, [square(0, 0), [(20.0, 0.0), (30.0, 0.0)]])
+    canvas._append_entity(
+        [(40.0, 0.0), (50.0, 0.0)],
+        kind="bezier",
+        meta={
+            "tangents": [(3.0, 0.0), (3.0, 0.0)],
+            "handles_in": [(-3.0, 0.0), (-3.0, 0.0)],
+            "handles_out": [(3.0, 0.0), (3.0, 0.0)],
+            "node_types": ["symmetric", "symmetric"],
+        },
+    )
+    canvas._entities[1].locked = True
+    canvas._symbol_library["Badge"] = [{"polyline": square(0, 0)}]
+
+    for selection, point in (
+        ([], (100.0, 100.0)),
+        ([0], canvas._w2c(5.0, 0.0)),
+        ([1], canvas._w2c(25.0, 0.0)),
+        ([0, 1], canvas._w2c(5.0, 0.0)),
+        ([2], canvas._w2c(40.0, 0.0)),
+    ):
+        canvas.set_selection(selection)
+        canvas._rightclick_cb(*point)
+
+    assert len(captured) == 5
+    bezier_labels = [action.text() for action in captured[-1].actions()]
+    assert "Bézier node" in bezier_labels
+    assert "Symbols" in bezier_labels
+
+
+def test_previous_and_next_view_restore_zoom_transform(qapp):
+    canvas = make_canvas(qapp, [square(0, 0)])
+    initial = canvas._view_transform()
+    canvas._zoom_by(1.5)
+    zoomed = canvas._view_transform()
+    assert zoomed != initial
+    assert canvas.previous_view()
+    assert canvas._view_transform() == pytest.approx(initial)
+    assert canvas.next_view()
+    assert canvas._view_transform() == pytest.approx(zoomed)

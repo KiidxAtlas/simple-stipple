@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from src.ui.core.focus_policy import blur_focused_line_edit
+from src.ui.components import blur_focused_line_edit
 
 _SWATCH_PALETTE = [
     "#f85149",  # red
@@ -88,9 +88,7 @@ class DxfLayersTree(QFrame):
 
     # New signals for shape operations from layer tree context menu.
     shapesGroupRequested = Signal(str, list)  # layer, shape keys → group
-    shapesUngroupRequested = Signal(
-        str, list
-    )  # layer, shape keys (group tuples) → ungroup
+    shapesUngroupRequested = Signal(str, list)  # layer, shape keys (group tuples) → ungroup
     shapesMergeRequested = Signal(str, list)  # layer, shape keys → merge (union)
     shapesCopyRequested = Signal(str, list)  # layer, shape keys → copy to clipboard
 
@@ -136,9 +134,7 @@ class DxfLayersTree(QFrame):
                 and current.data(0, DxfLayersTree._ROLE_KIND) == "layer"
                 and (not selected or selected == [current])
             ):
-                layer_name = str(
-                    current.data(0, DxfLayersTree._ROLE_INTERNAL_NAME) or ""
-                )
+                layer_name = str(current.data(0, DxfLayersTree._ROLE_INTERNAL_NAME) or "")
                 if layer_name and layer_name != "geometry":
                     payload = {"kind": "layer", "name": layer_name}
                     drag = QDrag(self)
@@ -165,9 +161,7 @@ class DxfLayersTree(QFrame):
                     return
                 shape_items = [item]
 
-            source_layer = str(
-                shape_items[0].data(0, DxfLayersTree._ROLE_SOURCE_LAYER) or ""
-            )
+            source_layer = str(shape_items[0].data(0, DxfLayersTree._ROLE_SOURCE_LAYER) or "")
             if not source_layer:
                 return
 
@@ -223,8 +217,7 @@ class DxfLayersTree(QFrame):
                     if target_layer_item is None:
                         return
                     target_name = str(
-                        target_layer_item.data(0, DxfLayersTree._ROLE_INTERNAL_NAME)
-                        or ""
+                        target_layer_item.data(0, DxfLayersTree._ROLE_INTERNAL_NAME) or ""
                     )
                     if not target_name or target_name not in self._owner._layer_order:
                         return
@@ -255,9 +248,7 @@ class DxfLayersTree(QFrame):
 
             # Emit a single batched signal so listeners can move every
             # dropped shape in one graph operation.
-            self._owner.shapesMoveRequested.emit(
-                source_layer, list(shape_keys), target_layer
-            )
+            self._owner.shapesMoveRequested.emit(source_layer, list(shape_keys), target_layer)
             event.acceptProposedAction()
 
     def __init__(self, title: str = "DXF Layers", *, editable: bool = False) -> None:
@@ -342,9 +333,7 @@ class DxfLayersTree(QFrame):
             self._delete_shortcut = QShortcut(
                 QKeySequence(QKeySequence.StandardKey.Delete), self._tree
             )
-            self._delete_shortcut.setContext(
-                Qt.ShortcutContext.WidgetWithChildrenShortcut
-            )
+            self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self._delete_shortcut.activated.connect(self._delete_current_layer)
 
         # Esc should always leave focused layer-tree inputs (search/rename editors).
@@ -449,9 +438,7 @@ class DxfLayersTree(QFrame):
                 display_name = str(
                     row.get(
                         "display_name",
-                        "Layer 1"
-                        if internal_name == "geometry"
-                        else row.get("name", ""),
+                        "Layer 1" if internal_name == "geometry" else row.get("name", ""),
                     )
                 )
                 visible = bool(row.get("visible", True))
@@ -489,9 +476,7 @@ class DxfLayersTree(QFrame):
             layer_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             layer_flags |= Qt.ItemFlag.ItemIsUserCheckable
             if self._editable:
-                layer_flags |= (
-                    Qt.ItemFlag.ItemIsDropEnabled | Qt.ItemFlag.ItemIsDragEnabled
-                )
+                layer_flags |= Qt.ItemFlag.ItemIsDropEnabled | Qt.ItemFlag.ItemIsDragEnabled
             if self._editable and editable:
                 layer_flags |= Qt.ItemFlag.ItemIsEditable
             layer_item.setFlags(layer_flags)
@@ -510,14 +495,10 @@ class DxfLayersTree(QFrame):
                     shape_label = str(shape.get("label", "Shape"))
                     shape_visible = bool(shape.get("visible", True))
                     shape_editable = bool(shape.get("editable", editable))
-                    draggable = bool(
-                        shape.get("draggable", self._editable and shape_editable)
-                    )
+                    draggable = bool(shape.get("draggable", self._editable and shape_editable))
                 else:
                     shape_key = shape[0]
-                    shape_label = (
-                        str(shape[1]) if len(shape) > 1 else f"Shape {shape_key}"
-                    )
+                    shape_label = str(shape[1]) if len(shape) > 1 else f"Shape {shape_key}"
                     shape_visible = bool(shape[2]) if len(shape) > 2 else True
                     shape_editable = bool(shape[3]) if len(shape) > 3 else editable
                     draggable = self._editable and shape_editable
@@ -649,11 +630,7 @@ class DxfLayersTree(QFrame):
         if item is None:
             return
         kind = self._item_kind(item)
-        if (
-            kind == "shape"
-            and self._editable
-            and bool(item.data(0, self._ROLE_EDITABLE))
-        ):
+        if kind == "shape" and self._editable and bool(item.data(0, self._ROLE_EDITABLE)):
             self._tree.editItem(item, 0)
         else:
             self.fitRequested.emit()
@@ -697,9 +674,7 @@ class DxfLayersTree(QFrame):
                     selected.append(key)
                     seen.add(key)
             elif kind == "layer":
-                for key in self._shape_keys_by_layer.get(
-                    self._item_internal_name(item), []
-                ):
+                for key in self._shape_keys_by_layer.get(self._item_internal_name(item), []):
                     if key in seen:
                         continue
                     selected.append(key)
@@ -718,9 +693,12 @@ class DxfLayersTree(QFrame):
             if "  ·  " in raw_text:
                 raw_text = raw_text.split("  ·  ", 1)[0].strip()
             new_display = raw_text
-            if editable and new_display and new_display != old_display:
+            if editable and new_display != old_display:
                 old_internal = self._item_internal_name(item)
-                if new_display in self._layer_order:
+                if not new_display or new_display in self._layer_order:
+                    # Blank name or a collision with another layer — revert
+                    # instead of leaving the row's text empty/invalid until
+                    # the next full set_layers() rebuild.
                     self._syncing = True
                     item.setText(0, old_display)
                     self._syncing = False
@@ -734,12 +712,11 @@ class DxfLayersTree(QFrame):
                         child.setData(0, self._ROLE_SOURCE_LAYER, new_display)
                     self._syncing = False
                     self._layer_order = [
-                        new_display if name == old_internal else name
-                        for name in self._layer_order
+                        new_display if name == old_internal else name for name in self._layer_order
                     ]
                     if old_internal in self._shape_keys_by_layer:
-                        self._shape_keys_by_layer[new_display] = (
-                            self._shape_keys_by_layer.pop(old_internal)
+                        self._shape_keys_by_layer[new_display] = self._shape_keys_by_layer.pop(
+                            old_internal
                         )
                     # A connected slot commonly reacts to a rename by
                     # rebuilding the whole tree (set_layers()), which
@@ -761,20 +738,23 @@ class DxfLayersTree(QFrame):
         if kind == "shape":
             old_display = str(item.data(0, self._ROLE_DISPLAY_NAME) or "")
             new_text = item.text(0).strip()
-            if (
-                bool(item.data(0, self._ROLE_EDITABLE))
-                and new_text
-                and new_text != old_display
-            ):
-                self._syncing = True
-                item.setData(0, self._ROLE_DISPLAY_NAME, new_text)
-                self._syncing = False
-                self.shapeRenamed.emit(
-                    self._item_internal_name(item),
-                    self._item_shape_key(item),
-                    new_text,
-                )
-                return
+            if bool(item.data(0, self._ROLE_EDITABLE)) and new_text != old_display:
+                if not new_text:
+                    # Cleared to blank — revert instead of leaving the row's
+                    # displayed text empty until the next full rebuild.
+                    self._syncing = True
+                    item.setText(0, old_display)
+                    self._syncing = False
+                else:
+                    self._syncing = True
+                    item.setData(0, self._ROLE_DISPLAY_NAME, new_text)
+                    self._syncing = False
+                    self.shapeRenamed.emit(
+                        self._item_internal_name(item),
+                        self._item_shape_key(item),
+                        new_text,
+                    )
+                    return
             self.shapeVisibilityChanged.emit(
                 self._item_internal_name(item), self._item_shape_key(item), visible
             )
@@ -800,30 +780,22 @@ class DxfLayersTree(QFrame):
             return
 
         kind = self._item_kind(item)
-        layer_name = self._item_internal_name(
-            item if kind == "layer" else item.parent()
-        )
+        layer_name = self._item_internal_name(item if kind == "layer" else item.parent())
         menu.addAction("New layer", self._prompt_add_layer)
 
         if kind == "layer":
             menu.addSeparator()
-            menu.addAction(
-                "Activate layer", lambda: self.layerActivated.emit(layer_name)
-            )
+            menu.addAction("Activate layer", lambda: self.layerActivated.emit(layer_name))
             menu.addAction("Rename layer\tF2", lambda: self._tree.editItem(item, 0))
             color_menu = menu.addMenu("Set color")
             for hex_color in _SWATCH_PALETTE:
                 swatch_action = color_menu.addAction(
                     "   " + hex_color,
-                    lambda _c=hex_color: self.layerColorChangeRequested.emit(
-                        layer_name, _c
-                    ),
+                    lambda _c=hex_color: self.layerColorChangeRequested.emit(layer_name, _c),
                 )
                 swatch_action.setIcon(_swatch_icon(hex_color, size=14))
             color_menu.addSeparator()
-            color_menu.addAction(
-                "Custom…", lambda: self._prompt_custom_layer_color(layer_name)
-            )
+            color_menu.addAction("Custom…", lambda: self._prompt_custom_layer_color(layer_name))
             current_color = item.data(0, self._ROLE_COLOR)
             clear_action = color_menu.addAction(
                 "No color",
@@ -850,11 +822,8 @@ class DxfLayersTree(QFrame):
                 del_action.setEnabled(bool(deletable_layers))
                 other_selected = [n for n in selected_layer_names if n != layer_name]
                 menu.addAction(
-                    f"Consolidate {len(selected_layer_names)} layers into "
-                    f"'{layer_name}'",
-                    lambda: self.layersConsolidateRequested.emit(
-                        other_selected, layer_name
-                    ),
+                    f"Consolidate {len(selected_layer_names)} layers into '{layer_name}'",
+                    lambda: self.layersConsolidateRequested.emit(other_selected, layer_name),
                 ).setToolTip(
                     "Move every shape from the other selected layers onto\n"
                     f"'{layer_name}' and remove the now-empty layers."
@@ -879,17 +848,9 @@ class DxfLayersTree(QFrame):
                 lambda: self.bulkVisibilityRequested.emit(False),
             )
             menu.addSeparator()
-            idx = (
-                self._layer_order.index(layer_name)
-                if layer_name in self._layer_order
-                else -1
-            )
-            up_action = menu.addAction(
-                "Move up", lambda: self._move_layer(layer_name, -1)
-            )
-            down_action = menu.addAction(
-                "Move down", lambda: self._move_layer(layer_name, 1)
-            )
+            idx = self._layer_order.index(layer_name) if layer_name in self._layer_order else -1
+            up_action = menu.addAction("Move up", lambda: self._move_layer(layer_name, -1))
+            down_action = menu.addAction("Move down", lambda: self._move_layer(layer_name, 1))
             if idx <= 0:
                 up_action.setEnabled(False)
             if idx < 0 or idx >= len(self._layer_order) - 1:
@@ -909,8 +870,7 @@ class DxfLayersTree(QFrame):
             selected_shape_keys = [
                 self._item_shape_key(it)
                 for it in self._tree.selectedItems()
-                if self._item_kind(it) == "shape"
-                and str(self._item_source_layer(it)) == layer_name
+                if self._item_kind(it) == "shape" and str(self._item_source_layer(it)) == layer_name
             ]
             if not selected_shape_keys:
                 selected_shape_keys = [shape_key]
@@ -937,15 +897,11 @@ class DxfLayersTree(QFrame):
             )
             if has_groups:
                 group_action.setEnabled(False)
-                group_action.setToolTip(
-                    "Group shapes\tCtrl+G\nAlready in a group — ungroup first."
-                )
+                group_action.setToolTip("Group shapes\tCtrl+G\nAlready in a group — ungroup first.")
 
             ungroup_action = menu.addAction(
                 "Ungroup shapes\tShift+Ctrl+G",
-                lambda: self.shapesUngroupRequested.emit(
-                    layer_name, selected_shape_keys
-                ),
+                lambda: self.shapesUngroupRequested.emit(layer_name, selected_shape_keys),
             )
             if not has_groups:
                 ungroup_action.setEnabled(False)
@@ -963,20 +919,15 @@ class DxfLayersTree(QFrame):
             # Delete and copy actions.
             delete_action = menu.addAction(
                 "Delete shapes\tDel",
-                lambda: self.shapesDeleteRequested.emit(
-                    layer_name, all_selected_shape_keys
-                ),
+                lambda: self.shapesDeleteRequested.emit(layer_name, all_selected_shape_keys),
             )
             delete_action.setToolTip(
-                "Delete shapes\tDel\n"
-                "Removes selected shapes. Locked shapes are skipped."
+                "Delete shapes\tDel\nRemoves selected shapes. Locked shapes are skipped."
             )
 
             copy_action = menu.addAction(
                 "Copy shapes\tCtrl+C",
-                lambda: self.shapesCopyRequested.emit(
-                    layer_name, all_selected_shape_keys
-                ),
+                lambda: self.shapesCopyRequested.emit(layer_name, all_selected_shape_keys),
             )
             copy_action.setToolTip(
                 "Copy shapes\tCtrl+C\n"
@@ -984,7 +935,6 @@ class DxfLayersTree(QFrame):
             )
 
             menu.addSeparator()
-            menu.addAction("Rename shape\tF2", lambda: self._tree.editItem(item, 0))
             menu.addAction(
                 "Hide shape",
                 lambda: self.shapeVisibilityChanged.emit(
@@ -1006,9 +956,7 @@ class DxfLayersTree(QFrame):
                 if self._item_kind(it) != "shape":
                     continue
                 src = self._item_source_layer(it) or layer_name
-                keys_by_source_layer.setdefault(src, []).append(
-                    self._item_shape_key(it)
-                )
+                keys_by_source_layer.setdefault(src, []).append(self._item_shape_key(it))
             if not keys_by_source_layer:
                 keys_by_source_layer = {layer_name: [shape_key]}
             total_selected = sum(len(v) for v in keys_by_source_layer.values())
