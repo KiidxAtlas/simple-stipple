@@ -469,6 +469,7 @@ class EditTool(CanvasTool):
             return True
         if apply_edit_drag(v, event):
             return True
+
         if v._shift_drag and v._band_start:
             v._lmb_prev = pos
             v._redraw()
@@ -504,16 +505,49 @@ class EditTool(CanvasTool):
     def double_click(self, event: QMouseEvent) -> bool:
         v = self.v
         pos = event.position()
-        hit = v._find_nearest_edge(pos.x(), pos.y())
+        # Edit the geometry the user can actually see. Procedural entities
+        # (circle, rectangle, spline, etc.) may store sparse control points
+        # while rendering a tessellation reconstructed from metadata.
+        wx, wy = v._c2w(pos.x(), pos.y())
+        hit = None
+        best_dist = 8.0
+        for pi in range(len(v._entities)):
+            if not v._entity_selectable(pi):
+                continue
+            visible_poly = v._flattened_points(pi)
+            dist, result = v._closest_point_on_poly(
+                visible_poly,
+                wx,
+                wy,
+                pos.x(),
+                pos.y(),
+                return_segment=True,
+            )
+            if dist is not None and dist < best_dist and result is not None:
+                best_dist = dist
+                seg_idx, closest_pt = result
+                hit = (pi, seg_idx, closest_pt, visible_poly)
         if hit is not None:
-            pi, seg_idx, pt = hit
+            pi, seg_idx, pt, visible_poly = hit
             if pi < 0 or pi >= len(v._entities):
                 return True
-            poly = v._entities[pi].points
+            if v._is_locked(pi):
+                return True
+            entity = v._entities[pi]
+            v._push_undo()
+            if entity.kind != "polyline" or entity.meta is not None:
+                # Adding a vertex changes topology, which most procedural
+                # schemas cannot represent. Demote once, using the rendered
+                # geometry as the canonical editable path, so the new vertex
+                # remains visible and draggable after redraw/save/export.
+                entity.points = list(visible_poly)
+                entity.kind = "polyline"
+                entity.meta = None
+            poly = entity.points
             if seg_idx + 1 > len(poly):
                 return True
-            v._push_undo()
             poly.insert(seg_idx + 1, pt)
+            v._edit_selected_verts = {(pi, seg_idx + 1)}
             v._redraw()
             v._notify()
             v._fire_poly_change()
@@ -693,6 +727,35 @@ class DrawTool(CanvasTool):
         # 2. Determine effective position (snap or raw cursor)
         eff_x = v._draw_snap[0] if v._draw_snap else wx
         eff_y = v._draw_snap[1] if v._draw_snap else wy
+
+        # Stable parallel/perpendicular inference: when the pointer is close
+        # to an existing edge direction, acquire that relationship exactly.
+        if allow_snap and v._draw_snap is None and v._draw_pts and v._snap_angle_enabled:
+            anchor_x, anchor_y = v._draw_pts[-1]
+            drag_angle = math.atan2(eff_y - anchor_y, eff_x - anchor_x)
+            drag_length = math.hypot(eff_x - anchor_x, eff_y - anchor_y)
+            best_relation = None
+            for entity in v._entities:
+                for first, second in zip(entity.points, entity.points[1:]):
+                    edge_angle = math.atan2(second[1] - first[1], second[0] - first[0])
+                    for inferred_angle, snap_type in (
+                        (edge_angle, "parallel"),
+                        (edge_angle + math.pi / 2.0, "perpendicular"),
+                    ):
+                        delta = abs((drag_angle - inferred_angle + math.pi / 2) % math.pi - math.pi / 2)
+                        if delta <= math.radians(3) and (
+                            best_relation is None or delta < best_relation[0]
+                        ):
+                            best_relation = (delta, inferred_angle, snap_type)
+            if best_relation is not None and drag_length > 1e-9:
+                _delta, inferred_angle, snap_type = best_relation
+                # Choose the equivalent ray pointing toward the cursor.
+                if math.cos(drag_angle - inferred_angle) < 0:
+                    inferred_angle += math.pi
+                eff_x = anchor_x + math.cos(inferred_angle) * drag_length
+                eff_y = anchor_y + math.sin(inferred_angle) * drag_length
+                v._draw_snap = (eff_x, eff_y)
+                v._draw_snap_type = snap_type
 
         # 3. Angle snap with Shift
         shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -906,6 +969,10 @@ class TrimExtendTool(CanvasTool):
     def move(self, event: QMouseEvent) -> bool:
         v = self.v
         pos = event.position()
+        if v._mode == "trim":
+            v.preview_trim_at(pos.x(), pos.y())
+        else:
+            v.preview_extend_at(pos.x(), pos.y())
         hover = v._find_poly_at(pos.x(), pos.y())
         if hover != v._hover_poly:
             v._hover_poly = hover

@@ -8,12 +8,26 @@ import platform as _platform
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from PySide6.QtCore import QObject, Signal
 
 from src.backend.persistence import read_json_file, write_json_file_atomic
 from src.infra.paths import user_data_dir
 
 _SETTINGS_FILE = user_data_dir() / "settings.json"
 _LOG = logging.getLogger(__name__)
+_LIVE_SETTINGS: dict | None = None
+
+
+class SettingsBus(QObject):
+    """Process-wide settings propagation for multi-window sessions."""
+
+    changed = Signal(str, object, object)
+
+    def publish(self, key: str, value: object, source: object) -> None:
+        self.changed.emit(key, value, source)
+
+
+settings_bus = SettingsBus()
 
 
 # =============================================================================
@@ -206,8 +220,8 @@ DEFAULT_SIMPLIFY_TOLERANCE = 0.2
 # and src.ui.canvas.view.
 # =============================================================================
 
-DEFAULT_DRAW_SIDEBAR_WIDTH = 108
-MIN_DRAW_SIDEBAR_WIDTH = 96
+DEFAULT_DRAW_SIDEBAR_WIDTH = 144
+MIN_DRAW_SIDEBAR_WIDTH = 144
 MAX_DRAW_SIDEBAR_WIDTH = 220
 MIN_DRAW_SIDEBAR_HEIGHT = 200
 MAX_DRAW_SIDEBAR_HEIGHT = 900
@@ -373,8 +387,12 @@ def validate_settings(data: dict) -> dict:
 
 def load_settings() -> dict:
     """Load settings from disk with automatic migration of legacy keys."""
+    global _LIVE_SETTINGS
+    if _LIVE_SETTINGS is not None:
+        return _LIVE_SETTINGS
     if not _SETTINGS_FILE.exists():
-        return validate_settings({})
+        _LIVE_SETTINGS = validate_settings({})
+        return _LIVE_SETTINGS
     try:
         data = read_json_file(_SETTINGS_FILE, default={})
         if not isinstance(data, dict):
@@ -383,10 +401,12 @@ def load_settings() -> dict:
                 _SETTINGS_FILE,
             )
             _backup_corrupt_settings()
-            return {}
+            _LIVE_SETTINGS = validate_settings({})
+            return _LIVE_SETTINGS
         data = _migrate_settings(data)
         data = validate_settings(data)
-        return data
+        _LIVE_SETTINGS = data
+        return _LIVE_SETTINGS
     except (OSError, json.JSONDecodeError) as exc:
         # Corrupt file: back it up so the user can recover, but don't keep
         # crashing on every launch.
@@ -396,7 +416,8 @@ def load_settings() -> dict:
             exc,
         )
         _backup_corrupt_settings()
-        return validate_settings({})
+        _LIVE_SETTINGS = validate_settings({})
+        return _LIVE_SETTINGS
 
 
 def _backup_corrupt_settings() -> None:

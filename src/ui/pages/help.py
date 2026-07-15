@@ -88,13 +88,55 @@ def _build_getting_started() -> str:
         <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Purpose</th>
     </tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Draft</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+1</td><td style="padding:6px;border-bottom:1px solid #30363d;">2D drafting — draw, edit, import/export DXF/SVG geometry.</td></tr>
-    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Pattern Fill</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+2</td><td style="padding:6px;border-bottom:1px solid #30363d;">Generate 20+ laser-engraving patterns inside outlines.</td></tr>
+    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Pattern</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+2</td><td style="padding:6px;border-bottom:1px solid #30363d;">Generate 20+ laser-engraving patterns inside outlines.</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Trace</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+3</td><td style="padding:6px;border-bottom:1px solid #30363d;">Convert images to vector outlines (tracing).</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Convert</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+4</td><td style="padding:6px;border-bottom:1px solid #30363d;">Utilities — FVI→DXF, SVG↔DXF conversion, repair.</td></tr>
-    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Repo</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+5</td><td style="padding:6px;border-bottom:1px solid #30363d;">Git workflow — pull, commit, push, log.</td></tr>
-</table>
+    </table>
+
+<p><em>Repository sync (Git pull/commit/push) lives under <strong>File ▸ Repository Sync…</strong> (Alt+5).</em></p>
 
 <p><em>Switch between pages using the tab bar or keyboard shortcuts. Each page maintains its own workspace state which is saved automatically.</em></p>
+"""
+
+
+def _build_whats_new_031() -> str:
+    """Release-level coverage for features added since the previous manual pass."""
+    return """
+<h2 id="whats-new-031" class="section-heading">What’s New in 0.3.1</h2>
+
+<h3 class="subheading">Guided precision drafting</h3>
+<ul>
+    <li><strong>Persistent command guidance:</strong> the bottom status chip identifies the active command, the next point or selection it expects, and the keys that finish or cancel it.</li>
+    <li><strong>Sketch palette:</strong> Grid, object snaps, Construction mode, and geometric constraints now share one persistent precision bar. The Constrain menu supports Horizontal, Vertical, Parallel, Perpendicular, Equal Length, Coincident, Fix, and removal.</li>
+    <li><strong>Relationship inference:</strong> new segments acquire exact parallel or perpendicular directions when the pointer approaches an existing edge direction. Disable Angle Constraints in Snap to bypass this behavior.</li>
+    <li><strong>Expression entry:</strong> dimensional fields accept arithmetic, parentheses, and mixed units, including <code>25/2</code>, <code>(10+5)*2</code>, and <code>1in + 3mm</code>. Bare lengths use the active display unit.</li>
+</ul>
+
+<h3 class="subheading">Direct and contextual editing</h3>
+<ul>
+    <li><strong>Contextual Properties actions:</strong> selection-aware Edit Vertices, Duplicate, Open/Close Path, and Delete actions appear only when applicable.</li>
+    <li><strong>Property highlighting:</strong> hover or focus a position, size, radius, or rotation field to highlight the corresponding geometry on the canvas.</li>
+    <li><strong>Local transform frames:</strong> rotated rectangles, rounded rectangles, ellipses, circles, and slots resize along their own axes. Width/height edits preserve their parametric shape data instead of silently converting them to generic paths.</li>
+    <li><strong>Shape controls:</strong> circles and ellipses retain editable radius controls; arcs and rectangles retain their defining controls. Double-clicking a path edge in Edit mode inserts a vertex.</li>
+    <li><strong>Reliable gizmos:</strong> rotation, edge/corner resize, move, and enlarged invisible hit targets work across parametric shapes, including slots.</li>
+</ul>
+
+<h3 class="subheading">Safer operations and clearer previews</h3>
+<ul>
+    <li><strong>Trim and Extend previews:</strong> hovering shows the exact segment to remove or extension to create before a click commits it.</li>
+    <li><strong>Geometry health:</strong> preflight reports open paths, invalid or duplicate geometry, tiny/zero-length segments, and the minimum segment before fabrication.</li>
+    <li><strong>Curve fidelity:</strong> spline and parametric geometry is re-tessellated for export and cross-page transfer rather than using stale low-resolution points.</li>
+    <li><strong>Responsive cancellation:</strong> long Pattern, Trace, Convert, and batch operations expose cancellation and avoid applying stale worker results.</li>
+</ul>
+
+<h3 class="subheading">Interoperability and workflow</h3>
+<ul>
+    <li><strong>Unified vector import:</strong> Draft opens, adds, or accepts dropped DXF, SVG, and FVI files through Import Vector.</li>
+    <li><strong>StarFX FVI:</strong> geometry-only import/export supports MOVEDIST, DRAWLINE, and DRAWARC, configurable origin/margins/precision/Y orientation, travel optimization, path reversal, native arc preservation, comments, and explicit reports for unsupported machine commands.</li>
+    <li><strong>Improved SVG/DXF handling:</strong> transforms, curves, view boxes, nested groups, bulges/arcs, and layer-aware export retain substantially more source fidelity.</li>
+    <li><strong>Pattern presets:</strong> presets can be renamed, duplicated, imported/exported as JSON, and restored from built-ins. Pattern output roles and layers remain distinct during export.</li>
+    <li><strong>Architecture and recovery:</strong> consolidated settings, notifications, units, page runtime, and operation handling reduce duplicated state while preserving multi-window workspace recovery.</li>
+</ul>
 """
 
 
@@ -110,11 +152,11 @@ def _build_draft_page() -> str:
 
 <h3 class="subheading">Toolbar</h3>
 <ul>
-    <li><strong>Open DXF:</strong> Load an existing DXF file (replaces current drawing). Use the dropdown arrow for <em>"Import into drawing"</em> to add geometry without replacing.</li>
-    <li><strong>Recent DXF:</strong> Quick access to recently opened DXF files.</li>
+    <li><strong>Import Vector:</strong> Open DXF, SVG, or FVI geometry (replaces the current drawing). Use the dropdown arrow to add it without replacing, or drop a supported file onto the page.</li>
+    <li><strong>Recent Vectors:</strong> Quick access to recently imported DXF, SVG, and FVI files.</li>
     <li><strong>Explode:</strong> Break selected grouped shapes into individual segments.</li>
     <li><strong>Merge:</strong> Combine selected connected segments into single objects.</li>
-    <li><strong>Export DXF:</strong> Save as grouped DXF (shapes sharing a layer are treated as one group by the laser). Use the dropdown for <em>SVG export</em>.</li>
+    <li><strong>Export DXF:</strong> Save as grouped DXF (shapes sharing a layer are treated as one group by the laser). Use the adjacent <strong>⋯</strong> menu for FVI or SVG export.</li>
     <li><strong>Drawing Modes:</strong> Select (S), Draw (D), Edit (E) — also accessible via single-letter keys.</li>
     <li><strong>Fit:</strong> Zoom to fit all content (F).</li>
 </ul>
@@ -140,7 +182,9 @@ def _build_draft_page() -> str:
 <h3 class="subheading">Editing Features</h3>
 <ul>
     <li><strong>Vertex Editing:</strong> In Edit mode, click on shape vertices to move them individually.</li>
-    <li><strong>8-Handle Resize:</strong> Select a shape to see 8 resize handles (corners + edges). Drag corners for proportional scaling, drag edge handles for axis-constrained resizing. Hold <kbd>Shift</kbd> to lock aspect ratio.</li>
+    <li><strong>8-Handle Resize:</strong> Select a shape to see 8 resize handles (corners + edges). Rotated parametric shapes use their local axes. Corners resize both dimensions, edges resize one; hold <kbd>Shift</kbd> to lock aspect ratio or <kbd>Alt</kbd> to resize from center.</li>
+    <li><strong>Properties &amp; Expressions:</strong> edit position, local size, rotation, and shape parameters without leaving the selection. Arithmetic and mixed units are accepted. Hover/focus a field to identify the geometry it controls.</li>
+    <li><strong>Contextual Actions:</strong> Edit Vertices, Duplicate, Open/Close Path, and Delete appear in Properties when valid for the current selection.</li>
     <li><strong>Rounding Corners:</strong> In Edit mode, hover a corner and press <kbd>R</kbd> to round it with a configurable radius.</li>
     <li><strong>Offset:</strong> Create an offset copy of selected shapes (O). Specify distance in mm.</li>
     <li><strong>Text:</strong> Add parametric text at cursor position (T) — see Text &amp; Typography for multi-line and text-on-path.</li>
@@ -165,8 +209,8 @@ def _build_draft_page() -> str:
 
 <h3 class="subheading">Trim &amp; Extend Tools</h3>
 <ul>
-    <li><strong>Trim (K):</strong> Click the part of a shape you want to remove. The tool stays active until you press <kbd>Esc</kbd>.</li>
-    <li><strong>Extend (L):</strong> Click an open shape to lengthen it to the next intersecting shape.</li>
+    <li><strong>Trim (K):</strong> Hover to preview the exact part that will be removed, then click to commit. The tool stays active until <kbd>Esc</kbd>.</li>
+    <li><strong>Extend (L):</strong> Hover an open endpoint to preview its extension to the next intersection, then click to commit.</li>
 </ul>
 
 <h3 class="subheading">Rulers &amp; Guides</h3>
@@ -523,11 +567,11 @@ def _build_repo_page() -> str:
     """Repo page section."""
     return """
 <h2 id="repo-page" class="section-heading">
-    Repo Page — Git Workflow
+    Repository Sync — Git Workflow
 </h2>
 
 <h3 class="subheading">Overview</h3>
-<p>The Repo page provides a simplified Git workflow interface for managing your project repository directly from the application.</p>
+<p>Repository Sync (<strong>File ▸ Repository Sync…</strong>, Alt+5) provides a simplified Git workflow for managing your project repository directly from the application.</p>
 
 <h3 class="subheading">Setup</h3>
 <ol>
@@ -696,7 +740,8 @@ def _build_shortcuts() -> str:
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>⌘+K</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Open command palette (searchable)</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Ctrl+,</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Open Settings</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Ctrl+Shift+N</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">New Window (independent workspace)</td></tr>
-    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Alt+1 … Alt+5</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Switch to pages (Draft, Pattern, Trace, Convert, Repo)</td></tr>
+    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Alt+1 … Alt+4</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Switch to pages (Draft, Pattern, Trace, Convert)</td></tr>
+    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Alt+5</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Open Repository Sync window</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Esc</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Cancel current tool / exit mode</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Shift+R / Shift+C / Shift+S / Shift+P</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Quick-shape drag (rectangle, circle, slot, hexagon) — Select mode</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Ctrl+R</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle rulers</td></tr>
@@ -802,7 +847,7 @@ def _build_support() -> str:
     <li><strong>Workspace folder</strong> — default location for workspace files.</li>
     <li><strong>Pattern library folder</strong> — where pattern presets are stored.</li>
     <li><strong>Output folders</strong> — default locations for DXF, SVG, and trace outputs.</li>
-    <li><strong>Repository folder</strong> — default Git repository directory (Repo page).</li>
+    <li><strong>Repository folder</strong> — default Git repository directory (Repository Sync window).</li>
     <li><strong>Auto-fetch on startup</strong> — automatically fetch remote repository metadata.</li>
     <li><strong>Check for updates on startup</strong> — silently check for app updates.</li>
     <li><strong>Display units</strong> — millimeters or inches. Changes every ruler, coordinate readout, and numeric-entry field across the app; the underlying geometry always stays in millimeters internally, so switching units never changes your actual drawing.</li>
@@ -825,6 +870,7 @@ def build_help_html() -> str:
     """Build the complete help HTML from all sections."""
     sections = [
         _build_getting_started(),
+        _build_whats_new_031(),
         _build_draft_page(),
         _build_bezier_pen_tool(),
         _build_dimension_tool(),
@@ -906,6 +952,7 @@ def build_help_html() -> str:
 
 TOC_ENTRIES: list[tuple[str, str]] = [
     _toc_entry("getting-started", "Getting Started"),
+    _toc_entry("whats-new-031", "What’s New in 0.3.1"),
     _toc_entry("draft-page", "Draft Page"),
     _toc_entry("bezier-pen-tool", "Bezier Pen Tool"),
     _toc_entry("dimension-tool", "Dimension Tool"),
@@ -913,11 +960,11 @@ TOC_ENTRIES: list[tuple[str, str]] = [
     _toc_entry("path-cleanup", "Path Cleanup Tools"),
     _toc_entry("text-tools", "Text & Typography"),
     _toc_entry("layers", "Layers"),
-    _toc_entry("pattern-page", "Pattern Fill Page"),
+    _toc_entry("pattern-page", "Pattern Page"),
     _toc_entry("pattern-types", "Pattern Types (20+)"),
     _toc_entry("trace-page", "Trace Page"),
     _toc_entry("convert-page", "Convert / Utilities"),
-    _toc_entry("repo-page", "Repo Page (Git)"),
+    _toc_entry("repo-page", "Repository Sync (Git)"),
     _toc_entry("canvas-commands", "Canvas Commands"),
     _toc_entry("keyboard-shortcuts", "Keyboard Shortcuts"),
     _toc_entry("troubleshooting", "Troubleshooting & Tips"),

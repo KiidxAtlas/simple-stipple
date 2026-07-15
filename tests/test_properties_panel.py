@@ -120,6 +120,46 @@ def test_panel_rotate_via_field(qapp):
 
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(10 * math.sqrt(2), abs=1e-6)
+    assert float(panel._rot.text()) == pytest.approx(45.0)
+
+
+def test_panel_shows_live_slot_angle_after_gizmo_rotation(qapp):
+    from PySide6.QtCore import Qt
+
+    canvas, panel = make_panel(qapp, [])
+    canvas.set_entity_records(
+        [
+            {
+                "points": square(0, 0),
+                "kind": "slot",
+                "meta": {
+                    "center": (5.0, 5.0),
+                    "length": 10.0,
+                    "width": 4.0,
+                    "rotation": 0.0,
+                },
+            }
+        ]
+    )
+    canvas.set_selection([0])
+    assert canvas._start_gizmo_drag("rotate", 10.0, 5.0)
+    canvas._apply_gizmo_drag(5.0, 10.0, Qt.KeyboardModifier.NoModifier)
+    assert canvas._entities[0].meta["rotation"] == pytest.approx(90.0)
+    assert float(panel._rot.text()) == pytest.approx(90.0)
+
+
+@pytest.mark.parametrize(
+    ("points", "label"),
+    [
+        ([(0.0, 0.0), (10.0, 0.0), (5.0, 8.660254), (0.0, 0.0)], "Triangle"),
+        (square(0, 0), "Rectangle"),
+    ],
+)
+def test_panel_recognizes_hand_drawn_closed_shapes(qapp, points, label):
+    canvas, panel = make_panel(qapp, [points])
+    canvas.set_selection([0])
+    assert canvas._entities[0].kind == "polyline"
+    assert panel._summary.text() == label
 
 
 def test_panel_edits_ellipse_radius(qapp):
@@ -138,3 +178,24 @@ def test_panel_edits_ellipse_radius(qapp):
     panel._commit_param("rx")  # crashed with TypeError before the fix
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(60.0, abs=0.3)
+
+
+def test_property_expression_preserves_parametric_width_and_focus_highlights(qapp):
+    canvas, panel = make_panel(qapp, [])
+    canvas.set_entity_records([{
+        "points": [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)],
+        "kind": "rectangle",
+        "meta": {"center": (5, 2.5), "width": 10, "height": 5, "rotation": 0},
+    }])
+    canvas.set_selection([0])
+    panel.refresh()
+    panel.show()
+    panel._w.setFocus()
+    qapp.processEvents()
+    assert canvas._property_highlight == "w"
+    panel._w.setText("1in + 3mm")
+    panel._commit_size("w")
+    assert canvas._entities[0].kind == "rectangle"
+    assert canvas._entities[0].meta["width"] == pytest.approx(28.4)
+    panel._w.clearFocus()
+    panel.close()

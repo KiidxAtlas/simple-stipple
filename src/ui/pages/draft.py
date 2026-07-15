@@ -9,12 +9,14 @@ Design goals:
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
@@ -25,11 +27,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.document import DraftTabState
+from src.backend.dxf.fvi import read_fvi, summarize_fvi_import, write_fvi
 from src.backend.dxf.io import (
     load_dxf_polylines_by_layer_with_report,
     write_polylines_dxf,
 )
-from src.backend.dxf.svg_dxf import write_polylines_svg
+from src.backend.dxf.svg_dxf import svg_to_dxf, write_polylines_svg
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
@@ -39,7 +42,8 @@ from src.ui.canvas.canvas_runtime import (
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components import RecentFilesButton, content_splitter, surface_frame
 from src.ui.pages.base import BasePage
-from src.ui.util import KIND_DXF, pick_open_file, pick_save_file, record_recent
+from src.ui.util import KIND_VECTOR, pick_open_file, pick_save_file, record_recent
+from src.ui.widgets.fvi_dialog import FviExportDialog
 from src.ui.widgets.import_dialog import DxfImportPreviewDialog
 from src.ui.widgets.properties_panel import CanvasPropertiesPanel
 from src.ui.widgets.status_strip import CanvasStatusStrip
@@ -85,6 +89,10 @@ class DraftPage(BasePage):
         self._canvas_status = CanvasStatusStrip()
         self._canvas_status.set_zoom_callback(self._on_zoom_preset)
         root.addWidget(self._canvas_status)
+        self._command_status_timer = QTimer(self)
+        self._command_status_timer.setInterval(120)
+        self._command_status_timer.timeout.connect(self._refresh_command_guidance)
+        self._command_status_timer.start()
 
         self.setAcceptDrops(True)
 
@@ -98,51 +106,36 @@ class DraftPage(BasePage):
 
     def _build_toolbar(self) -> QWidget:
         open_btn = QToolButton()
-        open_btn.setText("Open DXF")
-        open_btn.setMinimumHeight(28)
+        open_btn.setText("Import Vector")
+        open_btn.setMinimumHeight(30)
         open_btn.setToolTip(
-            "Open a DXF file (replaces the drawing).\n"
-            "Use the arrow for 'Import into drawing' to add instead."
+            "Import a DXF, FVI, or SVG file and replace the drawing.\n"
+            "Use the arrow to add it to the current drawing instead."
         )
         open_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        open_btn.clicked.connect(self._browse_dxf)
+        open_btn.clicked.connect(self._browse_vector)
         open_menu = QMenu(open_btn)
-        open_menu.addAction("Import into drawing (add)…", self._browse_dxf_add)
+        open_menu.addAction("Import vector into drawing (add)…", self._browse_vector_add)
         open_btn.setMenu(open_menu)
 
         self._recent_btn = RecentFilesButton(
             self._settings,
-            KIND_DXF,
-            empty_message="No recent DXF files.",
+            KIND_VECTOR,
+            empty_message="No recent vector files.",
         )
-        self._recent_btn.setMinimumHeight(28)
-        self._recent_btn.setToolTip("Pick from recently opened DXF files")
-        self._recent_btn.fileSelected.connect(self._load_dxf)
+        self._recent_btn.setMinimumHeight(30)
+        self._recent_btn.setToolTip("Pick from recently imported DXF, FVI, or SVG files")
+        self._recent_btn.fileSelected.connect(self._load_vector)
 
         explode_btn = QPushButton("Explode")
-        explode_btn.setMinimumHeight(28)
+        explode_btn.setMinimumHeight(30)
         explode_btn.setToolTip("Explode selected shapes into segments")
         explode_btn.clicked.connect(self._explode_selected)
 
         merge_btn = QPushButton("Merge")
-        merge_btn.setMinimumHeight(28)
+        merge_btn.setMinimumHeight(30)
         merge_btn.setToolTip("Merge selected segments into connected objects")
         merge_btn.clicked.connect(self._merge_selected)
-
-        export_btn = QToolButton()
-        export_btn.setText("Export DXF")
-        export_btn.setMinimumHeight(28)
-        export_btn.setMinimumWidth(90)
-        export_btn.setProperty("role", "primary")
-        export_btn.setToolTip(
-            "Export as DXF (grouped shapes share a layer, so a laser runs\n"
-            "each group as one job). Use the arrow for SVG export."
-        )
-        export_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        export_btn.clicked.connect(self._export)
-        export_menu = QMenu(export_btn)
-        export_menu.addAction("Export SVG (single layer)…", self._export_svg)
-        export_btn.setMenu(export_menu)
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
@@ -153,9 +146,9 @@ class DraftPage(BasePage):
                 _toolbar_sep(),
                 explode_btn,
                 merge_btn,
+                _toolbar_sep(),
                 open_btn,
                 self._recent_btn,
-                export_btn,
             ],
         )
         return self._toolbar_module
@@ -242,10 +235,38 @@ class DraftPage(BasePage):
         self._layers_tree.shapesDeleteRequested.connect(self._on_shapes_delete_requested)
         self._layers_tree.layerColorChangeRequested.connect(self._on_layer_color_change_requested)
         side_layout.addWidget(self._layer_module, stretch=1)
+        side_layout.addWidget(self._build_export_controls())
 
         splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
         layout.addWidget(splitter, stretch=1)
         return w
+
+    def _build_export_controls(self) -> QWidget:
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self._export_btn = QPushButton("Export DXF")
+        self._export_btn.setMinimumHeight(38)
+        self._export_btn.setProperty("role", "primary")
+        self._export_btn.setToolTip(
+            "Export as DXF; grouped shapes share a layer so a laser runs each group as one job"
+        )
+        self._export_btn.clicked.connect(self._export)
+        row.addWidget(self._export_btn, stretch=1)
+        overflow = QToolButton()
+        overflow.setText("⋯")
+        overflow.setProperty("role", "overflow")
+        overflow.setFixedSize(32, 38)
+        overflow.setToolTip("More export formats")
+        overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(overflow)
+        menu.addAction("Export StarFX FVI…", self._export_fvi)
+        menu.addAction("Export SVG (single layer)…", self._export_svg)
+        overflow.setMenu(menu)
+        row.addWidget(overflow)
+        self._export_overflow_btn = overflow
+        return container
 
     # ── Mode / callbacks ──────────────────────────────────────────────────
 
@@ -529,7 +550,9 @@ class DraftPage(BasePage):
         n = self._canvas.poly_count
         mode = str(summary["mode"])
 
-        if n:
+        if hasattr(self._canvas, "get_command_guidance"):
+            readiness, tone = self._canvas.get_command_guidance()
+        elif n:
             quick_mode = (
                 f"Quick shape: {self._canvas.quick_shape_mode.title()}"
                 if self._canvas.quick_shape_enabled
@@ -566,6 +589,11 @@ class DraftPage(BasePage):
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
 
+    def _refresh_command_guidance(self) -> None:
+        if hasattr(self, "_canvas_status") and hasattr(self._canvas, "get_command_guidance"):
+            text, tone = self._canvas.get_command_guidance()
+            self._canvas_status.set_readiness(text, tone)
+
     def _build_layer_tree_rows(
         self,
         layer_view_state: dict[str, dict[str, set[int]]],
@@ -575,7 +603,7 @@ class DraftPage(BasePage):
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith(".dxf"):
+                if url.toLocalFile().lower().endswith((".dxf", ".fvi", ".svg")):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -583,35 +611,49 @@ class DraftPage(BasePage):
     def dropEvent(self, event) -> None:
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".dxf"):
-                self._load_dxf(path)
+            if path.lower().endswith((".dxf", ".fvi", ".svg")):
+                self._load_vector(path)
                 event.acceptProposedAction()
                 return
         event.ignore()
 
-    def _browse_dxf(self) -> None:
-        path = pick_open_file(
-            self,
-            self._settings,
-            "draft_input_dxf",
-            "Open DXF for Draft Editing",
-            "DXF files (*.dxf *.Dxf *.DXF);;All files (*)",
-            fallback_dir=self._settings.get("draft_input_dxf_dir", ""),
-        )
-        if path:
-            self._load_dxf(path)
+    def _browse_vector(self) -> None:
+        self._pick_vector(append=False)
 
-    def _browse_dxf_add(self) -> None:
+    def _browse_vector_add(self) -> None:
+        self._pick_vector(append=True)
+
+    def _pick_vector(self, *, append: bool) -> None:
         path = pick_open_file(
             self,
             self._settings,
-            "draft_input_dxf",
-            "Import DXF into Drawing",
-            "DXF files (*.dxf *.Dxf *.DXF);;All files (*)",
+            "draft_input_vector",
+            "Import Vector",
+            "Vector files (*.dxf *.DXF *.fvi *.FVI *.svg *.SVG);;"
+            "DXF files (*.dxf *.DXF);;StarFX FVI programs (*.fvi *.FVI);;"
+            "SVG files (*.svg *.SVG);;All files (*)",
             fallback_dir=self._settings.get("draft_input_dxf_dir", ""),
         )
         if path:
-            self._import_dxf_add(path)
+            self._load_vector(path, append=append)
+
+    def _load_vector(self, path: str, *, append: bool = False) -> None:
+        suffix = Path(path).suffix.lower()
+        if suffix == ".dxf":
+            if append:
+                self._import_dxf_add(path)
+            else:
+                self._load_dxf(path)
+        elif suffix == ".fvi":
+            self._load_fvi(path, append=append)
+        elif suffix == ".svg":
+            self._load_svg(path, append=append)
+        else:
+            QMessageBox.warning(
+                self,
+                "Unsupported Vector File",
+                "Choose a DXF, FVI, or SVG vector file.",
+            )
 
     def _import_dxf_add(self, path: str) -> None:
         """Add a DXF's shapes to the existing drawing (instead of replacing)."""
@@ -657,6 +699,47 @@ class DraftPage(BasePage):
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Failed", str(exc))
 
+    def _export_fvi(self) -> None:
+        records = self._canvas.get_export_dxf_state()
+        if not records:
+            QMessageBox.information(
+                self,
+                "Nothing to Export",
+                "The canvas is empty — draw or import geometry first.",
+            )
+            return
+        dialog = FviExportDialog(records, self)
+        if not dialog.exec():
+            return
+        out_path = pick_save_file(
+            self,
+            self._settings,
+            "draft_output_fvi",
+            "Export StarFX FVI",
+            "draft.fvi",
+            "StarFX FVI programs (*.fvi *.FVI);;All files (*)",
+            fallback_dir=self._settings.get("draft_output_dir", ""),
+        )
+        if not out_path:
+            return
+        try:
+            report = write_fvi(records, out_path, dialog.options())
+            self._last_out_path = out_path
+            message = (
+                f"Exported FVI: {Path(out_path).name} "
+                f"({report.path_count} paths, {report.draw_arc_count} native arcs)"
+            )
+            self._canvas._show_flash(message, 1600)
+            if report.warnings:
+                QMessageBox.information(
+                    self,
+                    "FVI Export Notes",
+                    "\n".join(report.warnings)
+                    + "\n\nUse StarFX's red trace/profile preview before enabling the laser.",
+                )
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "FVI Export Failed", str(exc))
+
     def _load_dxf(self, path: str) -> None:
         try:
             by_layer, report = load_dxf_polylines_by_layer_with_report(path)
@@ -669,6 +752,72 @@ class DraftPage(BasePage):
                 self._apply_dxf_import(path, selected, append=append)
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Open DXF Failed", str(exc))
+
+    def _load_fvi(self, path: str, *, append: bool = False) -> None:
+        try:
+            document = read_fvi(path)
+            polys = [list(poly) for poly in document.paths]
+            if not polys:
+                details = summarize_fvi_import(document.report)
+                message = "No supported drawable geometry was found in that FVI program."
+                if details:
+                    message += f"\n\n{details}"
+                QMessageBox.information(self, "Import FVI", message)
+                return
+            if append and self._canvas._entities:
+                self._rt().add_polys(polys, fit=True)
+                verb = "Added"
+            else:
+                self._rt().load_polys(polys, fit=True)
+                verb = "Loaded"
+            self._last_in_path = path
+            record_recent(self._settings, KIND_VECTOR, path)
+            self._canvas._show_flash(f"{verb} FVI: {Path(path).name} ({len(polys)} paths)", 1400)
+            details = summarize_fvi_import(document.report)
+            if details:
+                QMessageBox.warning(
+                    self,
+                    "FVI Import Notes",
+                    f"Geometry was imported, but some program content was not used:\n\n{details}",
+                )
+            self._refresh_status()
+            self._emit_state_changed()
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Import FVI Failed", str(exc))
+
+    def _load_svg(self, path: str, *, append: bool = False) -> None:
+        """Import supported SVG primitives through the audited DXF geometry boundary."""
+        try:
+            with tempfile.TemporaryDirectory(prefix="simple-stipple-svg-") as directory:
+                converted = Path(directory) / "import.dxf"
+                stats = svg_to_dxf(path, converted)
+                by_layer, _report = load_dxf_polylines_by_layer_with_report(str(converted))
+            if not by_layer:
+                QMessageBox.information(
+                    self,
+                    "Import SVG",
+                    "No supported vector geometry was found in that SVG.",
+                )
+                return
+            self._apply_dxf_import(path, by_layer, append=append, source_kind="SVG")
+            unsupported = int(stats.get("unsupported_paths", 0))
+            unsupported_features = tuple(stats.get("unsupported_features", ()))
+            if unsupported or unsupported_features:
+                notes: list[str] = []
+                if unsupported:
+                    notes.append(
+                        f"Skipped {unsupported} path(s) containing Bézier, arc, or other "
+                        "unsupported path commands."
+                    )
+                if unsupported_features:
+                    notes.append("Unsupported SVG features: " + ", ".join(unsupported_features))
+                QMessageBox.warning(
+                    self,
+                    "SVG Import Notes",
+                    "Imported supported SVG geometry with limitations:\n\n" + "\n".join(notes),
+                )
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Import SVG Failed", str(exc))
 
     def _review_dxf_import(self, path, by_layer, report, *, default_append: bool):
         dialog = DxfImportPreviewDialog(
@@ -688,7 +837,14 @@ class DraftPage(BasePage):
             return None
         return selected, dialog.append_mode()
 
-    def _apply_dxf_import(self, path: str, by_layer, *, append: bool) -> None:
+    def _apply_dxf_import(
+        self,
+        path: str,
+        by_layer,
+        *,
+        append: bool,
+        source_kind: str = "DXF",
+    ) -> None:
         flat = [poly for polys in by_layer.values() for poly in polys]
         if append and self._canvas._entities:
             canvas = self._canvas
@@ -709,9 +865,9 @@ class DraftPage(BasePage):
             canvas._show_flash(f"Added {len(new_indices)} shapes from {Path(path).name}", 1200)
         else:
             self._rt().load_polys_by_layer(by_layer, fit=bool(flat))
-            self._canvas._show_flash(f"Loaded DXF: {Path(path).name}", 1200)
+            self._canvas._show_flash(f"Loaded {source_kind}: {Path(path).name}", 1200)
         self._last_in_path = path
-        record_recent(self._settings, KIND_DXF, path)
+        record_recent(self._settings, KIND_VECTOR, path)
         self._refresh_status()
         self._emit_state_changed()
 

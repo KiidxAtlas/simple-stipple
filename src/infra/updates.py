@@ -52,6 +52,7 @@ class UpdateInfo(NamedTuple):
     url: str
     release_notes: str
     is_newer: bool
+    sha256: str | None = None
 
 
 def get_current_version() -> str:
@@ -92,17 +93,24 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
         is_newer = _compare_versions(latest_version, _CURRENT_VERSION) > 0
 
         # Determine download URL based on platform
-        download_url = _get_download_url_for_platform(data.get("assets", []))
+        assets = data.get("assets", [])
+        download_url = _get_download_url_for_platform(assets)
 
         if not download_url:
             _LOG.warning("No release asset found for platform %s", platform.system())
             return None
 
+        selected = next(
+            (asset for asset in assets if asset.get("browser_download_url") == download_url), {}
+        )
+        digest = str(selected.get("digest") or "")
+        sha256 = digest.split(":", 1)[1] if digest.lower().startswith("sha256:") else None
         return UpdateInfo(
             version=latest_version,
             url=download_url,
             release_notes=release_notes,
             is_newer=is_newer,
+            sha256=sha256,
         )
     except (urllib.error.URLError, urllib.error.HTTPError) as exc:
         _LOG.warning("Network error checking for updates: %s", exc)

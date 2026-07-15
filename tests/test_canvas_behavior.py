@@ -814,6 +814,62 @@ def test_measure_toggle(qapp):
     assert not v._measure_mode
 
 
+def test_measure_editor_stays_inside_canvas_at_edge(qapp):
+    v = make_view(qapp, size=(320, 220))
+    v._measure_anchor = v._c2w(300, 205)
+    v._measure_end = v._c2w(318, 218)
+
+    v._show_measure_edit()
+
+    edit = v._measure_edit
+    assert edit is not None
+    assert edit.x() >= 8 and edit.y() >= 8
+    assert edit.x() + edit.width() <= v.width() - 8
+    assert edit.y() + edit.height() <= v.height() - 8
+
+
+def test_selection_dimension_editor_stays_inside_canvas_at_edge(qapp):
+    from PySide6.QtCore import QRectF
+
+    v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0)]], size=(320, 220))
+    v.set_selection([0])
+
+    v._show_sel_dim_editor("l", QRectF(305, 210, 40, 18))
+
+    edit = v._sel_dim_edit
+    assert edit is not None
+    assert edit.x() + edit.width() <= v.width() - 8
+    assert edit.y() + edit.height() <= v.height() - 8
+
+
+def test_size_hud_stays_grouped_and_inside_canvas(qapp):
+    c = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]])
+    c.resize(320, 220)
+    c.set_selection([0])
+    c._ox = 310
+    c._oy = 210
+
+    c._show_size_hud()
+
+    assert c._size_w_edit is not None and c._size_h_edit is not None
+    assert c._size_w_edit.y() == c._size_h_edit.y()
+    assert c._size_h_edit.x() - c._size_w_edit.x() == 106
+    assert c._size_w_edit.x() >= 8 and c._size_w_edit.y() >= 8
+    assert c._size_h_edit.x() + c._size_h_edit.width() <= c.width() - 8
+
+
+def test_radial_menu_shifts_inward_near_canvas_edge(qapp):
+    c = make_canvas(qapp, size=(500, 400))
+    c._cursor_wx, c._cursor_wy = c._c2w(3, 397)
+
+    c._toggle_radial_menu()
+
+    outer, _inner = c._radial_geometry(len(c._radial_tools))
+    center = c._radial_center_c
+    assert center.x() - outer >= 0
+    assert center.y() + outer <= c.height()
+
+
 def test_escape_exits_idle_measure_mode(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v.toggle_measure()
@@ -1271,6 +1327,8 @@ def test_handle_scale_corner_uniform(qapp):
     _paint_once(v)
     handles = dict(v._gizmo_handle_rects)
     assert set(handles) == {"nw", "n", "ne", "e", "se", "s", "sw", "w"}
+    assert all(rect.width() >= 28 and rect.height() >= 28 for rect in handles.values())
+    assert v._gizmo_rotate_rect.width() >= 32
     rect = handles["e"]  # right edge: axis-only scale
     cx, cy = rect.center().x(), rect.center().y()
     tx, ty = v._w2c(20.0, 5.0)  # drag right edge from x=10 to x=20
@@ -1281,6 +1339,25 @@ def test_handle_scale_corner_uniform(qapp):
     assert x1 - x0 == pytest.approx(20.0, abs=0.3)
     assert y1 - y0 == pytest.approx(10.0, abs=0.3)  # height untouched
     assert v.undo()
+
+
+def test_hud_prompt_anchors_near_world_cursor(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v._cursor_wx, v._cursor_wy = 5.0, 5.0
+    anchor_x, anchor_y = v._w2c(5.0, 5.0)
+    v._show_hud_prompt("Value", 1.0, lambda _value: None, is_length=False)
+    edit = v._hud_prompt_edit
+    assert edit is not None
+    assert edit.x() == pytest.approx(anchor_x + 20, abs=1.0)
+    assert edit.y() == pytest.approx(anchor_y + 18, abs=1.0)
+
+
+def test_transient_feedback_anchors_to_world_cursor(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v._cursor_wx, v._cursor_wy = 5.0, 5.0
+    expected = v._w2c(5.0, 5.0)
+    v._show_flash("Updated", 1000)
+    assert v._flash_anchor_c == pytest.approx(expected)
 
 
 def test_handle_scale_corner_keeps_anchor(qapp):
@@ -1427,6 +1504,144 @@ def test_handle_corner_shift_keeps_aspect(qapp):
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     assert x1 - x0 == pytest.approx(30.0, abs=0.5)  # dominant axis
     assert y1 - y0 == pytest.approx(30.0, abs=0.5)  # aspect locked
+
+
+def test_multi_shape_gizmo_rotate_updates_parametric_geometry(qapp):
+    v = make_view(qapp, [])
+    v.set_entity_records(
+        [
+            {
+                "points": square(0, 0),
+                "kind": "rectangle",
+                "meta": {"center": (5.0, 5.0), "width": 10.0, "height": 10.0, "rotation": 0.0},
+            },
+            {
+                "points": square(20, 0),
+                "kind": "rectangle",
+                "meta": {"center": (25.0, 5.0), "width": 10.0, "height": 10.0, "rotation": 0.0},
+            },
+        ]
+    )
+    v.set_selection([0, 1])
+    assert v._start_gizmo_drag("rotate", 30.0, 5.0)
+    v._apply_gizmo_drag(15.0, 20.0, Qt.KeyboardModifier.NoModifier)
+    assert [entity.meta["rotation"] for entity in v._entities] == pytest.approx([90.0, 90.0])
+    assert [entity.meta["center"] for entity in v._entities] == pytest.approx(
+        [(15.0, -5.0), (15.0, 15.0)]
+    )
+    for index, entity in enumerate(v._entities):
+        assert bbox(v._flattened_points(index)) == pytest.approx(bbox(entity.points))
+
+
+def test_multi_shape_nonuniform_gizmo_resize_keeps_transformed_geometry(qapp):
+    v = make_view(qapp, [])
+    v.set_entity_records(
+        [
+            {
+                "points": square(0, 0),
+                "kind": "rectangle",
+                "meta": {"center": (5.0, 5.0), "width": 10.0, "height": 10.0, "rotation": 0.0},
+            },
+            {
+                "points": square(20, 0),
+                "kind": "rectangle",
+                "meta": {"center": (25.0, 5.0), "width": 10.0, "height": 10.0, "rotation": 0.0},
+            },
+        ]
+    )
+    v.set_selection([0, 1])
+    assert v._start_gizmo_drag("scale-e", 30.0, 5.0)
+    v._apply_handle_scale(60.0, 5.0, Qt.KeyboardModifier.NoModifier)
+    assert [entity.kind for entity in v._entities] == ["polyline", "polyline"]
+    assert all(entity.meta is None for entity in v._entities)
+    assert bbox(v._entities[0].points) == pytest.approx((0.0, 0.0, 20.0, 10.0))
+    assert bbox(v._entities[1].points) == pytest.approx((40.0, 0.0, 60.0, 10.0))
+
+
+def test_rotated_rectangle_uses_local_gizmo_and_preserves_parameters(qapp):
+    from src.backend.geometry import build_rect_poly
+
+    v = make_view(qapp, [])
+    base_points = build_rect_poly(5, 5, 10, 6)
+    angle = math.radians(45)
+    rotated_points = [
+        (5 + (x - 5) * math.cos(angle) - (y - 5) * math.sin(angle),
+         5 + (x - 5) * math.sin(angle) + (y - 5) * math.cos(angle))
+        for x, y in base_points
+    ]
+    v.set_entity_records([{
+        "points": rotated_points,
+        "kind": "rectangle",
+        "meta": {"center": (5, 5), "width": 10, "height": 6, "rotation": 45},
+    }])
+    v.set_selection([0])
+    _paint_once(v)
+    east = dict(v._gizmo_handle_rects)["e"].center()
+    target_world = (5 + 15 / math.sqrt(2), 5 + 15 / math.sqrt(2))
+    target = v._w2c(*target_world)
+    press(v, east.x(), east.y())
+    move(v, *target)
+    release(v, *target)
+    entity = v._entities[0]
+    assert entity.kind == "rectangle"
+    assert entity.meta["rotation"] == pytest.approx(45)
+    assert entity.meta["width"] == pytest.approx(20, abs=0.2)
+
+
+def test_command_guidance_tracks_active_command_step(qapp):
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    assert "pick first point" in v.get_command_guidance()[0].lower()
+    v._draw_pts = [(0, 0)]
+    guidance, tone = v.get_command_guidance()
+    assert "pick next point" in guidance.lower()
+    assert "Enter finishes" in guidance
+    assert tone == "accent"
+
+
+def test_draw_inference_acquires_parallel_relationship(qapp):
+    v = make_view(qapp, [[(0, 0), (10, 10)]])
+    v.set_mode("draw")
+    v._draw_pts = [(20, 20)]
+    target = v._w2c(30, 30.3)
+    event = _mouse_event(QEvent.Type.MouseMove, *target, button=Qt.MouseButton.NoButton)
+    v.mouseMoveEvent(event)
+    assert v._draw_snap_type == "parallel"
+    assert v._draw_snap is not None
+    assert v._draw_snap[0] - 20 == pytest.approx(v._draw_snap[1] - 20)
+
+
+@pytest.mark.parametrize(
+    ("kind", "meta", "click_at"),
+    [
+        (
+            "rectangle",
+            {"center": (5.0, 5.0), "width": 10.0, "height": 10.0, "rotation": 0.0},
+            (5.0, 0.0),
+        ),
+        (
+            "circle",
+            {"center": (5.0, 5.0), "radius": 5.0, "segments": 48},
+            (10.0, 5.0),
+        ),
+    ],
+)
+def test_edit_double_click_adds_visible_vertex_to_procedural_shape(qapp, kind, meta, click_at):
+    v = make_view(qapp, [])
+    v.set_entity_records([{"points": square(0, 0), "kind": kind, "meta": meta}])
+    before = len(v._flattened_points(0))
+    v.set_mode("edit")
+    cx, cy = v._w2c(*click_at)
+    event = _mouse_event(QEvent.Type.MouseButtonDblClick, cx, cy)
+    v.mouseDoubleClickEvent(event)
+    entity = v._entities[0]
+    assert entity.kind == "polyline"
+    assert entity.meta is None
+    assert len(entity.points) == before + 1
+    assert len(v._edit_selected_verts) == 1
+    assert next(iter(v._edit_selected_verts))[0] == 0
+    assert any(math.dist(point, click_at) < 0.2 for point in entity.points)
+    assert v.undo()
 
 
 def test_move_drag_snaps_by_shape_vertices(qapp):

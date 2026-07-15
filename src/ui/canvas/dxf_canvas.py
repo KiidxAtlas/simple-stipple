@@ -845,6 +845,14 @@ class DxfCanvas(PolylineView):
         cx_w = (bounds[0] + bounds[2]) / 2.0
         cy_w = (bounds[1] + bounds[3]) / 2.0
         cx, cy = self._w2c(cx_w, cy_w)
+        hud_x, hud_y = self._hud_position_near(
+            cx,
+            cy,
+            196,
+            24,
+            offset_x=-98,
+            offset_y=-30,
+        )
         style = (
             "background: #1a1f2e; color: #ffffff; border: 1px solid #4a9eff;"
             "border-radius: 3px; font-size: 11px; font-family: 'Menlo';"
@@ -858,7 +866,7 @@ class DxfCanvas(PolylineView):
         self._size_w_edit.setText(f"{cur_w:.3f}")
         self._size_w_edit.setPlaceholderText("W")
         self._size_w_edit.setStyleSheet(style)
-        self._size_w_edit.move(int(cx - 98), int(cy - 30))
+        self._size_w_edit.move(hud_x, hud_y)
         self._size_w_edit.returnPressed.connect(self._apply_size_hud)
         self._size_w_edit.editingFinished.connect(self._apply_size_hud)
         self._size_w_edit.show()
@@ -870,7 +878,7 @@ class DxfCanvas(PolylineView):
         self._size_h_edit.setText(f"{cur_h:.3f}")
         self._size_h_edit.setPlaceholderText("H")
         self._size_h_edit.setStyleSheet(style)
-        self._size_h_edit.move(int(cx + 8), int(cy - 30))
+        self._size_h_edit.move(hud_x + 106, hud_y)
         self._size_h_edit.returnPressed.connect(self._apply_size_hud)
         self._size_h_edit.editingFinished.connect(self._apply_size_hud)
         self._size_h_edit.show()
@@ -924,9 +932,9 @@ class DxfCanvas(PolylineView):
             return
         if self._cursor_wx is not None and self._cursor_wy is not None:
             cx, cy = self._w2c(self._cursor_wx, self._cursor_wy)
-            self._radial_center_c = QPoint(int(cx), int(cy))
         else:
-            self._radial_center_c = QPoint(self.width() // 2, self.height() // 2)
+            cx, cy = self.width() / 2.0, self.height() / 2.0
+        self._radial_center_c = self._clamped_radial_center(cx, cy)
         self._radial_active = True
         self._radial_hover_index = None
         self._redraw()
@@ -950,6 +958,18 @@ class DxfCanvas(PolylineView):
         the two can never disagree about where a wedge actually is."""
         grow = max(0, n - 6)
         return cls._RADIAL_OUTER + grow * 9.0, cls._RADIAL_INNER + grow * 2.0
+
+    def _clamped_radial_center(self, cx: float, cy: float) -> QPoint:
+        """Keep the cursor-launched wheel reachable at every canvas edge."""
+        outer, _inner = self._radial_geometry(len(self._radial_tools))
+        margin = int(math.ceil(outer + 4.0))
+
+        def _axis(value: float, extent: int) -> int:
+            if extent <= margin * 2:
+                return extent // 2
+            return max(margin, min(int(value), extent - margin))
+
+        return QPoint(_axis(cx, self.width()), _axis(cy, self.height()))
 
     def set_radial_menu_tools(self, tools: list[str] | None) -> None:
         """Set which commands appear as radial-menu wedges, and in what order.

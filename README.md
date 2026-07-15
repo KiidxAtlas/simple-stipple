@@ -2,6 +2,19 @@
 
 Desktop app for drafting, tracing, and generating pattern fills for laser/vector workflows.
 
+## StarFX FVI workflow
+
+The Draft page has one **Import Vector** entry point for opening, adding, or
+dragging DXF, FVI, and SVG files onto the canvas. Use the **⋯** beside the
+right-panel **Export DXF** button to open the configurable FVI exporter. The export dialog controls
+program origin, margin, coordinate precision, Y orientation, travel optimization,
+open-path reversal, native arc preservation, and comments.
+
+FVI support is intentionally geometry-only: `MOVEDIST`, `DRAWLINE`, and
+`DRAWARC`. Hardware I/O, loops, file calls, laser parameters, and Z-axis motion
+are reported but never executed or generated. Always verify an exported program
+with StarFX's red trace/profile preview before enabling the laser.
+
 ## Run locally
 
 ```bash
@@ -26,7 +39,7 @@ pip install .[cad]
 From your Mac, create and push a version tag to trigger the GitHub Actions release workflow for both platforms:
 
 ```bash
-./scripts/release.sh v0.1.0
+./scripts/release.sh v0.3.1
 ```
 
 That single tag push builds and publishes:

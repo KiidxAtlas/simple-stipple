@@ -21,10 +21,29 @@ a fresh empty document.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
+
+
+@dataclass(frozen=True)
+class OperationResult:
+    """Outcome of a document-changing operation using stable entity IDs."""
+
+    changed: bool
+    message: str = ""
+    created_ids: tuple[str, ...] = ()
+    removed_ids: tuple[str, ...] = ()
+    selected_ids: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def unchanged(cls, message: str, *warnings: str) -> OperationResult:
+        return cls(False, message=message, warnings=tuple(warnings))
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Pydantic models — schema-validated workspace state
@@ -345,44 +364,49 @@ def validate_workspace_document(document: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError("Workspace file must contain a JSON object.")
     version = int(document.get("schema_version", 0))
-    if version != WORKSPACE_SCHEMA_VERSION:
+    if version < 1 or version > WORKSPACE_SCHEMA_VERSION:
         raise ValueError(
-            f"Unsupported workspace schema version: {version}. Expected {WORKSPACE_SCHEMA_VERSION}."
+            f"Unsupported workspace schema version: {version}. "
+            f"Supported versions are 1–{WORKSPACE_SCHEMA_VERSION}."
         )
+    normalized = deepcopy(document)
+    # Versions 1 and 2 used the same page dictionaries but did not always
+    # nest the active tab under ``app``. Defaults on the current models fill
+    # fields introduced since then without discarding unknown future fields.
+    if version < 3 and "app" not in normalized:
+        normalized["app"] = {"current_tab": normalized.pop("current_tab", 0)}
+    normalized["schema_version"] = WORKSPACE_SCHEMA_VERSION
+    name = normalized.get("workspace_name", "Untitled Workspace")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Workspace name must be a non-empty string.")
+    normalized["workspace_name"] = name
 
-    # Each page validates its concrete state with its own model when it is
-    # applied. Preserve those polymorphic dictionaries here; routing them all
-    # through ``TabStateBase`` can erase subclass-only fields.
-    if isinstance(document.get("tabs"), dict):
-        normalized = deepcopy(document)
-        normalized.setdefault("app", {"current_tab": 0})
-        normalized.setdefault("presets", {})
-        normalized.setdefault("meta", {})
-        return normalized
+    app = normalized.get("app", {"current_tab": 0})
+    if not isinstance(app, dict):
+        raise ValueError("Workspace app state must be an object.")
+    normalized["app"] = {**app, **AppWorkspaceState.from_dict(app).to_dict()}
 
-    # Try to construct a fully validated WorkspaceDocument. If it fails,
-    # fall back to a permissive merge so a single malformed field doesn't
-    # destroy the rest of an otherwise-current-format document.
-    try:
-        doc = WorkspaceDocument.from_dict(document)
-        return doc.to_dict()
-    except Exception:
-        result = empty_workspace_document()
-        result.update({k: deepcopy(v) for k, v in document.items() if k in result})
-        if not isinstance(result.get("app"), dict):
-            result["app"] = {"current_tab": 0}
-        if not isinstance(result.get("tabs"), dict):
-            result["tabs"] = empty_workspace_document()["tabs"]
-        else:
-            default_tabs = empty_workspace_document()["tabs"]
-            for key, value in default_tabs.items():
-                if key not in result["tabs"] or not isinstance(result["tabs"].get(key), dict):
-                    result["tabs"][key] = deepcopy(value)
-        if not isinstance(result.get("presets"), dict):
-            result["presets"] = empty_workspace_document()["presets"]
-        if not isinstance(result.get("meta"), dict):
-            result["meta"] = {}
-        return result
+    tabs = normalized.get("tabs", {})
+    if not isinstance(tabs, dict):
+        raise ValueError("Workspace tabs state must be an object.")
+    validated_tabs: dict[str, Any] = {}
+    for name, state in tabs.items():
+        if not isinstance(name, str) or not isinstance(state, dict):
+            raise ValueError(f"Workspace tab {name!r} must contain an object.")
+        model = TAB_STATE_MAP.get(name)
+        validated_tabs[name] = (
+            {**state, **model.from_dict(state).to_dict()} if model is not None else deepcopy(state)
+        )
+    for name, default in empty_workspace_document()["tabs"].items():
+        validated_tabs.setdefault(name, default)
+    normalized["tabs"] = validated_tabs
+
+    for key in ("presets", "meta"):
+        value = normalized.get(key, {})
+        if not isinstance(value, dict):
+            raise ValueError(f"Workspace {key} state must be an object.")
+        normalized[key] = value
+    return normalized
 
 
 def build_workspace_document(

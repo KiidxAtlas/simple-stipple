@@ -35,7 +35,7 @@ from src.infra.settings import (
 )
 from src.ui.components import section_label, sep, surface_frame
 from src.ui.pages.trace.form import TRACE_DEFAULT_FIELDS, trace_default
-from src.ui.units import DEFAULT_UNIT_SYSTEM
+from src.ui.util import DEFAULT_UNIT_SYSTEM
 from src.ui.widgets.customize_dialogs import (
     ContextMenuCustomizeDialog,
     DrawSidebarCustomizeDialog,

@@ -25,8 +25,8 @@ from src.ui.canvas.mixins.hud_text import (
     load_user_fonts,
     user_fonts_dir,
 )
-from src.ui.units import from_display, to_display
-from src.ui.units import suffix as unit_suffix
+from src.ui.util import from_display, to_display
+from src.ui.util import suffix as unit_suffix
 
 
 class AddTextDialog(QDialog):
@@ -137,7 +137,7 @@ class AddTextDialog(QDialog):
     def _import_font(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Import font",
+            "Import Font",
             "",
             "Font files (*.ttf *.otf *.ttc)",
         )
@@ -145,7 +145,7 @@ class AddTextDialog(QDialog):
             return
         family = install_font_file(path)
         if family is None:
-            QMessageBox.warning(self, "Import font", "Could not load that font file.")
+            QMessageBox.warning(self, "Import Font", "Could not load that font file.")
             return
         self._font_combo.setCurrentFont(QFont(family))
         self._update_preview()

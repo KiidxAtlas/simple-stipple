@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
+from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 from src.ui.util import clear_recent, list_recent
 
 # Platform modifier for human-readable shortcut hints
@@ -252,11 +252,11 @@ def browse_row(
     btn_tooltip: str = "",
     on_browse,
 ) -> QLineEdit:
-    """Add an optional eyebrow label, then a line-edit + Browse-button row
+    """Add an optional standard section label, then a line-edit + Browse-button row
     to ``parent_layout``. Returns the line edit."""
     if heading:
         lbl = QLabel(heading)
-        lbl.setProperty("role", "eyebrow")
+        lbl.setProperty("role", "section-label")
         parent_layout.addWidget(lbl)
     row = QHBoxLayout()
     edit = QLineEdit()
@@ -370,11 +370,11 @@ def set_status_label(
 ) -> None:
     """Set a status label's text and color→role styling.
 
-    ``color`` is compared against the three standard status colors
-    (:data:`~src.ui.style.theme.STATUS_OK`/``STATUS_ERR``/``STATUS_NEUTRAL``)
-    to pick a ``role`` property for the stylesheet. Pass ``hide_when_empty=False``
-    for labels that should stay visible with a blank/neutral role instead of
-    hiding on empty text.
+    ``color`` is compared against the standard status colors
+    (:data:`~src.ui.style.theme.STATUS_OK`/``STATUS_ERR``/``STATUS_WARN``/
+    ``STATUS_NEUTRAL``) to pick a ``role`` property for the stylesheet. Pass
+    ``hide_when_empty=False`` for labels that should stay visible with a
+    blank/neutral role instead of hiding on empty text.
     """
     if not text:
         if hide_when_empty:
@@ -391,6 +391,8 @@ def set_status_label(
         role = "status-ok"
     elif color == STATUS_ERR:
         role = "status-err"
+    elif color == STATUS_WARN:
+        role = "status-warn"
     else:
         role = neutral_role
     label.setProperty("role", role)

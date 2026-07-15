@@ -30,18 +30,27 @@ class GeometryPreflight:
     tiny_paths: int
     minimum_segment: float | None
     tolerance: float
+    near_closed: int = 0
     issues: tuple[GeometryIssue, ...] = ()
 
     @property
     def ready(self) -> bool:
-        return self.invalid == 0 and self.zero_segments == 0
+        return (
+            self.paths > 0
+            and self.invalid == 0
+            and self.zero_segments == 0
+            and self.duplicates == 0
+            and self.tiny_paths == 0
+            and self.near_closed == 0
+        )
 
     def summary(self) -> str:
-        state = "Ready" if self.ready else "Needs attention"
+        state = "Geometry valid" if self.ready else "Needs attention"
         return (
             f"{state} · {self.paths} paths · {self.closed} closed · {self.open} open · "
             f"{self.invalid} invalid · {self.duplicates} duplicate · "
-            f"{self.zero_segments} zero-length segments · {self.tiny_paths} tiny"
+            f"{self.zero_segments} zero-length segments · {self.tiny_paths} tiny · "
+            f"{self.near_closed} nearly closed"
         )
 
 
@@ -56,17 +65,30 @@ def scale_tolerance(polys: list[list[tuple[float, float]]]) -> float:
 
 def analyze_geometry(polys: list[list[tuple[float, float]]]) -> GeometryPreflight:
     tolerance = scale_tolerance(polys)
-    closed = invalid = duplicates = zero = tiny = 0
+    closed = invalid = duplicates = zero = tiny = near_closed = 0
     minimum: float | None = None
     signatures: set[tuple[tuple[float, float], ...]] = set()
     issues: list[GeometryIssue] = []
     for path_index, poly in enumerate(polys):
         if not poly:
+            invalid += 1
             issues.append(GeometryIssue("empty", path_index, (0.0, 0.0), "Empty path", "error"))
             continue
         signature = tuple((round(x, 6), round(y, 6)) for x, y in poly)
-        reverse = tuple(reversed(signature))
-        canonical = min(signature, reverse)
+        signature_points = signature[:-1] if len(signature) > 2 and signature[0] == signature[-1] else signature
+        if len(signature_points) >= 3 and math.dist(poly[0], poly[-1]) <= tolerance:
+            rotations = [
+                signature_points[index:] + signature_points[:index]
+                for index in range(len(signature_points))
+            ]
+            reversed_points = tuple(reversed(signature_points))
+            rotations.extend(
+                reversed_points[index:] + reversed_points[:index]
+                for index in range(len(reversed_points))
+            )
+            canonical = min(rotations)
+        else:
+            canonical = min(signature, tuple(reversed(signature)))
         if canonical in signatures:
             duplicates += 1
             issues.append(GeometryIssue("duplicate", path_index, poly[0], "Duplicate path"))
@@ -87,11 +109,25 @@ def analyze_geometry(polys: list[list[tuple[float, float]]]) -> GeometryPrefligh
         for length in lengths:
             if length > 0:
                 minimum = length if minimum is None else min(minimum, length)
-        is_closed = len(poly) >= 3 and math.dist(poly[0], poly[-1]) <= tolerance
+        endpoint_gap = math.dist(poly[0], poly[-1]) if len(poly) >= 2 else math.inf
+        exactly_closed = endpoint_gap <= 1e-9
+        is_closed = len(poly) >= 3 and endpoint_gap <= tolerance
         if is_closed:
             closed += 1
+            if not exactly_closed:
+                near_closed += 1
+                issues.append(
+                    GeometryIssue(
+                        "near_closed",
+                        path_index,
+                        poly[-1],
+                        f"Endpoints are {endpoint_gap:.6g} mm apart and only tolerance-closed",
+                    )
+                )
             try:
-                shape = Polygon(poly)
+                polygon_points = list(poly)
+                polygon_points[-1] = polygon_points[0]
+                shape = Polygon(polygon_points)
                 if not shape.is_valid or shape.is_empty:
                     invalid += 1
                     issues.append(
@@ -138,5 +174,6 @@ def analyze_geometry(polys: list[list[tuple[float, float]]]) -> GeometryPrefligh
         tiny_paths=tiny,
         minimum_segment=minimum,
         tolerance=tolerance,
+        near_closed=near_closed,
         issues=tuple(issues),
     )

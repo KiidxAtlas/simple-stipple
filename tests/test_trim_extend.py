@@ -21,6 +21,19 @@ def cross():
     return [[(-10.0, 0.0), (10.0, 0.0)], [(0.0, -10.0), (0.0, 10.0)]]
 
 
+def test_trim_hover_previews_exact_removed_piece(qapp):
+    v = make_view(qapp, [
+        [(-10, 0), (10, 0)],
+        [(-5, -5), (-5, 5)],
+        [(5, -5), (5, 5)],
+    ])
+    cx, cy = v._w2c(0, 0)
+    v.preview_trim_at(cx, cy)
+    assert len(v._operation_preview_polys) == 1
+    assert v._operation_preview_polys[0][0] == pytest.approx((-5, 0))
+    assert v._operation_preview_polys[0][-1] == pytest.approx((5, 0))
+
+
 def test_trim_removes_clicked_piece(qapp):
     v = make_view(qapp, cross())
     v.set_mode("trim")

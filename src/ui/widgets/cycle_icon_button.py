@@ -84,7 +84,9 @@ class CycleIconButton(QPushButton):
         # asks for — a hard pixel size is the only constraint every style
         # actually honors, which is what kept the old sidebar's buttons
         # from overflowing its fixed width.
-        self.setFixedSize(36, 32)
+        # The icon stays compact while the button supplies a substantially
+        # larger acquisition target (Fitts's law) for touchpads and tired hands.
+        self.setFixedSize(44, 40)
 
         self.setObjectName("cycle-icon-button")
         self.setStyleSheet(
@@ -325,7 +327,17 @@ class CycleIconButton(QPushButton):
         # the panel.
         panel_rect = self._panel_global_rect()
         button_top_global = self.mapToGlobal(self.rect().topLeft())
-        flyout.move(panel_rect.right() + 6, button_top_global.y())
+        screen = QApplication.screenAt(panel_rect.center()) or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else panel_rect
+        right_x = panel_rect.right() + 6
+        left_x = panel_rect.left() - flyout.width() - 6
+        x = right_x if right_x + flyout.width() <= available.right() else left_x
+        x = max(available.left(), min(x, available.right() - flyout.width() + 1))
+        y = max(
+            available.top(),
+            min(button_top_global.y(), available.bottom() - flyout.height() + 1),
+        )
+        flyout.move(x, y)
 
         flyout.show()
         self._flyout = flyout

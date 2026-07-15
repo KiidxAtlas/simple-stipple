@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.components import clear_line_edit_error, set_line_edit_error
+from src.ui.util import parse_numeric_expression
 
 
 class CanvasPrecisionBar(QFrame):
@@ -67,6 +68,28 @@ class CanvasPrecisionBar(QFrame):
         self._snap_btn.setMenu(self._snap_menu)
         layout.addWidget(self._snap_btn)
 
+        self._construction_btn = QPushButton("Construction")
+        self._construction_btn.setCheckable(True)
+        self._construction_btn.setToolTip("Create new geometry as construction/reference geometry")
+        self._construction_btn.toggled.connect(self._set_construction)
+        layout.addWidget(self._construction_btn)
+
+        self._constraints_btn = QToolButton()
+        self._constraints_btn.setText("Constrain")
+        self._constraints_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        constraints_menu = QMenu(self._constraints_btn)
+        for kind, label in (
+            ("horizontal", "Horizontal"), ("vertical", "Vertical"),
+            ("parallel", "Parallel"), ("perpendicular", "Perpendicular"),
+            ("equal_length", "Equal length"), ("coincident", "Coincident"),
+            ("fixed", "Fix"),
+        ):
+            constraints_menu.addAction(label, lambda _checked=False, k=kind: self._add_constraint(k))
+        constraints_menu.addSeparator()
+        constraints_menu.addAction("Remove selection constraints", self._remove_constraints)
+        self._constraints_btn.setMenu(constraints_menu)
+        layout.addWidget(self._constraints_btn)
+
         self._spacing_label = QLabel("Spacing")
         layout.addWidget(self._spacing_label)
         self._spacing = QLineEdit()
@@ -77,11 +100,15 @@ class CanvasPrecisionBar(QFrame):
 
         self._spacing_dec = QPushButton("\u2212")
         self._spacing_dec.setFixedSize(24, 24)
+        self._spacing_dec.setProperty("role", "icon-sm")
+        self._spacing_dec.setToolTip("Halve grid spacing")
         self._spacing_dec.clicked.connect(lambda: self._scale_spacing(0.5))
         layout.addWidget(self._spacing_dec)
 
         self._spacing_inc = QPushButton("+")
         self._spacing_inc.setFixedSize(24, 24)
+        self._spacing_inc.setProperty("role", "icon-sm")
+        self._spacing_inc.setToolTip("Double grid spacing")
         self._spacing_inc.clicked.connect(lambda: self._scale_spacing(2.0))
         layout.addWidget(self._spacing_inc)
 
@@ -106,6 +133,9 @@ class CanvasPrecisionBar(QFrame):
         spacing = float(state.get("grid_spacing", 1.0))
 
         self._grid_btn.setChecked(grid_on)
+        self._construction_btn.blockSignals(True)
+        self._construction_btn.setChecked(bool(state.get("construction_mode", False)))
+        self._construction_btn.blockSignals(False)
         snap_on = bool(state.get("snap_master", True))
         self._snap_btn.setProperty("active", snap_on)
         self._snap_btn.style().unpolish(self._snap_btn)
@@ -129,6 +159,21 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is not None and hasattr(canvas, method):
             getattr(canvas, method)(enabled)
+            self._after_change()
+
+    def _set_construction(self, enabled: bool) -> None:
+        if self._canvas is not None and hasattr(self._canvas, "set_construction_mode"):
+            self._canvas.set_construction_mode(enabled)
+            self._after_change()
+
+    def _add_constraint(self, kind: str) -> None:
+        if self._canvas is not None and hasattr(self._canvas, "add_geometric_constraint"):
+            self._canvas.add_geometric_constraint(kind)
+            self._after_change()
+
+    def _remove_constraints(self) -> None:
+        if self._canvas is not None and hasattr(self._canvas, "remove_constraints_for_selection"):
+            self._canvas.remove_constraints_for_selection()
             self._after_change()
 
     def _after_change(self) -> None:
@@ -162,9 +207,9 @@ class CanvasPrecisionBar(QFrame):
         if not hasattr(canvas, "set_grid_spacing"):
             return
         try:
-            value = float(self._spacing.text().strip())
-        except ValueError:
-            set_line_edit_error(self._spacing, "Grid spacing must be a number.")
+            value = parse_numeric_expression(self._spacing.text(), "mm")
+        except (ValueError, ZeroDivisionError, OverflowError):
+            set_line_edit_error(self._spacing, "Use a positive number or expression, e.g. 25/2.")
             return
         if value <= 0:
             set_line_edit_error(self._spacing, "Grid spacing must be greater than zero.")

@@ -186,6 +186,14 @@ QPushButton[active="true"]:hover {
     border-color: #58a6ff;
 }
 
+/* Small square glyph buttons (e.g. the grid-spacing − / + steppers).
+   The default 5px/12px padding leaves no room for the glyph on a 24px
+   button, so the label gets clipped to nothing without this. */
+QPushButton[role="icon-sm"] {
+    padding: 0px;
+    font-size: 14px;
+}
+
 QPushButton[role="primary"] {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2f81f7, stop:1 #1f6feb);
     border-color: #2f81f7;
@@ -311,7 +319,8 @@ QLabel[role="status-selection"], QLabel[role="status-zoom"] {
     color: #8b949e;
     font-size: 11px;
 }
-QLabel[role="status-mode"], QLabel[role="status-selection"][active="true"] {
+QLabel[role="status-mode"], QLabel[role="status-selection"][active="true"],
+QLabel[role="toolbar-selection"][active="true"] {
     color: #79c0ff;
     font-size: 11px;
     font-weight: 600;
@@ -388,6 +397,13 @@ QToolButton {
 }
 QToolButton:hover {
     color: #79c0ff;
+}
+
+/* "⋯" overflow buttons already say "more" — the default corner
+   menu-indicator arrow on top of the ellipsis is just noise. */
+QToolButton[role="overflow"]::menu-indicator {
+    image: none;
+    width: 0px;
 }
 
 /* Collapsible section toggle — left-aligned header */
@@ -544,6 +560,14 @@ QLabel[role="status-err"] {
     color: #f85149;
     background: #2a0f0f;
     border: 1px solid #6f1f1f;
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 11px;
+}
+QLabel[role="status-warn"] {
+    color: #e3b341;
+    background: #2a1e0a;
+    border: 1px solid #7d4f00;
     border-radius: 4px;
     padding: 4px 6px;
     font-size: 11px;

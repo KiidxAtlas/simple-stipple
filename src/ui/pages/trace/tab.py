@@ -42,6 +42,7 @@ from src.ui.components import (
     content_splitter,
     make_resettable_line_edit,
     parse_float_field_with_feedback,
+    set_status_label,
     sidebar_panel,
     surface_frame,
 )
@@ -59,6 +60,7 @@ from src.ui.pages.trace.session import (
     clear_trace_workspace_state,
     get_trace_workspace_state,
 )
+from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
 from src.ui.util import KIND_IMAGE, pick_open_file, pick_save_file, record_recent
 from src.ui.widgets.status_strip import CanvasStatusStrip
 
@@ -224,25 +226,8 @@ class TracePage(BasePage):
         )
         layout.addWidget(self._trace_settings_section)
 
-        recipe_label = QLabel("TRACE RECIPES")
-        recipe_label.setProperty("role", "section-label")
-        layout.addWidget(recipe_label)
-        recipe_row = QHBoxLayout()
-        self._recipe_combo = QComboBox()
-        self._recipe_combo.setToolTip("Reusable trace settings recipes")
-        self._refresh_trace_recipes()
-        recipe_row.addWidget(self._recipe_combo, stretch=1)
-        self._apply_recipe_btn = QPushButton("Apply")
-        self._apply_recipe_btn.setToolTip("Apply the selected recipe")
-        self._apply_recipe_btn.setEnabled(bool(self._settings.get("trace_recipes")))
-        self._apply_recipe_btn.clicked.connect(self._apply_trace_recipe)
-        recipe_row.addWidget(self._apply_recipe_btn)
-        save_recipe = QPushButton("Save…")
-        save_recipe.setToolTip("Save the current controls as a reusable recipe")
-        save_recipe.clicked.connect(self._save_trace_recipe)
-        recipe_row.addWidget(save_recipe)
-        layout.addLayout(recipe_row)
-
+        # Primary actions sit directly under Trace Settings — they act on
+        # the live preview those settings drive.
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(6)
@@ -276,6 +261,36 @@ class TracePage(BasePage):
         self._progress.setVisible(False)  # only shown while tracing
         layout.addWidget(self._progress)
 
+        # ── Recipes section ───────────────────────────────────────────────────
+        # A collapsible card like its siblings (was a bare caption + row,
+        # the odd one out on this sidebar).
+        recipes_content = QWidget()
+        recipes_layout = QVBoxLayout(recipes_content)
+        recipes_layout.setContentsMargins(0, 0, 0, 0)
+        recipes_layout.setSpacing(6)
+        recipe_row = QHBoxLayout()
+        self._recipe_combo = QComboBox()
+        self._recipe_combo.setToolTip("Reusable trace settings recipes")
+        self._refresh_trace_recipes()
+        recipe_row.addWidget(self._recipe_combo, stretch=1)
+        self._apply_recipe_btn = QPushButton("Apply")
+        self._apply_recipe_btn.setToolTip("Apply the selected recipe")
+        self._apply_recipe_btn.setEnabled(bool(self._settings.get("trace_recipes")))
+        self._apply_recipe_btn.clicked.connect(self._apply_trace_recipe)
+        recipe_row.addWidget(self._apply_recipe_btn)
+        save_recipe = QPushButton("Save…")
+        save_recipe.setToolTip("Save the current controls as a reusable recipe")
+        save_recipe.clicked.connect(self._save_trace_recipe)
+        recipe_row.addWidget(save_recipe)
+        recipes_layout.addLayout(recipe_row)
+        layout.addWidget(
+            CollapsibleSection(
+                "Recipes",
+                recipes_content,
+                expanded=bool(self._settings.get("trace_recipes")),
+            )
+        )
+
         # ── Advanced section ──────────────────────────────────────────────────
         advanced = build_lazy_section(
             "Advanced",
@@ -289,7 +304,7 @@ class TracePage(BasePage):
         export_layout = QVBoxLayout(export_content)
         export_layout.setContentsMargins(0, 0, 0, 0)
         export_layout.setSpacing(4)
-        self._export_all_btn = QPushButton("Export All as DXF…")
+        self._export_all_btn = QPushButton("Export DXF")
         self._export_all_btn.setMinimumHeight(36)
         self._export_all_btn.setProperty("role", "primary")
         self._export_all_btn.setToolTip("Save all traced outlines as a DXF file")
@@ -297,6 +312,7 @@ class TracePage(BasePage):
         self._export_all_btn.clicked.connect(self._export_all)
         _export_overflow_btn = QToolButton()
         _export_overflow_btn.setText("⋯")
+        _export_overflow_btn.setProperty("role", "overflow")
         _export_overflow_btn.setFixedWidth(32)
         _export_overflow_btn.setFixedHeight(36)
         _export_overflow_btn.setToolTip("More export options")
@@ -452,6 +468,9 @@ class TracePage(BasePage):
         return entry
 
     def _build_essential_fields(self, layout: QVBoxLayout) -> None:
+        detection_label = QLabel("Detection")
+        detection_label.setProperty("role", "section-label")
+        layout.addWidget(detection_label)
         layout.addWidget(
             TextField(
                 "Blur radius",
@@ -495,6 +514,9 @@ class TracePage(BasePage):
         )
         layout.addWidget(self._canny_widget)
 
+        size_label = QLabel("Output size")
+        size_label.setProperty("role", "section-label")
+        layout.addWidget(size_label)
         layout.addWidget(
             TextField("Width (mm)", entry=self._width_mm, tooltip=self._width_mm.toolTip())
         )
@@ -568,8 +590,11 @@ class TracePage(BasePage):
         layout.addWidget(self._grid_module)
         self._precision_bar = self._grid_module
 
+        # Placed at the bottom of the page (after the splitter) so every
+        # canvas page keeps the same anatomy: toolbars up top, canvas in
+        # the middle, status strip along the bottom — same as Draft.
         self._canvas_status = CanvasStatusStrip()
-        layout.addWidget(self._canvas_status)
+        self._canvas_status.set_zoom_callback(self._on_zoom_preset)
 
         canvas_shell = QWidget()
         canvas_layout = QVBoxLayout(canvas_shell)
@@ -608,7 +633,15 @@ class TracePage(BasePage):
 
         splitter = content_splitter(canvas_shell, side_panel, sizes=(860, 260))
         layout.addWidget(splitter, stretch=1)
+        layout.addWidget(self._canvas_status)
 
+        self._refresh_canvas_panels()
+
+    def _on_zoom_preset(self, value) -> None:
+        if value == "fit":
+            self._canvas.fit()
+        else:
+            self._canvas.set_zoom_percent(float(value))
         self._refresh_canvas_panels()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -656,7 +689,7 @@ class TracePage(BasePage):
         save_settings(self._settings)
         self._refresh_trace_recipes()
         self._recipe_combo.setCurrentText(name)
-        self._set_status(f"Saved trace recipe ‘{name}’.", "#3fb950")
+        self._set_status(f"Saved trace recipe ‘{name}’.", STATUS_OK)
 
     def _apply_trace_recipe(self) -> None:
         name = self._recipe_combo.currentText()
@@ -687,23 +720,10 @@ class TracePage(BasePage):
             if key in recipe:
                 widget.setChecked(bool(recipe[key]))
         self._schedule_trace()
-        self._set_status(f"Applied trace recipe ‘{name}’.", "#3fb950")
+        self._set_status(f"Applied trace recipe ‘{name}’.", STATUS_OK)
 
-    def _set_status(self, text: str, color: str = "#8b949e") -> None:
-        if not text:
-            self._status.setVisible(False)
-            return
-        self._status.setVisible(True)
-        self._status.setText(text)
-        if color == "#3fb950":
-            role = "status-ok"
-        elif color == "#f85149":
-            role = "status-err"
-        else:
-            role = "status-neutral"
-        self._status.setProperty("role", role)
-        self._status.style().unpolish(self._status)
-        self._status.style().polish(self._status)
+    def _set_status(self, text: str, color: str = STATUS_NEUTRAL) -> None:
+        set_status_label(self._status, text, color)
 
     def _reset_trace_runtime_state(self) -> None:
         self._running = False
@@ -878,7 +898,7 @@ class TracePage(BasePage):
         stuck in-flight/cancelled state, then start a fresh retrace right
         away with the current settings."""
         if not self._img_path:
-            self._set_status("No image loaded.", "#f85149")
+            self._set_status("No image loaded.", STATUS_ERR)
             return
         self._trace_revision += 1
         self._cancel_event.set()
@@ -901,7 +921,7 @@ class TracePage(BasePage):
         and Ctrl+Z reverts it if it doesn't look right.
         """
         if not self._canvas.get_polylines_state():
-            self._set_status("Nothing to smooth yet — trace an image first.", "#f85149")
+            self._set_status("Nothing to smooth yet — trace an image first.", STATUS_ERR)
             return
         tolerance, ok = QInputDialog.getDouble(
             self,
@@ -918,9 +938,9 @@ class TracePage(BasePage):
         count = self._canvas.fit_selected_to_curve(tolerance)
         self._canvas.deselect_all()
         if count:
-            self._set_status(f"Smoothed {count} shape(s).", "#3fb950")
+            self._set_status(f"Smoothed {count} shape(s).", STATUS_OK)
         else:
-            self._set_status("Nothing could be smoothed.", "#f85149")
+            self._set_status("Nothing could be smoothed.", STATUS_ERR)
 
     def _start_trace_thread(self) -> None:
         if not self._img_path:
@@ -1005,7 +1025,8 @@ class TracePage(BasePage):
             self._trace_done.emit((trace_token, *result, kwargs["width_mm"]))
         except TraceCancelled:
             self._trace_cancelled.emit(trace_token)
-        except (RuntimeError, OSError, ValueError, TypeError) as exc:
+        except Exception as exc:  # noqa: BLE001 - worker boundary must always complete
+            LOGGER.exception("Trace worker failed")
             if cancel_event and cancel_event.is_set():
                 self._trace_cancelled.emit(trace_token)
                 return
@@ -1055,13 +1076,13 @@ class TracePage(BasePage):
                 f"{sum(len(poly) for poly in polys)} vertices · "
                 f"{diagnostics.closed} closed/{diagnostics.open} open · "
                 f"{diagnostics.tiny_paths} tiny",
-                "#3fb950",
+                STATUS_OK,
             )
         else:
             self._canvas.set_polylines_state([], fit=False)
             self._set_status(
                 "No contours found. Try adjusting threshold or inverting.",
-                "#f85149",
+                STATUS_ERR,
             )
         self._update_trace_action_states()
         if self._trace_pending and self._img_path:
@@ -1076,7 +1097,7 @@ class TracePage(BasePage):
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
-        self._set_status(f"Error: {msg}", "#f85149")
+        self._set_status(f"Error: {msg}", STATUS_ERR)
         self._update_trace_action_states()
         if self._trace_pending and self._img_path:
             self._trace_pending = False
@@ -1235,7 +1256,7 @@ class TracePage(BasePage):
             )
             self._last_out = out
             self._reveal_action.setEnabled(True)
-            self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", "#3fb950")
+            self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", STATUS_OK)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
@@ -1262,7 +1283,7 @@ class TracePage(BasePage):
             self._reveal_action.setEnabled(True)
             self._set_status(
                 f"Exported {len(records)} selected shapes → {Path(out).name}",
-                "#3fb950",
+                STATUS_OK,
             )
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))

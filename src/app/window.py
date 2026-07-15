@@ -24,7 +24,7 @@ from src.app.controllers import (
     TaskController,
     WorkspaceController,
 )
-from src.app.page_runtime import PageRuntime
+from src.app.page_runtime import PageRuntime, PageSpec, default_page_specs
 from src.infra.error_reporting import report_error
 from src.infra.paths import user_data_dir
 from src.infra.settings import (
@@ -32,10 +32,9 @@ from src.infra.settings import (
     DEFAULT_RADIAL_MENU_TOOLS,
     load_settings,
     save_settings,
+    settings_bus,
 )
-from src.infra.settings_bus import settings_bus
 from src.ui.canvas.interaction import commands as canvas_commands
-from src.ui.pages.registry import PageSpec, default_page_specs
 from src.ui.style.theme import accessibility_palette
 
 LOGGER = logging.getLogger(__name__)
@@ -145,9 +144,16 @@ class App(QMainWindow):
         self._update_title()
 
     def _init_tab_bindings(self) -> None:
+        from src.ui.pages.repo_tab import RepoPage
+
         self._draft_page: Any = self._page_runtime.get("draft")
         self._pattern_page: Any = cast(Any, self._page_runtime.get("pattern"))
-        self._repo_page: Any = self._page_runtime.get("repo")
+        # Repository sync is a utility, not a drawing workflow, so it lives
+        # in a File-menu window (Alt+5) instead of a top-level tab. The page
+        # is built eagerly so background auto-fetch works without the window
+        # ever being opened.
+        self._repo_page: Any = RepoPage(settings=self._settings)
+        self._repo_dialog: Any = None
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
 
@@ -180,6 +186,22 @@ class App(QMainWindow):
 
     def _switch_to_page(self, page_id: str) -> None:
         self._page_runtime.switch_to(page_id)
+
+    def _open_repo_dialog(self) -> None:
+        """Show the repository sync window (modeless; reused across opens)."""
+        if self._repo_dialog is None:
+            from PySide6.QtWidgets import QDialog
+
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Repository Sync")
+            dialog.resize(920, 560)
+            dialog_layout = QVBoxLayout(dialog)
+            dialog_layout.setContentsMargins(8, 8, 8, 8)
+            dialog_layout.addWidget(self._repo_page)
+            self._repo_dialog = dialog
+        self._repo_dialog.show()
+        self._repo_dialog.raise_()
+        self._repo_dialog.activateWindow()
 
     def _has_workspace_content(self) -> bool:
         return self._page_runtime.has_workspace_content()
@@ -289,13 +311,20 @@ class App(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Failed to persist settings on close: %s", exc)
         # Cancel/clean up tracked workers if pages expose a hook.
-        for page in self._page_runtime.iter_workspace_pages():
+        # (iter_workspace_pages yields (page_id, page) tuples — unpacking
+        # matters, or getattr on the tuple silently skips every shutdown.)
+        for _page_id, page in self._page_runtime.iter_workspace_pages():
             shutdown = getattr(page, "shutdown", None)
             if callable(shutdown):
                 try:
                     shutdown()
                 except Exception as exc:  # noqa: BLE001
                     report_error("Page shutdown failed", exc)
+        # The repo page lives outside the page runtime (File-menu window).
+        try:
+            self._repo_page.shutdown()
+        except Exception as exc:  # noqa: BLE001
+            report_error("Repo page shutdown failed", exc)
         self._autosave_controller._discard_autosave()
         if self in App._open_windows:
             App._open_windows.remove(self)

@@ -151,3 +151,57 @@ def test_dxf_import_no_longer_drops_native_spline_entities(tmp_path):
     assert report.units == "Millimeters"
     all_pts = [p for polys in by_layer.values() for poly in polys for p in poly]
     assert len(all_pts) > 4  # smooth curve, not just the 4 fit points
+
+
+def test_dxf_import_scales_inch_coordinates_to_millimeters(tmp_path):
+    import ezdxf
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 1
+    doc.modelspace().add_line((0, 0), (1, 0))
+    source = tmp_path / "inch.dxf"
+    doc.saveas(source)
+
+    from src.backend.dxf.io import load_dxf_polylines
+
+    points = load_dxf_polylines(str(source))[0]
+    assert points[0] == pytest.approx((0, 0))
+    assert points[1] == pytest.approx((25.4, 0))
+
+
+def test_dxf_import_flattens_lwpolyline_bulge_arcs(tmp_path):
+    import ezdxf
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    doc.modelspace().add_lwpolyline([(0, 0, 1.0), (10, 0, 0.0)], format="xyb")
+    source = tmp_path / "bulge.dxf"
+    doc.saveas(source)
+
+    from src.backend.dxf.io import load_dxf_polylines_by_layer_with_report
+
+    by_layer, report = load_dxf_polylines_by_layer_with_report(str(source))
+    points = next(iter(by_layer.values()))[0]
+    assert len(points) > 2
+    assert max(abs(y) for _x, y in points) > 4.9
+    assert report.flattened_entities["LWPOLYLINE (bulge arcs)"] == 1
+
+
+def test_dxf_import_expands_transformed_block_references(tmp_path):
+    import ezdxf
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    block = doc.blocks.new("PART")
+    block.add_line((0, 0), (10, 0))
+    doc.modelspace().add_blockref("PART", (20, 5), dxfattribs={"rotation": 90})
+    source = tmp_path / "block.dxf"
+    doc.saveas(source)
+
+    from src.backend.dxf.io import load_dxf_polylines_by_layer_with_report
+
+    by_layer, report = load_dxf_polylines_by_layer_with_report(str(source))
+    points = next(iter(by_layer.values()))[0]
+    assert points[0] == pytest.approx((20, 5))
+    assert points[1] == pytest.approx((20, 15))
+    assert report.flattened_entities["INSERT (block contents)"] == 1

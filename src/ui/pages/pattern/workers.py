@@ -17,10 +17,15 @@ from typing import Any
 
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.pattern.cancellation import cancellation_scope
+from src.ui.pages.base import TaskPhase
 from src.ui.pages.pattern.output import prepare_output
-from src.ui.pages.task_state import TaskPhase
 
 LOGGER = logging.getLogger(__name__)
+CANCELLED_MESSAGE = "__task_cancelled__"
+
+
+def _report_cancel(on_error: Callable, token: int) -> None:
+    on_error((token, CANCELLED_MESSAGE))
 
 
 def _run_cancellable(cancel_event, function, *args, **kwargs):
@@ -112,6 +117,7 @@ def run_generate(
 ) -> None:
     try:
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, generation_token)
             return
         fill_polys: list[list[tuple[float, float]]] = []
         polys = _run_cancellable(
@@ -133,6 +139,7 @@ def run_generate(
             fill_polys_out=fill_polys,
         )
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, generation_token)
             return
         polys = prepare_output(polys, fabrication_options)
         fill_polys = prepare_output(fill_polys, fabrication_options)
@@ -165,6 +172,7 @@ def run_generate(
     except Exception as exc:  # noqa: BLE001 - any failure must still clear
         # `running` via on_error, or Generate/Preview stay disabled forever.
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, generation_token)
             return
         LOGGER.warning("Pattern generation failed: %s", exc, exc_info=True)
         on_error((generation_token, str(exc)))
@@ -218,6 +226,7 @@ def run_generate_zones(
             fill_polys_out=fill_polys,
         )
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, generation_token)
             return
         all_polys = prepare_output(all_polys, fabrication_options)
         fill_polys = prepare_output(fill_polys, fabrication_options)
@@ -239,6 +248,7 @@ def run_generate_zones(
         on_done((generation_token, count, name, out_path, all_polys + fill_polys))
     except Exception as exc:  # noqa: BLE001 - see run_generate
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, generation_token)
             return
         LOGGER.warning("Zone pattern generation failed: %s", exc, exc_info=True)
         on_error((generation_token, str(exc)))
@@ -268,6 +278,7 @@ def compute_preview(
 ) -> None:
     try:
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, preview_token)
             return
         preview = _run_cancellable(
             cancel_event,
@@ -288,10 +299,12 @@ def compute_preview(
             fill_options=fill_options,
         )
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, preview_token)
             return
         on_done((preview_token, preview["display"], preview["count"], preview))
     except Exception as exc:  # noqa: BLE001 - see run_generate
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, preview_token)
             return
         LOGGER.warning("Preview generation failed: %s", exc, exc_info=True)
         on_error((preview_token, str(exc)))
@@ -332,10 +345,12 @@ def compute_preview_zones(
             fill_options=fill_options,
         )
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, preview_token)
             return
         on_done((preview_token, preview["display"], preview["count"], preview))
     except Exception as exc:  # noqa: BLE001 - see run_generate
         if cancel_event and cancel_event.is_set():
+            _report_cancel(on_error, preview_token)
             return
         LOGGER.warning("Zone preview generation failed: %s", exc, exc_info=True)
         on_error((preview_token, str(exc)))

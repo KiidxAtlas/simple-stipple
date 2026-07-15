@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -22,8 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.units import from_display, to_display
-from src.ui.units import suffix as unit_suffix
+from src.ui.util import parse_numeric_expression, to_display
+from src.ui.util import suffix as unit_suffix
 
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]
@@ -44,7 +43,6 @@ _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
 
 def _num_edit(on_commit) -> QLineEdit:
     edit = QLineEdit()
-    edit.setValidator(QDoubleValidator(-1e9, 1e9, 4))
     edit.setAlignment(Qt.AlignmentFlag.AlignRight)
     edit.setMaximumWidth(90)
     edit.editingFinished.connect(on_commit)
@@ -97,6 +95,10 @@ class CanvasPropertiesPanel(QWidget):
         self._y = _num_edit(lambda: self._commit_pos())
         self._w = _num_edit(lambda: self._commit_size("w"))
         self._h = _num_edit(lambda: self._commit_size("h"))
+        for key, edit in (("x", self._x), ("y", self._y), ("w", self._w), ("h", self._h)):
+            edit.setProperty("geometry-key", key)
+            edit.installEventFilter(self)
+            edit.setToolTip("Accepts arithmetic and units, e.g. 25/2 or 1in + 3mm")
         self._axis_labels: dict[str, QLabel] = {}
         for row, (axis, edit) in enumerate(
             (("X", self._x), ("Y", self._y), ("W", self._w), ("H", self._h))
@@ -110,9 +112,9 @@ class CanvasPropertiesPanel(QWidget):
         # across the panel width
         grid.setColumnStretch(4, 1)
 
-        self._aspect_lock_btn = QPushButton("\U0001f517")  # 🔗
+        self._aspect_lock_btn = QPushButton("Lock")
         self._aspect_lock_btn.setCheckable(True)
-        self._aspect_lock_btn.setFixedWidth(26)
+        self._aspect_lock_btn.setFixedWidth(42)
         self._aspect_lock_btn.setToolTip(
             "Lock aspect ratio\nKeeps width/height proportional for both "
             "typed W/H edits and gizmo-handle drags"
@@ -128,27 +130,48 @@ class CanvasPropertiesPanel(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(4)
         for text, tip, cb in (
-            ("⟲ 90°", "Rotate 90° CCW", lambda: self._rotate(90.0)),
-            ("⟳ 90°", "Rotate 90° CW", lambda: self._rotate(-90.0)),
-            ("⇋", "Mirror horizontally", lambda: self._mirror("horizontal")),
-            ("⇵", "Mirror vertically", lambda: self._mirror("vertical")),
-            ("〰", "Smooth jagged corners (Chaikin)", self._smooth),
-            ("⤳", "Simplify — reduce vertex count", self._simplify),
+            ("R +90", "Rotate 90° CCW", lambda: self._rotate(90.0)),
+            ("R -90", "Rotate 90° CW", lambda: self._rotate(-90.0)),
+            ("Flip H", "Mirror horizontally", lambda: self._mirror("horizontal")),
+            ("Flip V", "Mirror vertically", lambda: self._mirror("vertical")),
+            ("Smooth", "Smooth jagged corners (Chaikin)", self._smooth),
+            ("Simplify", "Simplify — reduce vertex count", self._simplify),
         ):
             btn = QPushButton(text)
             btn.setToolTip(tip)
-            btn.setMaximumWidth(52)
+            btn.setMaximumWidth(64)
             btn.clicked.connect(cb)
             actions.addWidget(btn)
         rot_lbl = QLabel("∠")
         rot_lbl.setToolTip("Rotate by angle (° CCW)")
         actions.addWidget(rot_lbl)
         self._rot = _num_edit(self._commit_rotation)
-        self._rot.setPlaceholderText("0")
+        self._rot.setProperty("geometry-key", "rotation")
+        self._rot.installEventFilter(self)
+        self._rot.setPlaceholderText("Angle")
+        self._rot.setToolTip("Absolute angle of the selected shape in degrees")
         self._rot.setMaximumWidth(56)
         actions.addWidget(self._rot)
         actions.addStretch(1)
         fields_root.addLayout(actions)
+
+        context = QHBoxLayout()
+        context.setSpacing(4)
+        self._context_buttons: dict[str, QPushButton] = {}
+        for key, text, tip, callback in (
+            ("edit", "Edit vertices", "Enter direct vertex editing", lambda: canvas.set_mode("edit")),
+            ("duplicate", "Duplicate", "Duplicate the current selection", canvas.duplicate_selected),
+            ("close", "Close path", "Close selected open paths", canvas.close_selected_polylines),
+            ("open", "Open path", "Open selected closed paths", canvas.open_selected_polylines),
+            ("delete", "Delete", "Delete selected geometry", canvas.delete_selected),
+        ):
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.clicked.connect(callback)
+            context.addWidget(button)
+            self._context_buttons[key] = button
+        context.addStretch(1)
+        fields_root.addLayout(context)
 
         # Shape-parameter rows (built per selection kind)
         self._param_grid = QGridLayout()
@@ -162,6 +185,8 @@ class CanvasPropertiesPanel(QWidget):
         self._param_kind: str | None = None
 
         canvas.selectionChanged.connect(lambda _n: self.refresh())
+        if hasattr(canvas, "geometryChanged"):
+            canvas.geometryChanged.connect(self.refresh)
         self.refresh()
 
     # ── Refresh ───────────────────────────────────────────────────────────
@@ -185,14 +210,15 @@ class CanvasPropertiesPanel(QWidget):
             if info is None:
                 self._summary.setText("No selection")
                 self._metrics.clear()
-                for edit in (self._x, self._y, self._w, self._h):
+                for edit in (self._x, self._y, self._w, self._h, self._rot):
                     edit.clear()
                 self._set_param_rows(None, None, {})
                 return
             count = info["count"]
             kind = info.get("kind")
-            if count == 1 and kind:
-                self._summary.setText(kind.capitalize())
+            display_kind = info.get("display_kind") or kind
+            if count == 1 and display_kind:
+                self._summary.setText(str(display_kind).replace("_", " ").title())
             else:
                 self._summary.setText(f"{count} shapes")
             metric_parts = [f"Length {to_display(info['length'], unit):.3g} {unit_suffix(unit)}"]
@@ -215,7 +241,23 @@ class CanvasPropertiesPanel(QWidget):
             self._y.setText(f"{to_display(info['y'], unit):.2f}")
             self._w.setText(f"{to_display(info['w'], unit):.2f}")
             self._h.setText(f"{to_display(info['h'], unit):.2f}")
+            self._rot.setText(f"{float(info.get('rotation', 0.0)):.1f}")
             self._set_param_rows(info.get("index"), kind, info.get("meta") or {})
+            can_edit = count == 1 and kind not in {"circle", "ellipse", "rectangle", "slot"}
+            self._context_buttons["edit"].setVisible(can_edit)
+            self._context_buttons["duplicate"].setVisible(count > 0)
+            self._context_buttons["delete"].setVisible(count > 0)
+            selected = [
+                self._canvas._entities[i]
+                for i in getattr(self._canvas, "_sel", set())
+                if 0 <= i < len(self._canvas._entities)
+            ]
+            self._context_buttons["close"].setVisible(
+                any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
+            )
+            self._context_buttons["open"].setVisible(
+                any(len(e.points) >= 3 and e.points[0] == e.points[-1] for e in selected)
+            )
         finally:
             self._updating = False
 
@@ -236,6 +278,8 @@ class CanvasPropertiesPanel(QWidget):
                 lbl = QLabel(label)
                 lbl.setStyleSheet("color: #8b949e;")
                 edit = _num_edit(lambda k=key: self._commit_param(k))
+                edit.setProperty("geometry-key", key)
+                edit.installEventFilter(self)
                 self._param_grid.addWidget(lbl, row, 0)
                 self._param_grid.addWidget(edit, row, 1)
                 self._param_edits[key] = edit
@@ -265,21 +309,33 @@ class CanvasPropertiesPanel(QWidget):
 
     # ── Commits ───────────────────────────────────────────────────────────
 
+    def eventFilter(self, watched, event) -> bool:
+        key = watched.property("geometry-key") if isinstance(watched, QLineEdit) else None
+        if key and hasattr(self._canvas, "set_property_highlight"):
+            if event.type() == QEvent.Type.FocusIn:
+                self._canvas.set_property_highlight(str(key))
+            elif event.type() == QEvent.Type.Enter:
+                self._canvas.set_property_highlight(str(key))
+            elif event.type() == QEvent.Type.FocusOut:
+                self._canvas.set_property_highlight(None)
+            elif event.type() == QEvent.Type.Leave and not watched.hasFocus():
+                self._canvas.set_property_highlight(None)
+        return super().eventFilter(watched, event)
+
     def _value(self, edit: QLineEdit) -> float | None:
+        key = str(edit.property("geometry-key") or "")
+        is_length = key not in {"rotation", "angle", "sides", "points", "inner_ratio"}
         try:
-            return float(edit.text())
-        except (TypeError, ValueError):
+            return parse_numeric_expression(edit.text(), self._unit(), is_length=is_length)
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
             return None
 
     def _commit_pos(self) -> None:
         if self._updating:
             return
-        unit = self._unit()
         x = self._value(self._x)
         y = self._value(self._y)
-        x_mm = from_display(x, unit) if x is not None else None
-        y_mm = from_display(y, unit) if y is not None else None
-        if self._canvas.move_selection_to(x_mm, y_mm):
+        if self._canvas.move_selection_to(x, y):
             self.refresh()
 
     def _commit_size(self, axis: str) -> None:
@@ -289,11 +345,10 @@ class CanvasPropertiesPanel(QWidget):
         if value is None or value <= 0:
             self.refresh()
             return
-        value_mm = from_display(value, self._unit())
         if axis == "w":
-            self._canvas._set_selected_width(value_mm)
+            self._canvas._set_selected_width(value)
         else:
-            self._canvas._set_selected_height(value_mm)
+            self._canvas._set_selected_height(value)
         self.refresh()
 
     def _on_aspect_lock_toggled(self, checked: bool) -> None:
@@ -305,9 +360,12 @@ class CanvasPropertiesPanel(QWidget):
         if self._updating:
             return
         angle = self._value(self._rot)
-        if angle:
-            self._canvas.rotate_selected(angle)
-            self._rot.clear()
+        info = self._canvas.selection_geometry()
+        if angle is not None and info is not None:
+            current = float(info.get("rotation", 0.0))
+            delta = (angle - current + 180.0) % 360.0 - 180.0
+            if abs(delta) > 1e-9:
+                self._canvas.rotate_selected(delta)
             self.refresh()
 
     def _rotate(self, angle: float) -> None:

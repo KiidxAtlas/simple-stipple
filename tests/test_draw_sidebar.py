@@ -285,6 +285,12 @@ def test_hover_flyout_shows_beside_sidebar_not_overlapping_it(qapp):
     assert btn._flyout is not None
     panel_rect = btn._panel_global_rect()
     assert btn._flyout.x() >= panel_rect.right()
+    screen = qapp.screenAt(panel_rect.center()) or qapp.primaryScreen()
+    available = screen.availableGeometry()
+    assert btn._flyout.x() >= available.left()
+    assert btn._flyout.y() >= available.top()
+    assert btn._flyout.x() + btn._flyout.width() <= available.right() + 1
+    assert btn._flyout.y() + btn._flyout.height() <= available.bottom() + 1
 
 
 def test_flyout_survives_mouse_passing_through_the_gap_to_reach_it(qapp):
@@ -375,6 +381,7 @@ def test_resize_handle_drag_uses_stable_delta_from_press(qapp):
     v.set_mode("draw")
     sb = v._draw_sidebar
     handle = next(c for c in sb.children() if isinstance(c, _ResizeHandle))
+    assert handle.width() >= 12
     start_width = sb.width()
 
     def move_event(global_x: float) -> QMouseEvent:
@@ -403,6 +410,46 @@ def test_resize_handle_drag_uses_stable_delta_from_press(qapp):
     # from handle's own origin" math effectively did once the handle moved).
     handle.mouseMoveEvent(move_event(520.0))
     assert sb.width() == start_width + 20
+
+
+def test_sidebar_groups_use_whitespace_not_nested_frames(qapp):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QFrame, QWidget
+
+    v = make_view(qapp, [])
+    v.set_mode("draw")
+    section = v._draw_sidebar._polyline_buttons["polyline"].parentWidget().parentWidget()
+    assert isinstance(section, QWidget)
+    assert not isinstance(section, QFrame)
+    assert v._draw_sidebar._polyline_buttons["polyline"].size().width() >= 44
+    assert v._draw_sidebar._polyline_buttons["polyline"].size().height() >= 40
+    qapp.processEvents()
+    assert (
+        v._draw_sidebar._content.minimumSizeHint().width()
+        <= v._draw_sidebar._scroll.viewport().width()
+    )
+    assert (
+        v._draw_sidebar._scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+
+
+def test_shape_dimension_fields_stay_inside_canvas_near_edges(qapp):
+    v = make_view(qapp, [])
+    v.resize(500, 320)
+    v.set_mode("draw")
+    v._set_draw_primitive("polygon")
+    v._draw_shape_preview_active = True
+    v._draw_shape_anchor_w = v._c2w(490, 310)
+    v._draw_shape_cursor_w = v._c2w(498, 318)
+
+    v._show_shape_dim_inputs()
+
+    controls = [v._draw_shape_w_edit, v._draw_shape_h_edit, v._draw_shape_sides_spin]
+    assert all(control is not None for control in controls)
+    assert all(control.x() >= 8 and control.y() >= 8 for control in controls)
+    assert all(control.x() + control.width() <= v.width() - 8 for control in controls)
+    assert all(control.y() + control.height() <= v.height() - 8 for control in controls)
 
 
 def test_sidebar_sections_can_be_hidden_and_reordered(qapp):

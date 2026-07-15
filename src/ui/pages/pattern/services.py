@@ -774,14 +774,26 @@ class PatternProcessingService:
         all_polys_out: list[list[tuple[float, float]]] = []
         border_polys: list[list[tuple[float, float]]] = []
         for idx, zone in enumerate(zones):
+            output_mode = str(zone.get("output_mode", "pattern_fill"))
+            if output_mode == "none":
+                continue
             zone_fill: list[list[tuple[float, float]]] = []
-            # Per-zone fill override: if the zone carries its own "fill"
-            # entry, use it; otherwise fall back to the global fill_options.
-            zone_fill_options = zone.get("fill") or fill_options
+            # Presence, rather than truthiness, controls inheritance.  An
+            # explicit None means "no fill in this zone"; older workspaces
+            # without a fill key continue to inherit the document fill.
+            zone_fill_options = zone["fill"] if "fill" in zone else fill_options
+            zone_pattern = zone["pattern"]
+            if output_mode == "pattern":
+                zone_fill_options = None
+            elif output_mode == "fill":
+                zone_pattern = NULL_PATTERN
+            elif output_mode == "outline":
+                zone_pattern = NULL_PATTERN
+                zone_fill_options = None
             nested_exclusions = self._zone_nested_exclusions(zones, idx)
             zone_generated = self.build_pattern_polys(
                 zone["polys"] + floating_cutouts,
-                pattern=zone["pattern"],
+                pattern=zone_pattern,
                 params=zone["params"],
                 scale=zone["scale"],
                 orig_w=orig_w,
@@ -904,30 +916,51 @@ class PatternProcessingService:
         zone_poly_ids: set[int] = set()
         zone_pattern_polys: list[list[tuple[float, float]]] = []
         zone_fill_polys: list[list[tuple[float, float]]] = []
+        zone_outline_polys: list[list[tuple[float, float]]] = []
+        pattern_owners: list[int] = []
+        fill_owners: list[int] = []
+        outline_owners: list[int] = []
         floating_cutouts: list[list[tuple[float, float]]] = []
 
         for zone_idx, zone in enumerate(zones):
+            output_mode = str(zone.get("output_mode", "pattern_fill"))
             fill_buf: list[list[tuple[float, float]]] = []
-            zone_fill_options = zone.get("fill") or fill_options
+            zone_fill_options = zone["fill"] if "fill" in zone else fill_options
+            zone_pattern = zone["pattern"]
+            if output_mode == "pattern":
+                zone_fill_options = None
+            elif output_mode == "fill":
+                zone_pattern = NULL_PATTERN
+            elif output_mode in {"outline", "none"}:
+                zone_pattern = NULL_PATTERN
+                zone_fill_options = None
             nested_exclusions = self._zone_nested_exclusions(zones, zone_idx)
-            zone_generated = self.build_pattern_polys(
-                zone["polys"] + floating_cutouts,
-                pattern=zone["pattern"],
-                params=zone["params"],
-                scale=zone["scale"],
-                orig_w=orig_w,
-                orig_h=orig_h,
-                interlace=zone.get("interlace", False),
-                invert_fill=invert_fill,
-                mirror_v=mirror_v,
-                mirror_h=mirror_h,
-                border_fade=border_fade,
-                exclusion_polys=list(exclusion_polys or []) + nested_exclusions,
-                fill_options=zone_fill_options,
-                fill_polys_out=fill_buf,
+            zone_generated = [] if output_mode == "none" else self.build_pattern_polys(
+                    zone["polys"] + floating_cutouts,
+                    pattern=zone_pattern,
+                    params=zone["params"],
+                    scale=zone["scale"],
+                    orig_w=orig_w,
+                    orig_h=orig_h,
+                    interlace=zone.get("interlace", False),
+                    invert_fill=invert_fill,
+                    mirror_v=mirror_v,
+                    mirror_h=mirror_h,
+                    border_fade=border_fade,
+                    exclusion_polys=list(exclusion_polys or []) + nested_exclusions,
+                    fill_options=zone_fill_options,
+                    fill_polys_out=fill_buf,
             )
             zone_pattern_polys.extend(zone_generated)
             zone_fill_polys.extend(fill_buf)
+            pattern_owners.extend([zone_idx] * len(zone_generated))
+            fill_owners.extend([zone_idx] * len(fill_buf))
+            scaled_zone_outlines = self.apply_scale(
+                zone["polys"], zone["scale"][0], zone["scale"][1],
+                orig_w=orig_w, orig_h=orig_h,
+            )
+            zone_outline_polys.extend(scaled_zone_outlines)
+            outline_owners.extend([zone_idx] * len(scaled_zone_outlines))
             # Match zone polys to the global all_polys list using
             # rounded signatures to tolerate minor numeric differences
             # introduced by transforms. We pop indices as they are used to
@@ -943,11 +976,19 @@ class PatternProcessingService:
                     zone_poly_ids.add(indices.pop(0))
 
         context_polys = [p for i, p in enumerate(all_polys) if i not in zone_poly_ids]
-        display_polys = context_polys + zone_pattern_polys + zone_fill_polys
+        outline_polys = context_polys + zone_outline_polys
+        display_polys = outline_polys + zone_pattern_polys + zone_fill_polys
+        zone_owners: list[int | None] = (
+            [None] * len(context_polys)
+            + outline_owners
+            + pattern_owners
+            + fill_owners
+        )
         return {
-            "outline": context_polys,
+            "outline": outline_polys,
             "pattern": zone_pattern_polys,
             "fill": zone_fill_polys,
             "display": display_polys,
             "count": len(zone_pattern_polys) + len(zone_fill_polys),
+            "zone_owners": zone_owners,
         }

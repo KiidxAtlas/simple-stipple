@@ -26,7 +26,8 @@ from src.infra.updates import (
     get_current_version,
     get_releases_page_url,
 )
-from src.ui.components import section_label, sep, surface_frame
+from src.ui.components import section_label, sep, set_status_label, surface_frame
+from src.ui.style.theme import STATUS_ERR
 
 _LOG = logging.getLogger(__name__)
 
@@ -51,15 +52,20 @@ class UpdateDownloadThread(QThread):
 
     downloadComplete = Signal(bool, str, str)  # success, path, system
 
-    def __init__(self, url: str, dest_path: Path, system: str, parent=None) -> None:
+    def __init__(
+        self, url: str, dest_path: Path, system: str, sha256: str, parent=None
+    ) -> None:
         super().__init__(parent)
         self._url = url
         self._dest_path = dest_path
         self._system = system
+        self._sha256 = sha256
 
     def run(self) -> None:
         try:
-            success = download_update(self._url, self._dest_path)
+            success = download_update(
+                self._url, self._dest_path, expected_sha256=self._sha256
+            )
             self.downloadComplete.emit(success, str(self._dest_path), self._system)
         except (OSError, RuntimeError, ValueError) as exc:
             _LOG.error("Update download thread error: %s", exc)
@@ -145,11 +151,14 @@ class UpdateDialog(QDialog):
                     widget.deleteLater()
 
         if info is None:
-            error_label = QLabel(
-                "Failed to check for updates. Please check your internet connection."
-            )
-            error_label.setStyleSheet("color: #f85149; font-size: 13px;")
+            error_label = QLabel()
             error_label.setWordWrap(True)
+            set_status_label(
+                error_label,
+                "Failed to check for updates. Please check your internet connection.",
+                STATUS_ERR,
+                hide_when_empty=False,
+            )
             layout.addWidget(error_label, stretch=1)
         elif info.is_newer:
             self._build_update_available_ui(layout, info)
@@ -224,6 +233,11 @@ class UpdateDialog(QDialog):
         self._download_btn.setMinimumWidth(130)
         self._download_btn.setProperty("role", "primary")
         self._download_btn.clicked.connect(lambda: self._download_and_install(info))
+        if not info.sha256:
+            self._download_btn.setEnabled(False)
+            self._download_btn.setToolTip(
+                "Automatic installation is disabled because this release has no SHA-256 digest."
+            )
         action_row.addWidget(self._download_btn)
 
         card_layout.addLayout(action_row)
@@ -236,6 +250,14 @@ class UpdateDialog(QDialog):
 
     def _download_and_install(self, info: UpdateInfo) -> None:
         """Download and attempt to install the update."""
+        if not info.sha256:
+            QMessageBox.warning(
+                self,
+                "Update Not Verified",
+                "This release does not publish a SHA-256 digest. Open the release page "
+                "and verify the download manually.",
+            )
+            return
         reply = QMessageBox.question(
             self,
             "Download Update",
@@ -272,6 +294,7 @@ class UpdateDialog(QDialog):
             info.url,
             download_path,
             system,
+            info.sha256,
             parent=self,
         )
         self._download_thread.downloadComplete.connect(self._on_download_complete)

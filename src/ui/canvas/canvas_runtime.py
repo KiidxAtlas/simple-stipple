@@ -722,12 +722,10 @@ class CanvasToolbarModule(QWidget):
             button.style().polish(button)
 
     def set_selection_count(self, count: int) -> None:
-        if count > 0:
-            self.selection_label.setText(f"{count} selected")
-            self.selection_label.setStyleSheet("color: #79c0ff;")
-            return
-        self.selection_label.setText("")
-        self.selection_label.setStyleSheet("color: #8b949e;")
+        self.selection_label.setText(f"{count} selected" if count > 0 else "")
+        self.selection_label.setProperty("active", count > 0)
+        self.selection_label.style().unpolish(self.selection_label)
+        self.selection_label.style().polish(self.selection_label)
 
     def sync_from_canvas(self) -> None:
         if self._canvas is None:

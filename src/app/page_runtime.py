@@ -8,7 +8,65 @@ from typing import Any, Protocol, cast
 
 from PySide6.QtWidgets import QTabWidget, QWidget
 
-from src.ui.pages.registry import PageSpec
+from src.ui.pages.convert import ConvertPage
+from src.ui.pages.draft import DraftPage
+from src.ui.pages.pattern.tab import PatternPage
+from src.ui.pages.trace.tab import TracePage
+
+PageFactory = Callable[[dict], QWidget]
+
+
+@dataclass(frozen=True)
+class PageSpec:
+    """Registration metadata for one top-level application page."""
+
+    page_id: str
+    title: str
+    command_keywords: str
+    factory: PageFactory
+    content_canvas_attrs: tuple[str, ...] = ()
+
+    @property
+    def shortcut_id(self) -> str:
+        return f"tab.{self.page_id}"
+
+    @property
+    def command_title(self) -> str:
+        return f"Page: {self.title}"
+
+
+def default_page_specs() -> tuple[PageSpec, ...]:
+    """Return the declarative page registrations in UI order."""
+    return (
+        PageSpec(
+            "draft",
+            "Draft",
+            "page draft",
+            lambda settings: DraftPage(settings=settings),
+            ("_canvas",),
+        ),
+        PageSpec(
+            "pattern",
+            "Pattern",
+            "page pattern fill",
+            lambda settings: PatternPage(settings=settings),
+            ("_canvas",),
+        ),
+        PageSpec(
+            "trace",
+            "Trace",
+            "page trace",
+            lambda settings: TracePage(settings=settings),
+            ("_canvas",),
+        ),
+        PageSpec(
+            "convert",
+            "Convert",
+            "page convert utilities",
+            lambda settings: ConvertPage(settings=settings),
+            ("_preview_canvas",),
+        ),
+    )
 
 
 @dataclass(frozen=True)

@@ -17,15 +17,24 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox
 
 from src.infra.paths import user_log_dir, user_runtime_dir
 
 _LOG = logging.getLogger(__name__)
 _ACTIVATE_MESSAGE = b"activate\n"
+
+
+class _ComboWheelGuard(QObject):
+    """Prevent accidental selection changes while scrolling a form."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.Wheel and isinstance(watched, QComboBox):
+            return True
+        return super().eventFilter(watched, event)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -270,6 +279,8 @@ def main(argv: list[str] | None = None) -> int:
     _LOG.info("Starting Simple Stipple (log file: %s)", log_path)
 
     app = QApplication(sys.argv)
+    combo_wheel_guard = _ComboWheelGuard(app)
+    app.installEventFilter(combo_wheel_guard)
     apply_dark_theme(app)
     install_toast()
 

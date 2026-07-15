@@ -30,6 +30,7 @@ from src.ui.components import (
     surface_frame,
 )
 from src.ui.pages.base import BasePage
+from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
 
 
 class RepoPage(BasePage):
@@ -216,13 +217,13 @@ class RepoPage(BasePage):
         ready = repo is not None
         if not self._dir_edit.text().strip():
             message = "Choose a repository folder to enable git actions."
-            color = "#8b949e"
+            color = STATUS_NEUTRAL
         elif ready:
             message = f"Ready — {repo.name} is a valid git repository."
-            color = "#3fb950"
+            color = STATUS_OK
         else:
             message = "Selected folder is missing or is not a git repository."
-            color = "#f85149"
+            color = STATUS_ERR
         self._set_step_status(self._repo_status, message, color)
         self._open_btn.setEnabled(ready)
         # Git-action buttons stay disabled while a background pull/commit/
@@ -245,7 +246,7 @@ class RepoPage(BasePage):
         if text.startswith("$ "):
             color = "#79c0ff"
         elif "error" in lower or "fatal" in lower:
-            color = "#f85149"
+            color = STATUS_ERR
         else:
             color = "#c9d1d9"
         self._log.append(
@@ -334,9 +335,9 @@ class RepoPage(BasePage):
         def done(results: list[tuple[list[str], bool, str]]) -> None:
             ok = results[-1][1] if results else False
             if ok:
-                self._set_step_status(self._pull_status, "Up to date", "#3fb950")
+                self._set_step_status(self._pull_status, "Up to date", STATUS_OK)
             else:
-                self._set_step_status(self._pull_status, "Pull failed — check log", "#f85149")
+                self._set_step_status(self._pull_status, "Pull failed — check log", STATUS_ERR)
 
         self._run_git_async([["pull"]], done)
 
@@ -363,7 +364,7 @@ class RepoPage(BasePage):
         preview = status if len(status) <= 4000 else status[:4000] + "\n…"
         answer = QMessageBox.question(
             self,
-            "Review files to commit",
+            "Review Files to Commit",
             f"The following files will be staged and committed:\n\n{preview}\n\nMessage: {msg}",
         )
         if answer != QMessageBox.StandardButton.Yes:
@@ -374,12 +375,12 @@ class RepoPage(BasePage):
                 return  # "git add" itself failed; already logged
             _, ok, out = results[-1]
             if not ok and "nothing to commit" in out.lower():
-                self._set_step_status(self._commit_status, "Nothing to commit", "#8b949e")
+                self._set_step_status(self._commit_status, "Nothing to commit", STATUS_NEUTRAL)
                 QMessageBox.information(self, "Commit", "Nothing to commit.")
             elif ok:
-                self._set_step_status(self._commit_status, "Committed", "#3fb950")
+                self._set_step_status(self._commit_status, "Committed", STATUS_OK)
             else:
-                self._set_step_status(self._commit_status, "Commit failed — check log", "#f85149")
+                self._set_step_status(self._commit_status, "Commit failed — check log", STATUS_ERR)
 
         self._run_git_async([["add", "-A"], ["commit", "-m", msg]], done)
 
@@ -387,9 +388,9 @@ class RepoPage(BasePage):
         def done(results: list[tuple[list[str], bool, str]]) -> None:
             ok = results[-1][1] if results else False
             if ok:
-                self._set_step_status(self._push_status, "Pushed", "#3fb950")
+                self._set_step_status(self._push_status, "Pushed", STATUS_OK)
             else:
-                self._set_step_status(self._push_status, "Push failed — check log", "#f85149")
+                self._set_step_status(self._push_status, "Push failed — check log", STATUS_ERR)
 
         self._run_git_async([["push"]], done)
 

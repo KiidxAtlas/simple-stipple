@@ -87,3 +87,46 @@ def test_fill_targets_are_independent_and_preview_cells_can_be_cutouts(qapp):
         page.shutdown()
         page.deleteLater()
         qapp.processEvents()
+
+
+def test_pattern_property_defaults_are_editable_before_a_zone_exists(qapp):
+    page = _page(qapp)
+    try:
+        assert page._zone_list.count() == 1
+        assert page._zone_list.item(0).text() == "No zones assigned yet"
+        assert page._pattern_props_scope.text().startswith("New zone defaults")
+        assert page._zone_output_combo.isEnabled()
+        assert page._pattern_combo.isEnabled()
+        assert page._fill_mode_combo.isEnabled()
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
+def test_selecting_outline_or_preview_geometry_selects_owning_zone(qapp):
+    page = _page(qapp)
+    first = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+    second = [(20, 0), (30, 0), (30, 10), (20, 10), (20, 0)]
+    try:
+        page.load_outline_polys([first, second], source_label="zones")
+        page._zones = [
+            {"outline_ids": [page._outline_ids[0]], "pattern": "Honeycomb", "params": {}, "scale": (30, 10)},
+            {"outline_ids": [page._outline_ids[1]], "pattern": "Honeycomb", "params": {}, "scale": (30, 10)},
+        ]
+        page._refresh_zone_list()
+
+        page._canvas.set_selection([1])
+        assert page._zone_list.currentRow() == 1
+        assert page._pattern_props_scope.text() == "Editing Zone 2"
+
+        page._showing_preview = True
+        page._preview_zone_owners = [0, 1]
+        page._canvas.load([first, second])
+        page._canvas.set_selection([0])
+        assert page._zone_list.currentRow() == 0
+        assert page._pattern_props_scope.text() == "Editing Zone 1"
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()

@@ -60,9 +60,9 @@ from src.ui.canvas.constants import RUBBER_W as _RUBBER_W
 from src.ui.canvas.constants import SELECT_PT as _SELECT_PT
 from src.ui.canvas.constants import SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE
 from src.ui.canvas.constants import SNAP_CLOSE as _SNAP_CLOSE
-from src.ui.units import format_length as _fmt_len
-from src.ui.units import suffix as _unit_suffix
-from src.ui.units import to_display as _to_display
+from src.ui.util import format_length as _fmt_len
+from src.ui.util import suffix as _unit_suffix
+from src.ui.util import to_display as _to_display
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -139,6 +139,7 @@ if TYPE_CHECKING:
         _measure_mode: bool
         _mode: str
         _rulers_visible: bool
+        _property_highlight: str | None
         _scale: float
         _sel: set[int]
         _shift_drag: bool
@@ -1235,21 +1236,64 @@ class CanvasRenderer(_RendererBase):
 
         left = min(bx0, bx1)
         mid_y = (by0 + by1) / 2.0
-        rotate_center = QPointF(mid_x, top - 48.0)  # Moved further up for clarity
+        local_points: dict[str, tuple[float, float]] | None = None
+        if len(self._sel) == 1:
+            index = next(iter(self._sel))
+            entity = self._entities[index]
+            meta = entity.meta if isinstance(entity.meta, dict) else None
+            dims = None
+            if meta is not None:
+                if entity.kind in {"rectangle", "rounded_rectangle"}:
+                    dims = (float(meta.get("width", 0)), float(meta.get("height", 0)))
+                elif entity.kind == "ellipse":
+                    dims = (2 * float(meta.get("rx", 0)), 2 * float(meta.get("ry", 0)))
+                elif entity.kind == "circle":
+                    diameter = 2 * float(meta.get("radius", 0))
+                    dims = (diameter, diameter)
+                elif entity.kind == "slot":
+                    dims = (float(meta.get("length", 0)), float(meta.get("width", 0)))
+            if dims is not None and min(dims) > 1e-9:
+                world_cx, world_cy = (float(value) for value in meta.get("center", (0, 0)))
+                angle = math.radians(float(meta.get("rotation", 0.0)))
+
+                def _screen(fx: float, fy: float) -> tuple[float, float]:
+                    lx, ly = (fx - 0.5) * dims[0], (fy - 0.5) * dims[1]
+                    return self._w2c(
+                        world_cx + lx * math.cos(angle) - ly * math.sin(angle),
+                        world_cy + lx * math.sin(angle) + ly * math.cos(angle),
+                    )
+
+                local_points = {
+                    "sw": _screen(0, 0), "s": _screen(0.5, 0), "se": _screen(1, 0),
+                    "w": _screen(0, 0.5), "e": _screen(1, 0.5),
+                    "nw": _screen(0, 1), "n": _screen(0.5, 1), "ne": _screen(1, 1),
+                }
+                mid_x, mid_y = self._w2c(world_cx, world_cy)
+        if local_points is not None:
+            north = local_points["n"]
+            vx, vy = north[0] - mid_x, north[1] - mid_y
+            magnitude = max(1e-6, math.hypot(vx, vy))
+            rotate_center = QPointF(north[0] + vx / magnitude * 48, north[1] + vy / magnitude * 48)
+        else:
+            rotate_center = QPointF(mid_x, top - 48.0)
 
         self._gizmo_scale_rect = None
-        self._gizmo_rotate_rect = QRectF(
+        rotate_visual_rect = QRectF(
             rotate_center.x() - 10,
             rotate_center.y() - 10,
             20,
             20,
         )
+        self._gizmo_rotate_rect = rotate_visual_rect.adjusted(-7, -7, 7, 7)
 
         # Selection frame with improved styling.
         frame_pen = QPen(QColor("#58a6ff"), 1.2)
         painter.setPen(frame_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(QRectF(QPointF(left, top), QPointF(right, bottom)))
+        if local_points is None:
+            painter.drawRect(QRectF(QPointF(left, top), QPointF(right, bottom)))
+        else:
+            painter.drawPolygon(QPolygonF([QPointF(*local_points[name]) for name in ("sw", "se", "ne", "nw")]))
 
         # Larger handles with better hit areas (12px visual, 16px hit).
         hs = 6.0
@@ -1263,6 +1307,8 @@ class CanvasRenderer(_RendererBase):
             ("sw", left, bottom),
             ("w", left, mid_y),
         ]
+        if local_points is not None:
+            handles = [(name, *local_points[name]) for name in ("nw", "n", "ne", "e", "se", "s", "sw", "w")]
         self._gizmo_handle_rects = []
 
         # Familiar transform handles: square corners resize both axes;
@@ -1274,8 +1320,8 @@ class CanvasRenderer(_RendererBase):
 
         for name, hx, hy in handles:
             rect = QRectF(hx - hs, hy - hs, hs * 2, hs * 2)
-            # Generous hit area (16px), tight visual (12px).
-            self._gizmo_handle_rects.append((name, rect.adjusted(-4, -4, 4, 4)))
+            # 28px interaction target around a compact 12px visual handle.
+            self._gizmo_handle_rects.append((name, rect.adjusted(-8, -8, 8, 8)))
             if len(name) == 2:
                 painter.drawRoundedRect(rect, 2, 2)
             elif name in ("n", "s"):
@@ -1288,19 +1334,18 @@ class CanvasRenderer(_RendererBase):
         rotate_brush = QBrush(QColor("#3a2b16"))
         painter.setPen(rotate_pen)
         painter.setBrush(rotate_brush)
-        painter.drawEllipse(self._gizmo_rotate_rect)
+        painter.drawEllipse(rotate_visual_rect)
 
         # Dashed line from selection top-center to rotate handle.
         painter.setPen(QPen(QColor("#4a9eff"), 1.0, Qt.PenStyle.DashLine))
-        painter.drawLine(QPointF(mid_x, top), QPointF(rotate_center.x(), rotate_center.y()))
+        rotate_link = QPointF(*(local_points["n"] if local_points is not None else (mid_x, top)))
+        painter.drawLine(rotate_link, QPointF(rotate_center.x(), rotate_center.y()))
 
         # Move handle: a small 4-way arrow icon at the selection's center,
         # offering an unambiguous "grab here to drag" target distinct from
         # clicking the shape body (useful for thin/overlapping shapes).
         move_size = 11.0
-        self._gizmo_move_rect = QRectF(
-            mid_x - move_size, mid_y - move_size, move_size * 2, move_size * 2
-        )
+        self._gizmo_move_rect = QRectF(mid_x - 16, mid_y - 16, 32, 32)
         move_pen = QPen(QColor("#79c0ff"), 1.5)
         move_brush = QBrush(QColor(13, 17, 23, 235))
         painter.setPen(move_pen)
@@ -1363,6 +1408,22 @@ class CanvasRenderer(_RendererBase):
                 )
             )
         self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
+        key = self._property_highlight
+        if key:
+            left, right = min(bx0, bx1), max(bx0, bx1)
+            top, bottom = min(by0, by1), max(by0, by1)
+            mid_x, mid_y = (left + right) / 2.0, (top + bottom) / 2.0
+            painter.setPen(QPen(QColor("#f2cc60"), 2.4))
+            if key in {"w", "width", "rx"}:
+                painter.drawLine(QPointF(left, bottom + 12), QPointF(right, bottom + 12))
+            elif key in {"h", "height", "ry"}:
+                painter.drawLine(QPointF(right + 12, top), QPointF(right + 12, bottom))
+            elif key in {"x", "y", "center"}:
+                painter.drawEllipse(QPointF(mid_x, mid_y), 7, 7)
+            elif key in {"rotation", "angle"}:
+                painter.drawArc(QRectF(mid_x - 24, mid_y - 24, 48, 48), 20 * 16, 280 * 16)
+            elif key in {"radius", "inner_ratio"}:
+                painter.drawLine(QPointF(mid_x, mid_y), QPointF(right, mid_y))
 
     def _paint_inference_lines(self, painter: QPainter) -> None:
         """Draw dotted inference lines showing H/V alignment with existing endpoints."""
@@ -1423,6 +1484,45 @@ class CanvasRenderer(_RendererBase):
                 # Vertical inference line
                 painter.drawLine(QPointF(ecx, ecy), QPointF(ecx, cur_cy))
                 shown += 1
+
+        # Parallel/perpendicular inference against existing straight edges.
+        last_x, last_y = self._draw_pts[-1]
+        drag_angle = math.atan2(cur_wy - last_y, cur_wx - last_x)
+        drag_length = math.hypot(cur_wx - last_x, cur_wy - last_y)
+        if drag_length > 1e-6:
+            best_relation: tuple[float, float, str] | None = None
+            for entity in self._entities:
+                for first, second in zip(entity.points, entity.points[1:]):
+                    edge_angle = math.atan2(second[1] - first[1], second[0] - first[0])
+                    for candidate_angle, symbol in (
+                        (edge_angle, "Parallel"),
+                        (edge_angle + math.pi / 2.0, "Perpendicular"),
+                    ):
+                        delta = abs(
+                            (drag_angle - candidate_angle + math.pi / 2.0) % math.pi
+                            - math.pi / 2.0
+                        )
+                        if delta <= math.radians(3.0) and (
+                            best_relation is None or delta < best_relation[0]
+                        ):
+                            best_relation = (delta, candidate_angle, symbol)
+            if best_relation is not None:
+                _delta, inferred_angle, label = best_relation
+                end = (
+                    last_x + math.cos(inferred_angle) * drag_length,
+                    last_y + math.sin(inferred_angle) * drag_length,
+                )
+                start_c = self._w2c(last_x, last_y)
+                end_c = self._w2c(*end)
+                painter.setPen(QPen(QColor("#79c0ff"), 1.0, Qt.PenStyle.DashLine))
+                painter.drawLine(QPointF(*start_c), QPointF(*end_c))
+                self._draw_badge(
+                    painter,
+                    (start_c[0] + end_c[0]) / 2.0,
+                    (start_c[1] + end_c[1]) / 2.0 - 14.0,
+                    label,
+                    9,
+                )
 
     def _paint_geometry_health(self, painter: QPainter) -> None:
         """Overlay locatable topology findings without modifying geometry."""
@@ -1527,11 +1627,11 @@ class CanvasRenderer(_RendererBase):
         symbols = {
             "horizontal": "H",
             "vertical": "V",
-            "parallel": "∥",
-            "perpendicular": "⊥",
+            "parallel": "PAR",
+            "perpendicular": "PERP",
             "equal_length": "=",
-            "coincident": "●",
-            "fixed": "■",
+            "coincident": "CO",
+            "fixed": "FIX",
         }
         painter.setFont(_FONT_HEL_9_DEMIBOLD)
         shown = 0
@@ -1996,14 +2096,25 @@ class CanvasRenderer(_RendererBase):
             ftw = fm.horizontalAdvance(self._flash_text)
             fth = fm.height()
             fpad = 8
-            frx = w / 2 - ftw / 2 - fpad
-            fry = 40 + self._chrome_top()
+            anchor = getattr(self, "_flash_anchor_c", None)
+            if anchor is None:
+                anchor = (w / 2.0, 40.0 + self._chrome_top())
+            badge_w = ftw + 2 * fpad
+            badge_h = fth + fpad
+            frx = max(8.0, min(anchor[0] - badge_w / 2.0, w - badge_w - 8.0))
+            preferred_y = anchor[1] - badge_h - 22.0
+            fallback_y = anchor[1] + 22.0
+            fry = preferred_y if preferred_y >= self._chrome_top() + 8 else fallback_y
+            fry = max(
+                self._chrome_top() + 8.0,
+                min(fry, h - badge_h - 28.0),
+            )
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(20, 24, 36, 220)))
-            painter.drawRoundedRect(QRectF(frx, fry, ftw + 2 * fpad, fth + fpad), 4, 4)
+            painter.drawRoundedRect(QRectF(frx, fry, badge_w, badge_h), 4, 4)
             painter.setPen(QColor("#ffffff"))
             painter.drawText(
-                QRectF(frx, fry, ftw + 2 * fpad, fth + fpad),
+                QRectF(frx, fry, badge_w, badge_h),
                 Qt.AlignmentFlag.AlignCenter,
                 self._flash_text,
             )

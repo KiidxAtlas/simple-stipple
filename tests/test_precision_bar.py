@@ -40,6 +40,16 @@ def test_snap_menu_actions_drive_canvas_flags(qapp):
     bar._snap_actions["snap_tangent"].trigger()
     assert canvas._snap_tangent_enabled is False
 
+
+def test_sketch_palette_exposes_construction_and_constraints(qapp):
+    canvas = make_canvas(qapp, [[(0, 0), (10, 0)]])
+    canvas.set_selection([0])
+    bar = CanvasPrecisionBar(canvas)
+    bar._construction_btn.setChecked(True)
+    assert canvas._draw_construction_mode is True
+    bar._add_constraint("horizontal")
+    assert canvas._constraints[-1].kind == "horizontal"
+
     assert canvas._snap_extension_enabled is True
     bar._snap_actions["snap_extension"].trigger()
     assert canvas._snap_extension_enabled is False

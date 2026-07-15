@@ -35,7 +35,7 @@ from shapely.ops import linemerge, unary_union
 from shapely.ops import split as shapely_split
 
 from src.backend.constraints import GeometricConstraint, solve_constraints
-from src.backend.operations import OperationResult
+from src.backend.document import OperationResult
 from src.backend.shapes import ShapeFactory, transform_meta
 from src.backend.snapping import polygon_centroid as _polygon_centroid
 from src.backend.snapping import (
@@ -79,7 +79,7 @@ from src.ui.canvas.mixins.selection_ops import (
 from src.ui.canvas.snap import SnapEngine
 from src.ui.canvas.undo import HistoryState, UndoStore
 from src.ui.components import blur_focused_line_edit
-from src.ui.units import DEFAULT_UNIT_SYSTEM
+from src.ui.util import DEFAULT_UNIT_SYSTEM
 from src.ui.widgets.draw_sidebar import DrawSidebar
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
@@ -187,6 +187,7 @@ class PolylineView(
         self._document.next_group_id = int(value)
 
     selectionChanged = Signal(int)  # type: ignore[assignment]
+    geometryChanged = Signal()
     modeChanged = Signal(str)
     drawSidebarWidthChanged = Signal(int)
     drawSidebarHeightChanged = Signal(int)
@@ -513,6 +514,7 @@ class PolylineView(
         # center from its ORIGINAL (pre-drag) value every mouse-move event,
         # instead of compounding the transform onto an already-updated value.
         self._gizmo_meta_snapshot: dict[int, dict[str, Any] | None] = {}
+        self._gizmo_local_shape: dict[str, Any] | None = None
         self._gizmo_drag_moved: bool = False
         self._gizmo_undo_pushed: bool = False
         # Persistent aspect-ratio lock (properties panel toggle) — unlike
@@ -520,6 +522,7 @@ class PolylineView(
         # across both gizmo drags and typed width/height edits until
         # explicitly turned off.
         self._aspect_ratio_locked: bool = False
+        self._property_highlight: str | None = None
 
         # Auto-constraint detection (H/V)
         self._draw_constraint: str | None = None
@@ -951,6 +954,31 @@ class PolylineView(
             "precision": " · ".join(precision) if precision else "Free move",
             "topology": (f"{topo['closed']} closed · {topo['open']} open · {topo['points']} pts"),
         }
+
+    def get_command_guidance(self) -> tuple[str, str]:
+        """Persistent next-step guidance for the active canvas command."""
+        if self._dimension_mode:
+            step = len(self._dim_pending)
+            return (("Pick first point" if step == 0 else "Pick second point"), "accent")
+        if self._measure_mode:
+            if self._measure_anchor is None:
+                return "Measure: pick first point · Esc exits", "accent"
+            if not self._measure_locked:
+                return "Measure: pick second point · Shift snaps angle", "accent"
+            return "Measurement locked · Enter edits scale · Esc exits", "success"
+        if self._mode == "draw":
+            if not self._draw_pts and not self._draw_shape_preview_active:
+                return f"{self._draw_primitive.title()}: pick first point · Esc exits", "accent"
+            return f"{self._draw_primitive.title()}: pick next point · Enter finishes · Esc cancels", "accent"
+        if self._mode == "edit":
+            return "Edit vertices: drag points · double-click an edge to insert · Esc exits", "accent"
+        if self._mode == "trim":
+            return "Trim: hover a segment to preview removal · click to apply · Esc exits", "accent"
+        if self._mode == "extend":
+            return "Extend: hover an open end to preview · click to apply · Esc exits", "accent"
+        if self._sel:
+            return f"{len(self._sel)} selected · use contextual actions or drag the gizmo", "success"
+        return "Select geometry · drag empty space for a selection window", "neutral"
 
     def get_precision_state(self) -> dict[str, object]:
         """Public snapshot consumed by the shared precision bar."""
@@ -2313,6 +2341,11 @@ class PolylineView(
         typed W/H fields and gizmo-handle drags, until turned off again."""
         self._aspect_ratio_locked = bool(enabled)
 
+    def set_property_highlight(self, key: str | None) -> None:
+        """Highlight the geometry controlled by a focused inspector field."""
+        self._property_highlight = str(key) if key else None
+        self._redraw()
+
     def get_zoom_percent(self) -> int:
         if self._fit_scale < _MIN_SCALE:
             return 100
@@ -2892,17 +2925,21 @@ class PolylineView(
         w = abs(ex - sx)
         h = abs(ey - sy)
         cx, cy = self._w2c((sx + ex) / 2.0, (sy + ey) / 2.0)
+        field_x, field_y = self._hud_position_near(
+            cx, cy, 86, 80 if self._draw_primitive in {"polygon", "star"} else 52,
+            offset_x=16, offset_y=12,
+        )
 
         w_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
         w_edit.setText(f"{w:.2f}")
         w_edit.setProperty("shape_hud_temp", True)
-        w_edit.move(int(cx + 16), int(cy + 12))
+        w_edit.move(field_x, field_y)
         w_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
 
         h_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
         h_edit.setText(f"{h:.2f}")
         h_edit.setProperty("shape_hud_temp", True)
-        h_edit.move(int(cx + 16), int(cy + 40))
+        h_edit.move(field_x, field_y + 28)
         h_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
 
         self._draw_shape_w_edit = w_edit
@@ -2918,7 +2955,7 @@ class PolylineView(
             )
             sides_spin = self._make_hud_spinbox(minimum=3, maximum=64, value=count)
             sides_spin.setProperty("shape_hud_temp", True)
-            sides_spin.move(int(cx + 16), int(cy + 68))
+            sides_spin.move(field_x, field_y + 56)
             sides_spin.valueChanged.connect(self._on_polygon_sides_spin_changed)
             self._draw_shape_sides_spin = sides_spin
 
@@ -4392,6 +4429,17 @@ class PolylineView(
             return False
         if len(indices) == 1 and len(self._entities[indices[0]].points) == 2:
             return self._scale_single_line_extent(indices[0], "h", height)
+        if len(indices) == 1:
+            entity = self._entities[indices[0]]
+            parameter = {
+                "rectangle": ("height", height),
+                "rounded_rectangle": ("height", height),
+                "ellipse": ("ry", height / 2.0),
+                "circle": ("radius", height / 2.0),
+                "slot": ("width", height),
+            }.get(entity.kind)
+            if parameter is not None:
+                return self.set_shape_param(indices[0], *parameter)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
         if cur_h <= 1e-6:
@@ -4418,6 +4466,17 @@ class PolylineView(
             return False
         if len(indices) == 1 and len(self._entities[indices[0]].points) == 2:
             return self._scale_single_line_extent(indices[0], "w", width)
+        if len(indices) == 1:
+            entity = self._entities[indices[0]]
+            parameter = {
+                "rectangle": ("width", width),
+                "rounded_rectangle": ("width", width),
+                "ellipse": ("rx", width / 2.0),
+                "circle": ("radius", width / 2.0),
+                "slot": ("length", width),
+            }.get(entity.kind)
+            if parameter is not None:
+                return self.set_shape_param(indices[0], *parameter)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
         if cur_w <= 1e-6:
@@ -4520,6 +4579,73 @@ class PolylineView(
             )
         )
         return True
+
+    def preview_trim_at(self, cx: float, cy: float) -> None:
+        """Preview the exact segment that a trim click would remove."""
+        idx = self._find_poly_at(cx, cy)
+        if idx is None:
+            self._clear_operation_preview()
+            return
+        cutters = self._other_linework(idx)
+        if cutters is None or cutters.is_empty:
+            self._clear_operation_preview()
+            return
+        try:
+            pieces = [
+                g for g in shapely_split(LineString(self._entities[idx].points), cutters).geoms
+                if isinstance(g, LineString) and len(g.coords) >= 2
+            ]
+        except GEOSException:
+            pieces = []
+        if len(pieces) < 2:
+            self._clear_operation_preview()
+            return
+        wx, wy = self._c2w(cx, cy)
+        drop = min(pieces, key=lambda geometry: geometry.distance(Point(wx, wy)))
+        self._set_operation_preview([[(float(x), float(y)) for x, y in drop.coords]])
+
+    def preview_extend_at(self, cx: float, cy: float) -> None:
+        """Preview extension from the nearest open endpoint to its first target."""
+        best: tuple[int, int, float] | None = None
+        for index, entity in enumerate(self._entities):
+            if len(entity.points) < 2 or self._is_poly_closed(entity.points):
+                continue
+            for endsel in (0, -1):
+                ex, ey = self._w2c(*entity.points[endsel])
+                distance = math.hypot(cx - ex, cy - ey)
+                if distance < 18 and (best is None or distance < best[2]):
+                    best = (index, endsel, distance)
+        if best is None:
+            self._clear_operation_preview()
+            return
+        index, endsel, _distance = best
+        points = self._entities[index].points
+        tip = points[endsel]
+        neighbor = points[1] if endsel == 0 else points[-2]
+        dx, dy = tip[0] - neighbor[0], tip[1] - neighbor[1]
+        length = math.hypot(dx, dy)
+        others = self._other_linework(index)
+        if length < 1e-9 or others is None or others.is_empty:
+            self._clear_operation_preview()
+            return
+        reach = max(self._bbox()[2] - self._bbox()[0], self._bbox()[3] - self._bbox()[1], 1.0) * 3
+        ray = LineString([tip, (tip[0] + dx / length * reach, tip[1] + dy / length * reach)])
+        try:
+            intersection = ray.intersection(others)
+        except GEOSException:
+            self._clear_operation_preview()
+            return
+        candidates = []
+        for geometry in getattr(intersection, "geoms", [intersection]):
+            if isinstance(geometry, Point):
+                distance = math.dist(tip, (geometry.x, geometry.y))
+                if distance > 1e-6:
+                    candidates.append((distance, (float(geometry.x), float(geometry.y))))
+        if candidates:
+            hit = min(candidates)[1]
+            self._set_operation_preview([[tip, hit]])
+        else:
+            self._clear_operation_preview()
 
     def extend_at(self, cx: float, cy: float) -> bool:
         """Lengthen the nearest open polyline end to its first intersection
@@ -4761,6 +4887,40 @@ class PolylineView(
             info["kind"] = e.kind
             info["meta"] = deepcopy(e.meta) if e.meta else {}
             info["index"] = indices[0]
+            display_kind = e.kind
+            display_meta = info["meta"]
+            if e.kind == "polyline":
+                from src.backend.recognition import recognize_polyline
+
+                recognized = recognize_polyline(e.points)
+                if recognized is not None:
+                    display_kind = recognized.kind
+                    display_meta = dict(recognized.metadata)
+                    sides = int(display_meta.get("sides", 0) or 0)
+                    if display_kind == "polygon" and sides == 3:
+                        display_kind = "triangle"
+            info["display_kind"] = display_kind
+            rotation = display_meta.get("rotation")
+            if rotation is None and len(e.points) >= 2:
+                for first, second in zip(e.points, e.points[1:]):
+                    dx, dy = second[0] - first[0], second[1] - first[1]
+                    if math.hypot(dx, dy) > 1e-9:
+                        rotation = math.degrees(math.atan2(dy, dx))
+                        break
+            info["rotation"] = float(rotation or 0.0) % 360.0
+            if e.meta:
+                if e.kind in {"rectangle", "rounded_rectangle"}:
+                    info["w"] = float(e.meta.get("width", info["w"]))
+                    info["h"] = float(e.meta.get("height", info["h"]))
+                elif e.kind == "ellipse":
+                    info["w"] = 2.0 * float(e.meta.get("rx", info["w"] / 2.0))
+                    info["h"] = 2.0 * float(e.meta.get("ry", info["h"] / 2.0))
+                elif e.kind == "circle":
+                    diameter = 2.0 * float(e.meta.get("radius", info["w"] / 2.0))
+                    info["w"] = info["h"] = diameter
+                elif e.kind == "slot":
+                    info["w"] = float(e.meta.get("length", info["w"]))
+                    info["h"] = float(e.meta.get("width", info["h"]))
             if e.kind == "circle" and e.meta and e.meta.get("radius") is not None:
                 info["diameter"] = 2.0 * float(e.meta["radius"])
         return info
@@ -5341,7 +5501,7 @@ class PolylineView(
             return
         payload = [[(x, y) for x, y in poly] for poly in selected]
         cb(payload)
-        self._show_flash("Sent to Pattern Fill", 900)
+        self._show_flash("Sent to Pattern", 900)
 
     def _use_selected_as_custom_tile(self) -> None:
         cb = getattr(self, "_use_selected_as_custom_tile_cb", None)

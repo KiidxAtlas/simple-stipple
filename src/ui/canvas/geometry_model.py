@@ -174,7 +174,7 @@ def move_entity_control_point(
     if not isinstance(geometry, ShapeGeometry):
         return False
     shape = geometry.shape
-    if shape.shape_type not in {"arc", "rectangle"}:
+    if shape.shape_type not in {"arc", "circle", "ellipse", "rectangle"}:
         return False
     control_index = index
     if shape.shape_type == "arc":
@@ -184,6 +184,13 @@ def move_entity_control_point(
             control_index = 2
         else:
             return False
+    elif shape.shape_type == "circle":
+        control_index = 1
+    elif shape.shape_type == "ellipse":
+        if displayed_point_count is None or displayed_point_count < 5:
+            return False
+        fraction = index / max(1, displayed_point_count - 1)
+        control_index = int(round(fraction * 4.0)) % 4 + 1
     if not shape.move_control_point(control_index, point):
         return False
     _write_shape_to_entity(entity, shape)

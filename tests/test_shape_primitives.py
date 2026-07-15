@@ -8,6 +8,27 @@ from src.backend.geometry import build_rounded_rect_poly, build_star_poly
 from src.backend.shapes import RoundedRectangleShape, ShapeFactory, StarShape
 
 
+def test_circle_and_ellipse_control_drags_preserve_parametric_metadata():
+    from src.ui.canvas.document import EntityRecord
+    from src.ui.canvas.geometry_model import move_entity_control_point
+
+    circle = EntityRecord(
+        points=[], kind="circle", meta={"center": (0, 0), "radius": 5, "segments": 48}
+    )
+    assert move_entity_control_point(circle, 17, (8, 0), displayed_point_count=49)
+    assert circle.kind == "circle"
+    assert circle.meta["radius"] == pytest.approx(8)
+
+    ellipse = EntityRecord(
+        points=[],
+        kind="ellipse",
+        meta={"center": (0, 0), "rx": 5, "ry": 3, "rotation": 0, "segments": 48},
+    )
+    assert move_entity_control_point(ellipse, 12, (0, 7), displayed_point_count=49)
+    assert ellipse.kind == "ellipse"
+    assert ellipse.meta["ry"] == pytest.approx(7)
+
+
 def test_rounded_rectangle_is_closed_and_clamps_large_radius():
     points = build_rounded_rect_poly(0.0, 0.0, 20.0, 10.0, radius=99.0)
     assert points[0] == points[-1]

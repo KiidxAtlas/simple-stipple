@@ -165,3 +165,59 @@ def test_pattern_cell_fill_ignores_open_strokes_instead_of_failing():
 
     assert result
     assert fill == []
+
+
+def test_zone_explicit_no_fill_does_not_inherit_document_fill(monkeypatch):
+    service = PatternProcessingService()
+    calls = []
+
+    def fake_build(*args, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(service, "build_pattern_polys", fake_build)
+    service.build_zone_pattern_polys(
+        [{
+            "polys": [OUTER],
+            "pattern": "Honeycomb",
+            "params": {},
+            "scale": (100.0, 100.0),
+            "fill": None,
+            "output_mode": "pattern",
+        }],
+        include_border=True,
+        orig_w=100.0,
+        orig_h=100.0,
+        fill_options={"mode": "lines", "spacing": 2.0},
+    )
+
+    assert calls[0]["pattern"] == "Honeycomb"
+    assert calls[0]["fill_options"] is None
+
+
+def test_fill_only_zone_suppresses_pattern_but_keeps_its_fill(monkeypatch):
+    service = PatternProcessingService()
+    calls = []
+    zone_fill = {"mode": "crosshatch", "spacing": 1.25}
+
+    def fake_build(*args, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(service, "build_pattern_polys", fake_build)
+    service.build_zone_pattern_polys(
+        [{
+            "polys": [OUTER],
+            "pattern": "Honeycomb",
+            "params": {},
+            "scale": (100.0, 100.0),
+            "fill": zone_fill,
+            "output_mode": "fill",
+        }],
+        include_border=True,
+        orig_w=100.0,
+        orig_h=100.0,
+    )
+
+    assert calls[0]["pattern"] == "— None —"
+    assert calls[0]["fill_options"] == zone_fill

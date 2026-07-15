@@ -203,13 +203,13 @@ class PresetManagerDialog(QDialog):
         name = self._selected_name()
         if name is None:
             return
-        new_name, ok = QInputDialog.getText(self, "Rename preset", "New name:", text=name)
+        new_name, ok = QInputDialog.getText(self, "Rename Preset", "New name:", text=name)
         new_name = new_name.strip()
         if not ok or not new_name or new_name == name:
             return
         if new_name in self._presets:
             QMessageBox.warning(
-                self, "Rename preset", f"A preset called {new_name!r} already exists."
+                self, "Rename Preset", f"A preset called {new_name!r} already exists."
             )
             return
         self._presets[new_name] = self._presets.pop(name)
@@ -238,7 +238,7 @@ class PresetManagerDialog(QDialog):
             return
         result = QMessageBox.question(
             self,
-            "Delete preset",
+            "Delete Preset",
             f"Delete preset {name!r}? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -272,7 +272,7 @@ class PresetManagerDialog(QDialog):
         try:
             export_to_file({name: self._presets[name]}, path)
         except OSError as exc:
-            QMessageBox.critical(self, "Export failed", str(exc))
+            QMessageBox.critical(self, "Export Failed", str(exc))
             return
         self._set_status(f"Exported 1 preset → {Path(path).name}")
 
@@ -292,7 +292,7 @@ class PresetManagerDialog(QDialog):
         try:
             export_to_file(self._presets, path)
         except OSError as exc:
-            QMessageBox.critical(self, "Export failed", str(exc))
+            QMessageBox.critical(self, "Export Failed", str(exc))
             return
         self._set_status(f"Exported {len(self._presets)} preset(s) → {Path(path).name}")
 
@@ -301,7 +301,7 @@ class PresetManagerDialog(QDialog):
             self,
             self._settings,
             "pattern_preset_io",
-            "Import presets",
+            "Import Presets",
             "JSON files (*.json);;All files (*)",
         )
         if not path:
@@ -309,11 +309,11 @@ class PresetManagerDialog(QDialog):
         try:
             incoming = import_from_file(path)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Import failed", str(exc))
+            QMessageBox.critical(self, "Import Failed", str(exc))
             return
         if not incoming:
             QMessageBox.warning(
-                self, "Import presets", "No recognizable presets found in the file."
+                self, "Import Presets", "No recognizable presets found in the file."
             )
             return
         # Ask user how to handle collisions if any names overlap.

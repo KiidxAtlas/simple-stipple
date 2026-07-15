@@ -64,7 +64,6 @@ class CanvasStatusStrip(QFrame):
         self._readiness_chip = info_chip("No geometry", "warn")
         layout.addWidget(self._readiness_chip)
         self._readiness_dot.hide()
-        self._readiness_chip.hide()
 
     @staticmethod
     def _dot() -> QLabel:
@@ -127,6 +126,13 @@ class CanvasStatusStrip(QFrame):
         self._selection_label.setProperty("active", bool(count))
         self._selection_label.style().unpolish(self._selection_label)
         self._selection_label.style().polish(self._selection_label)
+
+    def set_readiness(self, text: str, tone: str = "neutral") -> None:
+        """Lightweight command-lifecycle update without rebuilding page state."""
+        self._readiness_chip.setText(text)
+        self._readiness_chip.setProperty("tone", tone)
+        self._readiness_chip.style().unpolish(self._readiness_chip)
+        self._readiness_chip.style().polish(self._readiness_chip)
 
 
 __all__ = ["CanvasStatusStrip"]

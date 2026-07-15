@@ -33,9 +33,9 @@ from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath
 from PySide6.QtWidgets import QLineEdit, QSpinBox
 
 from src.infra.paths import user_data_dir
-from src.ui.units import from_display as _from_display
-from src.ui.units import suffix as _unit_suffix
-from src.ui.units import to_display as _to_display
+from src.ui.util import parse_numeric_expression as _parse_expression
+from src.ui.util import suffix as _unit_suffix
+from src.ui.util import to_display as _to_display
 
 LOGGER = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class HudMixin(_HudBase):
 
     def _show_flash(self, text: str, duration_ms: int = 1200) -> None:
         """Show a brief flash indicator on the canvas."""
-        from src.ui.notifications import record_notification
+        from src.ui.util import record_notification
 
         record_notification(text)
         settings = getattr(self, "_settings", {})
@@ -111,6 +111,15 @@ class HudMixin(_HudBase):
         elif settings.get("reduced_motion"):
             duration_ms = min(duration_ms, 700)
         self._flash_text = text
+        if self._cursor_wx is not None and self._cursor_wy is not None:
+            self._flash_anchor_c = self._w2c(self._cursor_wx, self._cursor_wy)
+        else:
+            bounds = self._selection_bounds()
+            self._flash_anchor_c = (
+                self._w2c((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
+                if bounds is not None
+                else None
+            )
         if self._flash_timer is not None:
             self._flash_timer.stop()
         self._flash_timer = QTimer(cast("QWidget", self))
@@ -121,6 +130,7 @@ class HudMixin(_HudBase):
 
     def _clear_flash(self) -> None:
         self._flash_text = None
+        self._flash_anchor_c = None
         self._flash_timer = None
         self._redraw()
 
@@ -200,7 +210,7 @@ class HudMixin(_HudBase):
         is_length: bool = True,
         preview=None,
     ) -> None:
-        """Inline numeric prompt near the canvas center: Enter commits,
+        """Inline numeric prompt anchored to the active drawing context: Enter commits,
         Escape dismisses. Replaces modal QInputDialog for canvas ops.
 
         ``is_length`` marks *default*/the parsed value as an mm length that
@@ -216,7 +226,7 @@ class HudMixin(_HudBase):
         edit.setText(f"{display_default:g}")
         edit.selectAll()
         edit.setToolTip(display_label)
-        edit.move(int(self.width() / 2 - 60), int(self.height() / 2 - 11))
+        edit.move(*self._context_hud_position(120, 22))
         self._hud_prompt_edit = edit
         self._show_flash(display_label, 1600)
 
@@ -224,8 +234,7 @@ class HudMixin(_HudBase):
             if preview is None:
                 return
             try:
-                raw = float(text)
-                value = _from_display(raw, unit) if unit else raw
+                value = _parse_expression(text, unit or "mm", is_length=is_length)
             except (TypeError, ValueError):
                 self._clear_operation_preview()
                 return
@@ -240,11 +249,10 @@ class HudMixin(_HudBase):
 
         def _commit() -> None:
             try:
-                raw = float(edit.text())
+                value = _parse_expression(edit.text(), unit or "mm", is_length=is_length)
             except (TypeError, ValueError):
                 self._dismiss_hud_prompt()
                 return
-            value = _from_display(raw, unit) if unit else raw
             if minimum is not None and value < minimum:
                 self._dismiss_hud_prompt()
                 return
@@ -266,7 +274,7 @@ class HudMixin(_HudBase):
         self._dismiss_hud_prompt()
         edit = self._make_hud_edit(placeholder=label, width=width, height=24)
         edit.setText(initial)
-        edit.move(int(self.width() / 2 - width / 2), int(self.height() / 2 - 12))
+        edit.move(*self._context_hud_position(width, 24))
         edit.setToolTip(label)
         self._hud_prompt_edit = edit
         self._show_flash(label, 1800)
@@ -286,6 +294,36 @@ class HudMixin(_HudBase):
 
         edit.returnPressed.connect(_commit)
         edit.setFocus()
+
+    def _context_hud_position(self, width: int, height: int) -> tuple[int, int]:
+        """Anchor prompts near cursor/selection while keeping them on canvas."""
+        if self._cursor_wx is not None and self._cursor_wy is not None:
+            anchor_x, anchor_y = self._w2c(self._cursor_wx, self._cursor_wy)
+        else:
+            bounds = self._selection_bounds()
+            if bounds is not None:
+                anchor_x, anchor_y = self._w2c(
+                    (bounds[0] + bounds[2]) / 2.0,
+                    (bounds[1] + bounds[3]) / 2.0,
+                )
+            else:
+                anchor_x, anchor_y = self.width() / 2.0, self.height() / 2.0
+        return self._hud_position_near(anchor_x, anchor_y, width, height)
+
+    def _hud_position_near(
+        self,
+        anchor_x: float,
+        anchor_y: float,
+        width: int,
+        height: int,
+        *,
+        offset_x: int = 20,
+        offset_y: int = 18,
+    ) -> tuple[int, int]:
+        """Place a world-context control near its anchor without clipping."""
+        x = max(8, min(int(anchor_x + offset_x), max(8, self.width() - width - 8)))
+        y = max(8, min(int(anchor_y + offset_y), max(8, self.height() - height - 8)))
+        return x, y
 
     def _dismiss_hud_prompt(self) -> None:
         edit = getattr(self, "_hud_prompt_edit", None)
@@ -361,7 +399,11 @@ class HudMixin(_HudBase):
         )
         edit.setText(f"{cur_val:.3f}")
         edit.selectAll()
-        edit.move(int(rect.x()), int(rect.y()))
+        # Keep the editor registered with the badge it replaces, but never
+        # force the user to chase a clipped field beyond the canvas edge.
+        edit_x = max(8, min(int(rect.x()), max(8, self.width() - edit.width() - 8)))
+        edit_y = max(8, min(int(rect.y()), max(8, self.height() - edit.height() - 8)))
+        edit.move(edit_x, edit_y)
         edit.setFocus()
         edit.returnPressed.connect(lambda: self._apply_sel_dim_editor())
         edit.editingFinished.connect(lambda: self._apply_sel_dim_editor())
@@ -485,7 +527,7 @@ class HudMixin(_HudBase):
             dist_text = self._dim_distance_edit.text().strip() if self._dim_distance_edit else ""
             angle_text = self._dim_angle_edit.text().strip() if self._dim_angle_edit else ""
             if angle_text:
-                angle_deg = float(angle_text)
+                angle_deg = _parse_expression(angle_text, is_length=False)
             elif self._cursor_wx is not None and self._cursor_wy is not None:
                 angle_deg = math.degrees(
                     math.atan2(
@@ -496,7 +538,7 @@ class HudMixin(_HudBase):
             else:
                 angle_deg = 0.0
             if dist_text:
-                dist = float(dist_text)
+                dist = _parse_expression(dist_text, self._unit_system, is_length=True)
             elif self._cursor_wx is not None and self._cursor_wy is not None:
                 # Angle-only entry: project the cursor onto the typed-angle ray
                 # so the length still tracks the pointer.
@@ -543,7 +585,16 @@ class HudMixin(_HudBase):
             "background: #001522; color: #ffffff; border: 1px solid #00d8ff;"
             "border-radius: 3px; font-size: 12px; font-weight: bold;"
         )
-        le.move(int(mx - 50), int(my - 40))
+        le.move(
+            *self._hud_position_near(
+                mx,
+                my,
+                100,
+                24,
+                offset_x=-50,
+                offset_y=-40,
+            )
+        )
         le.show()
         le.setFocus()
         le.selectAll()

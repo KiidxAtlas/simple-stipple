@@ -60,7 +60,7 @@ def _toggle_states(icon_name: str, label: str) -> list[StateEntry]:
 
 
 class _ResizeHandle(QFrame):
-    """Thin drag handle docked to the sidebar's right edge."""
+    """Wide invisible hit target with a thin visual resize affordance."""
 
     def __init__(self, sidebar: DrawSidebar) -> None:
         super().__init__(sidebar)
@@ -68,7 +68,7 @@ class _ResizeHandle(QFrame):
         self._dragging = False
         self._drag_start_global_x = 0.0
         self._drag_start_width = 0
-        self.setFixedWidth(6)
+        self.setFixedWidth(14)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setStyleSheet(
             "QFrame { background: transparent; }"
@@ -103,7 +103,7 @@ class _BottomResizeHandle(QFrame):
         self._dragging = False
         self._drag_start_global_y = 0.0
         self._drag_start_height = 0
-        self.setFixedHeight(6)
+        self.setFixedHeight(14)
         self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setStyleSheet(
             "QFrame { background: transparent; }"
@@ -180,9 +180,9 @@ class DrawSidebar(QFrame):
                 letter-spacing: 0.5px;
             }
             QFrame#draw-side-panel QLabel[role='section-title'] {
-                color: #8b949e;
-                font-size: 9px;
-                font-weight: 600;
+                color: #c9d1d9;
+                font-size: 10px;
+                font-weight: 700;
                 letter-spacing: 1px;
                 text-transform: uppercase;
             }
@@ -213,14 +213,16 @@ class DrawSidebar(QFrame):
         outer.setSpacing(4)
 
         scroll = QScrollArea(self)
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         content = QWidget(scroll)
+        self._content = content
         col = QVBoxLayout(content)
         col.setContentsMargins(2, 2, 2, 2)
-        col.setSpacing(8)
+        col.setSpacing(14)
 
         title = QLabel("Draw")
         title.setProperty("role", "title")
@@ -326,7 +328,7 @@ class DrawSidebar(QFrame):
             path_buttons.append(self._arc_mode_button)
         shape_buttons = [self._shapes_buttons[t] for t in self._shape_tools]
 
-        section_frames: dict[str, QFrame] = {
+        section_frames: dict[str, QWidget] = {
             "path": self._section("Path", path_buttons, columns=2),
             "shapes": self._section("Shapes", shape_buttons, columns=2),
             "text": self._section("Text", [self._text_button]),
@@ -391,31 +393,36 @@ class DrawSidebar(QFrame):
         CycleIconButton's str-id contract."""
         return lambda sid: fn(sid == "on")
 
-    def _section(self, caption: str, buttons: list[CycleIconButton], *, columns: int = 1) -> QFrame:
-        frame = QFrame(self)
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(4)
+    def _section(
+        self, caption: str, buttons: list[CycleIconButton], *, columns: int = 1
+    ) -> QWidget:
+        # Deliberately borderless: proximity, whitespace, and typography do
+        # the grouping instead of nesting a card inside the sidebar card.
+        section = QWidget(self)
+        section.setProperty("role", "draw-section")
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(7)
 
         label = QLabel(caption)
         label.setProperty("role", "section-title")
-        label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         # Word-wrap defensively: a caption that renders wider than the
         # sidebar under the real system font shouldn't be able to force
         # the whole panel wider — wrapping keeps the layout's width fixed.
         label.setWordWrap(True)
-        label.setMaximumWidth(90)
-        layout.addWidget(label, alignment=Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(label)
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(4)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
         for i, btn in enumerate(buttons):
             grid.addWidget(btn, i // columns, i % columns)
-        grid_wrap = QWidget(frame)
+        grid_wrap = QWidget(section)
         grid_wrap.setLayout(grid)
         layout.addWidget(grid_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
-        return frame
+        return section
 
     # -- state sync (called from view.py) ------------------------------------
 

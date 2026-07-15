@@ -29,6 +29,9 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
+from src.backend.shapes import transform_meta
+from src.ui.canvas.geometry_model import transform_entity_metadata, update_entity_parameter
+
 # Process-wide clipboard (shared across every canvas instance — Pattern,
 # Draft, Trace, Convert, plus any additional windows) so copy in one tab and
 # paste in another actually round-trips — a plain per-instance list would
@@ -434,19 +437,49 @@ class GizmoDragMixin(_GizmoBase):
             return False
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
+        self._gizmo_local_shape = None
         if mode.startswith("scale-"):
             frac_a, frac_h = self._HANDLE_ANCHORS[mode[6:]]
             if from_center:
                 frac_a = (0.5, 0.5)
-            x0, y0, x1, y1 = bounds
-            self._gizmo_anchor_w = (
-                x0 + (x1 - x0) * frac_a[0],
-                y0 + (y1 - y0) * frac_a[1],
-            )
-            self._gizmo_handle_w = (
-                x0 + (x1 - x0) * frac_h[0],
-                y0 + (y1 - y0) * frac_h[1],
-            )
+            indices = self._mutable_selected_indices()
+            entity = self._entities[indices[0]] if len(indices) == 1 else None
+            meta = entity.meta if entity is not None and isinstance(entity.meta, dict) else None
+            dims = None
+            if entity is not None and meta is not None:
+                if entity.kind in {"rectangle", "rounded_rectangle"}:
+                    dims = (float(meta.get("width", 0)), float(meta.get("height", 0)), "width", "height")
+                elif entity.kind == "ellipse":
+                    dims = (2 * float(meta.get("rx", 0)), 2 * float(meta.get("ry", 0)), "rx", "ry")
+                elif entity.kind == "circle":
+                    diameter = 2 * float(meta.get("radius", 0))
+                    dims = (diameter, diameter, "radius", "radius")
+                elif entity.kind == "slot":
+                    dims = (float(meta.get("length", 0)), float(meta.get("width", 0)), "length", "width")
+            if dims is not None and min(dims[0], dims[1]) > 1e-9:
+                cx, cy = (float(v) for v in meta.get("center", (cx, cy)))
+                rotation = float(meta.get("rotation", 0.0))
+                angle = math.radians(rotation)
+
+                def _world(frac: tuple[float, float]) -> tuple[float, float]:
+                    lx = (frac[0] - 0.5) * dims[0]
+                    ly = (frac[1] - 0.5) * dims[1]
+                    return (
+                        cx + lx * math.cos(angle) - ly * math.sin(angle),
+                        cy + lx * math.sin(angle) + ly * math.cos(angle),
+                    )
+
+                self._gizmo_anchor_w = _world(frac_a)
+                self._gizmo_handle_w = _world(frac_h)
+                self._gizmo_local_shape = {
+                    "index": indices[0], "center": (cx, cy), "rotation": rotation,
+                    "width": dims[0], "height": dims[1], "x_key": dims[2], "y_key": dims[3],
+                    "from_center": from_center,
+                }
+            else:
+                x0, y0, x1, y1 = bounds
+                self._gizmo_anchor_w = (x0 + (x1 - x0) * frac_a[0], y0 + (y1 - y0) * frac_a[1])
+                self._gizmo_handle_w = (x0 + (x1 - x0) * frac_h[0], y0 + (y1 - y0) * frac_h[1])
         else:
             vec = (wx - cx, wy - cy)
             if math.hypot(vec[0], vec[1]) < 1e-9:
@@ -478,6 +511,9 @@ class GizmoDragMixin(_GizmoBase):
         if self._gizmo_anchor_w is None or self._gizmo_handle_w is None:
             return
         handle = (self._gizmo_drag_mode or "")[6:]
+        if self._gizmo_local_shape is not None:
+            self._apply_local_parametric_scale(handle, wx, wy, mods)
+            return
         ax, ay = self._gizmo_anchor_w
         hx, hy = self._gizmo_handle_w
 
@@ -548,14 +584,84 @@ class GizmoDragMixin(_GizmoBase):
             # start snapshot (never the live/already-updated meta) so
             # repeated mouse-move events don't compound the transform.
             snap_meta = self._gizmo_meta_snapshot.get(idx)
-            if isinstance(snap_meta, dict) and isinstance(snap_meta.get("center"), (tuple, list)):
-                cx0, cy0 = snap_meta["center"][0], snap_meta["center"][1]
-                new_meta = dict(snap_meta)
-                new_meta["center"] = (
-                    ax + (float(cx0) - ax) * sx,
-                    ay + (float(cy0) - ay) * sy,
-                )
-                self._entities[idx].meta = new_meta
+            if isinstance(snap_meta, dict):
+                if abs(sx - sy) <= 1e-9:
+                    new_meta = transform_meta(
+                        self._entities[idx].kind,
+                        snap_meta,
+                        transform="scale",
+                        center=(ax, ay),
+                        factor=sx,
+                    )
+                    self._entities[idx].meta = new_meta if new_meta is not None else snap_meta
+                else:
+                    # A world-axis non-uniform scale can turn circles into
+                    # ellipses and rotated rectangles into parallelograms.
+                    # Those results cannot be represented truthfully by the
+                    # original parametric schema. Keep the transformed points
+                    # as canonical geometry instead of leaving stale metadata
+                    # that redraw would use to restore the old shape.
+                    self._entities[idx].kind = "polyline"
+                    self._entities[idx].meta = None
+        self.geometryChanged.emit()
+
+    def _apply_local_parametric_scale(
+        self, handle: str, wx: float, wy: float, mods: Qt.KeyboardModifier | None
+    ) -> None:
+        """Resize a rotated parametric shape in its own coordinate system."""
+        state = self._gizmo_local_shape
+        if state is None or self._gizmo_anchor_w is None:
+            return
+        idx = int(state["index"])
+        cx, cy = state["center"]
+        angle = math.radians(-float(state["rotation"]))
+
+        def _local(point: tuple[float, float]) -> tuple[float, float]:
+            dx, dy = point[0] - cx, point[1] - cy
+            return (dx * math.cos(angle) - dy * math.sin(angle), dx * math.sin(angle) + dy * math.cos(angle))
+
+        ax, ay = _local(self._gizmo_anchor_w)
+        px, py = _local((wx, wy))
+        width, height = float(state["width"]), float(state["height"])
+        new_w = width if handle in {"n", "s"} else max(1e-3, abs(px - ax))
+        new_h = height if handle in {"e", "w"} else max(1e-3, abs(py - ay))
+        if state["from_center"]:
+            new_w = width if handle in {"n", "s"} else max(1e-3, 2 * abs(px))
+            new_h = height if handle in {"e", "w"} else max(1e-3, 2 * abs(py))
+        if mods is not None and mods & Qt.KeyboardModifier.ShiftModifier:
+            factor = max(new_w / width, new_h / height)
+            new_w, new_h = width * factor, height * factor
+        if state["x_key"] == state["y_key"]:
+            diameter = new_w if handle in {"e", "w"} else new_h
+            if len(handle) == 2:
+                diameter = max(new_w, new_h)
+            new_w = new_h = diameter
+        candidate = deepcopy(self._entities[idx])
+        x_value = new_w / 2.0 if state["x_key"] in {"rx", "radius"} else new_w
+        y_value = new_h / 2.0 if state["y_key"] in {"ry", "radius"} else new_h
+        update_entity_parameter(candidate, str(state["x_key"]), x_value)
+        update_entity_parameter(candidate, str(state["y_key"]), y_value)
+        if not state["from_center"]:
+            local_center = (
+                0.0 if handle in {"n", "s"} else (ax + px) / 2.0,
+                0.0 if handle in {"e", "w"} else (ay + py) / 2.0,
+            )
+            forward = math.radians(float(state["rotation"]))
+            target_center = (
+                cx + local_center[0] * math.cos(forward) - local_center[1] * math.sin(forward),
+                cy + local_center[0] * math.sin(forward) + local_center[1] * math.cos(forward),
+            )
+            old_center = candidate.meta.get("center", (cx, cy)) if candidate.meta else (cx, cy)
+            dx, dy = target_center[0] - old_center[0], target_center[1] - old_center[1]
+            candidate.points = [(x + dx, y + dy) for x, y in candidate.points]
+            transform_entity_metadata(candidate, transform="translate", dx=dx, dy=dy)
+        if not self._gizmo_undo_pushed:
+            self._push_undo()
+            self._gizmo_undo_pushed = True
+        self._entities[idx] = candidate
+        self._gizmo_drag_moved = True
+        self._sync_shape_storage_from_entities()
+        self.geometryChanged.emit()
 
     def _apply_gizmo_drag(
         self, wx: float, wy: float, mods: Qt.KeyboardModifier | None = None
@@ -607,18 +713,17 @@ class GizmoDragMixin(_GizmoBase):
             # snapshot, so circle/ellipse centroid snapping stays accurate
             # after a uniform corner-scale or rotate gizmo drag too.
             snap_meta = self._gizmo_meta_snapshot.get(idx)
-            if isinstance(snap_meta, dict) and isinstance(snap_meta.get("center"), (tuple, list)):
-                ecx0, ecy0 = (
-                    float(snap_meta["center"][0]),
-                    float(snap_meta["center"][1]),
+            if isinstance(snap_meta, dict):
+                new_meta = transform_meta(
+                    self._entities[idx].kind,
+                    snap_meta,
+                    transform=("rotate" if self._gizmo_drag_mode == "rotate" else "scale"),
+                    center=(cx, cy),
+                    angle_deg=math.degrees(angle),
+                    factor=scale,
                 )
-                scx = cx + (ecx0 - cx) * scale
-                scy = cy + (ecy0 - cy) * scale
-                rcx = cx + (scx - cx) * ca - (scy - cy) * sa
-                rcy = cy + (scx - cx) * sa + (scy - cy) * ca
-                new_meta = dict(snap_meta)
-                new_meta["center"] = (rcx, rcy)
-                self._entities[idx].meta = new_meta
+                self._entities[idx].meta = new_meta if new_meta is not None else snap_meta
+        self.geometryChanged.emit()
 
     def _end_gizmo_drag(self) -> bool:
         moved = self._gizmo_drag_moved
@@ -629,6 +734,7 @@ class GizmoDragMixin(_GizmoBase):
         self._gizmo_handle_w = None
         self._gizmo_snapshot = {}
         self._gizmo_meta_snapshot = {}
+        self._gizmo_local_shape = None
         self._gizmo_drag_moved = False
         self._gizmo_undo_pushed = False
         self._hover_snap = None

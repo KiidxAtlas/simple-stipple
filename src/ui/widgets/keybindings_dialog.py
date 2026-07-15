@@ -56,7 +56,7 @@ _APP_LABELS: dict[str, str] = {
     "tab.pattern": "Switch to Pattern Tab",
     "tab.trace": "Switch to Trace Tab",
     "tab.convert": "Switch to Convert Tab",
-    "tab.repo": "Switch to Repo Tab",
+    "tab.repo": "Open Repository Sync",
 }
 
 _APP_GROUPS: dict[str, str] = {
@@ -183,7 +183,7 @@ class KeybindingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        save_btn = QPushButton("Apply")
+        save_btn = QPushButton("Save")
         save_btn.setMinimumWidth(100)
         save_btn.setProperty("role", "primary")
         save_btn.clicked.connect(self._apply)

@@ -10,6 +10,9 @@ from collections.abc import Iterable
 from typing import Any, NamedTuple, Protocol, cast
 
 import ezdxf  # type: ignore[attr-defined]
+from ezdxf import path as ezdxf_path  # type: ignore[attr-defined]
+from ezdxf import units  # type: ignore[attr-defined]
+from ezdxf.disassemble import recursive_decompose  # type: ignore[attr-defined]
 from ezdxf.math import ConstructionArc  # type: ignore[attr-defined]
 from shapely.geometry import Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
@@ -260,6 +263,11 @@ def _load_dxf_polylines_by_layer_with_report(
         5: "Centimeters",
         6: "Meters",
     }.get(unit_code, f"DXF unit code {unit_code}")
+    try:
+        mm_per_unit = float(units.conversion_factor(unit_code, 4)) if unit_code else 1.0
+    except (TypeError, ValueError):
+        mm_per_unit = 1.0
+    flattening_distance = 0.02 / mm_per_unit
     by_layer: dict[str, list[list[tuple[float, float]]]] = {}
     flattened_entities: Counter[str] = Counter()
     unsupported_entities: Counter[str] = Counter()
@@ -272,10 +280,24 @@ def _load_dxf_polylines_by_layer_with_report(
         if len(pts) < 2:
             return
         bucket = by_layer.setdefault(layer, [])
-        bucket.append(_polyline_points_closed(pts, closed=closed))
+        scaled = [(x * mm_per_unit, y * mm_per_unit) for x, y in pts]
+        bucket.append(_polyline_points_closed(scaled, closed=closed))
         total_supported += 1
 
-    for ent in msp:
+    import_entities: list[Any] = []
+    for source_entity in msp:
+        if source_entity.dxftype() == "INSERT":
+            try:
+                expanded = list(recursive_decompose([source_entity]))
+                import_entities.extend(expanded)
+                flattened_entities["INSERT (block contents)"] += 1
+            except (AttributeError, TypeError, ValueError) as exc:
+                _LOG.warning("Skipping invalid INSERT in %s: %s", path, exc)
+                invalid_polylines += 1
+        else:
+            import_entities.append(source_entity)
+
+    for ent in import_entities:
         entity = _dxf_entity(ent)
         dxftype = entity.dxftype()
         try:
@@ -286,7 +308,15 @@ def _load_dxf_polylines_by_layer_with_report(
         if dxftype == "LWPOLYLINE":
             try:
                 lw = entity
-                pts = [(float(p[0]), float(p[1])) for p in lw.get_points()]
+                vertex_data = list(lw.get_points(format="xyb"))
+                if any(abs(float(point[2])) > 1e-12 for point in vertex_data):
+                    pts = [
+                        (float(point.x), float(point.y))
+                        for point in ezdxf_path.make_path(ent).flattening(flattening_distance)
+                    ]
+                    flattened_entities["LWPOLYLINE (bulge arcs)"] += 1
+                else:
+                    pts = [(float(p[0]), float(p[1])) for p in vertex_data]
                 _append(layer_name, pts, bool(lw.is_closed))
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid LWPOLYLINE in %s: %s", path, exc)
@@ -297,7 +327,18 @@ def _load_dxf_polylines_by_layer_with_report(
                 if not poly.is_2d_polyline:
                     unsupported_entities["POLYLINE (3D)"] += 1
                     continue
-                pts = [(float(v.dxf.location.x), float(v.dxf.location.y)) for v in poly.vertices]
+                vertices = list(poly.vertices)
+                if any(abs(float(vertex.dxf.get("bulge", 0.0))) > 1e-12 for vertex in vertices):
+                    pts = [
+                        (float(point.x), float(point.y))
+                        for point in ezdxf_path.make_path(ent).flattening(flattening_distance)
+                    ]
+                    flattened_entities["POLYLINE (bulge arcs)"] += 1
+                else:
+                    pts = [
+                        (float(vertex.dxf.location.x), float(vertex.dxf.location.y))
+                        for vertex in vertices
+                    ]
                 _append(layer_name, pts, bool(poly.is_closed))
             except (AttributeError, TypeError, ValueError) as exc:
                 _LOG.warning("Skipping invalid POLYLINE in %s: %s", path, exc)
@@ -324,6 +365,7 @@ def _load_dxf_polylines_by_layer_with_report(
                     float(arc.dxf.start_angle),
                     float(arc.dxf.end_angle),
                     closed=False,
+                    sagitta=flattening_distance,
                 )
                 _append(layer_name, pts, False)
                 flattened_entities[dxftype] += 1
@@ -341,6 +383,7 @@ def _load_dxf_polylines_by_layer_with_report(
                     0.0,
                     360.0,
                     closed=True,
+                    sagitta=flattening_distance,
                 )
                 _append(layer_name, pts, True)
                 flattened_entities[dxftype] += 1
@@ -374,7 +417,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 # Adaptive flattening (same tolerance-based approach as
                 # ARC/CIRCLE above) — smooth regardless of the spline's
                 # size, unlike a fixed segment count.
-                pts = [(float(p.x), float(p.y)) for p in spline.flattening(0.02)]
+                pts = [(float(p.x), float(p.y)) for p in spline.flattening(flattening_distance)]
                 is_closed = bool(getattr(spline.dxf, "flags", 0) & spline.CLOSED)
                 _append(layer_name, pts, is_closed)
                 flattened_entities[dxftype] += 1

@@ -510,6 +510,16 @@ class CircleShape(Shape):
         self.invalidate_cache()
         return True
 
+    def move_control_point(self, index: int, point: Point) -> bool:
+        if index == 0:
+            self.center = point
+        elif index == 1:
+            self.radius = max(1e-3, math.dist(self.center, point))
+        else:
+            return False
+        self.invalidate_cache()
+        return True
+
     def to_meta_dict(self) -> tuple[str, dict | None]:
         return ("circle", {"center": tuple(self.center), "radius": self.radius})
 
@@ -621,6 +631,24 @@ class EllipseShape(Shape):
         if key not in {"rx", "ry"} or value <= 0:
             return False
         setattr(self, key, float(value))
+        self.invalidate_cache()
+        return True
+
+    def move_control_point(self, index: int, point: Point) -> bool:
+        if index == 0:
+            self.center = point
+            self.invalidate_cache()
+            return True
+        if index not in {1, 2, 3, 4}:
+            return False
+        angle = math.radians(-self.rotation)
+        dx, dy = point[0] - self.center[0], point[1] - self.center[1]
+        local_x = dx * math.cos(angle) - dy * math.sin(angle)
+        local_y = dx * math.sin(angle) + dy * math.cos(angle)
+        if index in {1, 3}:
+            self.rx = max(1e-3, abs(local_x))
+        else:
+            self.ry = max(1e-3, abs(local_y))
         self.invalidate_cache()
         return True
 
@@ -1633,6 +1661,16 @@ class ShapeFactory:
                 center=_as_point(data.get("center", (0, 0))),
                 width=data.get("width", 0),
                 height=data.get("height", 0),
+                rotation=data.get("rotation", 0),
+                **kwargs,
+            )
+
+        elif shape_type == "slot":
+            return SlotShape(
+                id=shape_id or cls.next_id(),
+                center=_as_point(data.get("center", (0, 0))),
+                length=data.get("length", 0),
+                width=data.get("width", 0),
                 rotation=data.get("rotation", 0),
                 **kwargs,
             )

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 # (previously hardcoded independently in several pages).
 STATUS_OK = "#3fb950"
 STATUS_ERR = "#f85149"
+STATUS_WARN = "#e3b341"
 STATUS_NEUTRAL = "#8b949e"
 
 

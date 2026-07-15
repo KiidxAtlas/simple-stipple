@@ -36,8 +36,12 @@ from PySide6.QtWidgets import (
 from src.backend.document import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
 from src.backend.persistence import read_json_file, write_json_file_atomic
 from src.infra.paths import user_data_dir
-from src.infra.settings import DEFAULT_KEYBINDINGS, DEFAULT_RADIAL_MENU_TOOLS, save_settings
-from src.infra.settings_bus import settings_bus
+from src.infra.settings import (
+    DEFAULT_KEYBINDINGS,
+    DEFAULT_RADIAL_MENU_TOOLS,
+    save_settings,
+    settings_bus,
+)
 from src.ui.canvas.interaction import commands as canvas_commands
 from src.ui.components import download_icon, gear_icon, info_chip, surface_frame
 from src.ui.widgets.command_palette import CommandPaletteDialog
@@ -262,7 +266,7 @@ class UpdateChecker:
     def _attempt_auto_fetch(self) -> None:
         """Attempt to fetch remote repository metadata without altering the working tree."""
         try:
-            cast(Any, self._app._page_runtime.get("repo")).auto_fetch()
+            cast(Any, self._app._repo_page).auto_fetch()
         except (OSError, RuntimeError, ValueError) as exc:
             LOGGER.warning("Auto-fetch failed: %s", exc)
 
@@ -427,7 +431,7 @@ class MenuController(_AppProxy):
         add(help_menu, "Notification History…", self._show_notification_history)
 
     def _show_notification_history(self) -> None:
-        from src.ui.notifications import notification_history
+        from src.ui.util import notification_history
 
         history = notification_history()
         dialog = QDialog(self._app)
@@ -461,7 +465,8 @@ class MenuController(_AppProxy):
             ("New / Open / Save / Save As", "per File menu"),
             ("Command palette", self._shortcut("app.command_palette")),
             ("Settings", self._shortcut("app.settings")),
-            ("Switch tabs", "Alt+1 … Alt+5"),
+            ("Switch tabs", "Alt+1 … Alt+4"),
+            ("Repository sync", self._shortcut("tab.repo")),
             ("", ""),
         ]
         # Canvas commands come straight from the registry so this dialog
@@ -565,7 +570,12 @@ class MenuController(_AppProxy):
                 self._shortcut_tooltip_specs.append((btn, text, shortcut_hint))
             layout.addWidget(btn)
 
-        # Settings — visually separated
+        action_sep = QLabel("│")
+        action_sep.setProperty("role", "toolbar-sep")
+        action_sep.setToolTip("Application actions")
+        layout.addWidget(action_sep)
+
+        # Application actions — visually separated from workspace file actions.
         update_btn = QPushButton()
         update_btn.setIcon(download_icon())
         update_btn.setIconSize(QSize(18, 18))
@@ -645,6 +655,7 @@ class CommandController(_AppProxy):
             "workspace.open",
             "workspace.save",
             "workspace.save_as",
+            "tab.repo",  # Repository Sync menu action owns this shortcut
         }
         for cmd in self._build_commands():
             if cmd.action_id not in _MENU_HANDLED:
@@ -772,6 +783,14 @@ class CommandController(_AppProxy):
                     lambda page_id=spec.page_id: self._switch_to_page(page_id),  # type: ignore[misc]
                 )
             )
+        cmds.append(
+            CommandSpec(
+                "tab.repo",
+                "App: Repository Sync",
+                "repo git sync pull push commit",
+                self._open_repo_dialog,
+            )
+        )
         return cmds
 
     def _menu_redo(self) -> None:
@@ -943,6 +962,15 @@ class WorkspaceController(_WorkspaceStateController):
         )
         self._save_workspace_as_action.triggered.connect(self._save_workspace_as)
         self._workspace_menu.addAction(self._save_workspace_as_action)
+
+        self._workspace_menu.addSeparator()
+
+        # Repository sync moved out of the top-level tabs into this menu —
+        # the action id stays "tab.repo" so existing keybindings keep working.
+        self._repo_dialog_action = QAction("Repository Sync…", self._app)
+        self._repo_dialog_action.setShortcut(QKeySequence(self._shortcut("tab.repo")))
+        self._repo_dialog_action.triggered.connect(self._open_repo_dialog)
+        self._workspace_menu.addAction(self._repo_dialog_action)
 
         self._workspace_menu.addSeparator()
 

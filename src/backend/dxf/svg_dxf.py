@@ -11,9 +11,13 @@ absolute + relative).
 
 from __future__ import annotations
 
+import math
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import ezdxf  # type: ignore[attr-defined]
+from ezdxf import units  # type: ignore[attr-defined]
 
 from src.backend.dxf.io import (
     load_dxf_polylines_with_report,
@@ -132,6 +136,14 @@ def dxf_to_svg(
 ) -> dict:
     """Convert DXF polylines to a consolidated single-layer SVG."""
     polys, report = load_dxf_polylines_with_report(str(input_path))
+    document = ezdxf.readfile(str(input_path))
+    unit_code = int(document.header.get("$INSUNITS", 0) or 0)
+    try:
+        mm_factor = float(units.conversion_factor(unit_code, 4)) if unit_code else 1.0
+    except (ValueError, TypeError):
+        mm_factor = 1.0
+    if mm_factor != 1.0:
+        polys = [[(x * mm_factor, y * mm_factor) for x, y in poly] for poly in polys]
     result = write_polylines_svg(
         polys,
         output_path,
@@ -151,8 +163,61 @@ def dxf_to_svg(
 
 _NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _CMD_RE = re.compile(rf"[MmLlHhVvZz]|{_NUM_RE}")
-_PATH_COMMAND_RE = re.compile(r"[A-Za-z]")
+_PATH_COMMAND_RE = re.compile(r"[A-DF-Za-df-z]")  # E/e may be a numeric exponent
 _SUPPORTED_PATH_COMMANDS = frozenset("MmLlHhVvZz")
+Matrix = tuple[float, float, float, float, float, float]
+_IDENTITY: Matrix = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+
+
+def _matrix_multiply(left: Matrix, right: Matrix) -> Matrix:
+    a, b, c, d, e, f = left
+    g, h, i, j, k, offset_y = right
+    return (
+        a * g + c * h, b * g + d * h,
+        a * i + c * j, b * i + d * j,
+        a * k + c * offset_y + e, b * k + d * offset_y + f,
+    )
+
+
+def _apply_matrix(matrix: Matrix, point: tuple[float, float]) -> tuple[float, float]:
+    a, b, c, d, e, f = matrix
+    x, y = point
+    return a * x + c * y + e, b * x + d * y + f
+
+
+def _parse_transform(value: str) -> Matrix:
+    result = _IDENTITY
+    operations = re.findall(r"([A-Za-z]+)\s*\(([^)]*)\)", value)
+    if value.strip() and not operations:
+        raise ValueError(f"Malformed SVG transform: {value}")
+    for name, payload in operations:
+        args = [float(number) for number in re.findall(_NUM_RE, payload)]
+        name = name.lower()
+        if name == "matrix" and len(args) == 6:
+            current = tuple(args)  # type: ignore[assignment]
+        elif name == "translate" and args:
+            current = (1, 0, 0, 1, args[0], args[1] if len(args) > 1 else 0)
+        elif name == "scale" and args:
+            current = (args[0], 0, 0, args[1] if len(args) > 1 else args[0], 0, 0)
+        elif name == "rotate" and args:
+            angle = math.radians(args[0])
+            rotation: Matrix = (math.cos(angle), math.sin(angle), -math.sin(angle), math.cos(angle), 0, 0)
+            if len(args) >= 3:
+                cx, cy = args[1], args[2]
+                current = _matrix_multiply(
+                    _matrix_multiply((1, 0, 0, 1, cx, cy), rotation),
+                    (1, 0, 0, 1, -cx, -cy),
+                )
+            else:
+                current = rotation
+        elif name == "skewx" and args:
+            current = (1, 0, math.tan(math.radians(args[0])), 1, 0, 0)
+        elif name == "skewy" and args:
+            current = (1, math.tan(math.radians(args[0])), 0, 1, 0, 0)
+        else:
+            raise ValueError(f"Unsupported or malformed SVG transform: {name}({payload})")
+        result = _matrix_multiply(result, current)
+    return result
 
 
 def _parse_float(value: str | None, default: float = 0.0) -> float:
@@ -227,6 +292,8 @@ def _parse_path_d(d: str) -> list[list[tuple[float, float]]]:
             continue
 
         if cmd in ("H", "h"):
+            if i >= len(tokens):
+                raise ValueError("Malformed SVG path: H command requires a coordinate")
             x = float(tokens[i])
             i += 1
             if cmd == "h":
@@ -236,6 +303,8 @@ def _parse_path_d(d: str) -> list[list[tuple[float, float]]]:
             continue
 
         if cmd in ("V", "v"):
+            if i >= len(tokens):
+                raise ValueError("Malformed SVG path: V command requires a coordinate")
             y = float(tokens[i])
             i += 1
             if cmd == "v":
@@ -274,6 +343,37 @@ def _svg_height(root: ET.Element) -> float:
     return 0.0
 
 
+def _length_mm(value: str, *, default_px: float) -> float:
+    match = re.fullmatch(rf"\s*({_NUM_RE})\s*(px|mm|cm|in|pt|pc)?\s*", value)
+    if not match:
+        return default_px * 25.4 / 96.0
+    number = float(match.group(1))
+    factor = {None: 25.4 / 96.0, "px": 25.4 / 96.0, "mm": 1.0, "cm": 10.0,
+              "in": 25.4, "pt": 25.4 / 72.0, "pc": 25.4 / 6.0}[match.group(2)]
+    return number * factor
+
+
+def _root_svg_matrix(root: ET.Element) -> tuple[Matrix, float]:
+    values = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
+    if len(values) != 4 or values[2] <= 0 or values[3] <= 0:
+        scale = 25.4 / 96.0
+        height = _length_mm(root.attrib.get("height", ""), default_px=_svg_height(root))
+        return (scale, 0, 0, scale, 0, 0), height
+    x0, y0, vb_width, vb_height = values
+    width_mm = _length_mm(root.attrib.get("width", ""), default_px=vb_width)
+    height_mm = _length_mm(root.attrib.get("height", ""), default_px=vb_height)
+    sx, sy = width_mm / vb_width, height_mm / vb_height
+    aspect = root.attrib.get("preserveAspectRatio", "xMidYMid meet").strip()
+    if aspect != "none":
+        scale = max(sx, sy) if "slice" in aspect else min(sx, sy)
+        extra_x, extra_y = width_mm - vb_width * scale, height_mm - vb_height * scale
+        align = aspect.split()[0]
+        ax = 0.0 if "xMin" in align else extra_x if "xMax" in align else extra_x / 2.0
+        ay = 0.0 if "YMin" in align else extra_y if "YMax" in align else extra_y / 2.0
+        return (scale, 0, 0, scale, ax - x0 * scale, ay - y0 * scale), height_mm
+    return (sx, 0, 0, sy, -x0 * sx, -y0 * sy), height_mm
+
+
 def svg_to_dxf(
     input_path: str | Path,
     output_path: str | Path,
@@ -293,7 +393,28 @@ def svg_to_dxf(
 
     tree = ET.parse(str(input_path))
     root = tree.getroot()
-    y_flip = _svg_height(root)
+    root_matrix, y_flip = _root_svg_matrix(root)
+    viewbox = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
+    if len(viewbox) == 4:
+        viewport_width_px = _length_mm(root.attrib.get("width", ""), default_px=viewbox[2]) * 96 / 25.4
+        viewport_height_px = _length_mm(root.attrib.get("height", ""), default_px=viewbox[3]) * 96 / 25.4
+        user_per_px_x = viewbox[2] / viewport_width_px
+        user_per_px_y = viewbox[3] / viewport_height_px
+    else:
+        user_per_px_x = user_per_px_y = 1.0
+
+    def coord(value: str | None, axis: str = "x") -> float:
+        if value is None or not value.strip():
+            return 0.0
+        match = re.fullmatch(rf"\s*({_NUM_RE})\s*(px|mm|cm|in|pt|pc)?\s*", value)
+        if not match:
+            raise ValueError(f"Unsupported SVG coordinate: {value}")
+        number = float(match.group(1))
+        unit = match.group(2)
+        if unit is None:
+            return number
+        mm = _length_mm(f"{number}{unit}", default_px=number)
+        return mm * 96 / 25.4 * (user_per_px_y if axis == "y" else user_per_px_x)
 
     def yf(y: float) -> float:
         if not flip_y:
@@ -303,6 +424,7 @@ def svg_to_dxf(
     records: list[tuple[list[tuple[float, float]], str, dict | None]] = []
     native_entities = {"LINE": 0, "CIRCLE": 0, "ELLIPSE": 0}
     unsupported_paths = 0
+    unsupported_features: set[str] = set()
 
     def _add_meta_entity(kind: str, meta: dict, counter: str) -> None:
         shape = shape_from_meta(kind, meta)
@@ -313,59 +435,117 @@ def svg_to_dxf(
             records.append((pts, kind, meta))
             native_entities[counter] += 1
 
+    transforms: dict[int, Matrix] = {}
+
+    def collect_transforms(elem: ET.Element, parent: Matrix = root_matrix) -> None:
+        transform_value = elem.attrib.get("transform", "")
+        if not transform_value:
+            style_match = re.search(r"(?:^|;)\s*transform\s*:\s*([^;]+)", elem.attrib.get("style", ""))
+            transform_value = style_match.group(1).strip() if style_match else ""
+        local = _parse_transform(transform_value)
+        combined = _matrix_multiply(parent, local)
+        transforms[id(elem)] = combined
+        for child in elem:
+            collect_transforms(child, combined)
+
+    collect_transforms(root)
+
+    non_rendered: set[int] = set()
+
+    def mark_non_rendered(elem: ET.Element, hidden: bool = False) -> None:
+        tag = elem.tag.split("}")[-1].lower()
+        style = elem.attrib.get("style", "").replace(" ", "").lower()
+        hidden = hidden or tag in {"defs", "clippath", "mask", "symbol", "marker"}
+        hidden = hidden or elem.attrib.get("display", "").lower() == "none"
+        hidden = hidden or "display:none" in style or elem.attrib.get("visibility", "").lower() == "hidden"
+        if hidden:
+            non_rendered.add(id(elem))
+        for child in elem:
+            mark_non_rendered(child, hidden)
+
+    mark_non_rendered(root)
+
     for elem in root.iter():
         tag = elem.tag.split("}")[-1].lower()
+        if id(elem) in non_rendered:
+            continue
+        for feature in ("clip-path", "mask", "filter"):
+            if feature in elem.attrib:
+                unsupported_features.add(feature)
+        if tag in {"text", "use", "image", "foreignobject"}:
+            unsupported_features.add(tag)
+            continue
+        matrix = transforms[id(elem)]
+
+        def tp(point: tuple[float, float], transform: Matrix = matrix) -> tuple[float, float]:
+            x, y = _apply_matrix(transform, point)
+            return x, yf(y)
 
         if tag == "polyline":
             pts = _parse_points_attr(elem.attrib.get("points", ""))
             if len(pts) >= 2:
-                records.append(([(x, yf(y)) for x, y in pts], "polyline", None))
+                records.append(([tp(point) for point in pts], "polyline", None))
 
         elif tag == "polygon":
             pts = _parse_points_attr(elem.attrib.get("points", ""))
             if len(pts) >= 3:
                 if pts[0] != pts[-1]:
                     pts.append(pts[0])
-                records.append(([(x, yf(y)) for x, y in pts], "polyline", None))
+                records.append(([tp(point) for point in pts], "polyline", None))
 
         elif tag == "line":
-            x1 = _parse_float(elem.attrib.get("x1"))
-            y1 = _parse_float(elem.attrib.get("y1"))
-            x2 = _parse_float(elem.attrib.get("x2"))
-            y2 = _parse_float(elem.attrib.get("y2"))
-            _add_meta_entity(
-                "line",
-                {"start": (x1, yf(y1)), "end": (x2, yf(y2))},
-                "LINE",
-            )
+            x1 = coord(elem.attrib.get("x1"), "x")
+            y1 = coord(elem.attrib.get("y1"), "y")
+            x2 = coord(elem.attrib.get("x2"), "x")
+            y2 = coord(elem.attrib.get("y2"), "y")
+            start, end = tp((x1, y1)), tp((x2, y2))
+            _add_meta_entity("line", {"start": start, "end": end}, "LINE")
 
         elif tag == "rect":
-            x = _parse_float(elem.attrib.get("x"))
-            y = _parse_float(elem.attrib.get("y"))
-            w = _parse_float(elem.attrib.get("width"))
-            h = _parse_float(elem.attrib.get("height"))
+            x = coord(elem.attrib.get("x"), "x")
+            y = coord(elem.attrib.get("y"), "y")
+            w = coord(elem.attrib.get("width"), "x")
+            h = coord(elem.attrib.get("height"), "y")
             if w > 0 and h > 0:
                 pts = [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]
-                records.append(([(px, yf(py)) for px, py in pts], "polyline", None))
+                rx = max(0.0, min(coord(elem.attrib.get("rx"), "x"), w / 2))
+                ry_raw = coord(elem.attrib.get("ry"), "y")
+                ry = max(0.0, min(ry_raw if ry_raw else rx, h / 2))
+                if rx and ry:
+                    pts = []
+                    for cx0, cy0, start in (
+                        (x + w - rx, y + ry, -90), (x + w - rx, y + h - ry, 0),
+                        (x + rx, y + h - ry, 90), (x + rx, y + ry, 180),
+                    ):
+                        for step in range(5):
+                            angle = math.radians(start + step * 22.5)
+                            pts.append((cx0 + rx * math.cos(angle), cy0 + ry * math.sin(angle)))
+                    pts.append(pts[0])
+                records.append(([tp(point) for point in pts], "polyline", None))
 
         elif tag == "circle":
-            cx = _parse_float(elem.attrib.get("cx"))
-            cy = _parse_float(elem.attrib.get("cy"))
-            r = _parse_float(elem.attrib.get("r"))
+            cx = coord(elem.attrib.get("cx"), "x")
+            cy = coord(elem.attrib.get("cy"), "y")
+            r = coord(elem.attrib.get("r"), "x")
             if r > 0:
-                _add_meta_entity("circle", {"center": (cx, yf(cy)), "radius": r}, "CIRCLE")
+                center = tp((cx, cy))
+                edge_x = tp((cx + r, cy))
+                edge_y = tp((cx, cy + r))
+                rx2, ry2 = math.dist(center, edge_x), math.dist(center, edge_y)
+                if abs(rx2 - ry2) <= 1e-9 * max(rx2, ry2, 1.0):
+                    _add_meta_entity("circle", {"center": center, "radius": rx2}, "CIRCLE")
+                else:
+                    pts = [tp((cx + r * math.cos(a), cy + r * math.sin(a))) for a in [i * math.tau / 64 for i in range(65)]]
+                    records.append((pts, "polyline", None))
 
         elif tag == "ellipse":
-            cx = _parse_float(elem.attrib.get("cx"))
-            cy = _parse_float(elem.attrib.get("cy"))
-            rx = _parse_float(elem.attrib.get("rx"))
-            ry = _parse_float(elem.attrib.get("ry"))
+            cx = coord(elem.attrib.get("cx"), "x")
+            cy = coord(elem.attrib.get("cy"), "y")
+            rx = coord(elem.attrib.get("rx"), "x")
+            ry = coord(elem.attrib.get("ry"), "y")
             if rx > 0 and ry > 0:
-                _add_meta_entity(
-                    "ellipse",
-                    {"center": (cx, yf(cy)), "rx": rx, "ry": ry, "rotation": 0.0},
-                    "ELLIPSE",
-                )
+                pts = [tp((cx + rx * math.cos(a), cy + ry * math.sin(a))) for a in [i * math.tau / 64 for i in range(65)]]
+                records.append((pts, "polyline", None))
 
         elif tag == "path":
             d = elem.attrib.get("d", "")
@@ -380,7 +560,7 @@ def svg_to_dxf(
                 continue
             for p in _parse_path_d(d):
                 if len(p) >= 2:
-                    records.append(([(x, yf(y)) for x, y in p], "polyline", None))
+                    records.append(([tp(point) for point in p], "polyline", None))
 
     write_polylines_dxf(
         [poly for poly, _k, _m in records],
@@ -390,7 +570,7 @@ def svg_to_dxf(
     )
 
     plain = [poly for poly, kind, _m in records if kind == "polyline"]
-    all_pts = [pt for poly in plain for pt in poly]
+    all_pts = [pt for poly, _kind, _meta in records for pt in poly]
     if all_pts:
         xs, ys = zip(*all_pts)
         width = max(xs) - min(xs)
@@ -404,4 +584,5 @@ def svg_to_dxf(
         "height_mm": round(height, 4),
         "native_entities": native_entities,
         "unsupported_paths": unsupported_paths,
+        "unsupported_features": tuple(sorted(unsupported_features)),
     }
