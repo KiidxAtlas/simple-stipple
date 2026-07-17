@@ -792,6 +792,27 @@ class SvgSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
+        mode_row = QHBoxLayout()
+        self._mode_single = QPushButton("Single file")
+        self._mode_single.setToolTip("Convert one DXF file to SVG at a time")
+        self._mode_batch = QPushButton("Folder (batch)")
+        self._mode_batch.setToolTip("Convert all DXF files in a folder to SVG at once")
+        self._mode_single.setProperty("active", True)
+        self._mode_batch.setProperty("active", False)
+        self._mode_single.clicked.connect(lambda: self._set_mode("single"))
+        self._mode_batch.clicked.connect(lambda: self._set_mode("batch"))
+        mode_row.addWidget(self._mode_single)
+        mode_row.addWidget(self._mode_batch)
+        layout.addLayout(mode_row)
+
+        self._include_subfolders = QCheckBox("Include subfolders")
+        self._include_subfolders.setChecked(True)
+        self._include_subfolders.setToolTip(
+            "Find DXF files recursively and preserve their folder structure in the output"
+        )
+        self._include_subfolders.setVisible(False)
+        layout.addWidget(self._include_subfolders)
+
         self._src_edit = self._add_picker_row(
             layout,
             "INPUT",
@@ -829,25 +850,55 @@ class SvgSubTab(_StatusMixin, QWidget):
         """Public entry point called by the page-level footer CTA."""
         self._run()
 
-    def _browse_src(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select DXF file",
-            "",
-            "DXF files (*.dxf *.DXF);;All files (*)",
+    def _set_mode(self, mode: str) -> None:
+        batch = mode == "batch"
+        for button, active in (
+            (self._mode_single, not batch),
+            (self._mode_batch, batch),
+        ):
+            button.setProperty("active", active)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        self._include_subfolders.setVisible(batch)
+        self._src_edit.clear()
+        self._out_edit.clear()
+        self._src_edit.setPlaceholderText(
+            "Select a folder containing DXF files…" if batch else "Select a .dxf file…"
         )
+        self._out_edit.setPlaceholderText(
+            "Optional output folder (blank = sibling SVG folder)…"
+            if batch
+            else "Leave blank to auto-name…"
+        )
+
+    def _is_batch(self) -> bool:
+        return self._mode_batch.property("active") is True
+
+    def _browse_src(self) -> None:
+        if self._is_batch():
+            path = QFileDialog.getExistingDirectory(self, "Select folder containing DXF files", "")
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select DXF file",
+                "",
+                "DXF files (*.dxf *.DXF);;All files (*)",
+            )
         if path:
             self._src_edit.setText(path)
-            if not self._out_edit.text().strip():
+            if not self._is_batch() and not self._out_edit.text().strip():
                 self._out_edit.setText(str(Path(path).with_suffix(".svg")))
 
     def _browse_out(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save SVG",
-            "",
-            "SVG files (*.svg);;All files (*)",
-        )
+        if self._is_batch():
+            path = QFileDialog.getExistingDirectory(self, "Select output folder", "")
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save SVG",
+                "",
+                "SVG files (*.svg);;All files (*)",
+            )
         if path:
             self._out_edit.setText(path)
 
@@ -856,24 +907,49 @@ class SvgSubTab(_StatusMixin, QWidget):
             return
         src = self._src_edit.text().strip()
         if not src:
-            self._status_sig.emit("Choose an input DXF file first.", STATUS_WARN)
+            self._status_sig.emit("Choose an input DXF file or folder first.", STATUS_WARN)
             return
-        if not Path(src).is_file():
-            QMessageBox.warning(self, "File Not Found", f"The source file does not exist:\n{src}")
-            return
-        out = self._out_edit.text().strip()
-        if not out:
-            out = str(Path(src).with_suffix(".svg"))
-            self._out_edit.setText(out)
-        if Path(src).resolve() == Path(out).resolve():
-            QMessageBox.warning(self, "Unsafe Output Path", "Output must not overwrite the input DXF.")
+        source_path = Path(src)
+        expected = source_path.is_dir() if self._is_batch() else source_path.is_file()
+        if not expected:
+            QMessageBox.warning(
+                self,
+                "Source Not Found",
+                f"The source {'folder' if self._is_batch() else 'file'} does not exist:\n{src}",
+            )
             return
         cancel_event = self._start_job()
         self._btn.setEnabled(False)
         self._set_status("Converting…")
-        self._thread = threading.Thread(
-            target=self._convert, args=(src, out, cancel_event), daemon=True
-        )
+        if self._is_batch():
+            out_dir = self._out_edit.text().strip()
+            if not out_dir:
+                QMessageBox.warning(
+                    self,
+                    "Output Folder Required",
+                    "Please select an output folder for batch conversion.",
+                )
+                self._btn.setEnabled(True)
+                return
+            self._thread = threading.Thread(
+                target=self._convert_batch,
+                args=(src, out_dir, cancel_event, self._include_subfolders.isChecked()),
+                daemon=True,
+            )
+        else:
+            out = self._out_edit.text().strip()
+            if not out:
+                out = str(Path(src).with_suffix(".svg"))
+                self._out_edit.setText(out)
+            if Path(src).resolve() == Path(out).resolve():
+                QMessageBox.warning(
+                    self, "Unsafe Output Path", "Output must not overwrite the input DXF."
+                )
+                self._btn.setEnabled(True)
+                return
+            self._thread = threading.Thread(
+                target=self._convert, args=(src, out, cancel_event), daemon=True
+            )
         self._thread.start()
 
     def _convert(self, src: str, out: str, cancel_event: threading.Event) -> None:
@@ -900,6 +976,59 @@ class SvgSubTab(_StatusMixin, QWidget):
             self._running = False
             self._btn_state.emit(True)
             self._status_sig.emit(f"Error: {exc}", STATUS_ERR)
+
+    def _convert_batch(
+        self,
+        src: str,
+        out_dir: str,
+        cancel_event: threading.Event,
+        include_subfolders: bool = True,
+    ) -> None:
+        root = Path(src)
+        iterator = root.rglob("*") if include_subfolders else root.iterdir()
+        files = sorted(
+            (path for path in iterator if path.is_file() and path.suffix.lower() == ".dxf"),
+            key=lambda path: str(path.relative_to(root)).casefold(),
+        )
+        if not files:
+            self._running = False
+            self._btn_state.emit(True)
+            self._status_sig.emit("No DXF files found", STATUS_WARN)
+            self.log_line.emit("No DXF files found in the selected folder.")
+            return
+        self.log_line.emit(f"Found {len(files)} file(s)\n")
+        ok = err = 0
+        for index, dxf in enumerate(files, start=1):
+            if cancel_event.is_set():
+                self._finish_cancelled()
+                return
+            relative = dxf.relative_to(root)
+            svg = Path(out_dir) / relative.with_suffix(".svg")
+            self._status_sig.emit(
+                f"Converting {index} of {len(files)} — {dxf.name}", STATUS_NEUTRAL
+            )
+            try:
+                svg.parent.mkdir(parents=True, exist_ok=True)
+                stats = dxf_to_svg(dxf, svg)
+                msg = (
+                    f"  ✓  {relative} → {svg.name}"
+                    f"  ({stats['polylines']} polyline(s), "
+                    f"{stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm)"
+                )
+                self.log_line.emit(msg)
+                ok += 1
+            except Exception as exc:
+                LOGGER.exception("Could not convert %s to SVG", dxf)
+                self.log_line.emit(f"  ✗  {relative}: {exc}")
+                err += 1
+        self._running = False
+        self._btn_state.emit(True)
+        self._last_out = out_dir
+        self._status_sig.emit(
+            f"Done — {ok} converted" + (f", {err} error(s)" if err else ""),
+            STATUS_WARN if err else STATUS_OK,
+        )
+        self.log_line.emit(f"\nDone — {ok} converted" + (f", {err} error(s)" if err else ""))
 
     def _reveal(self) -> None:
         if self._last_out:
@@ -933,6 +1062,27 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
         self._build(root)
 
     def _build(self, layout: QVBoxLayout) -> None:
+        mode_row = QHBoxLayout()
+        self._mode_single = QPushButton("Single file")
+        self._mode_single.setToolTip("Convert one SVG file to DXF at a time")
+        self._mode_batch = QPushButton("Folder (batch)")
+        self._mode_batch.setToolTip("Convert all SVG files in a folder to DXF at once")
+        self._mode_single.setProperty("active", True)
+        self._mode_batch.setProperty("active", False)
+        self._mode_single.clicked.connect(lambda: self._set_mode("single"))
+        self._mode_batch.clicked.connect(lambda: self._set_mode("batch"))
+        mode_row.addWidget(self._mode_single)
+        mode_row.addWidget(self._mode_batch)
+        layout.addLayout(mode_row)
+
+        self._include_subfolders = QCheckBox("Include subfolders")
+        self._include_subfolders.setChecked(True)
+        self._include_subfolders.setToolTip(
+            "Find SVG files recursively and preserve their folder structure in the output"
+        )
+        self._include_subfolders.setVisible(False)
+        layout.addWidget(self._include_subfolders)
+
         self._src_edit = self._add_picker_row(
             layout,
             "INPUT",
@@ -967,25 +1117,55 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
         """Public entry point called by the page-level footer CTA."""
         self._run()
 
-    def _browse_src(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select SVG file",
-            "",
-            "SVG files (*.svg *.SVG);;All files (*)",
+    def _set_mode(self, mode: str) -> None:
+        batch = mode == "batch"
+        for button, active in (
+            (self._mode_single, not batch),
+            (self._mode_batch, batch),
+        ):
+            button.setProperty("active", active)
+            button.style().unpolish(button)
+            button.style().polish(button)
+        self._include_subfolders.setVisible(batch)
+        self._src_edit.clear()
+        self._out_edit.clear()
+        self._src_edit.setPlaceholderText(
+            "Select a folder containing SVG files…" if batch else "Select a .svg file…"
         )
+        self._out_edit.setPlaceholderText(
+            "Optional output folder (blank = sibling DXF folder)…"
+            if batch
+            else "Leave blank to auto-name…"
+        )
+
+    def _is_batch(self) -> bool:
+        return self._mode_batch.property("active") is True
+
+    def _browse_src(self) -> None:
+        if self._is_batch():
+            path = QFileDialog.getExistingDirectory(self, "Select folder containing SVG files", "")
+        else:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select SVG file",
+                "",
+                "SVG files (*.svg *.SVG);;All files (*)",
+            )
         if path:
             self._src_edit.setText(path)
-            if not self._out_edit.text().strip():
+            if not self._is_batch() and not self._out_edit.text().strip():
                 self._out_edit.setText(str(Path(path).with_suffix(".dxf")))
 
     def _browse_out(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save DXF",
-            "",
-            "DXF files (*.dxf);;All files (*)",
-        )
+        if self._is_batch():
+            path = QFileDialog.getExistingDirectory(self, "Select output folder", "")
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save DXF",
+                "",
+                "DXF files (*.dxf);;All files (*)",
+            )
         if path:
             self._out_edit.setText(path)
 
@@ -994,24 +1174,49 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
             return
         src = self._src_edit.text().strip()
         if not src:
-            self._status_sig.emit("Choose an input SVG file first.", STATUS_WARN)
+            self._status_sig.emit("Choose an input SVG file or folder first.", STATUS_WARN)
             return
-        if not Path(src).is_file():
-            QMessageBox.warning(self, "File Not Found", f"The source file does not exist:\n{src}")
-            return
-        out = self._out_edit.text().strip()
-        if not out:
-            out = str(Path(src).with_suffix(".dxf"))
-            self._out_edit.setText(out)
-        if Path(src).resolve() == Path(out).resolve():
-            QMessageBox.warning(self, "Unsafe Output Path", "Output must not overwrite the input SVG.")
+        source_path = Path(src)
+        expected = source_path.is_dir() if self._is_batch() else source_path.is_file()
+        if not expected:
+            QMessageBox.warning(
+                self,
+                "Source Not Found",
+                f"The source {'folder' if self._is_batch() else 'file'} does not exist:\n{src}",
+            )
             return
         cancel_event = self._start_job()
         self._btn.setEnabled(False)
         self._set_status("Converting…")
-        self._thread = threading.Thread(
-            target=self._convert, args=(src, out, cancel_event), daemon=True
-        )
+        if self._is_batch():
+            out_dir = self._out_edit.text().strip()
+            if not out_dir:
+                QMessageBox.warning(
+                    self,
+                    "Output Folder Required",
+                    "Please select an output folder for batch conversion.",
+                )
+                self._btn.setEnabled(True)
+                return
+            self._thread = threading.Thread(
+                target=self._convert_batch,
+                args=(src, out_dir, cancel_event, self._include_subfolders.isChecked()),
+                daemon=True,
+            )
+        else:
+            out = self._out_edit.text().strip()
+            if not out:
+                out = str(Path(src).with_suffix(".dxf"))
+                self._out_edit.setText(out)
+            if Path(src).resolve() == Path(out).resolve():
+                QMessageBox.warning(
+                    self, "Unsafe Output Path", "Output must not overwrite the input SVG."
+                )
+                self._btn.setEnabled(True)
+                return
+            self._thread = threading.Thread(
+                target=self._convert, args=(src, out, cancel_event), daemon=True
+            )
         self._thread.start()
 
     def _convert(self, src: str, out: str, cancel_event: threading.Event) -> None:
@@ -1046,6 +1251,65 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
             self._running = False
             self._btn_state.emit(True)
             self._status_sig.emit(f"Error: {exc}", STATUS_ERR)
+
+    def _convert_batch(
+        self,
+        src: str,
+        out_dir: str,
+        cancel_event: threading.Event,
+        include_subfolders: bool = True,
+    ) -> None:
+        root = Path(src)
+        iterator = root.rglob("*") if include_subfolders else root.iterdir()
+        files = sorted(
+            (path for path in iterator if path.is_file() and path.suffix.lower() == ".svg"),
+            key=lambda path: str(path.relative_to(root)).casefold(),
+        )
+        if not files:
+            self._running = False
+            self._btn_state.emit(True)
+            self._status_sig.emit("No SVG files found", STATUS_WARN)
+            self.log_line.emit("No SVG files found in the selected folder.")
+            return
+        self.log_line.emit(f"Found {len(files)} file(s)\n")
+        ok = err = 0
+        for index, svg in enumerate(files, start=1):
+            if cancel_event.is_set():
+                self._finish_cancelled()
+                return
+            relative = svg.relative_to(root)
+            dxf = Path(out_dir) / relative.with_suffix(".dxf")
+            self._status_sig.emit(
+                f"Converting {index} of {len(files)} — {svg.name}", STATUS_NEUTRAL
+            )
+            try:
+                dxf.parent.mkdir(parents=True, exist_ok=True)
+                stats = svg_to_dxf(svg, dxf)
+                msg = (
+                    f"  ✓  {relative} → {dxf.name}"
+                    f"  ({stats['polylines']} polyline(s), "
+                    f"{stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm)"
+                )
+                unsupported_paths = int(stats.get("unsupported_paths", 0) or 0)
+                if unsupported_paths:
+                    msg += f" · skipped {unsupported_paths} curved path(s)"
+                unsupported_features = tuple(stats.get("unsupported_features", ()))
+                if unsupported_features:
+                    msg += " · unsupported: " + ", ".join(unsupported_features)
+                self.log_line.emit(msg)
+                ok += 1
+            except Exception as exc:
+                LOGGER.exception("Could not convert %s to DXF", svg)
+                self.log_line.emit(f"  ✗  {relative}: {exc}")
+                err += 1
+        self._running = False
+        self._btn_state.emit(True)
+        self._last_out = out_dir
+        self._status_sig.emit(
+            f"Done — {ok} converted" + (f", {err} error(s)" if err else ""),
+            STATUS_WARN if err else STATUS_OK,
+        )
+        self.log_line.emit(f"\nDone — {ok} converted" + (f", {err} error(s)" if err else ""))
 
     def _reveal(self) -> None:
         if self._last_out:
