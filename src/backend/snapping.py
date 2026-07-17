@@ -445,7 +445,7 @@ def resolve_drag_snap(
                 )
 
         if allow_vertex:
-            best_dist = _SNAP_DIST
+            best_dist: float = float(_SNAP_DIST)
             best_midpoint: Point | None = None
             for _pi, poly in candidate_polys:
                 n = len(poly)
@@ -474,7 +474,7 @@ def resolve_drag_snap(
             # Same "point family" as vertex/midpoint above — dragging a
             # shape onto a line crossing should snap there too, not just
             # the hover/draw path (resolve_snap already has this).
-            best_dist = _SNAP_DIST
+            best_dist = float(_SNAP_DIST)
             best_intersection: Point | None = None
             segments: list[tuple[Point, Point]] = []
             for _pi, poly in candidate_polys:
@@ -506,7 +506,7 @@ def resolve_drag_snap(
                 )
 
         if allow_edge:
-            best_dist = _SNAP_DIST
+            best_dist = float(_SNAP_DIST)
             best_edge: Point | None = None
             for _pi, poly in candidate_polys:
                 n = len(poly)
@@ -548,7 +548,7 @@ def resolve_drag_snap(
         midpoint_candidates = [(dist, snap) for dist, snap in candidates if snap[2] == "midpoint"]
         if midpoint_candidates:
             mid_dist, mid_snap = min(midpoint_candidates, key=lambda item: item[0])
-            best_dist = min(dist for dist, _ in candidates)
+            best_dist = min(float(dist) for dist, _ in candidates)
             if mid_dist <= best_dist + 6.0:
                 return mid_snap
 

@@ -218,7 +218,7 @@ class RepoPage(BasePage):
         if not self._dir_edit.text().strip():
             message = "Choose a repository folder to enable git actions."
             color = STATUS_NEUTRAL
-        elif ready:
+        elif repo is not None:
             message = f"Ready — {repo.name} is a valid git repository."
             color = STATUS_OK
         else:

@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtCore import QEvent, QLockFile, QObject, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QComboBox
@@ -108,9 +108,8 @@ class SingleInstanceGuard(QObject):
         self._socket_name = f"{name}.sock"
         runtime = user_runtime_dir()
         self._lock_path = runtime / f"{name}.lock"
+        self._lockfile: QLockFile | None
         try:
-            from PySide6.QtCore import QLockFile
-
             self._lockfile = QLockFile(str(self._lock_path))
             self._lockfile.setStaleLockTime(0)
         except ImportError:  # PySide6 always provides this

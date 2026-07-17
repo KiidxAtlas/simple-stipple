@@ -364,7 +364,6 @@ def _is_corner(
 # ════════════════════════════════════════════════════════════════════════════
 
 
-PointTuple = tuple[float, float]
 Polyline = list[PointTuple]
 
 

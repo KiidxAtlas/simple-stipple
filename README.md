@@ -39,7 +39,7 @@ pip install .[cad]
 From your Mac, create and push a version tag to trigger the GitHub Actions release workflow for both platforms:
 
 ```bash
-./scripts/release.sh v0.3.2
+./scripts/release.sh v0.3.3
 ```
 
 That single tag push builds and publishes:

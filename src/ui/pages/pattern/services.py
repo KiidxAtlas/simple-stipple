@@ -637,7 +637,7 @@ class PatternProcessingService:
             # pattern fill uses the cells themselves. This makes the two
             # independent toggles partition the outline instead of engraving
             # overlapping hatch passes over the same area.
-            cell_shapes: list[tuple[Any, str | None]] = []
+            cell_shapes: list[tuple[Any, Any]] = []
             pending_lines: list[list[tuple[float, float]]] = []
             try:
                 for poly in polys:
@@ -657,10 +657,10 @@ class PatternProcessingService:
                     )
 
                     lines = [_LS(poly) for poly in pending_lines]
-                    for shp in polygonize(unary_union(lines)):
-                        clipped = shp.intersection(fill_outline)
-                        if not clipped.is_empty:
-                            cell_shapes.append((clipped, None))
+                    for polygonized_shape in polygonize(unary_union(lines)):
+                        clipped_shape = polygonized_shape.intersection(fill_outline)
+                        if not clipped_shape.is_empty:
+                            cell_shapes.append((clipped_shape, None))
             except (ValueError, TypeError) as exc:
                 raise ValueError(
                     "Pattern-cell fill failed because one or more generated cells are invalid."
@@ -1011,7 +1011,7 @@ class PatternProcessingService:
             [None] * len(context_polys)
             + outline_owners
             + pattern_owners
-            + fill_owners
+            + [owner for owner in fill_owners]
         )
         return {
             "outline": outline_polys,

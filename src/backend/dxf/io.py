@@ -283,7 +283,9 @@ def _load_dxf_polylines_by_layer_with_report(
         6: "Meters",
     }.get(unit_code, f"DXF unit code {unit_code}")
     try:
-        mm_per_unit = float(units.conversion_factor(unit_code, 4)) if unit_code else 1.0
+        source_units = cast(units.InsertUnits, unit_code)
+        mm_units = cast(units.InsertUnits, 4)
+        mm_per_unit = float(units.conversion_factor(source_units, mm_units)) if unit_code else 1.0
     except (TypeError, ValueError):
         mm_per_unit = 1.0
     flattening_distance = 0.02 / mm_per_unit
@@ -327,7 +329,7 @@ def _load_dxf_polylines_by_layer_with_report(
         if dxftype == "LWPOLYLINE":
             try:
                 lw = entity
-                vertex_data = list(lw.get_points(format="xyb"))
+                vertex_data = list(cast(Any, lw).get_points(format="xyb"))
                 if any(abs(float(point[2])) > 1e-12 for point in vertex_data):
                     pts = [
                         (float(point.x), float(point.y))

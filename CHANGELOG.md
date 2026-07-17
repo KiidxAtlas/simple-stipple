@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.3 — 2026-07-16
+
+### Fixed
+
+- Resolved all repository-wide MyPy diagnostics across backend, DXF, pattern, trace, workspace, and Qt UI boundaries.
+- Corrected concrete typing defects involving DXF units, SVG transforms, image conversion, pattern polygonization, workspace models, and nullable Qt widgets.
+- Added explicit typing boundaries for the canvas's cooperative Qt mixin architecture.
+
+### Changed
+
+- CI now runs MyPy over all 94 source files instead of two selected modules.
+- Compatibility ignores no longer fail inconsistently when third-party type coverage differs across supported Python versions.
+
 ## 0.3.2 — 2026-07-16
 
 ### Added

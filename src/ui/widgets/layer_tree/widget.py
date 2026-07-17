@@ -174,7 +174,7 @@ class DxfLayersTree(QFrame):
             if not shape_keys:
                 return
 
-            payload = {
+            drag_payload: dict[str, Any] = {
                 "kind": "shape",
                 "source_layer": source_layer,
                 "shape_keys": shape_keys,
@@ -183,7 +183,7 @@ class DxfLayersTree(QFrame):
             mime = self.mimeData(shape_items)
             mime.setData(
                 "application/x-simple-stipple-layer-tree",
-                json.dumps(payload).encode("utf-8"),
+                json.dumps(drag_payload).encode("utf-8"),
             )
             drag.setMimeData(mime)
             drag.exec(supportedActions)

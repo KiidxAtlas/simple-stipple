@@ -243,7 +243,7 @@ class MeasureTool(CanvasTool):
             reference_point=v._measure_anchor,
         )
         snapped = snap_result is not None
-        if snapped:
+        if snap_result is not None:
             wx, wy = snap_result[0], snap_result[1]
         # Angle snap with Shift
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -1312,7 +1312,7 @@ class SelectTool(CanvasTool):
             window = pos.x() >= bx
             if not v._band_additive:
                 v._sel.clear()
-            picked: set[int] = set()
+            band_picked: set[int] = set()
             for idx, e in enumerate(v._entities):
                 if not v._entity_selectable(idx):
                     continue
@@ -1323,24 +1323,24 @@ class SelectTool(CanvasTool):
                 inside = [x1c <= cx <= x2c and y1c <= cy <= y2c for cx, cy in pts_c]
                 if window:
                     if all(inside):
-                        picked.add(idx)
+                        band_picked.add(idx)
                     continue
                 if any(inside):
-                    picked.add(idx)
+                    band_picked.add(idx)
                     continue
                 n = len(pts_c)
                 seg_count = n if v._is_poly_closed(poly) else n - 1
                 for i in range(seg_count):
                     if _seg_hits_rect(pts_c[i], pts_c[(i + 1) % n], x1c, y1c, x2c, y2c):
-                        picked.add(idx)
+                        band_picked.add(idx)
                         break
             # A marquee that catches part of a group selects the whole group.
-            gids = {v._entities[i].group for i in picked} - {None}
+            gids = {v._entities[i].group for i in band_picked} - {None}
             if gids:
                 for i, e in enumerate(v._entities):
                     if e.group in gids and v._entity_selectable(i):
-                        picked.add(i)
-            v._sel |= picked
+                        band_picked.add(i)
+            v._sel |= band_picked
             v._redraw()
             v._notify()
             v._shift_drag = False

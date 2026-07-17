@@ -15,6 +15,7 @@ import math
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import cast
 
 import ezdxf  # type: ignore[attr-defined]
 from ezdxf import units  # type: ignore[attr-defined]
@@ -142,7 +143,11 @@ def dxf_to_svg(
     document = ezdxf.readfile(str(input_path))
     unit_code = int(document.header.get("$INSUNITS", 0) or 0)
     try:
-        mm_factor = float(units.conversion_factor(unit_code, 4)) if unit_code else 1.0
+        mm_factor = (
+            float(units.conversion_factor(cast(units.InsertUnits, unit_code), cast(units.InsertUnits, 4)))
+            if unit_code
+            else 1.0
+        )
     except (ValueError, TypeError):
         mm_factor = 1.0
     if mm_factor != 1.0:
@@ -197,7 +202,7 @@ def _parse_transform(value: str) -> Matrix:
         args = [float(number) for number in re.findall(_NUM_RE, payload)]
         name = name.lower()
         if name == "matrix" and len(args) == 6:
-            current = tuple(args)  # type: ignore[assignment]
+            current: Matrix = cast(Matrix, tuple(args))
         elif name == "translate" and args:
             current = (1, 0, 0, 1, args[0], args[1] if len(args) > 1 else 0)
         elif name == "scale" and args:
@@ -529,13 +534,13 @@ def svg_to_dxf(
                 ry = max(0.0, min(ry_raw if ry_raw else rx, h / 2))
                 if rx and ry:
                     pts = []
-                    for cx0, cy0, start in (
+                    for arc_cx, arc_cy, start_angle in (
                         (x + w - rx, y + ry, -90), (x + w - rx, y + h - ry, 0),
                         (x + rx, y + h - ry, 90), (x + rx, y + ry, 180),
                     ):
                         for step in range(5):
-                            angle = math.radians(start + step * 22.5)
-                            pts.append((cx0 + rx * math.cos(angle), cy0 + ry * math.sin(angle)))
+                            angle = math.radians(start_angle + step * 22.5)
+                            pts.append((arc_cx + rx * math.cos(angle), arc_cy + ry * math.sin(angle)))
                     pts.append(pts[0])
                 records.append(([tp(point) for point in pts], "polyline", None))
 

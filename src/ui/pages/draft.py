@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 from PySide6.QtCore import Signal
@@ -921,7 +921,7 @@ def _coerce_to_draft_state(state: dict | None) -> DraftTabState:
     if not isinstance(state, dict):
         return DraftTabState()
     try:
-        return DraftTabState.from_dict(state)
+        return cast(DraftTabState, DraftTabState.from_dict(state))
     except (ValidationError, TypeError, ValueError) as exc:
         LOGGER.warning("Discarding invalid Draft workspace state: %s", exc)
         return DraftTabState()

@@ -176,10 +176,11 @@ class SettingsDialog(QDialog):
         ):
             self._ui_scale_combo.addItem(label, value)
         current_scale = float(self._settings.get("ui_scale", 1.0) or 1.0)
+        scale_combo = self._ui_scale_combo
         self._ui_scale_combo.setCurrentIndex(
             min(
-                range(self._ui_scale_combo.count()),
-                key=lambda i: abs(float(self._ui_scale_combo.itemData(i)) - current_scale),
+                range(scale_combo.count()),
+                key=lambda i: abs(float(scale_combo.itemData(i)) - current_scale),
             )
         )
         scale_row.addWidget(self._ui_scale_combo)
@@ -189,8 +190,8 @@ class SettingsDialog(QDialog):
         smoothing_row = QHBoxLayout()
         smoothing_row.addWidget(QLabel("Smoothing method"))
         self._smoothing_combo = QComboBox()
-        for value, label in SMOOTHING_METHODS:
-            self._smoothing_combo.addItem(label, value)
+        for smoothing_value, smoothing_label in SMOOTHING_METHODS:
+            self._smoothing_combo.addItem(smoothing_label, smoothing_value)
         current_smoothing = self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD)
         idx = self._smoothing_combo.findData(current_smoothing)
         self._smoothing_combo.setCurrentIndex(idx if idx >= 0 else 0)

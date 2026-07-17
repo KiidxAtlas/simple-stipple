@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -106,7 +107,8 @@ def build_lazy_section(
             build_content(content_layout)
             built["done"] = True
 
-    section._toggle.toggled.connect(_ensure_built)
+    if isinstance(section._toggle, QToolButton):
+        section._toggle.toggled.connect(_ensure_built)
     _ensure_built(expanded)
     return section
 

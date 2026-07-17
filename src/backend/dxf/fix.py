@@ -125,7 +125,11 @@ def _safe_repair_dxf(input_path: Path, output_path: Path) -> dict[str, Any]:
     modelspace = doc.modelspace()
     unit_code = int(doc.header.get("$INSUNITS", 0) or 0)
     try:
-        mm_per_drawing_unit = float(units.conversion_factor(unit_code, 4)) if unit_code else 1.0
+        mm_per_drawing_unit = (
+            float(units.conversion_factor(cast(units.InsertUnits, unit_code), cast(units.InsertUnits, 4)))
+            if unit_code
+            else 1.0
+        )
     except (ValueError, TypeError):
         mm_per_drawing_unit = 1.0
     close_tol = _CLOSE_TOL / mm_per_drawing_unit
@@ -241,7 +245,11 @@ def fix_dxf(
     source_doc = cast(Any, ezdxf).readfile(str(source))
     source_unit = int(source_doc.header.get("$INSUNITS", 0) or 0)
     try:
-        mm_factor = float(units.conversion_factor(source_unit, 4)) if source_unit else 1.0
+        mm_factor = (
+            float(units.conversion_factor(cast(units.InsertUnits, source_unit), cast(units.InsertUnits, 4)))
+            if source_unit
+            else 1.0
+        )
     except (ValueError, TypeError):
         mm_factor = 1.0
     if mm_factor != 1.0:

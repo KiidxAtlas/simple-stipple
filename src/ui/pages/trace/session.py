@@ -9,7 +9,7 @@ but validate and coerce those dicts through ``TraceTabState`` internally.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from src.backend.document import TraceTabState
 from src.ui.pages.trace.form import trace_default
@@ -22,7 +22,7 @@ def _coerce_to_trace_state(state: dict | None) -> TraceTabState:
     if not isinstance(state, dict):
         return TraceTabState()
     try:
-        return TraceTabState.from_dict(state)
+        return cast(TraceTabState, TraceTabState.from_dict(state))
     except Exception:
         return TraceTabState()
 

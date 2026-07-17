@@ -72,7 +72,7 @@ def _load_image(path: str, max_px: int = 1200) -> tuple[Image.Image, np.ndarray]
     # Clamp ``max_px`` to a sane range so a malicious or corrupted call
     # site cannot allocate gigabytes of RGBA pixels.
     max_px = max(64, min(int(max_px), 8192))
-    img = Image.open(path)
+    img: Image.Image = Image.open(path)
     # Reject pathologically large source images outright — PIL otherwise
     # decompresses the full file before we get a chance to downscale.
     src_w, src_h = img.size

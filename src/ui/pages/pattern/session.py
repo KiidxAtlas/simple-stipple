@@ -9,7 +9,7 @@ but validate and coerce those dicts through ``PatternTabState`` internally.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -27,7 +27,7 @@ def _coerce_to_pattern_state(state: dict | None) -> PatternTabState:
     if not isinstance(state, dict):
         return PatternTabState()
     try:
-        return PatternTabState.from_dict(state)
+        return cast(PatternTabState, PatternTabState.from_dict(state))
     except (ValidationError, TypeError, ValueError) as exc:
         LOGGER.warning("Discarding invalid Pattern workspace state: %s", exc)
         return PatternTabState()

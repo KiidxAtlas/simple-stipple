@@ -1033,7 +1033,9 @@ class PatternPage(BasePage):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self._preset_combo.setMinimumContentsLength(10)
-        self._preset_combo.lineEdit().setPlaceholderText("Name or select preset…")
+        preset_editor = self._preset_combo.lineEdit()
+        if preset_editor is not None:
+            preset_editor.setPlaceholderText("Name or select preset…")
         pattern_layout.addWidget(self._preset_combo)
         preset_actions = QHBoxLayout()
         preset_actions.setSpacing(4)
@@ -1936,7 +1938,11 @@ class PatternPage(BasePage):
             "fill": [],
         }
         owners = self._preview_categories.get("zone_owners", [])
-        self._preview_zone_owners = list(owners) if isinstance(owners, list) else []
+        self._preview_zone_owners = (
+            [owner if isinstance(owner, int) else None for owner in owners]
+            if isinstance(owners, list)
+            else []
+        )
         generated_signatures = {
             self._pattern_service._poly_signature(poly)
             for poly in self._preview_categories.get("pattern", [])
@@ -2385,7 +2391,7 @@ class PatternPage(BasePage):
             return
         while self._zone_params_grid.count():
             item = self._zone_params_grid.takeAt(0)
-            widget = item.widget()
+            widget = item.widget() if item is not None else None
             if widget is not None:
                 widget.deleteLater()
         self._zone_param_inputs = {}
@@ -2904,7 +2910,9 @@ class PatternPage(BasePage):
             self._preset_combo.setCurrentText(current)
         else:
             self._preset_combo.setCurrentIndex(-1)
-            self._preset_combo.lineEdit().clear()
+            preset_editor = self._preset_combo.lineEdit()
+            if preset_editor is not None:
+                preset_editor.clear()
         self._preset_combo.blockSignals(False)
 
     def _save_preset(self) -> None:

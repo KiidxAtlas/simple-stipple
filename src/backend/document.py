@@ -337,7 +337,7 @@ def empty_workspace_document() -> dict[str, Any]:
     doc = WorkspaceDocument(
         schema_version=WORKSPACE_SCHEMA_VERSION,
         workspace_name="Untitled Workspace",
-        app={"current_tab": 0},
+        app=AppWorkspaceState(current_tab=0),
         tabs={
             "utilities": UtilitiesTabState(),
             "pattern": PatternTabState(),

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
+from importlib import import_module
+from types import ModuleType
 
 from shapely import prepared  # type: ignore[import-untyped]
 from shapely.geometry import (
@@ -17,7 +19,7 @@ from shapely.ops import unary_union  # type: ignore[import-untyped]
 from src.backend.pattern.cancellation import cancellation_checkpoint
 
 try:
-    from PIL import Image as _PIL_Image  # type: ignore[import-untyped]
+    _PIL_Image: ModuleType | None = import_module("PIL.Image")
 
     _PIL_OK = True
 except ImportError:
@@ -380,7 +382,7 @@ def apply_interlace(
                     try:
                         line = LineString(seg)
                         if not line.is_empty:
-                            clipped = outline_poly.intersection(line)
+                            clipped = outline_poly.intersection(line)  # type: ignore[union-attr]
                             if not clipped.is_empty:
                                 if clipped.geom_type == "LineString":
                                     new_poly.extend(list(clipped.coords))

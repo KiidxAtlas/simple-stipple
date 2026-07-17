@@ -24,4 +24,4 @@ jobs:
       - run: uv run python -c "import src.app; import src.infra.launcher"
       - run: uv run pytest -q
       - name: Type-check refactored boundaries
-        run: uv run mypy src/app/page_runtime.py src/ui/pages/pattern/workers.py
+        run: uv run mypy src

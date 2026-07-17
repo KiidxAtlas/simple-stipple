@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from importlib import metadata
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 _LOG = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
             _LOG.warning("No release asset found for platform %s", platform.system())
             return None
 
-        selected = next(
+        selected: dict[str, Any] = next(
             (asset for asset in assets if asset.get("browser_download_url") == download_url), {}
         )
         digest = str(selected.get("digest") or "")

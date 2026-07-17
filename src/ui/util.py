@@ -39,10 +39,10 @@ import math
 import operator
 import re
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from PySide6.QtWidgets import QFileDialog
 
@@ -63,7 +63,7 @@ DEFAULT_UNIT_SYSTEM: UnitSystem = "mm"
 _MM_PER_INCH = 25.4
 _notification_history: deque[tuple[str, str]] = deque(maxlen=200)
 
-_EXPR_OPS = {
+_EXPR_OPS: dict[type[ast.operator | ast.unaryop], Callable[..., Any]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
