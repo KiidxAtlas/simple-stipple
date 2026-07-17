@@ -385,7 +385,10 @@ def apply_interlace(
                             clipped = outline_poly.intersection(line)  # type: ignore[union-attr]
                             if not clipped.is_empty:
                                 if clipped.geom_type == "LineString":
-                                    new_poly.extend(list(clipped.coords))
+                                    new_poly.extend(
+                                        (float(point[0]), float(point[1]))
+                                        for point in clipped.coords
+                                    )
                                 elif clipped.geom_type == "MultiLineString":
                                     for part in clipped.geoms:
                                         new_poly.extend(list(part.coords))

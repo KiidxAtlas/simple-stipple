@@ -418,7 +418,8 @@ def render_fvi(
             and len(center_raw) >= 2
         )
         if can_arc and center_raw is not None:
-            center = (float(center_raw[0]), float(center_raw[1]))
+            center_values = cast(Sequence[Any], center_raw)
+            center = (float(center_values[0]), float(center_values[1]))
             end_delta = (end[0] - cursor[0], end[1] - cursor[1])
             center_delta = (center[0] - cursor[0], center[1] - cursor[1])
             ex_text, ex_actual = _quantized_delta(end_delta[0], options.precision)

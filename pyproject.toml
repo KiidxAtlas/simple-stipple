@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simple-stipple"
-version = "0.3.3"
+version = "0.3.4"
 description = ""
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,7 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.12",
     "mypy>=1.16",
+    "pyright>=1.1.403",
     "pytest-qt>=4.5",
     "hypothesis>=6.135",
     "pytest-benchmark>=5.1",

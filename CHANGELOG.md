@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.4 — 2026-07-16
+
+### Fixed
+
+- Cleared all Pyright/Pylance diagnostics in addition to Ruff and MyPy.
+- Configured VS Code and Pyright to use the project virtual environment, preventing false missing-import diagnostics.
+- Tightened FVI center and Shapely coordinate typing found by Pyright.
+
+### Changed
+
+- Added Pyright to development dependencies and the CI quality gate.
+- Documented the canvas cooperative-mixin boundary for Pyright while retaining full MyPy coverage of those modules.
+
 ## 0.3.3 — 2026-07-16
 
 ### Fixed
