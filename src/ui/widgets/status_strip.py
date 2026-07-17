@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton
 
 from src.ui.components import info_chip
 
@@ -51,11 +50,13 @@ class CanvasStatusStrip(QFrame):
 
         layout.addWidget(self._dot())
 
-        self._zoom_label = QLabel("100%")
+        self._zoom_label = QToolButton()
+        self._zoom_label.setText("100% ▾")
         self._zoom_label.setProperty("role", "status-zoom")
-        self._zoom_label.setToolTip("Zoom level — click for presets")
-        self._zoom_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._zoom_label.mousePressEvent = self._show_zoom_menu  # type: ignore[method-assign]
+        self._zoom_label.setToolTip("Zoom level — open presets")
+        self._zoom_label.setAccessibleName("Canvas zoom")
+        self._zoom_label.setAutoRaise(True)
+        self._zoom_label.clicked.connect(self._show_zoom_menu)
         self._on_zoom_selected = None
         layout.addWidget(self._zoom_label)
 
@@ -94,7 +95,7 @@ class CanvasStatusStrip(QFrame):
         if topology_text:
             combined_precision = f"{precision_text} · {topology_text}"
         self._precision_label.setText(combined_precision)
-        self._zoom_label.setText(f"{zoom_percent}%")
+        self._zoom_label.setText(f"{zoom_percent}% ▾")
         if cursor_pos:
             self._cursor_label.setText(f"X {cursor_pos[0]:.2f}  Y {cursor_pos[1]:.2f}")
         else:
@@ -108,7 +109,7 @@ class CanvasStatusStrip(QFrame):
         """callback(value) where value is a percent int or "fit"."""
         self._on_zoom_selected = callback
 
-    def _show_zoom_menu(self, event) -> None:
+    def _show_zoom_menu(self) -> None:
         callback = self._on_zoom_selected
         if callback is None:
             return
@@ -118,7 +119,7 @@ class CanvasStatusStrip(QFrame):
         menu.addAction("Fit", lambda: callback("fit"))
         for pct in (50, 100, 200, 400):
             menu.addAction(f"{pct}%", lambda _p=pct: callback(_p))
-        menu.popup(self._zoom_label.mapToGlobal(event.position().toPoint()))
+        menu.popup(self._zoom_label.mapToGlobal(self._zoom_label.rect().bottomLeft()))
 
     def set_selection_count(self, count: int) -> None:
         """Lightweight update — change only the selection label without a full snapshot."""

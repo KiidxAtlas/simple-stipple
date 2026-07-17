@@ -43,6 +43,11 @@ CLOSE_SNAP_DIST = 14  # same as snap so visual indicator matches click behavior
 VERT_HIT = 8  # vertex click hit radius
 EDGE_HIT = 6  # edge click hit radius
 
+# ── Grid spacing bounds (mm) ──────────────────────────────────────────────────
+# Shared clamp for every grid-spacing setter (precision bar, canvas commands).
+GRID_SPACING_MIN_MM = 0.1
+GRID_SPACING_MAX_MM = 100.0
+
 # ── Line widths ───────────────────────────────────────────────────────────────
 DRAW_VERT_R = 5  # vertex dot radius in draw mode
 DRAW_LINE_W = 2.0  # placed segment line width
@@ -61,6 +66,8 @@ __all__ = [
     "GRID_AXIS",
     "GRID_MAJOR",
     "GRID_MINOR",
+    "GRID_SPACING_MAX_MM",
+    "GRID_SPACING_MIN_MM",
     "GUIDE_COLOR",
     "HANDLE",
     "HANDLE_ACTIVE",

@@ -28,6 +28,39 @@ def test_near_open_outline_does_not_pass_preflight_then_disappear():
         PatternProcessingService.validate_outline_inputs([near_open])
 
 
+def test_small_closed_laser_feature_is_accepted_as_an_outline():
+    small_closed = [(0.0, 0.0), (0.5, 0.0), (0.5, 0.5), (0.0, 0.5), (0.0, 0.0)]
+
+    assert PatternProcessingService.validate_outline_inputs([small_closed]) is None
+
+
+def test_empty_legacy_zone_pattern_is_normalized_before_worker_snapshot():
+    service = PatternProcessingService()
+    jobs, warnings = service.snapshot_zone_jobs(
+        [
+            {
+                "outline_ids": ["outline-1"],
+                "pattern": "",
+                "params": {},
+                "scale": (10.0, 10.0),
+            }
+        ],
+        ["outline-1"],
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]],
+    )
+
+    assert warnings == []
+    assert jobs[0]["pattern"] == "— None —"
+
+
+def test_invalid_closed_outline_is_not_reported_as_open():
+    import pytest
+
+    self_crossing = [(0.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (0.0, 0.0)]
+    with pytest.raises(ValueError, match="boundary is closed.*invalid geometry"):
+        PatternProcessingService.validate_outline_inputs([self_crossing])
+
+
 def test_basketweave_dispatch_is_available():
     from shapely.geometry import box
 

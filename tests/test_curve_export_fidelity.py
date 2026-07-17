@@ -105,6 +105,24 @@ def test_dxf_export_writes_native_spline_entity(qapp, tmp_path):
     assert "SPLINE" in types
 
 
+def test_secondary_dxf_layer_preserves_native_curve_kind(qapp, tmp_path):
+    import ezdxf
+
+    from src.backend.dxf.io import write_polylines_dxf
+
+    export = _spline_view(qapp).get_export_dxf_state()
+    out = tmp_path / "secondary-curve.dxf"
+    write_polylines_dxf(
+        [[(0.0, 0.0), (1.0, 0.0)]],
+        str(out),
+        pattern_layer="Primary",
+        extra_layer_records={"Curves": export},
+    )
+
+    entities = list(ezdxf.readfile(out).modelspace().query('*[layer=="Curves"]'))
+    assert [entity.dxftype() for entity in entities] == ["SPLINE"]
+
+
 def test_dxf_export_flattens_bezier_to_a_smooth_polyline(qapp, tmp_path):
     from src.backend.dxf.io import write_polylines_dxf
 

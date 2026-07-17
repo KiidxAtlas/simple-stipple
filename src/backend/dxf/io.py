@@ -7,6 +7,7 @@ import math
 import re
 from collections import Counter
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any, NamedTuple, Protocol, cast
 
 import ezdxf  # type: ignore[attr-defined]
@@ -22,13 +23,19 @@ from src.backend.shapes import shape_from_meta
 
 _LOG = logging.getLogger(__name__)
 OUTLINE_CLOSE_TOLERANCE_MM = 2.0
-OUTLINE_MIN_AREA_MM2 = 1.0
+# Keep only numerical dust out of pattern regions.  A 1 mm² floor rejected
+# legitimate small laser features while reporting them as "not closed" in the
+# Pattern page.  The pattern geometry pipeline already uses 0.001 mm² as its
+# stable minimum when extracting polygon rings, so use the same floor here.
+OUTLINE_MIN_AREA_MM2 = 0.001
 
 # Tolerance (in drawing units) for detecting that a polyline's first and
 # last points coincide.  Tight enough to avoid false positives on real
 # open chains, loose enough to absorb float round-trips through shapely.
 _DXF_CLOSURE_EPS = 1e-4
 _DXF_DEDUP_EPS = 1e-9
+MAX_DXF_FILE_BYTES = 64 * 1024 * 1024
+MAX_DXF_ENTITIES = 500_000
 
 
 def _normalize_polyline_for_dxf(
@@ -239,6 +246,13 @@ def _load_dxf_polylines_with_report(
 def _load_dxf_polylines_by_layer_with_report(
     path: str,
 ) -> tuple[dict[str, list[list[tuple[float, float]]]], DxfImportReport]:
+    source = Path(path)
+    size = source.stat().st_size
+    if size > MAX_DXF_FILE_BYTES:
+        raise ValueError(
+            f"{source.name} is too large to import safely "
+            f"({size / (1024 * 1024):.1f} MB; limit 64 MB)."
+        )
     try:
         doc = _ezdxf_readfile(path)
     except (OSError, FileNotFoundError, ValueError) as exc:
@@ -254,6 +268,11 @@ def _load_dxf_polylines_by_layer_with_report(
             ),
         )
     msp = doc.modelspace()
+    if len(msp) > MAX_DXF_ENTITIES:
+        raise ValueError(
+            f"{source.name} contains {len(msp):,} entities; "
+            f"the safe import limit is {MAX_DXF_ENTITIES:,}."
+        )
     unit_code = int(doc.header.get("$INSUNITS", 0) or 0)
     unit_name = {
         0: "Unitless",
@@ -559,6 +578,7 @@ def write_polylines_dxf(
     entity_meta: list[dict[str, Any] | None] | None = None,
     entity_names: list[str] | None = None,
     extra_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
+    extra_layer_records: dict[str, list[dict[str, Any]]] | None = None,
 ) -> None:
     def _layer_from_meta_name(name: str | None) -> str | None:
         if not name:
@@ -655,6 +675,12 @@ def write_polylines_dxf(
                     dxfattribs={"layer": border_layer_prefix},
                 )
 
+    if extra_layer_records:
+        extra_layers = {
+            name: [list(record["polyline"]) for record in records]
+            for name, records in extra_layer_records.items()
+        }
+
     if extra_layers:
         # Each entry produces its own DXF layer. Polylines are written as
         # LWPOLYLINE entities; closure is inferred from coordinate equality.
@@ -669,9 +695,18 @@ def write_polylines_dxf(
             if layer_name not in doc.layers:
                 doc.layers.add(layer_name, color=color)
             attrs = {"layer": layer_name}
-            for c in layer_polys:
+            records = (extra_layer_records or {}).get(layer_name, [])
+            for record_index, c in enumerate(layer_polys):
                 if len(c) < 2:
                     continue
+                if record_index < len(records):
+                    record = records[record_index]
+                    kind = str(record.get("kind", "polyline"))
+                    meta = record.get("meta")
+                    if kind != "polyline" and isinstance(meta, dict):
+                        shape = shape_from_meta(kind, meta)
+                        if shape is not None and shape.to_dxf(msp, attrs):
+                            continue
                 coords, is_closed = _normalize_polyline_for_dxf(c, force_close=False)
                 if len(coords) < 2:
                     continue

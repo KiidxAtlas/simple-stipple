@@ -67,3 +67,22 @@ def test_grid_spacing_is_progressively_disclosed(qapp):
     assert not bar._spacing.isVisible()
     bar._grid_btn.click()
     assert not bar._spacing.isHidden()
+
+
+def test_grid_button_is_adjacent_to_its_spacing_controls(qapp):
+    bar = CanvasPrecisionBar(make_canvas(qapp))
+    layout = bar.layout()
+    assert layout.indexOf(bar._spacing_label) == layout.indexOf(bar._grid_btn) + 1
+    assert layout.indexOf(bar._spacing) == layout.indexOf(bar._spacing_label) + 1
+
+
+def test_lower_canvas_bar_exposes_pan_mode_button(qapp):
+    canvas = make_canvas(qapp)
+    bar = CanvasPrecisionBar(canvas)
+
+    assert "Shortcut: P" in bar._pan_btn.toolTip()
+    bar._pan_btn.click()
+    assert canvas.get_mode() == "pan"
+    assert bar._pan_btn.isChecked()
+    bar._pan_btn.click()
+    assert canvas.get_mode() == "select"

@@ -1,1 +1,1 @@
-"""AA Laser Studio package."""
+"""Simple Stipple package."""

@@ -92,4 +92,4 @@ def recent_workspace_paths(settings: dict) -> list[Path]:
 def workspace_title(workspace_path: Path | None, workspace_dirty: bool) -> str:
     name = workspace_path.name if workspace_path else "Untitled Workspace"
     dirty = " *" if workspace_dirty else ""
-    return f"AA Laser Studio — {name}{dirty}"
+    return f"Simple Stipple — {name}{dirty}"

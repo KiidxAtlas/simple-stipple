@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QTimer, Qt, Signal, QUrl
-from PySide6.QtGui import QDesktopServices, QDoubleValidator, QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices, QDoubleValidator, QIntValidator, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,12 +23,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QMessageBox,
     QInputDialog,
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -72,9 +72,28 @@ from src.ui.pages.pattern.params import (
     collect_pattern_params,
     restore_form_state,
 )
+from src.ui.pages.pattern._spec import PARAM_SPECS
 from src.ui.pages.pattern.presets import (
     SETTINGS_KEY as PRESET_SETTINGS_KEY,
     ensure_builtins_seeded,
+)
+from src.ui.pages.pattern.defaults import (
+    DEFAULT_BORDER_FADE,
+    DEFAULT_DENSITY_ANGLE,
+    DEFAULT_DENSITY_STRENGTH,
+    DEFAULT_FILL_ANGLE,
+    DEFAULT_FILL_INSET,
+    DEFAULT_FILL_SPACING,
+    DEFAULT_GRID_SPACING_MM,
+    DEFAULT_GRID_VISIBLE,
+    DEFAULT_MIN_ISLAND_AREA,
+    DEFAULT_MIN_SEGMENT,
+    DEFAULT_PATTERN_ROTATION,
+    DEFAULT_PREVIEW_QUALITY,
+    FILL_SPACING_FLOOR_MM,
+    PREVIEW_DEBOUNCE_MS,
+    SCALE_MAX_MM,
+    SCALE_MIN_MM,
 )
 from src.ui.pages.pattern.presets_dialog import PresetManagerDialog
 from src.ui.pages.pattern.services import PatternProcessingService
@@ -202,6 +221,8 @@ class PatternPage(BasePage):
 
         self._build_left(left)
         self._build_right(right)
+        self._refresh_zone_list()
+        self._refresh_pattern_properties_panel()
         self._left_esc_filter = EscapeBlurFilter(self._canvas, within=left_w)
         for edit in left_w.findChildren(QLineEdit):
             edit.installEventFilter(self._left_esc_filter)
@@ -230,11 +251,22 @@ class PatternPage(BasePage):
     # ── Right panel ───────────────────────────────────────────────────────────
 
     def _build_right(self, layout: QVBoxLayout) -> None:
-        self._preview_btn = QPushButton("Preview")
+        self._preview_btn = QPushButton("Show Preview")
         self._preview_btn.setCheckable(True)
         self._preview_btn.setMinimumHeight(28)
         self._preview_btn.setToolTip("Toggle between outline editing and pattern preview")
         self._preview_btn.clicked.connect(self._on_preview_clicked)
+        self._cancel_preview_btn = QToolButton()
+        self._cancel_preview_btn.setText("✕")
+        self._cancel_preview_btn.setToolTip("Cancel the preview currently computing")
+        self._cancel_preview_btn.setAccessibleName("Cancel preview")
+        self._cancel_preview_btn.setVisible(False)
+        self._cancel_preview_btn.clicked.connect(lambda: self._on_preview_clicked(False))
+        self._auto_preview_cb = QCheckBox("Auto-preview")
+        self._auto_preview_cb.setChecked(True)
+        self._auto_preview_cb.setToolTip(
+            "Show completed previews automatically when no selection or drawing gesture is active"
+        )
 
         self._reset_preview_btn = QPushButton("Reset")
         self._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
@@ -255,20 +287,27 @@ class PatternPage(BasePage):
             on_outline_role_change=self._on_canvas_outline_role_change,
             on_outline_role_explain=self._explain_outline_role,
             on_pattern_cell_cutout_toggle=self._on_pattern_cell_cutout_toggle,
+            on_create_zone_from_selection=self._assign_zone,
             draft_profile=True,
         )
         self._canvas.set_empty_message(
-            "No outline loaded\nLoad or drop a DXF, or send shapes from Draft"
+            "Start a pattern\nImport an outline on the left, drop a DXF here, or send shapes from Draft"
         )
-        self._canvas.set_grid_visible(True)
+        self._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
         self._canvas.set_grid_snap(False)
-        self._canvas.set_grid_spacing(1.0)
+        self._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
+        self._canvas.set_selection_follows_geometry(True)
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
             on_mode=self._on_toolbar_mode,
             on_fit=self._canvas.fit,
-            extra_widgets=[self._preview_btn, self._reset_preview_btn],
+            extra_widgets=[
+                self._auto_preview_cb,
+                self._preview_btn,
+                self._cancel_preview_btn,
+                self._reset_preview_btn,
+            ],
         )
         layout.addWidget(self._toolbar_module)
 
@@ -294,20 +333,18 @@ class PatternPage(BasePage):
 
         side_panel = QWidget()
         side_layout = QVBoxLayout(side_panel)
-        side_layout.setContentsMargins(0, 0, 0, 0)
+        # Keep sticky footer controls clear of the splitter and window edge.
+        side_layout.setContentsMargins(6, 0, 6, 6)
         side_layout.setSpacing(8)
+        zone_scroll = QScrollArea()
+        zone_scroll.setWidgetResizable(True)
+        zone_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        zone_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        zone_scroll.setWidget(self._zones_section)
+        self._zone_layers_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._zone_layers_splitter.setChildrenCollapsible(False)
+        self._zone_layers_splitter.addWidget(zone_scroll)
 
-        self._pattern_properties_panel = self._build_pattern_properties_panel()
-        properties_scroll = QScrollArea()
-        properties_scroll.setWidgetResizable(True)
-        properties_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        properties_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        properties_scroll.setWidget(self._pattern_properties_panel)
-        properties_scroll.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
-        )
         self._layer_module = CanvasLayerTreeModule(
             canvas=self._canvas,
             title="Layers",
@@ -324,14 +361,12 @@ class PatternPage(BasePage):
         self._layer_sidebar = self._layer_module.controller
         # Wire outline-mode shape rename to the runtime's label store.
         self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
-        self._properties_layers_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._properties_layers_splitter.setChildrenCollapsible(False)
-        self._properties_layers_splitter.addWidget(properties_scroll)
-        self._properties_layers_splitter.addWidget(self._layer_module)
-        self._properties_layers_splitter.setStretchFactor(0, 3)
-        self._properties_layers_splitter.setStretchFactor(1, 2)
-        self._properties_layers_splitter.setSizes([430, 260])
-        side_layout.addWidget(self._properties_layers_splitter, stretch=1)
+        self._zone_layers_splitter.addWidget(self._layer_module)
+        self._zone_layers_splitter.setStretchFactor(0, 3)
+        self._zone_layers_splitter.setStretchFactor(1, 2)
+        self._zone_layers_splitter.setSizes([390, 220])
+        side_layout.addWidget(self._zone_layers_splitter, stretch=1)
+        self._build_export_section(side_layout)
 
         self._canvas_runtime = PatternCanvasPageRuntime(
             canvas=self._canvas,
@@ -347,7 +382,7 @@ class PatternPage(BasePage):
             get_preview_categories=lambda: self._preview_categories,
         )
 
-        splitter = content_splitter(canvas_shell, side_panel, sizes=(860, 260))
+        splitter = content_splitter(canvas_shell, side_panel, sizes=(780, 340))
         layout.addWidget(splitter, stretch=1)
         layout.addWidget(self._canvas_status)
         self._refresh_canvas_panels()
@@ -400,14 +435,24 @@ class PatternPage(BasePage):
         row = self._zone_list.currentRow() if hasattr(self, "_zone_list") else -1
         if 0 <= row < len(self._zones):
             self._pattern_props_scope.setText(f"Editing Zone {row + 1}")
+            self._pattern_props_scope.setProperty("editing", True)
         else:
             self._pattern_props_scope.setText(
                 "New zone defaults — select geometry, then create a zone."
             )
+            self._pattern_props_scope.setProperty("editing", False)
+        self._pattern_props_scope.style().unpolish(self._pattern_props_scope)
+        self._pattern_props_scope.style().polish(self._pattern_props_scope)
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _on_preview_clicked(self, checked: bool) -> None:
+        if self._preview_task.running:
+            self._preview_task.cancel()
+            self._preview_task.pending = False
+            self._preview_btn.setChecked(False)
+            self._set_preview_status("Cancelling preview; last completed result retained…")
+            return
         # Explicit user action: leaving preview opts out of auto-preview
         # until the user re-engages (new outline or pattern change).
         self._preview_user_opt_out = not checked
@@ -416,14 +461,17 @@ class PatternPage(BasePage):
     def _on_preview_toggled(self, checked: bool) -> None:
         """Toggle between outline editing and pattern preview display."""
         if checked and self._preview_polys_cache:
+            selected_zone = self._zone_list.currentRow()
             # Switch to preview view
             self._showing_preview = True
-            self._canvas.load(self._preview_polys_cache)
+            self._canvas.load(self._preview_polys_cache, fit=False)
             # Show the source outline as a faded ghost overlay so the user can
             # see both the outline and the generated pattern at the same time.
             if self._edit_polys:
                 self._canvas.set_ghost_polylines(self._edit_polys)
             self._configure_pattern_cell_context()
+            if 0 <= selected_zone < len(self._zones):
+                self._highlight_zone_on_canvas(selected_zone)
             self._set_preview_status(
                 f"{len(self._preview_polys_cache)} shapes — preview", "success"
             )
@@ -438,7 +486,7 @@ class PatternPage(BasePage):
             self._canvas.set_pattern_cell_context(set())
             self._canvas.set_ghost_polylines(None)
             if self._edit_polys:
-                self._canvas.load(self._edit_polys)
+                self._canvas.load(self._edit_polys, fit=False)
             if self._preview_polys_cache:
                 self._set_preview_status("Editing outline — preview cached")
             else:
@@ -465,6 +513,35 @@ class PatternPage(BasePage):
             if self._pattern_service._poly_signature(poly) in cutout_signatures
         }
         self._canvas.set_pattern_cell_context(indices, cutout_indices)
+
+    def _preview_outline_indices_for_zone(self, zone_row: int) -> list[int]:
+        """Select only a zone's boundary entities, not all generated output."""
+        outline_count = len(self._preview_categories.get("outline", []))
+        return [
+            index
+            for index, owner in enumerate(self._preview_zone_owners[:outline_count])
+            if owner == zone_row
+        ]
+
+    def _highlight_zone_on_canvas(self, zone_row: int) -> None:
+        """Highlight a zone without changing canvas/layer-tree selection."""
+        if not 0 <= zone_row < len(self._zones):
+            self._canvas.set_accent_polys({})
+            return
+        if self._showing_preview:
+            indices = [
+                index
+                for index, owner in enumerate(self._preview_zone_owners)
+                if owner == zone_row
+            ]
+        else:
+            zone_ids = set(self._zones[zone_row].get("outline_ids", []))
+            indices = [
+                index
+                for index, outline_id in enumerate(self._outline_ids)
+                if outline_id in zone_ids
+            ]
+        self._canvas.set_accent_polys({index: "#f5a623" for index in indices})
 
     def _on_pattern_cell_cutout_toggle(self, canvas_index: int) -> None:
         if not self._showing_preview:
@@ -498,8 +575,6 @@ class PatternPage(BasePage):
             return True
         del self._pattern_cell_cutouts[existing]
         return False
-        self._update_zone_actions()
-        self._refresh_canvas_panels()
 
     def _on_sel_change(self, count: int) -> None:
         if self._showing_preview:
@@ -561,11 +636,74 @@ class PatternPage(BasePage):
 
     def _on_canvas_geometry_change(self) -> None:
         if self._showing_preview:
+            current = self._canvas.get_polylines_state()
+            previous = list(self._preview_polys_cache)
+            previous_sigs = [self._pattern_service._poly_signature(poly) for poly in previous]
+            current_sigs = [self._pattern_service._poly_signature(poly) for poly in current]
+
+            # Generated pattern cells deleted in preview become persistent
+            # cell cutouts, rather than reappearing on the next rebuild.
+            missing_sigs = set(previous_sigs) - set(current_sigs)
+            removed_cells = [
+                poly
+                for poly in self._preview_categories.get("pattern", [])
+                if self._pattern_service._poly_signature(poly) in missing_sigs
+            ]
+            for poly in removed_cells:
+                if self._pattern_service._poly_signature(poly) not in {
+                    self._pattern_service._poly_signature(item)
+                    for item in self._pattern_cell_cutouts
+                }:
+                    self._pattern_cell_cutouts.append(list(poly))
+
+            # Preview outlines are normally the same source coordinates. When
+            # one is deleted, remove the matching durable outline and its zone
+            # membership as well. Scaled/non-matching display-only outlines
+            # are left untouched rather than risking deletion of the wrong one.
+            removed_outline_sigs = {
+                self._pattern_service._poly_signature(poly)
+                for poly in self._preview_categories.get("outline", [])
+                if self._pattern_service._poly_signature(poly) in missing_sigs
+            }
+            kept_polys: list[list[tuple[float, float]]] = []
+            kept_ids: list[str] = []
+            try:
+                preview_scale = self._collect_scale()
+                displayed_sources = self._apply_scale(self._edit_polys, *preview_scale)
+            except ValueError:
+                displayed_sources = self._edit_polys
+            for source_index, (outline_id, poly) in enumerate(
+                zip(self._outline_ids, self._edit_polys)
+            ):
+                displayed = displayed_sources[source_index]
+                if self._pattern_service._poly_signature(displayed) not in removed_outline_sigs:
+                    kept_ids.append(outline_id)
+                    kept_polys.append(poly)
+            removed_outline_count = len(self._edit_polys) - len(kept_polys)
+            if removed_outline_count:
+                self._edit_polys = kept_polys
+                self._outline_ids = kept_ids
+                self._invalidate_zones_for_geometry_change(set(kept_ids))
+
+            # Shapes drawn while previewing have no prior generated signature;
+            # promote them to source outlines so they survive regeneration.
+            previous_sig_set = set(previous_sigs)
+            added = [poly for poly, sig in zip(current, current_sigs) if sig not in previous_sig_set]
+            if added:
+                self._edit_polys.extend([list(poly) for poly in added])
+                self._outline_ids.extend(self._fresh_outline_ids(len(added)))
+                self._set_status(f"Added {len(added)} outline(s) from preview.", STATUS_OK)
+
+            if removed_cells or removed_outline_count or added:
+                self._schedule_preview()
+                self._emit_state_changed()
             return
+        new_polys = self._canvas.get_polylines_state()
+        new_outline_ids = self._sync_outline_ids(new_polys)
         if self._zones:
-            self._invalidate_zones_for_geometry_change()
-        self._edit_polys = self._canvas.get_polylines_state()
-        self._outline_ids = self._sync_outline_ids(self._edit_polys)
+            self._invalidate_zones_for_geometry_change(set(new_outline_ids))
+        self._edit_polys = new_polys
+        self._outline_ids = new_outline_ids
         self._refresh_canvas_panels()
         self._schedule_preview()
         self._emit_state_changed()
@@ -680,13 +818,13 @@ class PatternPage(BasePage):
         sw = self._parse_float_field(
             self._scale_w,
             "Scale width",
-            minimum=0.001,
+            minimum=SCALE_MIN_MM,
             allow_empty=True,
         )
         sh = self._parse_float_field(
             self._scale_h,
             "Scale height",
-            minimum=0.001,
+            minimum=SCALE_MIN_MM,
             allow_empty=True,
         )
         sw = self._orig_w if sw is None else sw
@@ -694,7 +832,18 @@ class PatternPage(BasePage):
         return sw, sh
 
     def _collect_pattern_params(self, pattern: str) -> dict:
-        return collect_pattern_params(self, pattern)
+        return collect_pattern_params(self, self._pattern_key(pattern))
+
+    @staticmethod
+    def _pattern_key(label: str) -> str:
+        return "Custom Tile" if label.startswith("Custom · ") else label
+
+    @staticmethod
+    def _custom_pattern_name(label: str) -> str | None:
+        return label.removeprefix("Custom · ") if label.startswith("Custom · ") else None
+
+    def _current_pattern_key(self) -> str:
+        return self._pattern_key(self._pattern_combo.currentText())
 
     def _apply_scale(
         self,
@@ -788,11 +937,11 @@ class PatternPage(BasePage):
 
     def _build_left(self, layout: QVBoxLayout) -> None:
         self._build_shape_section(layout)
-        # Establish the editing scope before presenting its properties.
+        # Construct Zones before Pattern signal wiring; _build_right reparents
+        # the completed card into the right inspector above Layers.
         self._build_zones_section(layout)
         self._build_pattern_section(layout)
         self._build_fill_section(layout)
-        self._build_export_section(layout)
         layout.addStretch()
         self._install_pattern_shortcuts()
         self._refresh_section_subtitles()
@@ -835,7 +984,7 @@ class PatternPage(BasePage):
         dims_row.setSpacing(6)
         dims_row.addWidget(QLabel("W (mm)"))
         self._scale_w = QLineEdit()
-        self._scale_w.setValidator(QDoubleValidator(0.001, 1e9, 6, self._scale_w))
+        self._scale_w.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, self._scale_w))
         self._scale_w.setFixedWidth(72)
         self._scale_w.setPlaceholderText("auto")
         self._scale_w.setToolTip("Target width of the outline in millimetres")
@@ -851,7 +1000,7 @@ class PatternPage(BasePage):
         dims_row.addWidget(self._ar_lock_btn)
         dims_row.addWidget(QLabel("H (mm)"))
         self._scale_h = QLineEdit()
-        self._scale_h.setValidator(QDoubleValidator(0.001, 1e9, 6, self._scale_h))
+        self._scale_h.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, self._scale_h))
         self._scale_h.setFixedWidth(72)
         self._scale_h.setPlaceholderText("auto")
         self._scale_h.setToolTip("Target height of the outline in millimetres")
@@ -870,6 +1019,7 @@ class PatternPage(BasePage):
         self._pattern_combo = QComboBox()
         self._pattern_combo.setToolTip("Choose the fill pattern")
         self._refresh_pattern_choices()
+        self._pattern_combo.setCurrentText("— None —")
         self._pattern_combo.currentTextChanged.connect(self._switch_pattern)
         pattern_layout.addWidget(self._pattern_combo)
         from PySide6.QtWidgets import QMenu
@@ -929,35 +1079,27 @@ class PatternPage(BasePage):
             self._pattern_widgets[name] = w
             pattern_layout.addWidget(w)
             w.hide()
-        self._tile_library_widget = QWidget()
-        tile_library_layout = QVBoxLayout(self._tile_library_widget)
-        tile_library_layout.setContentsMargins(0, 0, 0, 0)
-        tile_library_layout.setSpacing(4)
-        section_label(tile_library_layout, "Motif library")
-        self._tile_motif_combo = QComboBox()
-        self._tile_motif_combo.setToolTip("Reusable Custom Tile motifs saved in app settings")
-        tile_library_layout.addWidget(self._tile_motif_combo)
         tile_actions = QHBoxLayout()
-        load_tile_btn = QPushButton("Load")
-        load_tile_btn.clicked.connect(self._load_tile_motif)
-        tile_actions.addWidget(load_tile_btn)
-        save_tile_btn = QPushButton("Save current…")
-        save_tile_btn.clicked.connect(self._save_tile_motif)
-        tile_actions.addWidget(save_tile_btn)
-        delete_tile_btn = QPushButton("Delete")
-        delete_tile_btn.clicked.connect(self._delete_tile_motif)
-        tile_actions.addWidget(delete_tile_btn)
-        tile_library_layout.addLayout(tile_actions)
-        pattern_layout.addWidget(self._tile_library_widget)
-        self._refresh_tile_motif_combo()
-        self._tile_library_widget.hide()
+        self._save_tile_btn = QPushButton("Save current as custom…")
+        self._save_tile_btn.setToolTip(
+            "Save the current Custom Tile geometry into the Pattern list"
+        )
+        self._save_tile_btn.clicked.connect(self._save_tile_motif)
+        tile_actions.addWidget(self._save_tile_btn, stretch=1)
+        self._delete_tile_btn = QPushButton("Delete custom")
+        self._delete_tile_btn.setToolTip("Delete the selected custom pattern")
+        self._delete_tile_btn.clicked.connect(self._delete_tile_motif)
+        tile_actions.addWidget(self._delete_tile_btn)
+        self._save_tile_btn.hide()
+        self._delete_tile_btn.hide()
+        pattern_layout.addLayout(tile_actions)
         self._modifiers_label = section_label(pattern_layout, "Modifiers")
         self._modifiers_widget = QWidget()
         rot_row = QGridLayout(self._modifiers_widget)
         rot_row.setContentsMargins(0, 0, 0, 0)
         rot_row.addWidget(QLabel("Rotation (°)"), 0, 0)
-        self._pattern_rotation = QLineEdit("0")
-        make_resettable_line_edit(self._pattern_rotation, "0")
+        self._pattern_rotation = QLineEdit(DEFAULT_PATTERN_ROTATION)
+        make_resettable_line_edit(self._pattern_rotation, DEFAULT_PATTERN_ROTATION)
         self._pattern_rotation.setValidator(
             QDoubleValidator(-36000, 36000, 4, self._pattern_rotation)
         )
@@ -965,40 +1107,46 @@ class PatternPage(BasePage):
         self._pattern_rotation.setToolTip("Rotate generated pattern around the outline center")
         self._pattern_rotation.textChanged.connect(self._schedule_preview)
         rot_row.addWidget(self._pattern_rotation, 0, 1)
-        rot_row.addWidget(QLabel("Fade (mm)"), 1, 0)
-        self._border_fade = QLineEdit("0")
-        make_resettable_line_edit(self._border_fade, "0")
+        rot_row.addWidget(QLabel("Pattern size (%)"), 1, 0)
+        self._pattern_size_percent = QLineEdit("100")
+        self._pattern_size_percent.setValidator(QDoubleValidator(1, 10000, 3, self._pattern_size_percent))
+        self._pattern_size_percent.setToolTip("Scale pattern elements and spacing without resizing the outline")
+        self._pattern_size_percent.textChanged.connect(self._schedule_preview)
+        rot_row.addWidget(self._pattern_size_percent, 1, 1)
+        rot_row.addWidget(QLabel("Fade (mm)"), 2, 0)
+        self._border_fade = QLineEdit(DEFAULT_BORDER_FADE)
+        make_resettable_line_edit(self._border_fade, DEFAULT_BORDER_FADE)
         self._border_fade.setValidator(QDoubleValidator(0, 1e9, 6, self._border_fade))
         self._border_fade.setFixedWidth(80)
         self._border_fade.setToolTip("Thin the pattern near the outline edge. 0 = off.")
         self._border_fade.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._border_fade, 1, 1)
-        rot_row.addWidget(QLabel("Density field"), 2, 0)
+        rot_row.addWidget(self._border_fade, 2, 1)
+        rot_row.addWidget(QLabel("Density field"), 3, 0)
         self._density_mode_combo = QComboBox()
         self._density_mode_combo.addItems(["Uniform", "Horizontal", "Radial", "Boundary"])
         self._density_mode_combo.setToolTip(
             "Deterministically thin pattern elements across a field"
         )
         self._density_mode_combo.currentTextChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_mode_combo, 2, 1)
-        rot_row.addWidget(QLabel("Density strength"), 3, 0)
-        self._density_strength = QLineEdit("0.75")
-        make_resettable_line_edit(self._density_strength, "0.75")
+        rot_row.addWidget(self._density_mode_combo, 3, 1)
+        rot_row.addWidget(QLabel("Density strength"), 4, 0)
+        self._density_strength = QLineEdit(DEFAULT_DENSITY_STRENGTH)
+        make_resettable_line_edit(self._density_strength, DEFAULT_DENSITY_STRENGTH)
         self._density_strength.setValidator(QDoubleValidator(0, 1, 4, self._density_strength))
         self._density_strength.setToolTip("0 = uniform; 1 = strongest thinning")
         self._density_strength.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_strength, 3, 1)
-        rot_row.addWidget(QLabel("Density angle (°)"), 4, 0)
-        self._density_angle = QLineEdit("0")
-        make_resettable_line_edit(self._density_angle, "0")
+        rot_row.addWidget(self._density_strength, 4, 1)
+        rot_row.addWidget(QLabel("Density angle (°)"), 5, 0)
+        self._density_angle = QLineEdit(DEFAULT_DENSITY_ANGLE)
+        make_resettable_line_edit(self._density_angle, DEFAULT_DENSITY_ANGLE)
         self._density_angle.setValidator(QDoubleValidator(-36000, 36000, 4, self._density_angle))
         self._density_angle.setToolTip("Direction of the linear density gradient")
         self._density_angle.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_angle, 4, 1)
+        rot_row.addWidget(self._density_angle, 5, 1)
         self._density_reverse = QCheckBox("Reverse density")
         self._density_reverse.setToolTip("Swap the dense and sparse sides of the field")
         self._density_reverse.stateChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_reverse, 5, 0, 1, 2)
+        rot_row.addWidget(self._density_reverse, 6, 0, 1, 2)
         pattern_layout.addWidget(self._modifiers_widget)
         self._modifiers_label.hide()
         self._modifiers_widget.hide()
@@ -1009,8 +1157,9 @@ class PatternPage(BasePage):
 
     def _build_zones_section(self, layout: QVBoxLayout) -> None:
         zones_content, zones_layout = collapsible_content_widget(spacing=6)
+        section_label(zones_layout, "Assigned zones")
         scope_hint = QLabel(
-            "Select geometry → create zone → select that zone and edit Pattern or Fill."
+            "Select shapes on the canvas, then create a zone. Selecting a zone below highlights its shapes."
         )
         scope_hint.setWordWrap(True)
         scope_hint.setProperty("role", "hint")
@@ -1032,10 +1181,19 @@ class PatternPage(BasePage):
             "Assigned pattern zones — each outline group with its own pattern"
         )
         self._zone_list.currentRowChanged.connect(self._on_zone_selected)
+        self._zone_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._zone_list.customContextMenuRequested.connect(self._show_zone_context_menu)
+        self._delete_zone_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._zone_list)
+        self._delete_zone_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        self._delete_zone_shortcut.activated.connect(self._remove_selected_zone)
         zones_layout.addWidget(self._zone_list)
-        # Built here with the other zone widgets, but placed in the
-        # Pattern Properties panel on the right — output is a property of
-        # the selected zone, so it lives next to Pattern and Fill.
+
+        section_label(zones_layout, "Selected zone settings")
+        self._pattern_props_scope = QLabel("Select a zone to edit its settings")
+        self._pattern_props_scope.setWordWrap(True)
+        self._pattern_props_scope.setProperty("role", "zone-edit-scope")
+        zones_layout.addWidget(self._pattern_props_scope)
+
         self._zone_output_combo = QComboBox()
         self._zone_output_combo.addItem("Pattern + Fill", "pattern_fill")
         self._zone_output_combo.addItem("Pattern only", "pattern")
@@ -1046,30 +1204,63 @@ class PatternPage(BasePage):
             "Output for the selected zone, or the next zone when none is selected"
         )
         self._zone_output_combo.currentIndexChanged.connect(self._schedule_preview)
-        outline_action_row = QHBoxLayout()
-        self._close_outlines_btn = QPushButton("Close Selected")
-        self._close_outlines_btn.setToolTip("Close the selected open outlines")
-        self._close_outlines_btn.clicked.connect(self._close_selected_outlines)
-        outline_action_row.addWidget(self._close_outlines_btn)
-        self._open_outlines_btn = QPushButton("Open Selected")
-        self._open_outlines_btn.setToolTip("Open the selected closed outlines")
-        self._open_outlines_btn.clicked.connect(self._open_selected_outlines)
-        outline_action_row.addWidget(self._open_outlines_btn)
-        zones_layout.addLayout(outline_action_row)
-        zone_action_row = QHBoxLayout()
-        self._remove_zone_btn = QPushButton("Remove Zone")
-        self._remove_zone_btn.setToolTip("Remove the selected zone from the list")
-        self._remove_zone_btn.clicked.connect(self._remove_selected_zone)
-        zone_action_row.addWidget(self._remove_zone_btn)
-        self._clear_zones_btn = QPushButton("Clear All")
-        self._clear_zones_btn.setToolTip("Remove all pattern zone assignments")
-        self._clear_zones_btn.clicked.connect(self._clear_zones)
-        zone_action_row.addWidget(self._clear_zones_btn)
-        zones_layout.addLayout(zone_action_row)
+        self._zone_output_combo.currentIndexChanged.connect(self._live_update_selected_zone)
+        pattern_row = QHBoxLayout()
+        pattern_row.addWidget(QLabel("Pattern"))
+        self._zone_pattern_combo = QComboBox()
+        self._populate_pattern_combo(self._zone_pattern_combo)
+        self._zone_pattern_combo.currentTextChanged.connect(self._rebuild_zone_parameter_editor)
+        self._zone_pattern_combo.currentTextChanged.connect(self._live_update_selected_zone)
+        self._zone_pattern_combo.currentTextChanged.connect(self._update_zone_actions)
+        pattern_row.addWidget(self._zone_pattern_combo, stretch=1)
+        zones_layout.addLayout(pattern_row)
+        self._zone_params_widget = QWidget()
+        self._zone_params_grid = QGridLayout(self._zone_params_widget)
+        self._zone_params_grid.setContentsMargins(0, 0, 0, 0)
+        self._zone_params_grid.setSpacing(5)
+        self._zone_param_inputs: dict[str, QWidget] = {}
+        zones_layout.addWidget(self._zone_params_widget)
+        fill_grid = QGridLayout()
+        fill_grid.addWidget(QLabel("Fill"), 0, 0)
+        self._zone_fill_mode = QComboBox()
+        self._zone_fill_mode.addItem("None", "none")
+        self._zone_fill_mode.addItem("Lines", "lines")
+        self._zone_fill_mode.addItem("Crosshatch", "crosshatch")
+        self._zone_fill_mode.currentIndexChanged.connect(self._live_update_selected_zone)
+        fill_grid.addWidget(self._zone_fill_mode, 0, 1)
+        self._zone_fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
+        self._zone_fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
+        self._zone_fill_inset = QLineEdit(DEFAULT_FILL_INSET)
+        for row, (label, field) in enumerate(
+            (("Spacing (mm)", self._zone_fill_spacing), ("Angle (°)", self._zone_fill_angle), ("Inset (mm)", self._zone_fill_inset)),
+            start=1,
+        ):
+            field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
+            field.textChanged.connect(self._live_update_selected_zone)
+            fill_grid.addWidget(QLabel(label), row, 0)
+            fill_grid.addWidget(field, row, 1)
+        zones_layout.addLayout(fill_grid)
+        fill_targets = QHBoxLayout()
+        fill_targets.addWidget(QLabel("Fill targets"))
+        self._zone_fill_target_outline = QCheckBox("Outline space")
+        self._zone_fill_target_outline.setChecked(True)
+        self._zone_fill_target_outline.toggled.connect(self._live_update_selected_zone)
+        fill_targets.addWidget(self._zone_fill_target_outline)
+        self._zone_fill_target_pattern = QCheckBox("Pattern cells")
+        self._zone_fill_target_pattern.setChecked(False)
+        self._zone_fill_target_pattern.toggled.connect(self._live_update_selected_zone)
+        fill_targets.addWidget(self._zone_fill_target_pattern)
+        fill_targets.addStretch()
+        zones_layout.addLayout(fill_targets)
+        output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Output"))
+        output_row.addWidget(self._zone_output_combo, stretch=1)
+        zones_layout.addLayout(output_row)
         self._zones_section = CollapsibleSection(
-            "Zones", zones_content, expanded=True, subtitle="No zones assigned"
+            "Zone Manager", zones_content, expanded=True, subtitle="No zones assigned"
         )
         layout.addWidget(self._zones_section)
+        self._rebuild_zone_parameter_editor()
 
     def _build_fill_section(self, layout: QVBoxLayout) -> None:
         fill_content, fill_layout = collapsible_content_widget(spacing=8)
@@ -1087,22 +1278,22 @@ class PatternPage(BasePage):
         fill_layout.addLayout(mode_row)
         params_row = QGridLayout()
         params_row.addWidget(QLabel("Spacing (mm)"), 0, 0)
-        self._fill_spacing = QLineEdit("0.5")
-        make_resettable_line_edit(self._fill_spacing, "0.5")
+        self._fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
+        make_resettable_line_edit(self._fill_spacing, DEFAULT_FILL_SPACING)
         self._fill_spacing.setFixedWidth(80)
         self._fill_spacing.setToolTip("Distance between adjacent infill lines")
         self._fill_spacing.textChanged.connect(self._schedule_preview)
         params_row.addWidget(self._fill_spacing, 0, 1)
         params_row.addWidget(QLabel("Angle (°)"), 1, 0)
-        self._fill_angle = QLineEdit("0")
-        make_resettable_line_edit(self._fill_angle, "0")
+        self._fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
+        make_resettable_line_edit(self._fill_angle, DEFAULT_FILL_ANGLE)
         self._fill_angle.setFixedWidth(80)
         self._fill_angle.setToolTip("Angle of the infill direction")
         self._fill_angle.textChanged.connect(self._schedule_preview)
         params_row.addWidget(self._fill_angle, 1, 1)
         params_row.addWidget(QLabel("Boundary inset (mm)"), 2, 0)
-        self._fill_inset = QLineEdit("0")
-        make_resettable_line_edit(self._fill_inset, "0")
+        self._fill_inset = QLineEdit(DEFAULT_FILL_INSET)
+        make_resettable_line_edit(self._fill_inset, DEFAULT_FILL_INSET)
         self._fill_inset.setFixedWidth(80)
         self._fill_inset.setToolTip(
             "Keep engraving this far inside each target boundary; useful for kerf and edge clearance"
@@ -1206,21 +1397,23 @@ class PatternPage(BasePage):
         self._preview_quality_combo.addItem("Fast", "fast")
         self._preview_quality_combo.addItem("Balanced", "balanced")
         self._preview_quality_combo.addItem("High", "high")
-        self._preview_quality_combo.setCurrentIndex(1)
+        self._preview_quality_combo.setCurrentIndex(
+            max(0, self._preview_quality_combo.findData(DEFAULT_PREVIEW_QUALITY))
+        )
         self._preview_quality_combo.currentIndexChanged.connect(self._schedule_preview)
         quality_row.addWidget(self._preview_quality_combo)
         card_layout.addLayout(quality_row)
         cleanup_grid = QGridLayout()
         cleanup_grid.addWidget(QLabel("Min segment (mm)"), 0, 0)
-        self._minimum_segment_edit = QLineEdit("0")
-        make_resettable_line_edit(self._minimum_segment_edit, "0")
+        self._minimum_segment_edit = QLineEdit(DEFAULT_MIN_SEGMENT)
+        make_resettable_line_edit(self._minimum_segment_edit, DEFAULT_MIN_SEGMENT)
         self._minimum_segment_edit.setToolTip(
             "Remove vertices closer than this at export; 0 disables"
         )
         cleanup_grid.addWidget(self._minimum_segment_edit, 0, 1)
         cleanup_grid.addWidget(QLabel("Min island (mm²)"), 1, 0)
-        self._minimum_area_edit = QLineEdit("0")
-        make_resettable_line_edit(self._minimum_area_edit, "0")
+        self._minimum_area_edit = QLineEdit(DEFAULT_MIN_ISLAND_AREA)
+        make_resettable_line_edit(self._minimum_area_edit, DEFAULT_MIN_ISLAND_AREA)
         self._minimum_area_edit.setToolTip(
             "Discard closed pattern islands smaller than this; 0 disables"
         )
@@ -1240,12 +1433,21 @@ class PatternPage(BasePage):
         card_layout.addWidget(self._summary_chip)
         layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
         self._gen_btn = primary_button(
-            "Export DXF",
+            "Export Pattern + Fill DXF",
             height=38,
             tooltip="Generate the pattern fill and save as a DXF  (⌘E)",
         )
         self._gen_btn.clicked.connect(self._generate)
-        layout.addWidget(self._gen_btn)
+        export_action_row = QHBoxLayout()
+        export_action_row.addWidget(self._gen_btn, stretch=1)
+        self._cancel_generate_btn = QToolButton()
+        self._cancel_generate_btn.setText("✕")
+        self._cancel_generate_btn.setToolTip("Cancel the current export")
+        self._cancel_generate_btn.setAccessibleName("Cancel pattern export")
+        self._cancel_generate_btn.setVisible(False)
+        self._cancel_generate_btn.clicked.connect(self._cancel_generation)
+        export_action_row.addWidget(self._cancel_generate_btn)
+        layout.addLayout(export_action_row)
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
@@ -1267,16 +1469,26 @@ class PatternPage(BasePage):
 
     def _switch_pattern(self, value: str) -> None:
         self._preview_user_opt_out = False
+        custom_name = self._custom_pattern_name(value)
+        if custom_name and custom_name in self._tile_motifs:
+            self._custom_tile_polys = [list(poly) for poly in self._tile_motifs[custom_name]]
+        pattern_key = self._pattern_key(value)
+        self._update_custom_pattern_actions(value)
         for w in self._pattern_widgets.values():
             w.hide()
-        if value in self._pattern_widgets:
-            self._pattern_widgets[value].show()
+        if pattern_key in self._pattern_widgets:
+            self._pattern_widgets[pattern_key].show()
             self._schedule_preview()
-        self._tile_library_widget.setVisible(value == "Custom Tile")
-        has_pattern = value != "— None —" and value in self._pattern_widgets
+        has_pattern = pattern_key != "— None —" and pattern_key in self._pattern_widgets
         self._modifiers_label.setVisible(has_pattern)
         self._modifiers_widget.setVisible(has_pattern)
         self._refresh_section_subtitles()
+
+    def _update_custom_pattern_actions(self, value: str) -> None:
+        if not hasattr(self, "_save_tile_btn"):
+            return
+        self._save_tile_btn.setVisible(value == "Custom Tile")
+        self._delete_tile_btn.setVisible(self._custom_pattern_name(value) is not None)
 
     def use_custom_tile(self, polys: list[list[tuple[float, float]]]) -> None:
         """Use selected canvas geometry as the repeated pattern source."""
@@ -1289,19 +1501,16 @@ class PatternPage(BasePage):
         self._canvas._show_flash(f"Custom tile: {len(normalized)} shape(s)", 1200)
 
     def _refresh_tile_motif_combo(self, current: str | None = None) -> None:
-        if not hasattr(self, "_tile_motif_combo"):
-            return
-        current = self._tile_motif_combo.currentText() if current is None else current
-        self._tile_motif_combo.clear()
-        self._tile_motif_combo.addItems(sorted(self._tile_motifs, key=str.casefold))
-        if current in self._tile_motifs:
-            self._tile_motif_combo.setCurrentText(current)
+        selected = f"Custom · {current}" if current else None
+        self._refresh_pattern_choices(current=selected or self._pattern_combo.currentText())
 
     def _persist_tile_motifs(self) -> None:
         self._settings["custom_tile_motifs"] = self._tile_motifs
         save_settings(self._settings)
 
     def _save_tile_motif(self) -> None:
+        if self._pattern_combo.currentText() != "Custom Tile":
+            return
         if not self._custom_tile_polys:
             self._set_status("Send geometry to Custom Tile before saving a motif.", STATUS_WARN)
             return
@@ -1312,10 +1521,11 @@ class PatternPage(BasePage):
         self._tile_motifs[name] = [list(poly) for poly in self._custom_tile_polys]
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo(name)
-        self._set_status(f"Saved Custom Tile motif: {name}", STATUS_OK)
+        self._pattern_combo.setCurrentText(f"Custom · {name}")
+        self._set_status(f"Saved custom pattern: {name}", STATUS_OK)
 
     def _load_tile_motif(self) -> None:
-        name = self._tile_motif_combo.currentText()
+        name = self._custom_pattern_name(self._pattern_combo.currentText()) or ""
         motif = self._tile_motifs.get(name)
         if not motif:
             return
@@ -1325,13 +1535,14 @@ class PatternPage(BasePage):
         self._set_status(f"Loaded Custom Tile motif: {name}", STATUS_OK)
 
     def _delete_tile_motif(self) -> None:
-        name = self._tile_motif_combo.currentText()
+        name = self._custom_pattern_name(self._pattern_combo.currentText()) or ""
         if not name or name not in self._tile_motifs:
             return
         del self._tile_motifs[name]
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo()
-        self._set_status(f"Deleted Custom Tile motif: {name}")
+        self._pattern_combo.setCurrentText("— None —")
+        self._set_status(f"Deleted custom pattern: {name}")
 
     def _refresh_section_subtitles(self) -> None:
         if not getattr(self, "_pattern_section", None):
@@ -1373,7 +1584,7 @@ class PatternPage(BasePage):
             mod_parts: list[str] = []
             try:
                 fade = (
-                    float(self._border_fade.text() or "0") if hasattr(self, "_border_fade") else 0.0
+                    float(self._border_fade.text() or DEFAULT_BORDER_FADE) if hasattr(self, "_border_fade") else 0.0
                 )
                 if fade > 0:
                     mod_parts.append(f"Fade {fade:.1f}mm")
@@ -1551,15 +1762,17 @@ class PatternPage(BasePage):
         if not target_outline and not target_pattern:
             return None
         try:
-            spacing = max(0.05, float(self._fill_spacing.text() or "0.5"))
+            spacing = max(
+                FILL_SPACING_FLOOR_MM, float(self._fill_spacing.text() or DEFAULT_FILL_SPACING)
+            )
         except ValueError:
             spacing = 0.5
         try:
-            angle = float(self._fill_angle.text() or "0")
+            angle = float(self._fill_angle.text() or DEFAULT_FILL_ANGLE)
         except ValueError:
             angle = 0.0
         try:
-            inset = max(0.0, float(self._fill_inset.text() or "0"))
+            inset = max(0.0, float(self._fill_inset.text() or DEFAULT_FILL_INSET))
         except ValueError:
             inset = 0.0
         return {
@@ -1575,11 +1788,15 @@ class PatternPage(BasePage):
 
     def _collect_fabrication_options(self) -> dict:
         try:
-            minimum_segment = max(0.0, float(self._minimum_segment_edit.text() or "0"))
+            minimum_segment = max(
+                0.0, float(self._minimum_segment_edit.text() or DEFAULT_MIN_SEGMENT)
+            )
         except ValueError:
             minimum_segment = 0.0
         try:
-            minimum_area = max(0.0, float(self._minimum_area_edit.text() or "0"))
+            minimum_area = max(
+                0.0, float(self._minimum_area_edit.text() or DEFAULT_MIN_ISLAND_AREA)
+            )
         except ValueError:
             minimum_area = 0.0
         return {
@@ -1592,9 +1809,8 @@ class PatternPage(BasePage):
         self._refresh_section_subtitles()
         if self._suspend_state:
             return
-        self._sync_selected_zone_from_controls()
         fill_active = bool(self._collect_fill_options())
-        if not self._zones and not fill_active and self._pattern_combo.currentText() == "— None —":
+        if not self._zones and not fill_active and self._current_pattern_key() == "— None —":
             return
         if not self._zones and not self._edit_polys:
             return
@@ -1602,7 +1818,7 @@ class PatternPage(BasePage):
         self._invalidate_preview_cache()
         if self._preview_task.running:
             self._preview_task.pending = True
-        self._preview_timer.start(400)
+        self._preview_timer.start(PREVIEW_DEBOUNCE_MS)
         self._emit_state_changed()
 
     def _start_preview_thread(self) -> None:
@@ -1616,12 +1832,12 @@ class PatternPage(BasePage):
             return
         self._update_preview_controls()
         preview_token = self._preview_revision
-        pattern = self._pattern_combo.currentText()
+        pattern = self._current_pattern_key()
         include_border = self._include_border_cb.isChecked()
         try:
             scale = self._collect_scale()
             params = self._collect_pattern_params(pattern) if pattern != "— None —" else {}
-            params["quality"] = self._preview_quality_combo.currentData() or "balanced"
+            params["quality"] = self._preview_quality_combo.currentData() or DEFAULT_PREVIEW_QUALITY
             if not self._zones:
                 self._validate_outline_inputs(self._edit_polys)
         except ValueError as exc:
@@ -1631,7 +1847,7 @@ class PatternPage(BasePage):
             return
         interlace = invert_fill = mirror_v = mirror_h = False
         try:
-            border_fade = max(0.0, float(self._border_fade.text() or "0"))
+            border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
         except ValueError:
             border_fade = 0.0
         excl_polys = self._resolve_exclusion_polys() or None
@@ -1748,8 +1964,11 @@ class PatternPage(BasePage):
             f" · {diagnostics.travel_length:.1f} mm travel"
         )
         if self._showing_preview:
-            self._canvas.load(display_polys)
+            selected_zone = self._zone_list.currentRow()
+            self._canvas.load(display_polys, fit=False)
             self._configure_pattern_cell_context()
+            if 0 <= selected_zone < len(self._zones):
+                self._highlight_zone_on_canvas(selected_zone)
             self._set_preview_status(f"{status_text} — preview", "success")
         elif self._should_auto_preview():
             self._preview_btn.setChecked(True)
@@ -1763,10 +1982,17 @@ class PatternPage(BasePage):
             self._preview_timer.start(0)
 
     def _should_auto_preview(self) -> bool:
+        if not self._auto_preview_cb.isChecked():
+            return False
         if self._preview_user_opt_out:
             return False
         if getattr(self._canvas, "_mode", "select") != "select":
             return False
+        # Zone editing intentionally keeps the zone's source outlines
+        # selected. That selection is context, not an in-progress geometry
+        # gesture, so it must not suppress the zone result.
+        if self._zones:
+            return True
         return not getattr(self._canvas, "sel_count", 0)
 
     def _handle_preview_error(self, payload: tuple) -> None:
@@ -1791,6 +2017,8 @@ class PatternPage(BasePage):
 
     def _set_preview_status(self, text: str, tone: str = "dim") -> None:
         self._preview_status.setText(text)
+        self._preview_status.setAccessibleName("Pattern preview status")
+        self._preview_status.setAccessibleDescription(text)
         if tone == "success":
             role = "preview-ok"
         elif tone == "error":
@@ -1818,17 +2046,31 @@ class PatternPage(BasePage):
             self._preview_btn.setProperty("active", True)
             self._preview_btn.style().unpolish(self._preview_btn)
             self._preview_btn.style().polish(self._preview_btn)
+            self._canvas.setToolTip(
+                "Refreshing preview — geometry shown is the last completed result."
+            )
         if had_cache or was_showing:
             self._set_preview_status("Refreshing preview…")
         self._update_preview_controls()
 
-    def _invalidate_zones_for_geometry_change(self) -> None:
+    def _invalidate_zones_for_geometry_change(self, valid_outline_ids: set[str]) -> None:
         if not self._zones:
             return
-        self._zones.clear()
+        retained: list[dict] = []
+        removed_assignments = 0
+        for zone in self._zones:
+            previous_ids = list(zone.get("outline_ids", []))
+            remaining_ids = [oid for oid in previous_ids if oid in valid_outline_ids]
+            removed_assignments += len(previous_ids) - len(remaining_ids)
+            if remaining_ids:
+                retained.append({**zone, "outline_ids": remaining_ids})
+        if not removed_assignments:
+            return
+        self._zones = retained
         self._refresh_zone_list()
         self._set_status(
-            "Outline changed — cleared assigned zones to avoid mismatched pattern results.",
+            f"Outline changed — removed {removed_assignments} affected zone "
+            f"assignment{'s' if removed_assignments != 1 else ''}; unaffected zones were kept.",
             STATUS_WARN,
         )
 
@@ -1836,39 +2078,56 @@ class PatternPage(BasePage):
         has_preview = bool(self._preview_polys_cache)
         is_computing = self._preview_task.running
         if self._showing_preview:
-            self._preview_btn.setText("← Outline")
+            self._preview_btn.setText("Show Preview")
             self._preview_btn.setEnabled(True)
-            self._preview_btn.setToolTip("Return to outline editing")
+            self._preview_btn.setToolTip("Checked: showing preview. Click to return to outline editing")
         elif is_computing:
-            self._preview_btn.setText("Previewing…")
+            self._preview_btn.setText("Show Preview")
             self._preview_btn.setEnabled(False)
-            self._preview_btn.setToolTip("Generating preview in background…")
+            self._preview_btn.setToolTip("Preview is computing")
         elif has_preview:
-            self._preview_btn.setText("Preview ▶")
+            self._preview_btn.setText("Show Preview")
             self._preview_btn.setEnabled(True)
             self._preview_btn.setToolTip("Show the generated pattern preview")
         else:
-            self._preview_btn.setText("Preview")
+            self._preview_btn.setText("Show Preview")
             self._preview_btn.setEnabled(False)
             self._preview_btn.setToolTip(
                 "Preview becomes available after the current outline and parameters produce a valid result"
             )
+        self._cancel_preview_btn.setVisible(is_computing)
         if hasattr(self, "_gen_btn"):
-            pattern_ready = self._pattern_combo.currentText() != "— None —"
+            pattern_ready = self._current_pattern_key() != "— None —"
             can_export = bool(self._edit_polys) and (pattern_ready or bool(self._zones))
-            self._gen_btn.setEnabled(can_export and not self._generate_task.running)
-            self._gen_btn.setToolTip(
-                "Generate the pattern fill and save as a DXF  (⌘E)"
-                if can_export
-                else "Load an outline and choose a pattern before exporting"
+            self._gen_btn.setEnabled(
+                can_export and not self._generate_task.running and not self._preview_task.running
             )
+            if self._generate_task.running:
+                export_tip = "Stop the current pattern export"
+            elif self._preview_task.running:
+                export_tip = "Preview is still computing; export will be available when it finishes"
+            elif can_export:
+                export_tip = "Generate the pattern fill and save as a DXF  (⌘E)"
+            else:
+                export_tip = "Load an outline and choose a pattern before exporting"
+            self._gen_btn.setToolTip(export_tip)
+        # Keep the core Pattern controls discoverable in the empty state.
+        # They serve as editable defaults before an outline or zone exists.
+        if hasattr(self, "_zones_section"):
+            self._zones_section.setVisible(True)
+        if hasattr(self, "_pattern_properties_scroll"):
+            self._pattern_properties_scroll.setVisible(True)
 
     def _update_zone_actions(self) -> None:
         has_selection = bool(getattr(self._canvas, "sel_count", 0))
+        zone_pattern = (
+            self._pattern_key(self._zone_pattern_combo.currentText())
+            if hasattr(self, "_zone_pattern_combo")
+            else "— None —"
+        )
         can_assign = (
-            (not self._showing_preview)
-            and has_selection
-            and self._pattern_combo.currentText() != "— None —"
+            has_selection
+            and zone_pattern != "— None —"
         )
         self._assign_zone_btn.setEnabled(can_assign)
         self._assign_zone_btn.setToolTip(
@@ -1876,8 +2135,6 @@ class PatternPage(BasePage):
             if not can_assign
             else "Save the current pattern and parameters for the selected outlines"
         )
-        self._remove_zone_btn.setEnabled((not self._showing_preview) and bool(self._zones))
-        self._clear_zones_btn.setEnabled((not self._showing_preview) and bool(self._zones))
         if hasattr(self, "_mark_cutout_btn"):
             self._mark_cutout_btn.setEnabled(
                 (not self._showing_preview) or bool(getattr(self._canvas, "sel_count", 0))
@@ -1889,14 +2146,23 @@ class PatternPage(BasePage):
         from src.ui.pages.pattern.workers import run_generate, run_generate_zones
 
         if self._generate_task.running:
-            # _gen_btn is disabled while a generate is in flight, but the
-            # Cmd/Ctrl+E shortcut isn't gated by button state — without this
-            # guard a repeated trigger starts a second concurrent
-            # run_generate thread writing to the same output path.
-            self._set_status("Already generating…", STATUS_WARN)
+            self._cancel_generation()
             return
         if not self._edit_polys and not self._zones:
-            QMessageBox.critical(self, "Error", "No polylines available for outline.")
+            self._set_status("Load an outline before exporting.", STATUS_WARN)
+            return
+        pattern = self._current_pattern_key()
+        try:
+            zones_snap = self._snapshot_zone_jobs() if self._zones else None
+            scale = self._collect_scale() if not self._zones else None
+            params = (
+                self._collect_pattern_params(pattern)
+                if not self._zones and pattern != "— None —"
+                else {}
+            )
+            params["quality"] = "high"
+        except ValueError as exc:
+            self._set_status(str(exc), STATUS_ERR)
             return
         out_path = pick_save_file(
             self,
@@ -1909,18 +2175,19 @@ class PatternPage(BasePage):
         )
         if not out_path:
             return
-        pattern = self._pattern_combo.currentText()
         include_border = self._include_border_cb.isChecked()
         open_paths = self._export_open_paths_cb.isChecked()
         invert_fill = mirror_v = mirror_h = False
         try:
-            border_fade = max(0.0, float(self._border_fade.text() or "0"))
+            border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
         except ValueError:
             border_fade = 0.0
         excl_polys = self._resolve_exclusion_polys() or None
         gen_fill_options = self._collect_fill_options()
         fabrication_options = self._collect_fabrication_options()
         self._gen_btn.setEnabled(False)
+        self._cancel_generate_btn.setEnabled(True)
+        self._cancel_generate_btn.setVisible(True)
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)
         self._set_status("Generating…")
@@ -1928,16 +2195,7 @@ class PatternPage(BasePage):
         generation_token = self._generation_revision
         _, cancel_event = self._generate_task.request_start()
         if self._zones:
-            try:
-                zones_snap = self._snapshot_zone_jobs()
-            except ValueError as exc:
-                self._generate_task.finish_run()
-                self._gen_btn.setEnabled(True)
-                self._progress.setRange(0, 100)
-                self._progress.setValue(0)
-                self._progress.setVisible(False)
-                self._set_status(str(exc), STATUS_ERR)
-                return
+            assert zones_snap is not None
             self._generate_thread = threading.Thread(
                 target=run_generate_zones,
                 args=(
@@ -1968,17 +2226,7 @@ class PatternPage(BasePage):
             self._generate_thread.start()
         else:
             polys_snap = self._generation_polys()
-            try:
-                scale = self._collect_scale()
-                params = self._collect_pattern_params(pattern) if pattern != "— None —" else {}
-                params["quality"] = "high"
-            except ValueError:
-                self._generate_task.finish_run()
-                self._gen_btn.setEnabled(True)
-                self._progress.setRange(0, 100)
-                self._progress.setValue(0)
-                self._progress.setVisible(False)
-                return
+            assert scale is not None
             border_polys = self._apply_scale(polys_snap, *scale) if include_border else None
             interlace = False
             self._generate_thread = threading.Thread(
@@ -2022,6 +2270,7 @@ class PatternPage(BasePage):
         self._progress.setRange(0, 100)
         self._progress.setValue(100)
         self._gen_btn.setEnabled(True)
+        self._cancel_generate_btn.setVisible(False)
         self._set_status(f"Done — {count} shapes → {name}", STATUS_OK)
         self._last_out_path = out_path
         self._reveal_btn.setVisible(True)
@@ -2049,10 +2298,18 @@ class PatternPage(BasePage):
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
         self._gen_btn.setEnabled(True)
+        self._cancel_generate_btn.setVisible(False)
         if msg == CANCELLED_MESSAGE:
             self._set_status("Generation cancelled", STATUS_WARN)
         else:
             self._set_status(f"Error: {msg}", STATUS_ERR)
+
+    def _cancel_generation(self) -> None:
+        if not self._generate_task.running:
+            return
+        self._generate_task.cancel()
+        self._cancel_generate_btn.setEnabled(False)
+        self._set_status("Cancelling generation…", STATUS_WARN)
         if self._preview_task.has_pending() and (self._edit_polys or self._zones):
             self._preview_task.pending = False
             self._preview_timer.start(0)
@@ -2083,7 +2340,7 @@ class PatternPage(BasePage):
         row = self._zone_list.currentRow()
         if not (0 <= row < len(self._zones)):
             return
-        pattern = self._pattern_combo.currentText()
+        pattern = self._current_pattern_key()
         try:
             params = self._collect_pattern_params(pattern) if pattern != "— None —" else {}
             scale = self._collect_scale()
@@ -2108,28 +2365,216 @@ class PatternPage(BasePage):
             item.setText(zone["label"])
         self._refresh_pattern_properties_panel()
 
+    def _populate_pattern_combo(self, combo: QComboBox, current: str | None = None) -> None:
+        current = combo.currentText() if current is None else current
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItems(self._base_patterns)
+        if self._tile_motifs:
+            combo.insertSeparator(combo.count())
+            for name in sorted(self._tile_motifs, key=str.casefold):
+                combo.addItem(f"Custom · {name}")
+        target = current if combo.findText(current) >= 0 else "— None —"
+        combo.setCurrentText(target)
+        combo.blockSignals(False)
+        if combo is getattr(self, "_pattern_combo", None):
+            self._update_custom_pattern_actions(target)
+
+    def _rebuild_zone_parameter_editor(self, _label: str | None = None, params: dict | None = None) -> None:
+        if not hasattr(self, "_zone_params_grid"):
+            return
+        while self._zone_params_grid.count():
+            item = self._zone_params_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._zone_param_inputs = {}
+        pattern = self._pattern_key(self._zone_pattern_combo.currentText())
+        values = params or {}
+        row = 0
+        for spec in PARAM_SPECS.get(pattern, []):
+            key = spec.param_key or spec.attr[1:]
+            if spec.kind == "checkbox":
+                field = QCheckBox(spec.label)
+                field.setChecked(bool(values.get(key, spec.default.lower() == "true")))
+                self._zone_params_grid.addWidget(field, row, 0, 1, 2)
+            elif spec.kind == "combobox":
+                field = QComboBox()
+                field.addItems(spec.items)
+                field.setCurrentText(str(values.get(key, spec.default)))
+                self._zone_params_grid.addWidget(QLabel(spec.label), row, 0)
+                self._zone_params_grid.addWidget(field, row, 1)
+            else:
+                field = QLineEdit(str(values.get(key, spec.default)))
+                if spec.kind == "int":
+                    field.setValidator(QIntValidator(int(spec.minimum or -2_147_483_648), int(spec.maximum or 2_147_483_647), field))
+                else:
+                    field.setValidator(QDoubleValidator(float(spec.minimum or -1e12), float(spec.maximum or 1e12), 6, field))
+                self._zone_params_grid.addWidget(QLabel(spec.label), row, 0)
+                self._zone_params_grid.addWidget(field, row, 1)
+            field.setToolTip(spec.tooltip)
+            if isinstance(field, QLineEdit):
+                field.textChanged.connect(self._live_update_selected_zone)
+            elif isinstance(field, QComboBox):
+                field.currentIndexChanged.connect(self._live_update_selected_zone)
+            elif isinstance(field, QCheckBox):
+                field.toggled.connect(self._live_update_selected_zone)
+            self._zone_param_inputs[key] = field
+            row += 1
+        self._zone_rotation = QLineEdit(str(values.get("rotation", DEFAULT_PATTERN_ROTATION)))
+        self._zone_rotation.setValidator(QDoubleValidator(-36000, 36000, 4, self._zone_rotation))
+        self._zone_rotation.textChanged.connect(self._live_update_selected_zone)
+        self._zone_params_grid.addWidget(QLabel("Rotation (°)"), row, 0)
+        self._zone_params_grid.addWidget(self._zone_rotation, row, 1)
+        row += 1
+        self._zone_size_percent = QLineEdit(str(values.get("size_percent", 100)))
+        self._zone_size_percent.setValidator(QDoubleValidator(1, 10000, 3, self._zone_size_percent))
+        self._zone_size_percent.textChanged.connect(self._live_update_selected_zone)
+        self._zone_params_grid.addWidget(QLabel("Pattern size (%)"), row, 0)
+        self._zone_params_grid.addWidget(self._zone_size_percent, row, 1)
+
+    def _collect_zone_editor(self) -> tuple[str, dict, dict | None]:
+        label = self._zone_pattern_combo.currentText()
+        pattern = self._pattern_key(label)
+        params: dict = {}
+        for spec in PARAM_SPECS.get(pattern, []):
+            key = spec.param_key or spec.attr[1:]
+            field = self._zone_param_inputs[key]
+            if spec.kind == "checkbox":
+                params[key] = field.isChecked()
+            elif spec.kind == "combobox":
+                params[key] = field.currentText()
+            elif spec.kind == "int":
+                value = self._parse_float_field(
+                    field,
+                    spec.label,
+                    minimum=spec.minimum,
+                    maximum=spec.maximum,
+                )
+                assert value is not None
+                params[key] = int(value)
+            else:
+                params[key] = self._parse_float_field(
+                    field,
+                    spec.label,
+                    minimum=spec.minimum,
+                    maximum=spec.maximum,
+                )
+        params["rotation"] = self._parse_float_field(
+            self._zone_rotation, "Rotation"
+        )
+        params["size_percent"] = self._parse_float_field(
+            self._zone_size_percent,
+            "Pattern size",
+            minimum=1.0,
+            maximum=10000.0,
+        )
+        params.update({"density_mode": "Uniform", "density_strength": 0.0, "density_angle": 0.0, "density_reverse": False})
+        custom_name = self._custom_pattern_name(label)
+        if pattern == "Custom Tile":
+            motif = self._tile_motifs.get(custom_name or "", self._custom_tile_polys)
+            if not motif:
+                raise ValueError("Choose or save custom pattern geometry first.")
+            params["tile_polys"] = [list(poly) for poly in motif]
+            params["interlock"] = False
+        mode = str(self._zone_fill_mode.currentData() or "none")
+        fill = None
+        if mode != "none":
+            fill = {
+                "mode": mode,
+                "spacing": max(
+                    FILL_SPACING_FLOOR_MM,
+                    self._parse_float_field(
+                        self._zone_fill_spacing,
+                        "Fill spacing",
+                        minimum=FILL_SPACING_FLOOR_MM,
+                    ),
+                ),
+                "angle_deg": self._parse_float_field(
+                    self._zone_fill_angle, "Fill angle"
+                ),
+                "inset": self._parse_float_field(
+                    self._zone_fill_inset, "Fill inset", minimum=0.0
+                ),
+                "keep_pattern": True,
+                "target_outline": self._zone_fill_target_outline.isChecked(),
+                "target_pattern": self._zone_fill_target_pattern.isChecked(),
+                "cell_cutouts": [],
+            }
+        return pattern, params, fill
+
+    def _apply_selected_zone_edits(self) -> None:
+        """Compatibility entry point; zone controls now commit live."""
+        self._live_update_selected_zone()
+
+    def _live_update_selected_zone(self, *_args) -> None:
+        if self._loading_zone or self._suspend_state:
+            return
+        row = self._zone_list.currentRow()
+        if not (0 <= row < len(self._zones)):
+            return
+        try:
+            pattern, params, fill = self._collect_zone_editor()
+        except (KeyError, TypeError, ValueError):
+            # A line edit can briefly contain an incomplete number while the
+            # user types. Keep the last valid zone state until it is complete.
+            return
+        zone = self._zones[row]
+        self._preview_user_opt_out = False
+        zone.update(
+            {
+                "pattern": pattern,
+                "pattern_label": self._zone_pattern_combo.currentText(),
+                "params": params,
+                "fill": fill,
+                "output_mode": self._zone_output_combo.currentData() or "pattern_fill",
+            }
+        )
+        zone["label"] = self._zone_label(zone, row)
+        item = self._zone_list.item(row)
+        if item is not None:
+            item.setText(zone["label"])
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _show_zone_context_menu(self, pos) -> None:
+        item = self._zone_list.itemAt(pos)
+        if item is None or not self._zones:
+            return
+        self._zone_list.setCurrentItem(item)
+        menu = QMenu(self._zone_list)
+        delete_action = menu.addAction("Delete Zone")
+        delete_action.setShortcut(QKeySequence.StandardKey.Delete)
+        chosen = menu.exec(self._zone_list.viewport().mapToGlobal(pos))
+        if chosen is delete_action:
+            self._remove_selected_zone()
+
     def _on_zone_selected(self, row: int) -> None:
         valid = 0 <= row < len(self._zones)
         if not valid:
+            self._canvas.set_accent_polys({})
             self._refresh_pattern_properties_panel()
             return
         zone = self._zones[row]
+        self._highlight_zone_on_canvas(row)
         self._loading_zone = True
         self._suspend_state = True
         try:
-            form_state = zone.get("form_state")
-            if isinstance(form_state, dict):
-                restore_form_state(self, form_state)
+            pattern_label = str(zone.get("pattern_label") or zone.get("pattern", "— None —"))
+            self._populate_pattern_combo(self._zone_pattern_combo, pattern_label)
+            self._rebuild_zone_parameter_editor(params=dict(zone.get("params", {})))
+            fill = zone.get("fill")
+            fill_mode = str(fill.get("mode", "none")) if isinstance(fill, dict) else "none"
+            self._zone_fill_mode.setCurrentIndex(max(0, self._zone_fill_mode.findData(fill_mode)))
+            if isinstance(fill, dict):
+                self._zone_fill_spacing.setText(str(fill.get("spacing", DEFAULT_FILL_SPACING)))
+                self._zone_fill_angle.setText(str(fill.get("angle_deg", DEFAULT_FILL_ANGLE)))
+                self._zone_fill_inset.setText(str(fill.get("inset", DEFAULT_FILL_INSET)))
+                self._zone_fill_target_outline.setChecked(bool(fill.get("target_outline", True)))
+                self._zone_fill_target_pattern.setChecked(bool(fill.get("target_pattern", False)))
             else:
-                # Migration path for zones saved before live editing existed.
-                self._refresh_pattern_choices(current=str(zone.get("pattern", "— None —")))
-                self._pattern_combo.setCurrentText(str(zone.get("pattern", "— None —")))
-                sw, sh = zone.get("scale", (self._orig_w, self._orig_h))
-                self._scale_w.setText(str(sw))
-                self._scale_h.setText(str(sh))
-                fill = zone.get("fill")
-                fill_mode = str(fill.get("mode", "none")) if isinstance(fill, dict) else "none"
-                self._fill_mode_combo.setCurrentIndex(max(0, self._fill_mode_combo.findData(fill_mode)))
+                self._zone_fill_target_outline.setChecked(True)
+                self._zone_fill_target_pattern.setChecked(False)
             mode = str(zone.get("output_mode", "pattern_fill"))
             self._zone_output_combo.setCurrentIndex(
                 max(0, self._zone_output_combo.findData(mode))
@@ -2142,11 +2587,18 @@ class PatternPage(BasePage):
 
     def _assign_zone(self) -> None:
         sel_polys = self._canvas.get_selected()
-        sel_ids = [
-            self._outline_ids[idx]
-            for idx in self._canvas.get_selection_indices()
-            if 0 <= idx < len(self._outline_ids)
-        ]
+        promoted: list[list[tuple[float, float]]] = []
+        if self._showing_preview:
+            # A generated cell can itself become a zone boundary. Promote the
+            # selected preview geometry to durable source outlines first.
+            promoted = [[(float(x), float(y)) for x, y in poly] for poly in sel_polys]
+            sel_ids = self._fresh_outline_ids(len(promoted))
+        else:
+            sel_ids = [
+                self._outline_ids[idx]
+                for idx in self._canvas.get_selection_indices()
+                if 0 <= idx < len(self._outline_ids)
+            ]
         if not sel_polys:
             QMessageBox.information(
                 self,
@@ -2154,14 +2606,16 @@ class PatternPage(BasePage):
                 "Select one or more outlines on the canvas first, then click 'Assign'.",
             )
             return
-        pattern = self._pattern_combo.currentText()
         try:
             scale = self._collect_scale()
-            params = self._collect_pattern_params(pattern)
+            pattern, params, fill_snapshot = self._collect_zone_editor()
             self._validate_outline_inputs(sel_polys)
-        except ValueError:
+        except ValueError as exc:
+            self._set_status(str(exc), STATUS_ERR)
             return
-        fill_snapshot = self._collect_fill_options()
+        if promoted:
+            self._edit_polys.extend(promoted)
+            self._outline_ids.extend(sel_ids)
         if set(sel_ids).intersection(self._exclusion_ids):
             self._set_status(
                 "Remove Cutout from the selected shape before assigning a zone.",
@@ -2200,7 +2654,8 @@ class PatternPage(BasePage):
         self._zones = retained_zones
         zone = {
                 "outline_ids": list(sel_ids),
-                "pattern": pattern,
+            "pattern": pattern,
+            "pattern_label": self._zone_pattern_combo.currentText(),
                 "params": params,
                 "scale": scale,
                 "fill": fill_snapshot,
@@ -2209,6 +2664,7 @@ class PatternPage(BasePage):
             }
         zone["label"] = self._zone_label(zone, len(self._zones))
         self._zones.append(zone)
+        self._preview_user_opt_out = False
         self._refresh_zone_list()
         self._zone_list.setCurrentRow(len(self._zones) - 1)
         self._schedule_preview()
@@ -2683,10 +3139,6 @@ class PatternPage(BasePage):
     def _refresh_pattern_choices(self, current: str | None = None) -> None:
         if not hasattr(self, "_pattern_combo"):
             return
-        current = self._pattern_combo.currentText() if current is None else current
-        self._pattern_combo.blockSignals(True)
-        self._pattern_combo.clear()
-        self._pattern_combo.addItems(self._base_patterns)
-        target = current if self._pattern_combo.findText(current) >= 0 else "— None —"
-        self._pattern_combo.setCurrentText(target)
-        self._pattern_combo.blockSignals(False)
+        self._populate_pattern_combo(self._pattern_combo, current)
+        if hasattr(self, "_zone_pattern_combo"):
+            self._populate_pattern_combo(self._zone_pattern_combo)

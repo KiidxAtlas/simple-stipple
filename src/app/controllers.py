@@ -91,13 +91,33 @@ class _WorkspaceStateController:
         )
 
     def apply(self, document: dict) -> None:
-        apply_workspace_document(
-            document=document,
-            workspace_pages=self._page_runtime.iter_workspace_pages(),
-            preset_pages=self._page_runtime.iter_preset_pages(),
-            tab_count=self._tabs.count(),
-            set_current_tab_index=self._tabs.setCurrentIndex,
-        )
+        # Page application is necessarily imperative. Keep a complete snapshot
+        # so a late page failure cannot leave a half-old, half-new workspace.
+        previous = self.collect()
+        try:
+            apply_workspace_document(
+                document=document,
+                workspace_pages=self._page_runtime.iter_workspace_pages(),
+                preset_pages=self._page_runtime.iter_preset_pages(),
+                tab_count=self._tabs.count(),
+                set_current_tab_index=self._tabs.setCurrentIndex,
+            )
+        except Exception as apply_error:
+            try:
+                apply_workspace_document(
+                    document=previous,
+                    workspace_pages=self._page_runtime.iter_workspace_pages(),
+                    preset_pages=self._page_runtime.iter_preset_pages(),
+                    tab_count=self._tabs.count(),
+                    set_current_tab_index=self._tabs.setCurrentIndex,
+                )
+            except Exception as rollback_error:
+                raise RuntimeError(
+                    "Workspace could not be loaded and the previous view could not be "
+                    f"fully restored. Load error: {apply_error}. "
+                    f"Restore error: {rollback_error}. The workspace was not saved."
+                ) from apply_error
+            raise
 
     def clear(self) -> None:
         clear_workspace_state(
@@ -136,10 +156,9 @@ class SettingsController:
 class AutosaveController:
     """Manages periodic workspace snapshots for crash recovery and regular autosaving."""
 
-    _recovery_offered = False
-
     def __init__(self, app: App) -> None:
         self._app = app
+        self._recovery_offered = False
 
         # Crash recovery: periodically snapshot unsaved work to the app data
         # dir; a clean exit or successful save removes the snapshot.
@@ -186,8 +205,18 @@ class AutosaveController:
                 self._app._update_title()
             except (OSError, TypeError, ValueError) as exc:
                 LOGGER.warning("Auto-save failed: %s", exc)
-                self._app._workspace_state_chip.setText("Auto-save failed")
+                self._app._workspace_state_chip.setText("Error: Auto-save failed")
                 self._app._workspace_state_chip.setProperty("tone", "danger")
+                self._app._workspace_state_chip.setToolTip(
+                    f"Auto-save could not write the workspace: {exc}\n"
+                    "Use Save As to choose another location, then retry."
+                )
+                self._app._workspace_state_chip.setAccessibleDescription(
+                    f"Auto-save failed. {exc}. Use Save As to choose another location."
+                )
+                from src.ui.util import record_notification
+
+                record_notification(f"Auto-save failed: {exc}. Use Save As to choose another location.")
                 self._app._workspace_state_chip.style().unpolish(self._app._workspace_state_chip)
                 self._app._workspace_state_chip.style().polish(self._app._workspace_state_chip)
 
@@ -197,10 +226,20 @@ class AutosaveController:
         except OSError as exc:
             LOGGER.warning("Could not remove autosave: %s", exc)
 
-    def _offer_autosave_recovery(self) -> None:
-        if AutosaveController._recovery_offered:
+    def _discard_restored_snapshot(self) -> None:
+        path = self._app._restored_recovery_path
+        if path is None:
             return
-        AutosaveController._recovery_offered = True
+        try:
+            path.unlink(missing_ok=True)
+            self._app._restored_recovery_path = None
+        except OSError as exc:
+            LOGGER.warning("Could not remove restored recovery snapshot: %s", exc)
+
+    def _offer_autosave_recovery(self) -> None:
+        if self._recovery_offered:
+            return
+        self._recovery_offered = True
         recovery_dir = user_data_dir() / "recovery"
         paths = sorted(
             recovery_dir.glob("*.workspace.json"),
@@ -219,7 +258,20 @@ class AutosaveController:
                 raw = read_json_file(path)
                 metadata = raw.get("recovery", {}) if isinstance(raw, dict) else {}
                 document = raw.get("document", raw) if isinstance(raw, dict) else {}
-                timestamp = str(metadata.get("timestamp", "Unknown time"))
+                timestamp = str(metadata.get("timestamp", ""))
+                try:
+                    recovered_at = datetime.fromisoformat(timestamp).astimezone()
+                    age_seconds = max(
+                        0, int((datetime.now().astimezone() - recovered_at).total_seconds())
+                    )
+                    age = (
+                        f"{age_seconds // 60} min ago"
+                        if age_seconds < 3600
+                        else f"{age_seconds // 3600} hr ago"
+                    )
+                    timestamp = recovered_at.strftime("%b %d, %I:%M %p") + f" ({age})"
+                except (TypeError, ValueError):
+                    timestamp = "Unknown time"
                 workspace = (
                     Path(str(metadata.get("workspace_path", ""))).name or "Unsaved workspace"
                 )
@@ -240,9 +292,30 @@ class AutosaveController:
             self._app._apply_workspace_document(document)
             self._app._workspace_dirty = True
             self._app._update_title()
-            path.unlink(missing_ok=True)
+            # Keep the known-good snapshot until the restored work is actually
+            # saved. A second crash before the next timer tick must not erase it.
+            self._app._restored_recovery_path = path
         except (OSError, ValueError, KeyError) as exc:
             QMessageBox.warning(self._app, "Recovery Failed", f"Could not restore snapshot:\n{exc}")
+
+    def offer_startup_autosave_recovery(self) -> None:
+        """Offer recovery only after the application window is actually visible."""
+        if self._app.isVisible():
+            self._offer_autosave_recovery()
+
+    def open_recovery_manager(self) -> None:
+        """Re-open recovery from the File menu after a startup dismissal."""
+        self._recovery_offered = False
+        recovery_dir = user_data_dir() / "recovery"
+        legacy = user_data_dir() / "autosave.workspace.json"
+        if not any(recovery_dir.glob("*.workspace.json")) and not legacy.exists():
+            QMessageBox.information(
+                self._app,
+                "Recover Unsaved Work",
+                "No recovery snapshots are available.",
+            )
+            return
+        self._offer_autosave_recovery()
 
     def shutdown(self) -> None:
         """Stops all timers and cleans up the autosave file."""
@@ -321,7 +394,7 @@ class TaskController:
         self.updates = UpdateChecker(app)
 
     def startup(self, *, check_updates: bool) -> None:
-        QTimer.singleShot(200, self.autosave._offer_autosave_recovery)
+        QTimer.singleShot(200, self.autosave.offer_startup_autosave_recovery)
         if check_updates:
             QTimer.singleShot(1000, self.updates._attempt_startup_update_check)
         self.updates._configure_auto_fetch_timer()
@@ -474,7 +547,7 @@ class MenuController(_AppProxy):
         rows += canvas_commands.shortcut_reference_rows()
         rows += [
             ("Canvas interaction", ""),
-            ("Pan", "Space-drag or middle mouse"),
+            ("Pan", "P, Space-drag, or middle mouse"),
             ("Zoom", "Mouse wheel, ⌘+ / ⌘-"),
             ("Nudge selection", "Arrows (⇧ = 1 mm)"),
             ("Delete selected", "Backspace / Del"),
@@ -509,8 +582,12 @@ class MenuController(_AppProxy):
     def _refresh_workspace_header(self) -> None:
         title = self._workspace_path.stem if self._workspace_path else "Untitled"
         self._workspace_title_label.setText(title)
-        chip_text = "Unsaved" if self._workspace_dirty else "Saved"
-        chip_tone = "warn" if self._workspace_dirty else "success"
+        if self._workspace_dirty:
+            chip_text, chip_tone = "Unsaved changes", "warn"
+        elif self._workspace_path is None:
+            chip_text, chip_tone = "Not saved", "neutral"
+        else:
+            chip_text, chip_tone = "Saved", "success"
         self._workspace_state_chip.setText(chip_text)
         self._workspace_state_chip.setProperty("tone", chip_tone)
         self._workspace_state_chip.style().unpolish(self._workspace_state_chip)
@@ -528,7 +605,7 @@ class MenuController(_AppProxy):
         layout.setSpacing(12)
 
         # App identity — compact single line
-        title = QLabel("AA Laser Studio")
+        title = QLabel("Simple Stipple")
         title.setProperty("role", "shell-title")
         layout.addWidget(title)
 
@@ -544,6 +621,7 @@ class MenuController(_AppProxy):
 
         # Status chip
         self._workspace_state_chip = info_chip("Saved", "success")
+        self._workspace_state_chip.setAccessibleName("Workspace save status")
         layout.addWidget(self._workspace_state_chip)
 
         layout.addStretch()
@@ -553,7 +631,6 @@ class MenuController(_AppProxy):
             ("New", self._new_workspace, None),
             ("Open", self._open_workspace, None),
             ("Save", self._save_workspace, "primary"),
-            ("Save As", self._save_workspace_as, None),
         ]:
             btn = QPushButton(text)
             btn.setMinimumHeight(30)
@@ -581,6 +658,7 @@ class MenuController(_AppProxy):
         update_btn.setIconSize(QSize(18, 18))
         update_btn.setFixedSize(30, 30)
         update_btn.setToolTip("Check for updates")
+        update_btn.setAccessibleName("Check for updates")
         update_btn.clicked.connect(self._open_update_check)
         layout.addWidget(update_btn)
 
@@ -963,6 +1041,12 @@ class WorkspaceController(_WorkspaceStateController):
         self._save_workspace_as_action.triggered.connect(self._save_workspace_as)
         self._workspace_menu.addAction(self._save_workspace_as_action)
 
+        self._recover_workspace_action = QAction("Recover Unsaved Work…", self._app)
+        self._recover_workspace_action.triggered.connect(
+            self._autosave_controller.open_recovery_manager
+        )
+        self._workspace_menu.addAction(self._recover_workspace_action)
+
         self._workspace_menu.addSeparator()
 
         # Repository sync moved out of the top-level tabs into this menu —
@@ -996,8 +1080,22 @@ class WorkspaceController(_WorkspaceStateController):
         )
         if not path:
             return False
-        self._workspace_path = normalize_workspace_path(path)
-        return self._save_workspace()
+        candidate = normalize_workspace_path(path)
+        try:
+            document = self._collect_workspace_document()
+            write_json_file_atomic(candidate, document)
+        except (OSError, TypeError, ValueError) as exc:
+            QMessageBox.critical(self._app, "Workspace Error", str(exc))
+            return False
+        self._workspace_path = candidate
+        self._last_saved_document = self._collect_workspace_document()
+        self._workspace_dirty = False
+        self._has_unsaved_changes = False
+        self._remember_workspace_path(candidate)
+        self._update_title()
+        self._autosave_controller._discard_autosave()
+        self._autosave_controller._discard_restored_snapshot()
+        return True
 
     def _update_title(self) -> None:
         self.setWindowTitle(workspace_title(self._workspace_path, self._workspace_dirty))
@@ -1068,9 +1166,9 @@ class WorkspaceController(_WorkspaceStateController):
         if check_dirty and not self._confirm_discard_if_dirty():
             return
         try:
-            data = read_json_file(path, default={})
+            data = read_json_file(path, default=None)
             if not isinstance(data, dict):
-                raise TypeError("Workspace file is not a JSON object.")
+                raise TypeError("Workspace file is invalid or is not a JSON object.")
             self._apply_workspace_document(data)
             self._workspace_path = path
             self._last_saved_document = self._collect_workspace_document()
@@ -1119,6 +1217,7 @@ class WorkspaceController(_WorkspaceStateController):
             self._remember_workspace_path(self._workspace_path)
             self._update_title()
             self._autosave_controller._discard_autosave()
+            self._autosave_controller._discard_restored_snapshot()
             return True
         except (OSError, TypeError, ValueError) as exc:
             QMessageBox.critical(self._app, "Workspace Error", str(exc))

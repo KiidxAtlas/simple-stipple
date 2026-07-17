@@ -25,6 +25,9 @@ from src.backend.dxf.io import (
     write_polylines_dxf,
 )
 
+MAX_SVG_FILE_BYTES = 32 * 1024 * 1024
+MAX_SVG_ELEMENTS = 250_000
+
 # ══════════════════════════════════════════════════════════════════════════
 # DXF -> SVG
 # ══════════════════════════════════════════════════════════════════════════
@@ -391,8 +394,21 @@ def svg_to_dxf(
     """
     from src.backend.shapes import shape_from_meta
 
-    tree = ET.parse(str(input_path))
+    source = Path(input_path)
+    size = source.stat().st_size
+    if size > MAX_SVG_FILE_BYTES:
+        raise ValueError(
+            f"{source.name} is too large to import safely "
+            f"({size / (1024 * 1024):.1f} MB; limit 32 MB)."
+        )
+    tree = ET.parse(str(source))
     root = tree.getroot()
+    element_count = sum(1 for _ in root.iter())
+    if element_count > MAX_SVG_ELEMENTS:
+        raise ValueError(
+            f"{source.name} contains {element_count:,} SVG elements; "
+            "the safe import limit is 250,000."
+        )
     root_matrix, y_flip = _root_svg_matrix(root)
     viewbox = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
     if len(viewbox) == 4:

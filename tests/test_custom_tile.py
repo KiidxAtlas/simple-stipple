@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from shapely.geometry import box
+from shapely.geometry import LineString, box
 
 from src.ui.pages.pattern.services import PatternProcessingService
 
@@ -41,6 +41,54 @@ def test_custom_tile_preserves_internal_closed_and_open_linework():
     assert 6.0 in widths  # the internal open decorative stroke survives
     assert closed_count > 2
     assert open_count > 0
+
+
+def test_clipped_custom_tile_cells_remain_closed_and_receive_pattern_fill():
+    outline = [(0.0, 0.0), (9.0, 0.0), (9.0, 9.0), (0.0, 9.0), (0.0, 0.0)]
+    motif = [[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]]
+    service = PatternProcessingService()
+    params = {
+        "tile_polys": motif,
+        "gap": 0.0,
+        "rotation": 0.0,
+        "interlock": False,
+        "repeat_mode": "Straight",
+        "origin_x": 1.0,
+        "origin_y": 1.0,
+    }
+
+    cells = service.build_pattern_polys(
+        [outline],
+        pattern="Custom Tile",
+        params=params,
+        scale=(9.0, 9.0),
+        orig_w=9.0,
+        orig_h=9.0,
+    )
+    edge_cells = [
+        cell
+        for cell in cells
+        if min(x for x, _y in cell) == 0.0
+        or max(x for x, _y in cell) == 9.0
+        or min(y for _x, y in cell) == 0.0
+        or max(y for _x, y in cell) == 9.0
+    ]
+    assert edge_cells
+    assert all(cell[0] == cell[-1] for cell in edge_cells)
+
+    fill: list[list[tuple[float, float]]] = []
+    service.build_pattern_polys(
+        [outline],
+        pattern="Custom Tile",
+        params=params,
+        scale=(9.0, 9.0),
+        orig_w=9.0,
+        orig_h=9.0,
+        fill_options={"mode": "lines", "spacing": 0.5, "target_pattern": True},
+        fill_polys_out=fill,
+    )
+    assert fill
+    assert any(LineString(stroke).distance(box(0, 0, 9, 9).boundary) < 1e-9 for stroke in fill)
 
 
 def test_custom_tile_requires_geometry():
@@ -94,6 +142,48 @@ def test_pattern_page_builds_custom_tile_parameters(qapp):
         page.shutdown()
         page.deleteLater()
         qapp.processEvents()
+
+
+def test_saved_custom_patterns_appear_in_main_pattern_picker(qapp):
+    from src.infra.settings import validate_settings
+    from src.ui.pages.pattern.tab import PatternPage
+
+    motif = [[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)]]
+    page = PatternPage(
+        settings=validate_settings({"custom_tile_motifs": {"My Tile": motif}})
+    )
+    try:
+        assert page._pattern_combo.findText("Custom · My Tile") >= 0
+        assert not hasattr(page, "_tile_motif_combo")
+        page._pattern_combo.setCurrentText("Custom · My Tile")
+        assert page._current_pattern_key() == "Custom Tile"
+        assert page._custom_tile_polys == motif
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
+def test_pattern_size_percent_scales_custom_tile_geometry():
+    from shapely.geometry import box
+
+    from src.ui.pages.pattern.services import PatternProcessingService
+
+    service = PatternProcessingService()
+    params = {
+        "tile_polys": [[(0.0, 0.0), (2.0, 0.0)]],
+        "gap": 1.0,
+        "repeat_mode": "Straight",
+        "origin_x": 0.0,
+        "origin_y": 0.0,
+        "rotation": 0.0,
+        "size_percent": 100.0,
+    }
+    normal = service._gen_pattern(box(0, 0, 20, 20), "Custom Tile", params)
+    larger = service._gen_pattern(
+        box(0, 0, 20, 20), "Custom Tile", {**params, "size_percent": 200.0}
+    )
+    assert normal != larger
 
 
 def test_custom_tile_preset_state_includes_motif(qapp):

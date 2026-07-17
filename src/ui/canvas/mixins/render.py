@@ -144,6 +144,7 @@ if TYPE_CHECKING:
         _sel: set[int]
         _shift_drag: bool
         _show_selection_bbox: bool
+        _selection_follows_geometry: bool
         _unit_system: str
 
         def _on_active_layer(self, e: EntityRecord) -> bool: ...
@@ -1236,46 +1237,11 @@ class CanvasRenderer(_RendererBase):
 
         left = min(bx0, bx1)
         mid_y = (by0 + by1) / 2.0
+        # Keep the controls screen-aligned. Rotating a shape must not make
+        # its resize and rotate controls orbit around it; the geometry itself
+        # supplies the orientation feedback.
         local_points: dict[str, tuple[float, float]] | None = None
-        if len(self._sel) == 1:
-            index = next(iter(self._sel))
-            entity = self._entities[index]
-            meta = entity.meta if isinstance(entity.meta, dict) else None
-            dims = None
-            if meta is not None:
-                if entity.kind in {"rectangle", "rounded_rectangle"}:
-                    dims = (float(meta.get("width", 0)), float(meta.get("height", 0)))
-                elif entity.kind == "ellipse":
-                    dims = (2 * float(meta.get("rx", 0)), 2 * float(meta.get("ry", 0)))
-                elif entity.kind == "circle":
-                    diameter = 2 * float(meta.get("radius", 0))
-                    dims = (diameter, diameter)
-                elif entity.kind == "slot":
-                    dims = (float(meta.get("length", 0)), float(meta.get("width", 0)))
-            if dims is not None and min(dims) > 1e-9:
-                world_cx, world_cy = (float(value) for value in meta.get("center", (0, 0)))
-                angle = math.radians(float(meta.get("rotation", 0.0)))
-
-                def _screen(fx: float, fy: float) -> tuple[float, float]:
-                    lx, ly = (fx - 0.5) * dims[0], (fy - 0.5) * dims[1]
-                    return self._w2c(
-                        world_cx + lx * math.cos(angle) - ly * math.sin(angle),
-                        world_cy + lx * math.sin(angle) + ly * math.cos(angle),
-                    )
-
-                local_points = {
-                    "sw": _screen(0, 0), "s": _screen(0.5, 0), "se": _screen(1, 0),
-                    "w": _screen(0, 0.5), "e": _screen(1, 0.5),
-                    "nw": _screen(0, 1), "n": _screen(0.5, 1), "ne": _screen(1, 1),
-                }
-                mid_x, mid_y = self._w2c(world_cx, world_cy)
-        if local_points is not None:
-            north = local_points["n"]
-            vx, vy = north[0] - mid_x, north[1] - mid_y
-            magnitude = max(1e-6, math.hypot(vx, vy))
-            rotate_center = QPointF(north[0] + vx / magnitude * 48, north[1] + vy / magnitude * 48)
-        else:
-            rotate_center = QPointF(mid_x, top - 48.0)
+        rotate_center = QPointF(mid_x, top - 42.0)
 
         self._gizmo_scale_rect = None
         rotate_visual_rect = QRectF(
@@ -1284,19 +1250,24 @@ class CanvasRenderer(_RendererBase):
             20,
             20,
         )
-        self._gizmo_rotate_rect = rotate_visual_rect.adjusted(-7, -7, 7, 7)
+        self._gizmo_rotate_rect = rotate_visual_rect.adjusted(-11, -11, 11, 11)
 
         # Selection frame with improved styling.
         frame_pen = QPen(QColor("#58a6ff"), 1.2)
         painter.setPen(frame_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        if local_points is None:
-            painter.drawRect(QRectF(QPointF(left, top), QPointF(right, bottom)))
-        else:
-            painter.drawPolygon(QPolygonF([QPointF(*local_points[name]) for name in ("sw", "se", "ne", "nw")]))
+        if not self._selection_follows_geometry:
+            if local_points is None:
+                painter.drawRect(QRectF(QPointF(left, top), QPointF(right, bottom)))
+            else:
+                painter.drawPolygon(
+                    QPolygonF(
+                        [QPointF(*local_points[name]) for name in ("sw", "se", "ne", "nw")]
+                    )
+                )
 
         # Larger handles with better hit areas (12px visual, 16px hit).
-        hs = 6.0
+        hs = 7.0
         handles = [
             ("nw", left, top),
             ("n", mid_x, top),
@@ -1314,7 +1285,7 @@ class CanvasRenderer(_RendererBase):
         # Familiar transform handles: square corners resize both axes;
         # compact edge handles resize one axis. Hit targets remain generous.
         handle_pen = QPen(QColor("#79c0ff"), 1.5)
-        handle_brush = QBrush(QColor("#0d1117"))
+        handle_brush = QBrush(QColor("#1f6feb"))
         painter.setPen(handle_pen)
         painter.setBrush(handle_brush)
 
@@ -1323,7 +1294,7 @@ class CanvasRenderer(_RendererBase):
             # 28px interaction target around a compact 12px visual handle.
             self._gizmo_handle_rects.append((name, rect.adjusted(-8, -8, 8, 8)))
             if len(name) == 2:
-                painter.drawRoundedRect(rect, 2, 2)
+                painter.drawEllipse(rect)
             elif name in ("n", "s"):
                 painter.drawRoundedRect(rect.adjusted(-2, 2, 2, -2), 2, 2)
             else:
@@ -1335,6 +1306,9 @@ class CanvasRenderer(_RendererBase):
         painter.setPen(rotate_pen)
         painter.setBrush(rotate_brush)
         painter.drawEllipse(rotate_visual_rect)
+        painter.setFont(_FONT_HEL_9)
+        painter.setPen(QColor("#ffd28a"))
+        painter.drawText(rotate_visual_rect, Qt.AlignmentFlag.AlignCenter, "↻")
 
         # Dashed line from selection top-center to rotate handle.
         painter.setPen(QPen(QColor("#4a9eff"), 1.0, Qt.PenStyle.DashLine))
@@ -1344,8 +1318,8 @@ class CanvasRenderer(_RendererBase):
         # Move handle: a small 4-way arrow icon at the selection's center,
         # offering an unambiguous "grab here to drag" target distinct from
         # clicking the shape body (useful for thin/overlapping shapes).
-        move_size = 11.0
-        self._gizmo_move_rect = QRectF(mid_x - 16, mid_y - 16, 32, 32)
+        move_size = 14.0
+        self._gizmo_move_rect = QRectF(mid_x - 20, mid_y - 20, 40, 40)
         move_pen = QPen(QColor("#79c0ff"), 1.5)
         move_brush = QBrush(QColor(13, 17, 23, 235))
         painter.setPen(move_pen)
@@ -1842,10 +1816,10 @@ class CanvasRenderer(_RendererBase):
                 mx = (cx0 + cx1) / 2.0
                 my = (cy0 + cy1) / 2.0
                 self._sel_badge_w_rect = self._draw_badge(
-                    painter, mx, min(cy0, cy1) - 14, f"W {width:.2f}", 9
+                    painter, mx, min(cy0, cy1) - 18, f"W {width:.2f}", 10
                 )
                 self._sel_badge_h_rect = self._draw_badge(
-                    painter, max(cx0, cx1) + 26, my, f"H {height:.2f}", 9
+                    painter, max(cx0, cx1) + 34, my, f"H {height:.2f}", 10
                 )
                 self._sel_badge_l_rect = None
                 self._sel_badge_a_rect = None
@@ -1855,10 +1829,10 @@ class CanvasRenderer(_RendererBase):
                     llen = math.hypot(bx - ax, by - ay)
                     ang = math.degrees(math.atan2(by - ay, bx - ax))
                     self._sel_badge_l_rect = self._draw_badge(
-                        painter, mx - 34, max(cy0, cy1) + 16, f"L {llen:.2f}", 9
+                        painter, mx - 42, max(cy0, cy1) + 20, f"L {llen:.2f}", 10
                     )
                     self._sel_badge_a_rect = self._draw_badge(
-                        painter, mx + 34, max(cy0, cy1) + 16, f"∠ {ang:.1f}°", 9
+                        painter, mx + 42, max(cy0, cy1) + 20, f"∠ {ang:.1f}°", 10
                     )
             else:
                 self._sel_badge_w_rect = None
@@ -2047,15 +2021,6 @@ class CanvasRenderer(_RendererBase):
             info_x = sidebar.x() + sidebar.width() + 12
         painter.drawText(info_x, self._chrome_top() + 18, info)
 
-        hint: str | None = None
-        if self._mode == "draw":
-            hint = f"{self._draw_primitive}: click points · Enter finish · double-click close · Esc cancel"
-        elif self._mode == "edit":
-            hint = "Drag vertex · double-click edge to insert · right-click to delete · E exit"
-        if hint:
-            painter.setFont(QFont("Helvetica", 9))
-            painter.drawText(self._chrome_left() + 8, h - 8, hint)
-
         if not self._entities and not self._draw_pts:
             message = getattr(self, "_empty_message", "No polylines loaded")
             title, _, hint = message.partition("\n")
@@ -2119,9 +2084,6 @@ class CanvasRenderer(_RendererBase):
                 self._flash_text,
             )
 
-        # Measure button
-        self._paint_measure_button(painter, w)
-        self._paint_dimension_button(painter, w)
 
         painter.end()
 

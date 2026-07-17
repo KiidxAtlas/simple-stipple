@@ -78,13 +78,21 @@ class DxfImportPreviewDialog(QDialog):
         self._replace = QRadioButton("Replace drawing")
         self._append = QRadioButton("Add to drawing")
         self._append.setEnabled(has_existing_geometry)
-        choose_append = default_append and has_existing_geometry
+        choose_append = has_existing_geometry or default_append
         self._append.setChecked(choose_append)
         self._replace.setChecked(not choose_append)
         mode_row.addWidget(self._replace)
         mode_row.addWidget(self._append)
         mode_row.addStretch(1)
         root.addLayout(mode_row)
+        if has_existing_geometry:
+            safety = QLabel(
+                "Add preserves the current drawing. Replace removes existing objects; "
+                "you can undo the replacement immediately after import."
+            )
+            safety.setProperty("role", "hint")
+            safety.setWordWrap(True)
+            root.addWidget(safety)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok

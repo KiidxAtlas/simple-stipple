@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QToolButton,
 )
 
+from src.ui.canvas.constants import GRID_SPACING_MAX_MM, GRID_SPACING_MIN_MM
 from src.ui.components import clear_line_edit_error, set_line_edit_error
 from src.ui.util import parse_numeric_expression
 
@@ -35,6 +36,15 @@ class CanvasPrecisionBar(QFrame):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(4)
 
+        self._pan_btn = QPushButton("Pan")
+        self._pan_btn.setMinimumHeight(24)
+        self._pan_btn.setCheckable(True)
+        self._pan_btn.setToolTip("Pan the canvas by dragging (Shortcut: P)")
+        self._pan_btn.setAccessibleName("Pan tool")
+        self._pan_btn.clicked.connect(self._toggle_pan)
+        layout.addWidget(self._pan_btn)
+        layout.addSpacing(6)
+
         self._grid_btn = QPushButton("Grid")
         self._grid_btn.setMinimumHeight(24)
         self._grid_btn.setCheckable(True)
@@ -42,12 +52,40 @@ class CanvasPrecisionBar(QFrame):
         self._grid_btn.clicked.connect(self._toggle_grid)
         layout.addWidget(self._grid_btn)
 
+        # Keep the grid's spacing controls physically attached to Grid. They
+        # appear when Grid (or grid-point snapping) is enabled, without
+        # unrelated snapping/constraint controls opening a visual gap.
+        self._spacing_label = QLabel("Spacing")
+        layout.addWidget(self._spacing_label)
+        self._spacing = QLineEdit()
+        self._spacing.setFixedWidth(64)
+        self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._spacing.returnPressed.connect(self._apply_spacing)
+        layout.addWidget(self._spacing)
+
+        self._spacing_dec = QPushButton("\u2212")
+        self._spacing_dec.setFixedSize(24, 24)
+        self._spacing_dec.setProperty("role", "icon-sm")
+        self._spacing_dec.setToolTip("Halve grid spacing")
+        self._spacing_dec.clicked.connect(lambda: self._scale_spacing(0.5))
+        layout.addWidget(self._spacing_dec)
+
+        self._spacing_inc = QPushButton("+")
+        self._spacing_inc.setFixedSize(24, 24)
+        self._spacing_inc.setProperty("role", "icon-sm")
+        self._spacing_inc.setToolTip("Double grid spacing")
+        self._spacing_inc.clicked.connect(lambda: self._scale_spacing(2.0))
+        layout.addWidget(self._spacing_inc)
+
+        layout.addSpacing(6)
+
         self._snap_btn = QToolButton()
         self._snap_btn.setText("Snap")
         self._snap_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._snap_btn.setToolTip(
             "Choose which geometric constraints are active (hold Alt to bypass)"
         )
+        self._snap_btn.setAccessibleName("Snapping options")
         self._snap_menu = QMenu(self._snap_btn)
         self._snap_actions = {}
         for key, label_text, setter in (
@@ -76,6 +114,8 @@ class CanvasPrecisionBar(QFrame):
 
         self._constraints_btn = QToolButton()
         self._constraints_btn.setText("Constrain")
+        self._constraints_btn.setAccessibleName("Geometry constraints")
+        self._constraints_btn.setToolTip("Add or remove constraints on selected geometry")
         self._constraints_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         constraints_menu = QMenu(self._constraints_btn)
         for kind, label in (
@@ -89,28 +129,6 @@ class CanvasPrecisionBar(QFrame):
         constraints_menu.addAction("Remove selection constraints", self._remove_constraints)
         self._constraints_btn.setMenu(constraints_menu)
         layout.addWidget(self._constraints_btn)
-
-        self._spacing_label = QLabel("Spacing")
-        layout.addWidget(self._spacing_label)
-        self._spacing = QLineEdit()
-        self._spacing.setFixedWidth(64)
-        self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._spacing.returnPressed.connect(self._apply_spacing)
-        layout.addWidget(self._spacing)
-
-        self._spacing_dec = QPushButton("\u2212")
-        self._spacing_dec.setFixedSize(24, 24)
-        self._spacing_dec.setProperty("role", "icon-sm")
-        self._spacing_dec.setToolTip("Halve grid spacing")
-        self._spacing_dec.clicked.connect(lambda: self._scale_spacing(0.5))
-        layout.addWidget(self._spacing_dec)
-
-        self._spacing_inc = QPushButton("+")
-        self._spacing_inc.setFixedSize(24, 24)
-        self._spacing_inc.setProperty("role", "icon-sm")
-        self._spacing_inc.setToolTip("Double grid spacing")
-        self._spacing_inc.clicked.connect(lambda: self._scale_spacing(2.0))
-        layout.addWidget(self._spacing_inc)
 
         layout.addStretch()
         self.refresh()
@@ -132,6 +150,11 @@ class CanvasPrecisionBar(QFrame):
         grid_on = bool(state.get("grid_visible", False))
         spacing = float(state.get("grid_spacing", 1.0))
 
+        self._pan_btn.blockSignals(True)
+        self._pan_btn.setChecked(
+            hasattr(self._canvas, "get_mode") and self._canvas.get_mode() == "pan"
+        )
+        self._pan_btn.blockSignals(False)
         self._grid_btn.setChecked(grid_on)
         self._construction_btn.blockSignals(True)
         self._construction_btn.setChecked(bool(state.get("construction_mode", False)))
@@ -190,6 +213,14 @@ class CanvasPrecisionBar(QFrame):
             canvas.set_grid_visible(not bool(state.get("grid_visible", False)))
             self._after_change()
 
+    def _toggle_pan(self) -> None:
+        canvas = self._canvas
+        if canvas is None or not hasattr(canvas, "set_mode"):
+            return
+        current = canvas.get_mode() if hasattr(canvas, "get_mode") else "select"
+        canvas.set_mode("select" if current == "pan" else "pan")
+        self._after_change()
+
     def _scale_spacing(self, factor: float) -> None:
         canvas = self._canvas
         if canvas is None:
@@ -197,7 +228,9 @@ class CanvasPrecisionBar(QFrame):
         if not hasattr(canvas, "get_precision_state") or not hasattr(canvas, "set_grid_spacing"):
             return
         current = float(canvas.get_precision_state().get("grid_spacing", 1.0))
-        canvas.set_grid_spacing(max(0.1, min(100.0, current * factor)))
+        canvas.set_grid_spacing(
+            max(GRID_SPACING_MIN_MM, min(GRID_SPACING_MAX_MM, current * factor))
+        )
         self._after_change()
 
     def _apply_spacing(self) -> None:
@@ -215,7 +248,7 @@ class CanvasPrecisionBar(QFrame):
             set_line_edit_error(self._spacing, "Grid spacing must be greater than zero.")
             return
         clear_line_edit_error(self._spacing)
-        canvas.set_grid_spacing(max(0.1, min(100.0, value)))
+        canvas.set_grid_spacing(max(GRID_SPACING_MIN_MM, min(GRID_SPACING_MAX_MM, value)))
         self._after_change()
 
 

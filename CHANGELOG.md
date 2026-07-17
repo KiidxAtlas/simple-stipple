@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.2 — 2026-07-16
+
+### Added
+
+- Zone-first pattern editing with clearer assignment, selection highlighting, role controls, and per-zone output ownership.
+- Auto-preview controls, cancellable pattern generation, persistent preview edits, and reusable pattern defaults.
+- Recovery management for unsaved work, including safer snapshot retention and clearer recovery timestamps.
+- File-size limits for JSON persistence and regression coverage for oversized workspace data.
+
+### Fixed
+
+- Pattern selections, cutouts, deleted cells, and newly drawn outlines failing to survive preview regeneration.
+- Voronoi preview generation crashing when non-finite geometry or gap values reached Shapely.
+- The quality workflow type-checking a task-state module that had moved to the Pattern worker boundary.
+- Hidden application windows opening a blocking recovery dialog during background startup processing.
+- Workspace loads leaving partially applied state when a page failed, and Save As adopting a path before the write succeeded.
+- DXF/FVI/SVG import and export edge cases affecting curve fidelity, layer roles, and destination handling.
+- Canvas selection, panning, HUD text, keybindings, properties, and workspace round-trip inconsistencies.
+
+### Changed
+
+- Conversion workflows now confirm replacements and create non-destructive repaired copies by default.
+- Refined Pattern, Convert, Trace, Draft, precision, status, settings, and layer-tree layouts and feedback.
+- Updated application identity, accessibility labels, help content, and workspace save-state messaging.
+
 ## 0.3.1 — 2026-07-15
 
 ### Added
@@ -28,4 +53,3 @@
 
 - Consolidated small settings, notification, units, page runtime, and operation modules without adding source-directory sprawl.
 - Updated in-app Help with the complete 0.3.1 drafting, interoperability, and workflow feature set.
-

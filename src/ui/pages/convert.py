@@ -9,6 +9,7 @@ stay split.
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 from pathlib import Path
 
@@ -51,6 +52,11 @@ from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WAR
 from src.ui.widgets.status_strip import CanvasStatusStrip
 
 LOGGER = logging.getLogger(__name__)
+
+# ── Page default settings ────────────────────────────────────────────────
+DEFAULT_GRID_VISIBLE = True
+DEFAULT_GRID_SPACING_MM = 1.0
+LOG_PANEL_MAX_HEIGHT = 140
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -271,7 +277,7 @@ class FviSubTab(_StatusMixin, QWidget):
             return
         src = self._src_edit.text().strip()
         if not src:
-            QMessageBox.critical(self, "Error", "Please select a source file or folder.")
+            self._status_sig.emit("Choose an FVI source file or folder first.", STATUS_WARN)
             return
         src_path = Path(src)
         if self._is_batch():
@@ -290,9 +296,42 @@ class FviSubTab(_StatusMixin, QWidget):
                     f"The source file does not exist:\n{src}",
                 )
                 return
+        out_dir = self._out_edit.text().strip() or None
+        source_files = (
+            [src_path]
+            if src_path.is_file()
+            else sorted(
+                path
+                for path in (
+                    src_path.rglob("*")
+                    if self._include_subfolders.isChecked()
+                    else src_path.iterdir()
+                )
+                if path.is_file() and path.suffix.casefold() == ".fvi"
+            )
+        )
+        destinations = []
+        for source in source_files:
+            if out_dir:
+                relative = source.relative_to(src_path) if src_path.is_dir() else Path(source.name)
+                destinations.append(Path(out_dir) / relative.with_suffix(".dxf"))
+            else:
+                destinations.append(source.with_suffix(".dxf"))
+        existing = [path for path in destinations if path.exists()]
+        if existing:
+            answer = QMessageBox.question(
+                self,
+                "Replace Existing DXF Files?",
+                f"{len(existing)} destination file(s) already exist and will be replaced.\n\n"
+                + "\n".join(path.name for path in existing[:5])
+                + ("\n…" if len(existing) > 5 else ""),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         cancel_event = self._start_job()
         self._btn.setEnabled(False)
-        out_dir = self._out_edit.text().strip() or None
         self._thread = threading.Thread(
             target=self._convert,
             args=(src, out_dir, cancel_event, self._include_subfolders.isChecked()),
@@ -440,8 +479,8 @@ class FixerSubTab(_StatusMixin, QWidget):
         self._out_edit = self._add_picker_row(
             layout,
             "OUTPUT",
-            "Leave blank to overwrite source…",
-            tooltip="Single: output file. Batch: output folder. Blank overwrites source files.",
+            "Optional — defaults to a non-destructive fixed copy…",
+            tooltip="Single: output file. Batch: output folder. Blank creates a sibling fixed copy.",
             btn_tooltip="Choose an output file or folder",
             on_browse=self._browse_out,
         )
@@ -484,9 +523,9 @@ class FixerSubTab(_StatusMixin, QWidget):
             "Select a folder containing DXF files…" if batch else "Select a .dxf file…"
         )
         self._out_edit.setPlaceholderText(
-            "Optional output folder (blank = overwrite sources)…"
+            "Optional output folder (blank = sibling fixed folder)…"
             if batch
-            else "Leave blank to overwrite input…"
+            else "Optional (blank = name-fixed.dxf)…"
         )
 
     def _is_batch(self) -> bool:
@@ -523,7 +562,7 @@ class FixerSubTab(_StatusMixin, QWidget):
             return
         src = self._src_edit.text().strip()
         if not src:
-            QMessageBox.critical(self, "Error", "Please select an input DXF file.")
+            self._status_sig.emit("Choose an input DXF file first.", STATUS_WARN)
             return
         source_path = Path(src)
         expected = source_path.is_dir() if self._is_batch() else source_path.is_file()
@@ -536,21 +575,11 @@ class FixerSubTab(_StatusMixin, QWidget):
             return
         out = self._out_edit.text().strip()
         if not out:
-            answer = QMessageBox.question(
-                self,
-                "Overwrite Originals?" if self._is_batch() else "Overwrite Original?",
-                (
-                    "Output folder is empty. Every DXF in this folder will be replaced "
-                    "with its repaired version. Continue?"
-                    if self._is_batch()
-                    else "Output path is empty. This will overwrite the original file. Continue?"
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+            out = (
+                str(source_path.with_name(f"{source_path.name}-fixed"))
+                if self._is_batch()
+                else str(source_path.with_name(f"{source_path.stem}-fixed{source_path.suffix}"))
             )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            out = "" if self._is_batch() else src
         elif self._is_batch():
             try:
                 Path(out).mkdir(parents=True, exist_ok=True)
@@ -636,6 +665,8 @@ class FixerSubTab(_StatusMixin, QWidget):
             self._status_sig.emit(f"Fixing {index} of {len(files)} — {source.name}", STATUS_NEUTRAL)
             try:
                 destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.resolve() == source.resolve():
+                    shutil.copy2(source, source.with_suffix(source.suffix + ".bak"))
                 stats = fix_dxf(source, destination, mode=repair_mode)  # type: ignore[arg-type]
                 succeeded += 1
                 for key in totals:
@@ -703,6 +734,9 @@ class FixerSubTab(_StatusMixin, QWidget):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
+            if Path(src).resolve() == Path(out).resolve():
+                source = Path(src)
+                shutil.copy2(source, source.with_suffix(source.suffix + ".bak"))
             stats = fix_dxf(src, out, mode=repair_mode)  # type: ignore[arg-type]
             msg = (
                 f"Done — {stats['polylines_in']} in → {stats['polylines_out']} out"
@@ -822,7 +856,7 @@ class SvgSubTab(_StatusMixin, QWidget):
             return
         src = self._src_edit.text().strip()
         if not src:
-            QMessageBox.critical(self, "Error", "Please select an input DXF file.")
+            self._status_sig.emit("Choose an input DXF file first.", STATUS_WARN)
             return
         if not Path(src).is_file():
             QMessageBox.warning(self, "File Not Found", f"The source file does not exist:\n{src}")
@@ -960,7 +994,7 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
             return
         src = self._src_edit.text().strip()
         if not src:
-            QMessageBox.critical(self, "Error", "Please select an input SVG file.")
+            self._status_sig.emit("Choose an input SVG file first.", STATUS_WARN)
             return
         if not Path(src).is_file():
             QMessageBox.warning(self, "File Not Found", f"The source file does not exist:\n{src}")
@@ -1166,7 +1200,7 @@ class ConvertPage(BasePage):
         self._footer_status.setVisible(False)
         footer_layout.addWidget(self._footer_status)
 
-        sidebar_outer.addWidget(footer_w)
+        self._footer_widget = footer_w
         self._left_panel = sidebar_frame
 
         # ── Right panel: empty state → canvas preview ─────────────────────────
@@ -1178,7 +1212,7 @@ class ConvertPage(BasePage):
         right.setSpacing(6)
 
         self._right_stack = QStackedWidget()
-        right.addWidget(self._right_stack)
+        right.addWidget(self._right_stack, stretch=1)
 
         # Page 0 — empty state
         _empty_w = QWidget()
@@ -1201,6 +1235,16 @@ class ConvertPage(BasePage):
         _ev.addWidget(_ev_title)
         _ev.addSpacing(4)
         _ev.addWidget(_ev_hint)
+        _ev_choose = QPushButton("Choose input file…")
+        _ev_choose.setProperty("role", "primary")
+        _ev_choose.setAccessibleDescription(
+            "Choose the input for the currently selected conversion task"
+        )
+        _ev_choose.clicked.connect(
+            lambda: self._tool_stack.currentWidget()._browse_src()
+        )
+        _ev.addSpacing(8)
+        _ev.addWidget(_ev_choose, alignment=Qt.AlignmentFlag.AlignHCenter)
         _ev.addStretch()
         self._right_stack.addWidget(_empty_w)
 
@@ -1220,9 +1264,9 @@ class ConvertPage(BasePage):
         self._preview_canvas.set_empty_message(
             "No preview\nRun a conversion to see the result here"
         )
-        self._preview_canvas.set_grid_visible(True)
+        self._preview_canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
         self._preview_canvas.set_grid_snap(False)
-        self._preview_canvas.set_grid_spacing(1.0)
+        self._preview_canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
         self._precision_bar.bind_canvas(self._preview_canvas)
         _cl.addWidget(self._preview_canvas, stretch=1)
 
@@ -1232,13 +1276,14 @@ class ConvertPage(BasePage):
 
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
-        self._log.setMaximumHeight(140)
+        self._log.setMaximumHeight(LOG_PANEL_MAX_HEIGHT)
         self._log.setProperty("role", "log")
         self._log.setPlaceholderText("Conversion output and repair details will appear here.")
         _cl.addWidget(self._log)
 
         self._right_stack.addWidget(_canvas_w)
         self._right_stack.setCurrentIndex(0)
+        right.addWidget(self._footer_widget)
 
         # ── Splitter ──────────────────────────────────────────────────────────
         self._splitter = content_splitter(self._left_panel, right_w, sizes=(380, 860))

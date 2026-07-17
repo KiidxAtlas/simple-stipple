@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from src.backend.document import PatternTabState
+from src.ui.pages.pattern.fill import NULL_PATTERN
 from src.ui.pages.pattern.params import collect_form_state, restore_form_state
 
 LOGGER = logging.getLogger(__name__)
@@ -103,7 +104,15 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._canvas.set_view_state(pattern_state.canvas_view)
     page._suspend_state = False
     page._refresh_canvas_panels()
-    page._zones = list(pattern_state.zones)
+    page._zones = []
+    for raw_zone in pattern_state.zones:
+        zone = dict(raw_zone)
+        zone["pattern"] = str(zone.get("pattern") or NULL_PATTERN).strip() or NULL_PATTERN
+        zone["pattern_label"] = (
+            str(zone.get("pattern_label") or zone["pattern"]).strip() or zone["pattern"]
+        )
+        zone.setdefault("params", {})
+        page._zones.append(zone)
     page._refresh_zone_list()
     page._exclusion_ids = [str(v) for v in pattern_state.exclusion_ids]
     # Migrate legacy workspaces whose explicit cutouts predate outline roles.

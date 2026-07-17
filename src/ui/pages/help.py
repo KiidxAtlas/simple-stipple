@@ -60,7 +60,7 @@ def _build_getting_started() -> str:
 </h2>
 
 <h3 class="subheading">What is Simple Stipple?</h3>
-<p>Simple Stipple (branded as <strong>AA Laser Studio</strong>) is a desktop application that generates intricate laser-engraving patterns inside user-defined outlines. You draw or import an outline, choose a pattern and its parameters, and the software fills the area with mathematically precise vector geometry ready for your laser cutter.</p>
+<p>Simple Stipple is a desktop application that generates intricate laser-engraving patterns inside user-defined outlines. You draw or import an outline, choose a pattern and its parameters, and the software fills the area with mathematically precise vector geometry ready for your laser cutter.</p>
 
 <h3 class="subheading">System Requirements</h3>
 <ul>
@@ -225,7 +225,7 @@ def _build_bezier_pen_tool() -> str:
     Bezier Pen Tool
 </h2>
 
-<p>The Pen tool (<kbd>P</kbd>, or the "Bezier Pen" entry in the Draw tool picker) draws true cubic-bezier curves with draggable tangent handles — a different, more powerful tool than the Spline primitive (which fits a curve through plain points with no direct handle control).</p>
+<p>The Pen tool (the "Bezier Pen" entry in the Draw tool picker) draws true cubic-bezier curves with draggable tangent handles — a different, more powerful tool than the Spline primitive (which fits a curve through plain points with no direct handle control).</p>
 <ul>
     <li><strong>Click:</strong> places a corner anchor (a sharp point — zero-length tangent handles).</li>
     <li><strong>Click and drag:</strong> places a smooth anchor with a symmetric pair of tangent handles extending from the drag direction — drag further for a rounder curve.</li>
@@ -939,7 +939,7 @@ def build_help_html() -> str:
     }}
 </style>
 
-<h1 style="text-align:center;color:#f0f6fc;">AA Laser Studio — User Manual</h1>
+<h1 style="text-align:center;color:#f0f6fc;">Simple Stipple — User Manual</h1>
 <p style="text-align:center;color:#8b949e;">A powerful laser-engraving pattern generator for DXF files.</p>
 
 <hr style="border:none;border-top:2px solid #2f81f7;margin:20px 0;">
@@ -989,7 +989,7 @@ class HelpDialog(QDialog):
     def __init__(self, parent: QWidget | None = None, main_window: QMainWindow | None = None):
         super().__init__(parent, Qt.WindowType.Window)
         self._main_window = main_window
-        self.setWindowTitle("AA Laser Studio — User Manual")
+        self.setWindowTitle("Simple Stipple — User Manual")
         self.setMinimumSize(950, 700)
 
         # Build content dynamically

@@ -695,6 +695,9 @@ class GizmoDragMixin(_GizmoBase):
             start_a = math.atan2(start_vy, start_vx)
             cur_a = math.atan2(cur_vy, cur_vx)
             angle = cur_a - start_a
+            if mods is not None and mods & Qt.KeyboardModifier.ShiftModifier:
+                increment = math.radians(15.0)
+                angle = round(angle / increment) * increment
             if abs(angle) > math.radians(0.2):
                 self._gizmo_drag_moved = True
 

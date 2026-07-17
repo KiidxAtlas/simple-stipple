@@ -20,6 +20,8 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 
+from src.ui.canvas.constants import GRID_SPACING_MAX_MM, GRID_SPACING_MIN_MM
+
 
 @dataclass(frozen=True)
 class Command:
@@ -90,12 +92,12 @@ def _toggle_grid_snap(v: Any) -> None:
 
 
 def _grid_coarser(v: Any) -> None:
-    v.set_grid_spacing(min(100.0, v._grid_spacing * 2.0))
+    v.set_grid_spacing(min(GRID_SPACING_MAX_MM, v._grid_spacing * 2.0))
     v._show_flash(f"Grid: {v._grid_spacing:g} mm")
 
 
 def _grid_finer(v: Any) -> None:
-    v.set_grid_spacing(max(0.1, v._grid_spacing / 2.0))
+    v.set_grid_spacing(max(GRID_SPACING_MIN_MM, v._grid_spacing / 2.0))
     v._show_flash(f"Grid: {v._grid_spacing:g} mm")
 
 
@@ -779,6 +781,13 @@ COMMANDS: tuple[Command, ...] = (
         "mode.pen",
         "Bezier Pen Tool",
         _toggle_pen,
+        "",
+        category="Modes",
+    ),
+    Command(
+        "mode.pan",
+        "Pan Tool",
+        lambda v: v.set_mode("pan" if v.get_mode() != "pan" else "select"),
         "P",
         category="Modes",
     ),

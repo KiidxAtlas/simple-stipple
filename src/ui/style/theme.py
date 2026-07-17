@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -58,7 +59,7 @@ def accessibility_palette(high_contrast: bool = False) -> QPalette:
     return palette
 
 
-def load_app_qss() -> str:
+def load_app_qss(*, scale: float = 1.0, high_contrast: bool = False) -> str:
     bundled_root = getattr(sys, "_MEIPASS", None)
     candidates = [Path(__file__).with_name("theme.qss")]
     if bundled_root:
@@ -70,7 +71,27 @@ def load_app_qss() -> str:
             # Qt's QSS url() needs forward slashes even on Windows, and the
             # icon dir must be resolved at load time since it differs
             # between a dev checkout and a PyInstaller-bundled _MEIPASS root.
-            return qss_path.read_text(encoding="utf-8").replace("{ICONS_DIR}", icons_dir)
+            qss = qss_path.read_text(encoding="utf-8").replace("{ICONS_DIR}", icons_dir)
+            if scale != 1.0:
+                qss = re.sub(
+                    r"font-size:\s*(\d+(?:\.\d+)?)px",
+                    lambda match: f"font-size: {float(match.group(1)) * scale:.1f}px",
+                    qss,
+                )
+            if high_contrast:
+                for source, target in {
+                    "#0d1117": "#000000",
+                    "#161b22": "#080808",
+                    "#1a222d": "#151515",
+                    "#21262d": "#202020",
+                    "#30363d": "#8a8a8a",
+                    "#484f58": "#b8b8b8",
+                    "#6e7681": "#d0d0d0",
+                    "#8b949e": "#e0e0e0",
+                    "#e6edf3": "#ffffff",
+                }.items():
+                    qss = qss.replace(source, target)
+            return qss
 
     logging.warning(
         "Theme stylesheet not found in expected locations: %s",

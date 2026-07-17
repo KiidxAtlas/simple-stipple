@@ -167,6 +167,32 @@ def test_pattern_cell_fill_ignores_open_strokes_instead_of_failing():
     assert fill == []
 
 
+def test_topographic_generator_rejects_non_finite_spacing_without_crashing():
+    service = PatternProcessingService()
+    result = service.build_pattern_polys(
+        [OUTER],
+        pattern="Topographic",
+        params={"spacing": float("nan"), "quality": "high"},
+        scale=(100.0, 100.0),
+        orig_w=100.0,
+        orig_h=100.0,
+    )
+    assert result == []
+
+
+def test_voronoi_generator_rejects_non_finite_gap_without_crashing():
+    service = PatternProcessingService()
+    result = service.build_pattern_polys(
+        [OUTER],
+        pattern="Voronoi",
+        params={"n_cells": 20, "gap": float("nan"), "seed": 42},
+        scale=(100.0, 100.0),
+        orig_w=100.0,
+        orig_h=100.0,
+    )
+    assert result == []
+
+
 def test_zone_explicit_no_fill_does_not_inherit_document_fill(monkeypatch):
     service = PatternProcessingService()
     calls = []

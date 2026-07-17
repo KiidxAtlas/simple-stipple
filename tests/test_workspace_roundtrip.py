@@ -82,3 +82,65 @@ def test_autosave_skips_when_clean(app_window, tmp_path, monkeypatch):
     w._workspace_dirty = False
     w._autosave_workspace()
     assert not (tmp_path / "auto.json").exists()
+
+
+def test_successful_save_removes_restored_snapshot(app_window, tmp_path):
+    w = app_window
+    snapshot = tmp_path / "restored.workspace.json"
+    snapshot.write_text("{}", encoding="utf-8")
+    w._restored_recovery_path = snapshot
+    draft = _draft_page(w)
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    w._workspace_path = tmp_path / "saved.workspace.json"
+
+    assert w._save_workspace()
+    assert not snapshot.exists()
+    assert w._restored_recovery_path is None
+
+
+def test_failed_save_as_does_not_rebind_workspace(app_window, monkeypatch, tmp_path):
+    from src.app import controllers
+
+    w = app_window
+    old_path = tmp_path / "old.workspace.json"
+    w._workspace_path = old_path
+    monkeypatch.setattr(
+        controllers.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(tmp_path / "new.workspace.json"), ""),
+    )
+    monkeypatch.setattr(
+        controllers,
+        "write_json_file_atomic",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(controllers.QMessageBox, "critical", lambda *_args: None)
+
+    assert not w._save_workspace_as()
+    assert w._workspace_path == old_path
+
+
+def test_workspace_apply_rolls_back_after_page_failure(app_window, monkeypatch):
+    w = app_window
+    draft = _draft_page(w)
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    before = w._collect_workspace_document()
+    pages = list(w._workspace_pages())
+    failing_page = pages[-1][1]
+    original_apply = failing_page.apply_workspace_state
+    calls = 0
+
+    def fail_once(state):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ValueError("bad page state")
+        return original_apply(state)
+
+    monkeypatch.setattr(failing_page, "apply_workspace_state", fail_once)
+    changed = w._collect_workspace_document()
+    changed["tabs"]["draft"] = {}
+
+    with pytest.raises(ValueError, match="bad page state"):
+        w._apply_workspace_document(changed)
+    assert w._collect_workspace_document() == before

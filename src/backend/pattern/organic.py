@@ -192,13 +192,18 @@ def gen_voronoi(
     outline_poly, n_cells: int, gap: float = 0.1, seed: int = 42
 ) -> list[list[tuple[float, float]]]:
     """Random-seed Voronoi cells clipped to the outline."""
-    if n_cells < 2:
+    if n_cells < 2 or not math.isfinite(gap):
+        return []
+    minx, miny, maxx, maxy = outline_poly.bounds
+    if not all(math.isfinite(value) for value in (minx, miny, maxx, maxy)):
+        return []
+    extent = max(maxx - minx, maxy - miny)
+    if extent <= 0:
         return []
     rng = random.Random(seed)
-    minx, miny, maxx, maxy = outline_poly.bounds
     pts = [Point(rng.uniform(minx, maxx), rng.uniform(miny, maxy)) for _ in range(n_cells)]
     mp = MultiPoint(pts)
-    envelope = outline_poly.convex_hull.buffer(max(maxx - minx, maxy - miny) * 0.1)
+    envelope = outline_poly.convex_hull.buffer(extent * 0.1)
     try:
         diagram = voronoi_diagram(mp, envelope=envelope)
     except (TypeError, ValueError, RuntimeError):
@@ -224,7 +229,7 @@ def gen_topographic(
     outline_poly, spacing: float, *, quality: str = "high"
 ) -> list[list[tuple[float, float]]]:
     """Topographic elevation contour lines pattern."""
-    if spacing <= 0:
+    if not math.isfinite(spacing) or spacing <= 0:
         return []
 
     minx, miny, maxx, maxy = outline_poly.bounds

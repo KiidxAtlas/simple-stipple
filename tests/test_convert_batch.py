@@ -249,6 +249,31 @@ def test_fvi_batch_skips_empty_placeholder_files_without_errors(qapp, tmp_path):
         qapp.processEvents()
 
 
+def test_fvi_declined_overwrite_does_not_leave_job_running(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    source = tmp_path / "part.fvi"
+    source.write_text("MOVEDIST 0,0\nDRAWLINE 10,0\n")
+    source.with_suffix(".dxf").write_text("existing")
+    tab = FviSubTab(settings={})
+    try:
+        tab._src_edit.setText(str(source))
+        monkeypatch.setattr(
+            QMessageBox,
+            "question",
+            lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
+        )
+
+        tab._run()
+
+        assert not tab._running
+        assert tab._btn.isEnabled()
+        assert tab._thread is None
+    finally:
+        tab.deleteLater()
+        qapp.processEvents()
+
+
 def test_batch_log_reveals_results_panel_without_preview(qapp):
     page = ConvertPage(settings={})
     try:

@@ -1,5 +1,5 @@
-"""CycleIconButton — reusable icon button with click-to-cycle, right-click
-modal, and hover flyout, used consistently for every multi-state control in
+"""CycleIconButton — reusable icon button with a direct state picker, used for
+multi-state controls in
 the Draw sidebar (tool-family pickers, snap toggles, arc mode, constraint
 mode, split, construction).
 
@@ -9,8 +9,7 @@ owns the interaction behavior, not icon drawing.
 
 Behaviors
 ---------
-* **Left-click** — advances to the next state, invokes ``on_change(id)``.
-* **Right-click** — pops a small QMenu (checkable actions, one per state,
+* **Click / keyboard activation** — opens a QMenu (checkable actions, one per state,
   current one checked) so any state can be jumped to directly.
 * **Hover** (after ~350ms) — shows a lightweight frameless flyout listing
   all states with the current one highlighted, auto-hidden on mouse-leave.
@@ -50,7 +49,7 @@ class _FlyoutFrame(QFrame):
 
 
 class CycleIconButton(QPushButton):
-    """Icon button supporting click-to-cycle, right-click modal, and hover
+    """Icon button supporting a direct state menu and hover
     flyout across a list of named states.
 
     Parameters
@@ -59,7 +58,7 @@ class CycleIconButton(QPushButton):
         List of ``(id, icon, label)`` tuples defining the cycle states.
     on_change : Callable[[str], None]
         Invoked with the new state id whenever the state changes, via
-        either left-click cycling or a direct right-click/menu selection.
+        direct menu selection.
     parent : QWidget | None
         Parent widget.
     """
@@ -77,6 +76,7 @@ class CycleIconButton(QPushButton):
 
         self.setIcon(self._states[0][1] if self._states else QIcon())
         self.setToolTip(self._states[0][2] if self._states else "")
+        self.setAccessibleName(self._states[0][2] if self._states else "Tool option")
         self.setCheckable(True)
         self.setFlat(True)
         # Native styles (macOS in particular) can ignore CSS min/max-width
@@ -157,15 +157,16 @@ class CycleIconButton(QPushButton):
     def _on_left_click(self) -> None:
         if not self._states:
             return
-        self._hide_flyout()
-        self._current_index = (self._current_index + 1) % len(self._states)
-        self._update_visuals()
-        self._on_change(self._states[self._current_index][0])
+        if len(self._states) <= 2:
+            self._select_state((self._current_index + 1) % len(self._states))
+            return
+        self._show_context_menu(self.mapToGlobal(self.rect().bottomLeft()))
 
     def _update_visuals(self) -> None:
         entry = self._states[self._current_index]
         self.setIcon(entry[1])
         self.setToolTip(entry[2])
+        self.setAccessibleName(entry[2])
         # First state reads as the "neutral" one (Off / Free / etc.) for
         # boolean-style toggles; tool-family pickers can override the
         # checked look explicitly via setChecked() after syncing state.
@@ -207,7 +208,9 @@ class CycleIconButton(QPushButton):
             action.setCheckable(True)
             action.setChecked(i == self._current_index)
             action.triggered.connect(lambda checked, idx=i: self._select_state(idx))
-        menu.exec(pos)
+        self._state_menu = menu
+        menu.aboutToHide.connect(lambda: setattr(self, "_state_menu", None))
+        menu.popup(pos)
 
     def _select_state(self, index: int) -> None:
         if 0 <= index < len(self._states):

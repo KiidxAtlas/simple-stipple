@@ -1,4 +1,4 @@
-"""Compact canvas mode-toolbar (Select/Draw/Edit + Fit + secondary actions)."""
+"""Compact canvas mode-toolbar (Select/Draw/Edit + secondary actions)."""
 
 from __future__ import annotations
 

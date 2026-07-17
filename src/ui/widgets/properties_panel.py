@@ -44,7 +44,8 @@ _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
 def _num_edit(on_commit) -> QLineEdit:
     edit = QLineEdit()
     edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-    edit.setMaximumWidth(90)
+    edit.setMinimumWidth(88)
+    edit.setMaximumWidth(160)
     edit.editingFinished.connect(on_commit)
     return edit
 
@@ -106,15 +107,13 @@ class CanvasPropertiesPanel(QWidget):
             lbl = QLabel(axis)
             lbl.setStyleSheet("color: #8b949e;")
             self._axis_labels[axis] = lbl
-            grid.addWidget(lbl, row // 2, (row % 2) * 2)
-            grid.addWidget(edit, row // 2, (row % 2) * 2 + 1)
-        # keep the label/field pairs packed to the left instead of spreading
-        # across the panel width
-        grid.setColumnStretch(4, 1)
+            grid.addWidget(lbl, row, 0)
+            grid.addWidget(edit, row, 1)
+        grid.setColumnStretch(1, 1)
 
         self._aspect_lock_btn = QPushButton("Lock")
         self._aspect_lock_btn.setCheckable(True)
-        self._aspect_lock_btn.setFixedWidth(42)
+        self._aspect_lock_btn.setMinimumWidth(64)
         self._aspect_lock_btn.setToolTip(
             "Lock aspect ratio\nKeeps width/height proportional for both "
             "typed W/H edits and gizmo-handle drags"
@@ -123,54 +122,56 @@ class CanvasPropertiesPanel(QWidget):
             "QPushButton:checked { background: #1f3a6e; border: 1px solid #2f81f7; }"
         )
         self._aspect_lock_btn.toggled.connect(self._on_aspect_lock_toggled)
-        grid.addWidget(self._aspect_lock_btn, 1, 4)
-        grid.setColumnMinimumWidth(2, 18)
+        grid.addWidget(self._aspect_lock_btn, 2, 2, 2, 1)
         fields_root.addLayout(grid)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(4)
-        for text, tip, cb in (
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(6)
+        actions.setVerticalSpacing(6)
+        for index, (text, tip, cb) in enumerate((
             ("R +90", "Rotate 90° CCW", lambda: self._rotate(90.0)),
             ("R -90", "Rotate 90° CW", lambda: self._rotate(-90.0)),
             ("Flip H", "Mirror horizontally", lambda: self._mirror("horizontal")),
             ("Flip V", "Mirror vertically", lambda: self._mirror("vertical")),
             ("Smooth", "Smooth jagged corners (Chaikin)", self._smooth),
             ("Simplify", "Simplify — reduce vertex count", self._simplify),
-        ):
+        )):
             btn = QPushButton(text)
             btn.setToolTip(tip)
-            btn.setMaximumWidth(64)
+            btn.setMinimumHeight(28)
             btn.clicked.connect(cb)
-            actions.addWidget(btn)
+            actions.addWidget(btn, index // 2, index % 2)
+        fields_root.addLayout(actions)
+
+        rotation_row = QHBoxLayout()
+        rotation_row.setSpacing(6)
+        rotation_row.addWidget(QLabel("Rotation"))
         rot_lbl = QLabel("∠")
         rot_lbl.setToolTip("Rotate by angle (° CCW)")
-        actions.addWidget(rot_lbl)
+        rotation_row.addWidget(rot_lbl)
         self._rot = _num_edit(self._commit_rotation)
         self._rot.setProperty("geometry-key", "rotation")
         self._rot.installEventFilter(self)
         self._rot.setPlaceholderText("Angle")
         self._rot.setToolTip("Absolute angle of the selected shape in degrees")
-        self._rot.setMaximumWidth(56)
-        actions.addWidget(self._rot)
-        actions.addStretch(1)
-        fields_root.addLayout(actions)
+        rotation_row.addWidget(self._rot, stretch=1)
+        fields_root.addLayout(rotation_row)
 
-        context = QHBoxLayout()
-        context.setSpacing(4)
+        context = QGridLayout()
+        context.setHorizontalSpacing(6)
+        context.setVerticalSpacing(6)
         self._context_buttons: dict[str, QPushButton] = {}
-        for key, text, tip, callback in (
-            ("edit", "Edit vertices", "Enter direct vertex editing", lambda: canvas.set_mode("edit")),
+        for index, (key, text, tip, callback) in enumerate((
             ("duplicate", "Duplicate", "Duplicate the current selection", canvas.duplicate_selected),
             ("close", "Close path", "Close selected open paths", canvas.close_selected_polylines),
-            ("open", "Open path", "Open selected closed paths", canvas.open_selected_polylines),
             ("delete", "Delete", "Delete selected geometry", canvas.delete_selected),
-        ):
+        )):
             button = QPushButton(text)
+            button.setMinimumHeight(28)
             button.setToolTip(tip)
             button.clicked.connect(callback)
-            context.addWidget(button)
+            context.addWidget(button, index // 2, index % 2)
             self._context_buttons[key] = button
-        context.addStretch(1)
         fields_root.addLayout(context)
 
         # Shape-parameter rows (built per selection kind)
@@ -243,8 +244,6 @@ class CanvasPropertiesPanel(QWidget):
             self._h.setText(f"{to_display(info['h'], unit):.2f}")
             self._rot.setText(f"{float(info.get('rotation', 0.0)):.1f}")
             self._set_param_rows(info.get("index"), kind, info.get("meta") or {})
-            can_edit = count == 1 and kind not in {"circle", "ellipse", "rectangle", "slot"}
-            self._context_buttons["edit"].setVisible(can_edit)
             self._context_buttons["duplicate"].setVisible(count > 0)
             self._context_buttons["delete"].setVisible(count > 0)
             selected = [
@@ -254,9 +253,6 @@ class CanvasPropertiesPanel(QWidget):
             ]
             self._context_buttons["close"].setVisible(
                 any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
-            )
-            self._context_buttons["open"].setVisible(
-                any(len(e.points) >= 3 and e.points[0] == e.points[-1] for e in selected)
             )
         finally:
             self._updating = False

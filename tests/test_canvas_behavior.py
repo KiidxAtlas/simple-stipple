@@ -46,6 +46,17 @@ def make_canvas(qapp, polys=None, size=(800, 600)):
     return c
 
 
+def test_load_without_fit_preserves_viewport(qapp):
+    canvas = make_canvas(qapp, [[(0.0, 0.0), (10.0, 10.0)]])
+    canvas._scale = 7.5
+    canvas._ox = 123.0
+    canvas._oy = 234.0
+
+    canvas.load([[(0.0, 0.0), (100.0, 100.0)]], fit=False)
+
+    assert (canvas._scale, canvas._ox, canvas._oy) == (7.5, 123.0, 234.0)
+
+
 def test_precision_state_exposes_all_user_snap_controls(qapp):
     canvas = make_canvas(qapp)
     canvas.set_snap_master(False)
@@ -960,6 +971,28 @@ def test_command_registry_single_letter_commands(qapp):
     assert v.get_mode() == "draw"
     key(v, Qt.Key.Key_D)
     assert v.get_mode() == "select"
+    key(v, Qt.Key.Key_P)
+    assert v.get_mode() == "pan"
+    key(v, Qt.Key.Key_P)
+    assert v.get_mode() == "select"
+
+
+def test_pan_tool_left_drag_moves_view_without_editing_geometry(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.set_selection([0])
+    original_polys = v.get_polylines_state()
+    original_selection = v.get_selection_indices()
+    ox, oy = v._ox, v._oy
+
+    v.set_mode("pan")
+    press(v, 100, 120)
+    move(v, 135, 145)
+    release(v, 135, 145)
+
+    assert (v._ox, v._oy) == pytest.approx((ox + 35, oy + 25))
+    assert v.get_polylines_state() == original_polys
+    assert v.get_selection_indices() == original_selection
+    assert v._lmb_prev is None
 
 
 def test_command_registry_group_shortcut(qapp):
@@ -1533,6 +1566,23 @@ def test_multi_shape_gizmo_rotate_updates_parametric_geometry(qapp):
         assert bbox(v._flattened_points(index)) == pytest.approx(bbox(entity.points))
 
 
+def test_shift_snaps_gizmo_rotation_to_fifteen_degree_increment(qapp):
+    v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0)]])
+    v.set_selection([0])
+    assert v._start_gizmo_drag("rotate", 10.0, 0.0)
+    requested = math.radians(22.0)
+
+    v._apply_gizmo_drag(
+        5.0 + 5.0 * math.cos(requested),
+        5.0 * math.sin(requested),
+        Qt.KeyboardModifier.ShiftModifier,
+    )
+
+    (ax, ay), (bx, by) = v._entities[0].points
+    actual = math.degrees(math.atan2(by - ay, bx - ax))
+    assert actual == pytest.approx(15.0)
+
+
 def test_multi_shape_nonuniform_gizmo_resize_keeps_transformed_geometry(qapp):
     v = make_view(qapp, [])
     v.set_entity_records(
@@ -1945,6 +1995,9 @@ def test_context_menu_builds_for_mixed_editor_states(qapp, monkeypatch):
 
     assert len(captured) == 5
     bezier_labels = [action.text() for action in captured[-1].actions()]
+    more = next((action.menu() for action in captured[-1].actions() if action.text() == "More actions…"), None)
+    if more is not None:
+        bezier_labels.extend(action.text() for action in more.actions())
     assert "Bézier node" in bezier_labels
     assert "Symbols" in bezier_labels
 

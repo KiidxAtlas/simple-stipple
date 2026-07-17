@@ -35,7 +35,7 @@ from src.infra.settings import (
     settings_bus,
 )
 from src.ui.canvas.interaction import commands as canvas_commands
-from src.ui.style.theme import accessibility_palette
+from src.ui.style.theme import accessibility_palette, load_app_qss
 
 LOGGER = logging.getLogger(__name__)
 
@@ -69,9 +69,9 @@ class App(QMainWindow):
         self._recovery_id = uuid4().hex
         self._menu_controller = MenuController(self)
         self._command_controller = CommandController(self)
-        self.setWindowTitle("AA Laser Studio")
-        self.resize(1100, 740)
-        self.setMinimumSize(860, 580)
+        self.setWindowTitle("Simple Stipple")
+        self.resize(1280, 820)
+        self.setMinimumSize(1100, 700)
 
         self._settings = load_settings()
         self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
@@ -88,6 +88,7 @@ class App(QMainWindow):
         except Exception:  # never block startup on a stale list
             logging.getLogger(__name__).exception("Failed to prune recent-files MRU")
         self._workspace_path: Path | None = None
+        self._restored_recovery_path: Path | None = None
         self._workspace_dirty: bool = False
         self._last_saved_document: dict | None = None
         self._has_unsaved_changes: bool = False
@@ -115,6 +116,15 @@ class App(QMainWindow):
             settings=self._settings,
             specs=self._page_specs,
         )
+        for index, tooltip in enumerate(
+            (
+                "Draft — create, import, and edit drawing geometry",
+                "Pattern — generate fills from a prepared outline",
+                "Trace — turn a raster image into editable vector outlines",
+                "Convert — convert or repair vector files",
+            )
+        ):
+            self._tabs.setTabToolTip(index, tooltip)
         self._workspace_controller = WorkspaceController(self, self._page_runtime, self._tabs)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
         self._shell_header = self._build_shell_header()
@@ -257,6 +267,7 @@ class App(QMainWindow):
         high_contrast = bool(self._settings.get("high_contrast", False))
         app.setProperty("highContrast", high_contrast)
         app.setPalette(accessibility_palette(high_contrast))
+        app.setStyleSheet(load_app_qss(scale=float(self._settings.get("ui_scale", 1.0) or 1.0), high_contrast=high_contrast))
 
     def _on_draw_sidebar_height_changed(self, height: int) -> None:
         """Persist a live sidebar-resize drag and echo the new height to

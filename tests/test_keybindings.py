@@ -139,6 +139,17 @@ def test_new_draw_primitive_commands_are_registered_and_unbound_by_default():
         assert cmd.shortcut == ""
 
 
+def test_pan_owns_p_and_bezier_pen_is_unbound_by_default():
+    assert canvas_commands.get("mode.pan").shortcut == "P"
+    assert canvas_commands.get("mode.pen").shortcut == ""
+
+    from src.ui.widgets.keybindings_dialog import _KEYBINDING_FIELDS
+
+    fields = {key: (label, default) for key, label, _group, default in _KEYBINDING_FIELDS}
+    assert fields["mode.pan"] == ("Pan Tool", "P")
+    assert fields["mode.pen"] == ("Bezier Pen Tool", "")
+
+
 def test_simplify_and_chamfer_commands_are_registered():
     assert canvas_commands.get("path.simplify") is not None
     assert canvas_commands.get("vertex.chamfer") is not None

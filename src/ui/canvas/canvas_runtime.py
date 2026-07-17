@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from src.ui.widgets.layer_tree import (
     CanvasLayerSidebarController,
@@ -684,6 +684,25 @@ class CanvasToolbarModule(QWidget):
             show_fit=show_fit,
         )
         toolbar_layout = toolbar.layout()
+        if isinstance(toolbar_layout, QHBoxLayout) and canvas is not None:
+            for text, shortcut, method_name, state_name in (
+                ("Measure", "M", "toggle_measure", "_measure_mode"),
+                ("Dimension", "Shift+M", "toggle_dimension_mode", "_dimension_mode"),
+            ):
+                if not hasattr(canvas, method_name):
+                    continue
+                button = QPushButton(text)
+                button.setCheckable(True)
+                button.setMinimumHeight(28)
+                button.setToolTip(f"Toggle {text.lower()} tool ({shortcut})")
+                button.setAccessibleName(f"{text} tool")
+
+                def _toggle(_checked=False, *, b=button, method=method_name, state=state_name):
+                    getattr(canvas, method)()
+                    b.setChecked(bool(getattr(canvas, state, False)))
+
+                button.clicked.connect(_toggle)
+                toolbar_layout.insertWidget(toolbar_layout.count() - 1, button)
         if isinstance(toolbar_layout, QHBoxLayout) and extra_widgets:
             for widget in extra_widgets:
                 toolbar_layout.insertWidget(toolbar_layout.count() - 1, widget)

@@ -222,11 +222,11 @@ class HudMixin(_HudBase):
         unit = self._unit_system if is_length else None
         display_label = label.replace("mm", _unit_suffix(unit)) if unit else label
         display_default = _to_display(default, unit) if unit else default
-        edit = self._make_hud_edit(placeholder=display_label, width=120, height=22)
+        edit = self._make_hud_edit(placeholder=display_label, width=180, height=32)
         edit.setText(f"{display_default:g}")
         edit.selectAll()
         edit.setToolTip(display_label)
-        edit.move(*self._context_hud_position(120, 22))
+        edit.move(*self._context_hud_position(180, 32))
         self._hud_prompt_edit = edit
         self._show_flash(display_label, 1600)
 
@@ -393,8 +393,8 @@ class HudMixin(_HudBase):
             cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
 
         edit = self._make_hud_edit(
-            width=max(int(rect.width()) + 10, 70),
-            height=22,
+            width=max(int(rect.width()) + 20, 112),
+            height=32,
             align=Qt.AlignmentFlag.AlignCenter,
         )
         edit.setText(f"{cur_val:.3f}")

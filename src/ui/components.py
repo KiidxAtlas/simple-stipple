@@ -314,6 +314,8 @@ def parse_float_field(
         value = float(text)
     except ValueError as exc:
         raise ValueError("Value must be a number.") from exc
+    if not math.isfinite(value):
+        raise ValueError("Value must be a finite number.")
     if minimum is not None and value < minimum:
         raise ValueError(f"Value must be at least {minimum:g}.")
     if maximum is not None and value > maximum:
@@ -440,6 +442,8 @@ class CollapsibleSection(QFrame):
         self._toggle: QToolButton | QLabel
         if collapsible:
             self._toggle = QToolButton()
+            self._toggle.setAccessibleName(f"{title} section")
+            self._toggle.setAccessibleDescription("Expand or collapse this group of controls")
             self._toggle.setProperty("role", "collapsible-toggle")
             self._toggle.setText(f"{'▾' if expanded else '▸'}  {title}")
             self._toggle.setCheckable(True)

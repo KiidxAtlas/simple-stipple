@@ -238,10 +238,18 @@ def parse_fvi(text: str) -> FviDocument:
 
 
 def read_fvi(path: str | Path) -> FviDocument:
+    source = Path(path)
+    max_bytes = 32 * 1024 * 1024
+    size = source.stat().st_size
+    if size > max_bytes:
+        raise ValueError(
+            f"{source.name} is too large to import safely "
+            f"({size / (1024 * 1024):.1f} MB; limit 32 MB)."
+        )
     try:
-        text = Path(path).read_text(encoding="utf-8-sig")
+        text = source.read_text(encoding="utf-8-sig")
     except UnicodeDecodeError:
-        text = Path(path).read_text(encoding="latin-1")
+        text = source.read_text(encoding="latin-1")
     return parse_fvi(text)
 
 

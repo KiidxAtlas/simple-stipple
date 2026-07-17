@@ -94,3 +94,4 @@ def test_reload_button_forces_a_fresh_retrace_even_if_running_is_stuck(qapp, tmp
     # proving it didn't just hit the "already running" short-circuit.
     assert page._running is True
     assert page._trace_pending is False
+    page.shutdown()

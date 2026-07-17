@@ -1,8 +1,5 @@
 /* ── Global font ─────────────────────────────────────── */
-* {
-    font-family: "Arial";
-    font-size: 13px;
-}
+* { font-family: "Arial"; }
 
 QMainWindow {
     background: #0d1117;
@@ -18,7 +15,7 @@ QTabBar {
 }
 QTabBar::tab {
     background: transparent;
-    color: #6e7681;
+    color: #8b949e;
     padding: 6px 16px;
     margin-right: 2px;
     border: none;
@@ -39,7 +36,7 @@ QTabBar::tab:hover:!selected {
 
 QLabel[role="shell-eyebrow"], QLabel[role="eyebrow"] {
     color: #6e7681;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 1px;
 }
@@ -81,7 +78,7 @@ QLabel[role="chip"] {
     border: 1px solid #2b3440;
     background: rgba(31, 42, 56, 0.9);
     color: #c9d1d9;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
 }
 QLabel[role="chip"][tone="accent"] {
@@ -114,7 +111,7 @@ QLabel[role="summary-banner"] {
     border: 1px solid #2b3440;
     background: rgba(31, 42, 56, 0.9);
     color: #c9d1d9;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
 }
 QLabel[role="summary-banner"][tone="success"] {
@@ -125,19 +122,31 @@ QLabel[role="summary-banner"][tone="success"] {
 
 /* ── Section labels & subtitles ──────────────────────── */
 QLabel[role="section-label"] {
-    color: #484f58;
-    font-size: 10px;
+    color: #8b949e;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.8px;
     padding: 8px 0 2px 0;
 }
 QLabel[role="section-subtitle"] {
     color: #8b949e;
-    font-size: 10px;
+    font-size: 11px;
     padding-left: 18px;
 }
 QLabel[role="section-subtitle"][dim="true"] {
-    color: #6e7681;
+    color: #8b949e;
+}
+QLabel[role="zone-edit-scope"] {
+    color: #8b949e;
+    border: 1px solid #30363d;
+    border-radius: 5px;
+    padding: 6px 8px;
+}
+QLabel[role="zone-edit-scope"][editing="true"] {
+    color: #ffffff;
+    background: rgba(47, 129, 247, 0.16);
+    border-color: #58a6ff;
+    font-weight: 700;
 }
 
 /* ── Tooltip ─────────────────────────────────────────── */
@@ -244,7 +253,8 @@ QPushButton[role="mode-button"][active="true"] {
     color: #ffffff;
 }
 QToolButton {
-    min-height: 24px;
+    min-width: 24px;
+    min-height: 28px;
     padding: 3px 9px;
     border: 1px solid #303a47;
     border-radius: 6px;
@@ -748,13 +758,13 @@ QLabel[role="empty-icon"] {
     font-size: 36px;
 }
 QLabel[role="empty-title"] {
-    color: #8b949e;
+    color: #c9d1d9;
     font-size: 15px;
     font-weight: 600;
 }
 QLabel[role="empty-hint"] {
-    color: #6e7681;
-    font-size: 11px;
+    color: #9da7b3;
+    font-size: 12px;
 }
 QWidget[role="empty-state"] {
     background: #0b0f14;

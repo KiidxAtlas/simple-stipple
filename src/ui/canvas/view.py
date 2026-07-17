@@ -227,6 +227,7 @@ class PolylineView(
         self._selectable = selectable
         self._empty_message = "No polylines loaded"
         self._show_selection_bbox: bool = False
+        self._selection_follows_geometry: bool = False
         self._on_poly_change = on_poly_change
         if on_change:
             self.selectionChanged.connect(on_change)
@@ -554,7 +555,7 @@ class PolylineView(
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def load(self, polys: list[list[tuple[float, float]]]) -> None:
+    def load(self, polys: list[list[tuple[float, float]]], *, fit: bool = True) -> None:
         self._entities = [EntityRecord(points=list(p), layer=self._active_layer) for p in polys]
         self._sel.clear()
         self._group_labels.clear()
@@ -562,8 +563,11 @@ class PolylineView(
 
         self._sync_shape_storage_from_entities()
 
-        self._needs_fit = True
-        self._fit()
+        self._needs_fit = fit
+        if fit:
+            self._fit()
+        else:
+            self._redraw()
         self._notify()
 
     def set_accent_polys(self, accent: dict[int, str]) -> None:
@@ -572,6 +576,11 @@ class PolylineView(
         Pass an empty dict to clear all accents.
         """
         self._accent_polys = dict(accent)
+        self._redraw()
+
+    def set_selection_follows_geometry(self, enabled: bool) -> None:
+        """Use path highlighting instead of a rectangular transform frame."""
+        self._selection_follows_geometry = bool(enabled)
         self._redraw()
 
     def _flattened_points(self, idx: int) -> list[tuple[float, float]]:
@@ -2407,6 +2416,13 @@ class PolylineView(
                 else Qt.CursorShape.OpenHandCursor
             )
             return
+        if self._mode == "pan":
+            self.setCursor(
+                Qt.CursorShape.ClosedHandCursor
+                if self._lmb_prev is not None
+                else Qt.CursorShape.OpenHandCursor
+            )
+            return
         if self._measure_mode or self._mode in ("draw", "edit", "trim", "extend"):
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._mode == "select" and self._hover_vert is not None and self._sel:
@@ -3386,20 +3402,17 @@ class PolylineView(
             self._update_cursor()
             return
 
+        if btn == Qt.MouseButton.LeftButton and self._mode == "pan":
+            self._lmb_prev = pos
+            self._update_cursor()
+            return
+
         if btn == Qt.MouseButton.RightButton:
             if self._selectable:
                 self._rightclick_cb(pos.x(), pos.y())
             return
 
         if btn != Qt.MouseButton.LeftButton:
-            return
-
-        if self._hit_measure_button(pos.x(), pos.y()):
-            self.toggle_measure()
-            return
-
-        if self._hit_dimension_button(pos.x(), pos.y()):
-            self.toggle_dimension_mode()
             return
 
         # Rulers: press inside a ruler strip drags out a new guide.
@@ -3494,7 +3507,7 @@ class PolylineView(
             return
 
         if (
-            self._space_pan_active
+            (self._space_pan_active or self._mode == "pan")
             and self._lmb_prev is not None
             and event.buttons() & Qt.MouseButton.LeftButton
         ):
@@ -3547,7 +3560,7 @@ class PolylineView(
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        if self._space_pan_active:
+        if self._space_pan_active or self._mode == "pan":
             self._space_pan_dragging = False
             self._lmb_prev = None
             self._update_cursor()

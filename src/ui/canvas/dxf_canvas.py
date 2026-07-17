@@ -145,6 +145,7 @@ class DxfCanvas(PolylineView):
         on_outline_role_change=None,
         on_outline_role_explain=None,
         on_pattern_cell_cutout_toggle=None,
+        on_create_zone_from_selection=None,
         on_ghost_click=None,
         draft_profile: bool = False,
     ):
@@ -162,6 +163,7 @@ class DxfCanvas(PolylineView):
         self._on_outline_role_change = on_outline_role_change
         self._on_outline_role_explain = on_outline_role_explain
         self._on_pattern_cell_cutout_toggle = on_pattern_cell_cutout_toggle
+        self._on_create_zone_from_selection = on_create_zone_from_selection
         self._on_ghost_click = on_ghost_click
         self._cutout_indices: set[int] = set()
         self._outline_roles: dict[int, str] = {}
@@ -439,6 +441,9 @@ class DxfCanvas(PolylineView):
             self._show_hud_prompt(label, default, callback, minimum=minimum, is_length=is_length)
 
         if self._sel and section_enabled("selected"):
+            if callable(self._on_create_zone_from_selection):
+                menu.addAction("Create Zone from Selection", self._on_create_zone_from_selection)
+                menu.addSeparator()
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
             menu.addAction("Move to Coordinate…", self.show_coordinate_entry)
             menu.addAction(canvas_commands.menu_text("edit.duplicate"), self.duplicate_selected)
@@ -830,6 +835,21 @@ class DxfCanvas(PolylineView):
             lambda: self.set_mode("edit"),
         )
         _hide_section("view", section_start)
+        # Keep the first, context-specific verbs immediately scannable and
+        # place expert/less-frequent families behind one progressive-disclosure
+        # tier. The command palette and persistent Draw controls remain direct
+        # homes for the same commands.
+        top_actions = list(menu.actions())
+        direct_limit = 8 if (self._sel or poly_hit is not None) else 5
+        overflow_actions = top_actions[direct_limit:]
+        if overflow_actions:
+            for action in overflow_actions:
+                menu.removeAction(action)
+            more_menu = QMenu("More actions…", menu)
+            menu.addMenu(more_menu)
+            menu._more_actions_menu = more_menu
+            for action in overflow_actions:
+                more_menu.addAction(action)
         menu.popup(self.mapToGlobal(QPoint(int(cx), int(cy))))
 
     def _show_size_hud(self) -> None:

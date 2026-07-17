@@ -9,15 +9,28 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+MAX_JSON_FILE_BYTES = 32 * 1024 * 1024
 
-def read_json_file(path: str | Path, default: Any | None = None) -> Any:
+
+def read_json_file(
+    path: str | Path,
+    default: Any | None = None,
+    *,
+    max_bytes: int = MAX_JSON_FILE_BYTES,
+) -> Any:
     """Read a UTF-8 JSON file or return a default value when missing."""
     file_path = Path(path)
     if not file_path.exists():
         return default
     try:
+        size = file_path.stat().st_size
+        if size > max_bytes:
+            raise ValueError(
+                f"{file_path.name} is too large to open safely "
+                f"({size / (1024 * 1024):.1f} MB; limit {max_bytes / (1024 * 1024):.0f} MB)."
+            )
         return json.loads(file_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError:
         # Return the provided default on read/parse errors so callers can
         # handle missing/invalid files robustly.
         return default

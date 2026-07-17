@@ -202,20 +202,20 @@ def test_slot_gets_size_hud_fields_like_rectangle(qapp):
 # in the Precision bar — see test_precision_bar.py) ──────────────────────────
 
 
-def test_constraint_button_cycles_through_free_h_v_45(qapp):
+def test_constraint_button_selects_free_h_v_45_directly(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
     v._set_draw_primitive("polyline")
     sb = v._draw_sidebar
     assert v._draw_constraint_lock is None
 
-    sb._constraint_button.click()
+    sb._constraint_button._select_state(1)
     assert v._draw_constraint_lock == "H"
-    sb._constraint_button.click()
+    sb._constraint_button._select_state(2)
     assert v._draw_constraint_lock == "V"
-    sb._constraint_button.click()
+    sb._constraint_button._select_state(3)
     assert v._draw_constraint_lock == "45"
-    sb._constraint_button.click()
+    sb._constraint_button._select_state(0)
     assert v._draw_constraint_lock is None
 
 
@@ -572,9 +572,9 @@ def test_smoothing_button_cycles_and_stays_in_sync_with_settings(qapp):
     assert v._smoothing_method == "chaikin"
     assert sb._smoothing_button.current_state_id == "chaikin"
 
-    sb._smoothing_button.click()
+    sb._smoothing_button._select_state(1)
     assert v._smoothing_method == "gaussian"
-    sb._smoothing_button.click()
+    sb._smoothing_button._select_state(2)
     assert v._smoothing_method == "catmull_rom"
 
     # setting it the way Settings' own combo box does must also update
@@ -595,7 +595,7 @@ def test_sidebar_smoothing_change_emits_persistence_signal(qapp):
     seen: list[str] = []
     v.smoothingMethodChanged.connect(seen.append)
 
-    sb._smoothing_button.click()
+    sb._smoothing_button._select_state(1)
     assert v._smoothing_method == "gaussian"
     assert seen == ["gaussian"]
 

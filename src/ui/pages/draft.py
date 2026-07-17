@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -49,6 +49,10 @@ from src.ui.widgets.properties_panel import CanvasPropertiesPanel
 from src.ui.widgets.status_strip import CanvasStatusStrip
 
 LOGGER = logging.getLogger(__name__)
+
+# ── Page default settings ────────────────────────────────────────────────
+DEFAULT_QUICK_SHAPE_MODE = "rectangle"
+VECTOR_IMPORT_EXTENSIONS = (".dxf", ".fvi", ".svg")
 
 
 def _toolbar_sep() -> QLabel:
@@ -89,11 +93,6 @@ class DraftPage(BasePage):
         self._canvas_status = CanvasStatusStrip()
         self._canvas_status.set_zoom_callback(self._on_zoom_preset)
         root.addWidget(self._canvas_status)
-        self._command_status_timer = QTimer(self)
-        self._command_status_timer.setInterval(120)
-        self._command_status_timer.timeout.connect(self._refresh_command_guidance)
-        self._command_status_timer.start()
-
         self.setAcceptDrops(True)
 
         self._refresh_status()
@@ -189,8 +188,9 @@ class DraftPage(BasePage):
             on_ghost_click=self._on_ghost_poly_click,
             draft_profile=True,
         )
+        self._canvas.set_selection_follows_geometry(True)
         self._canvas.set_empty_message(
-            "Nothing here yet\nOpen a DXF, drop a file here, or press D to start drawing"
+            "Start a drawing\nUse Import Vector above, drop a file here, or choose Draw"
         )
         self._canvas.quickShapeChanged.connect(self._on_quick_shape_changed)
         self._canvas.quickShapeEnabledChanged.connect(self._on_quick_shape_enabled_changed)
@@ -246,7 +246,7 @@ class DraftPage(BasePage):
         row = QHBoxLayout(container)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        self._export_btn = QPushButton("Export DXF")
+        self._export_btn = QPushButton("Export Drawing DXF")
         self._export_btn.setMinimumHeight(38)
         self._export_btn.setProperty("role", "primary")
         self._export_btn.setToolTip(
@@ -524,7 +524,7 @@ class DraftPage(BasePage):
             # tools assign it a real color and can fill it.
             first_name = order[0] if order else (active_name or "Layer")
             first = by_layer.get(first_name, [])
-            extra = {name: [list(r["polyline"]) for r in by_layer[name]] for name in order[1:]}
+            extra_records = {name: by_layer[name] for name in order[1:]}
             write_polylines_dxf(
                 [list(r["polyline"]) for r in first],
                 out_path,
@@ -532,7 +532,7 @@ class DraftPage(BasePage):
                 pattern_layer=first_name,
                 entity_kinds=[str(r.get("kind", "polyline")) for r in first],
                 entity_meta=[r.get("meta") for r in first],
-                extra_layers=extra or None,
+                extra_layer_records=extra_records or None,
             )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
@@ -603,7 +603,7 @@ class DraftPage(BasePage):
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith((".dxf", ".fvi", ".svg")):
+                if url.toLocalFile().lower().endswith(VECTOR_IMPORT_EXTENSIONS):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -611,7 +611,7 @@ class DraftPage(BasePage):
     def dropEvent(self, event) -> None:
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith((".dxf", ".fvi", ".svg")):
+            if path.lower().endswith(VECTOR_IMPORT_EXTENSIONS):
                 self._load_vector(path)
                 event.acceptProposedAction()
                 return
@@ -775,11 +775,8 @@ class DraftPage(BasePage):
             self._canvas._show_flash(f"{verb} FVI: {Path(path).name} ({len(polys)} paths)", 1400)
             details = summarize_fvi_import(document.report)
             if details:
-                QMessageBox.warning(
-                    self,
-                    "FVI Import Notes",
-                    f"Geometry was imported, but some program content was not used:\n\n{details}",
-                )
+                self._canvas.setToolTip(f"FVI import notes:\n{details}")
+                self._canvas._show_flash("Imported with notes — hover the canvas for details", 4000)
             self._refresh_status()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:
@@ -811,11 +808,9 @@ class DraftPage(BasePage):
                     )
                 if unsupported_features:
                     notes.append("Unsupported SVG features: " + ", ".join(unsupported_features))
-                QMessageBox.warning(
-                    self,
-                    "SVG Import Notes",
-                    "Imported supported SVG geometry with limitations:\n\n" + "\n".join(notes),
-                )
+                details = "\n".join(notes)
+                self._canvas.setToolTip(f"SVG import notes:\n{details}")
+                self._canvas._show_flash("Imported with notes — hover the canvas for details", 4000)
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Import SVG Failed", str(exc))
 
@@ -983,7 +978,7 @@ def clear_draft_workspace_state(page: Any) -> None:
     page._suspend_state = True
     page._rt().reset_empty()
     page._canvas.set_mode("select")
-    page._canvas.set_quick_shape_mode("rectangle", flash=False)
+    page._canvas.set_quick_shape_mode(DEFAULT_QUICK_SHAPE_MODE, flash=False)
     page._canvas.set_quick_shape_enabled(False)
     page._last_in_path = None
     page._suspend_state = False

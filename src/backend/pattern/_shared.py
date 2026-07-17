@@ -815,6 +815,25 @@ def gen_custom_tile(
 
             for source_path in motif_paths:
                 transformed = [_place(px, py) for px, py in source_path]
+                # Closed motif paths are cells, not merely linework. Clip them
+                # as polygonal areas so a cell crossing the outline boundary
+                # comes back as a closed ring that pattern-cell fill can use.
+                # Open decorative strokes intentionally retain line clipping.
+                if len(transformed) >= 4 and transformed[0] == transformed[-1]:
+                    try:
+                        cell = Polygon(transformed)
+                        if not cell.is_valid:
+                            cell = cell.buffer(0)
+                    except (TypeError, ValueError):
+                        cell = None
+                    if cell is not None and not cell.is_empty and cell.area > 1e-9:
+                        if not prep.intersects(cell):
+                            continue
+                        if prep.contains(cell):
+                            result.append(transformed)
+                        else:
+                            _extract_polys(outline_poly.intersection(cell), result)
+                        continue
                 try:
                     line = LineString(transformed)
                 except (TypeError, ValueError):

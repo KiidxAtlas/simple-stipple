@@ -31,6 +31,7 @@ from src.backend.pattern._shared import is_open_polyline as _is_open_polyline_sh
 from src.backend.pattern._shared import (
     merge_and_classify_outlines as _merge_and_classify_outlines_shared,
 )
+from src.ui.pages.pattern._spec import PARAM_SPECS
 from src.ui.pages.pattern.fill import (
     NULL_PATTERN,
     FillSpec,
@@ -118,7 +119,10 @@ class PatternProcessingService:
         area = max(float(getattr(outline, "area", width * height)), 0.0)
 
         def positive(key: str, default: float = 1.0) -> float:
-            return max(float(params.get(key, default) or default), 1e-6)
+            value = float(params.get(key, default) or default)
+            if not math.isfinite(value):
+                return max(float(default), 1e-6)
+            return max(value, 1e-6)
 
         if pattern == "Voronoi":
             return max(0, int(params.get("n_cells", 0) or 0))
@@ -260,14 +264,19 @@ class PatternProcessingService:
         closed, open_paths = PatternProcessingService._merge_and_classify_outlines(polys)
         analysis = analyze_outline_polylines(closed)
         if analysis.usable_closed_count <= 0:
-            detail = (
-                f" Found {len(open_paths)} open path(s); assign a closed Boundary for fill."
-                if open_paths
-                else ""
-            )
+            if not closed:
+                detail = f" ({len(open_paths)} open path(s) selected)" if open_paths else ""
+                raise ValueError(
+                    "The selected geometry has no closed boundary"
+                    f"{detail}. Select a closed shape or use Close Outline first."
+                )
+            if analysis.too_small_count:
+                raise ValueError(
+                    "The selected boundary is closed, but its filled area is too small to pattern."
+                )
             raise ValueError(
-                "No valid closed outline was found. Close or repair the outline before generating a pattern."
-                + detail
+                "The selected boundary is closed, but it crosses itself or has invalid geometry. "
+                "Repair the shape before assigning a zone."
             )
         if open_paths:
             return (
@@ -292,7 +301,12 @@ class PatternProcessingService:
             warning = self.validate_outline_inputs(resolved)
             if warning:
                 warnings.append(warning)
-            jobs.append({**deepcopy(zone), "polys": resolved})
+            normalized = deepcopy(zone)
+            normalized["pattern"] = str(normalized.get("pattern") or NULL_PATTERN).strip()
+            if not normalized["pattern"]:
+                normalized["pattern"] = NULL_PATTERN
+            normalized.setdefault("params", {})
+            jobs.append({**normalized, "polys": resolved})
         if not jobs:
             raise ValueError(
                 "No valid closed zone outlines were found. Reassign zones after repairing the outlines."
@@ -305,6 +319,21 @@ class PatternProcessingService:
         pattern: str,
         params: dict,
     ) -> list[list[tuple[float, float]]]:
+        params = deepcopy(params)
+        multiplier = max(float(params.pop("size_percent", 100.0) or 100.0) / 100.0, 0.01)
+        if abs(multiplier - 1.0) > 1e-9:
+            for spec in PARAM_SPECS.get(pattern, []):
+                key = spec.param_key or spec.attr[1:]
+                if "(mm)" in spec.label and isinstance(params.get(key), (int, float)):
+                    params[key] = float(params[key]) * multiplier
+            if pattern == "Custom Tile" and params.get("tile_polys"):
+                points = [point for poly in params["tile_polys"] for point in poly]
+                cx = (min(x for x, _y in points) + max(x for x, _y in points)) / 2.0
+                cy = (min(y for _x, y in points) + max(y for _x, y in points)) / 2.0
+                params["tile_polys"] = [
+                    [(cx + (x - cx) * multiplier, cy + (y - cy) * multiplier) for x, y in poly]
+                    for poly in params["tile_polys"]
+                ]
         self.validate_pattern_complexity(outline, pattern, params)
         # NULL_PATTERN ("— None —") = outline-only mode: no pattern strokes,
         # only the outline (and optional fill) reach the output.
@@ -782,7 +811,7 @@ class PatternProcessingService:
             # explicit None means "no fill in this zone"; older workspaces
             # without a fill key continue to inherit the document fill.
             zone_fill_options = zone["fill"] if "fill" in zone else fill_options
-            zone_pattern = zone["pattern"]
+            zone_pattern = str(zone.get("pattern") or NULL_PATTERN).strip() or NULL_PATTERN
             if output_mode == "pattern":
                 zone_fill_options = None
             elif output_mode == "fill":
@@ -926,7 +955,7 @@ class PatternProcessingService:
             output_mode = str(zone.get("output_mode", "pattern_fill"))
             fill_buf: list[list[tuple[float, float]]] = []
             zone_fill_options = zone["fill"] if "fill" in zone else fill_options
-            zone_pattern = zone["pattern"]
+            zone_pattern = str(zone.get("pattern") or NULL_PATTERN).strip() or NULL_PATTERN
             if output_mode == "pattern":
                 zone_fill_options = None
             elif output_mode == "fill":

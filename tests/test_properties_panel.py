@@ -26,6 +26,14 @@ def test_panel_reflects_selection(qapp):
     assert panel._w.text() == "10.00"
 
 
+def test_panel_omits_vertex_edit_and_open_path_actions(qapp):
+    _canvas, panel = make_panel(qapp, [square(0, 0)])
+
+    assert "edit" not in panel._context_buttons
+    assert "open" not in panel._context_buttons
+    assert set(panel._context_buttons) == {"duplicate", "close", "delete"}
+
+
 def test_panel_moves_selection(qapp):
     canvas, panel = make_panel(qapp, [square(0, 0)])
     canvas.set_selection([0])

@@ -52,8 +52,8 @@ class SettingsDialog(QDialog):
         ("outline_dxf_dir", "Pattern outline folder"),
         ("pattern_output_dir", "Pattern fill output folder"),
         ("draft_output_dir", "Draft output folder"),
-        ("fvi_source_dir", "Trace source folder"),
-        ("fvi_output_dir", "Trace output folder"),
+        ("fvi_source_dir", "FVI conversion source folder"),
+        ("fvi_output_dir", "FVI conversion output folder"),
     ]
 
     _REPO_FIELDS = [

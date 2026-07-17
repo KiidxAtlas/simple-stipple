@@ -60,12 +60,23 @@ from src.ui.pages.trace.session import (
     clear_trace_workspace_state,
     get_trace_workspace_state,
 )
-from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
+from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 from src.ui.util import KIND_IMAGE, pick_open_file, pick_save_file, record_recent
 from src.ui.widgets.status_strip import CanvasStatusStrip
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
 TRACE_BG_BLEND_ALPHA = 0.7
+
+# ── Page default settings ────────────────────────────────────────────────
+# Detection defaults (blur, threshold, simplify, …) live in
+# ``src.ui.pages.trace.form.TRACE_DEFAULTS`` and are user-editable in
+# Settings — only the widgets' mechanical config is defined here.
+TRACE_DEBOUNCE_MS = 220  # retrace delay after a control changes
+BLUR_SLIDER_MAX = 50  # slider is 0..50 = 0.0..5.0 (×10 fixed-point)
+BLUR_SLIDER_SCALE = 10
+THRESHOLD_SLIDER_MAX = 255
+DEFAULT_GRID_VISIBLE = True
+DEFAULT_GRID_SPACING_MM = 1.0
 
 LOGGER = logging.getLogger(__name__)
 
@@ -231,10 +242,9 @@ class TracePage(BasePage):
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(6)
-        self._reload_btn = QPushButton("Reload Preview")
+        self._reload_btn = QPushButton("Refresh Preview")
         self._reload_btn.setToolTip(
-            "Force an immediate retrace with the current settings.\n"
-            "Use this if the live preview ever stops updating."
+            "Retrace immediately with the current settings."
         )
         self._reload_btn.clicked.connect(self._force_reload_trace)
         action_row.addWidget(self._reload_btn, stretch=1)
@@ -304,7 +314,7 @@ class TracePage(BasePage):
         export_layout = QVBoxLayout(export_content)
         export_layout.setContentsMargins(0, 0, 0, 0)
         export_layout.setSpacing(4)
-        self._export_all_btn = QPushButton("Export DXF")
+        self._export_all_btn = QPushButton("Export Traced Outlines DXF")
         self._export_all_btn.setMinimumHeight(36)
         self._export_all_btn.setProperty("role", "primary")
         self._export_all_btn.setToolTip("Save all traced outlines as a DXF file")
@@ -316,6 +326,7 @@ class TracePage(BasePage):
         _export_overflow_btn.setFixedWidth(32)
         _export_overflow_btn.setFixedHeight(36)
         _export_overflow_btn.setToolTip("More export options")
+        _export_overflow_btn.setAccessibleName("More export options")
         _export_overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         _overflow_menu = QMenu(_export_overflow_btn)
         self._export_sel_action = _overflow_menu.addAction(
@@ -332,7 +343,8 @@ class TracePage(BasePage):
         export_row.addWidget(self._export_all_btn, stretch=1)
         export_row.addWidget(_export_overflow_btn)
         export_layout.addLayout(export_row)
-        layout.addWidget(CollapsibleSection("Export", export_content, expanded=True))
+        # _build_right reparents this into the bottom of the right inspector.
+        self._export_footer = export_content
 
         layout.addStretch()
 
@@ -378,10 +390,14 @@ class TracePage(BasePage):
             on_change=self._on_width_changed,
         )
         self._height_mm = self._mk_entry(
-            "---",
+            "",
             "Target output height in millimetres",
             on_change=self._on_height_changed,
+            placeholder="auto",
         )
+        self._width_mm.blockSignals(True)
+        self._width_mm.setText(f"{float(self._width_mm.text() or 50.0):.2f}")
+        self._width_mm.blockSignals(False)
         self._max_res = self._mk_entry(
             trace_default(self._settings, "max_res"),
             "Maximum pixel dimension when loading the image.\nHigher values give finer detail but are slower.",
@@ -421,23 +437,34 @@ class TracePage(BasePage):
         self._lock_cb.stateChanged.connect(self._on_aspect_lock_changed)
 
         self._blur_slider = QSlider(Qt.Orientation.Horizontal)
-        self._blur_slider.setRange(0, 50)
-        self._blur_slider.setValue(15)  # 1.5 * 10
+        self._blur_slider.setRange(0, BLUR_SLIDER_MAX)
+        # Initial position derives from the field default (TRACE_DEFAULTS or
+        # the user's Settings override) so slider and text never start out
+        # of sync.
+        try:
+            blur_default = float(trace_default(self._settings, "blur"))
+        except ValueError:
+            blur_default = 0.0
+        self._blur_slider.setValue(int(blur_default * BLUR_SLIDER_SCALE))
         self._blur_slider.setToolTip("Drag to adjust the blur radius (0.0 – 5.0)")
         self._blur_slider.valueChanged.connect(self._on_blur_slider)
 
         self._thresh_slider = QSlider(Qt.Orientation.Horizontal)
-        self._thresh_slider.setRange(0, 255)
-        self._thresh_slider.setValue(128)
+        self._thresh_slider.setRange(0, THRESHOLD_SLIDER_MAX)
+        try:
+            thresh_default = int(float(trace_default(self._settings, "threshold")))
+        except ValueError:
+            thresh_default = THRESHOLD_SLIDER_MAX // 2
+        self._thresh_slider.setValue(thresh_default)
         self._thresh_slider.setToolTip("Drag to adjust the brightness threshold")
         self._thresh_slider.valueChanged.connect(self._on_thresh_slider)
 
     def _on_blur_text(self, text: str) -> None:
         try:
             val = float(text)
-            if 0.0 <= val <= 5.0:
+            if 0.0 <= val <= BLUR_SLIDER_MAX / BLUR_SLIDER_SCALE:
                 self._blur_slider.blockSignals(True)
-                self._blur_slider.setValue(int(val * 10))
+                self._blur_slider.setValue(int(val * BLUR_SLIDER_SCALE))
                 self._blur_slider.blockSignals(False)
         except ValueError:
             pass
@@ -445,7 +472,7 @@ class TracePage(BasePage):
 
     def _on_blur_slider(self, value: int) -> None:
         self._blur.blockSignals(True)
-        self._blur.setText(f"{value / 10:.1f}")
+        self._blur.setText(f"{value / BLUR_SLIDER_SCALE:.1f}")
         self._blur.blockSignals(False)
         self._schedule_trace()
 
@@ -572,9 +599,9 @@ class TracePage(BasePage):
             draft_profile=True,
         )
         self._canvas.set_empty_message("No image loaded\nOpen or drop an image to trace")
-        self._canvas.set_grid_visible(True)
+        self._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
         self._canvas.set_grid_snap(False)
-        self._canvas.set_grid_spacing(1.0)
+        self._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
@@ -620,6 +647,7 @@ class TracePage(BasePage):
         self._layers_tree = self._layer_module.tree
         self._layer_sidebar = self._layer_module.controller
         side_layout.addWidget(self._layer_module, stretch=1)
+        side_layout.addWidget(self._export_footer)
 
         self._canvas_runtime = TraceCanvasPageRuntime(
             canvas=self._canvas,
@@ -852,7 +880,7 @@ class TracePage(BasePage):
             self._height_mm.blockSignals(False)
             if self._img_w_px and self._img_h_px:
                 self._size_info_lbl.setText(
-                    f"{self._img_w_px}×{self._img_h_px} px → {w:.1f}×{h:.1f} mm"
+                    f"{self._img_w_px}×{self._img_h_px} px → {w:.2f}×{h:.2f} mm"
                 )
         except ValueError:
             pass
@@ -890,13 +918,20 @@ class TracePage(BasePage):
         if self._running:
             self._trace_pending = True
             self._cancel_event.set()
-        self._preview_timer.start(220)
+        self._set_status("Preview out of date — refreshing…", STATUS_WARN)
+        self._preview_timer.start(TRACE_DEBOUNCE_MS)
         self._emit_state_changed()
 
     def _force_reload_trace(self) -> None:
         """Manual escape hatch: bypass the live-preview debounce and any
         stuck in-flight/cancelled state, then start a fresh retrace right
         away with the current settings."""
+        if self._running:
+            self._trace_revision += 1
+            self._trace_pending = False
+            self._cancel_event.set()
+            self._set_status("Cancelling trace…")
+            return
         if not self._img_path:
             self._set_status("No image loaded.", STATUS_ERR)
             return
@@ -994,6 +1029,8 @@ class TracePage(BasePage):
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
         self._set_status("Tracing…")
+        self._reload_btn.setText("Cancel Trace")
+        self._reload_btn.setToolTip("Stop the trace and keep the last completed result")
         self._trace_thread = threading.Thread(
             target=self._run_trace,
             args=(self._img_path, kwargs, trace_token, cancel_event),
@@ -1044,6 +1081,7 @@ class TracePage(BasePage):
         diagnostics = analyze_geometry(polys)
 
         self._running = False
+        self._reload_btn.setText("Refresh Preview")
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(100)
@@ -1072,7 +1110,7 @@ class TracePage(BasePage):
             self._set_status(
                 f"{count} contour(s) extracted  ·  "
                 f"{img_w_px}×{img_h_px} px → "
-                f"{width_mm_val:.1f}×{height_mm_val:.1f} mm · "
+                f"{width_mm_val:.2f}×{height_mm_val:.2f} mm · "
                 f"{sum(len(poly) for poly in polys)} vertices · "
                 f"{diagnostics.closed} closed/{diagnostics.open} open · "
                 f"{diagnostics.tiny_paths} tiny",
@@ -1094,6 +1132,7 @@ class TracePage(BasePage):
         if trace_token != self._trace_revision:
             return
         self._running = False
+        self._reload_btn.setText("Refresh Preview")
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
@@ -1114,6 +1153,8 @@ class TracePage(BasePage):
         actual "stops updating after enough rapid changes" freeze.
         """
         self._running = False
+        self._reload_btn.setText("Refresh Preview")
+        self._set_status("Trace cancelled; previous result retained.")
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)

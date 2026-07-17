@@ -234,11 +234,11 @@ TRACE_DEFAULT_FIELDS: tuple[tuple[str, str, str], ...] = (
 
 #: Built-in fallback used when a key has never been set in trace_defaults.
 TRACE_DEFAULTS: dict[str, str] = {
-    "blur": "1.2",
+    "blur": "1.0",
     "threshold": "128",
     "canny_low": "50",
     "canny_high": "150",
-    "simplify": "1.5",
+    "simplify": "0.7",
     "min_area": "10",
     "max_area": "",
     "close_r": "1",

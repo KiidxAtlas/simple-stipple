@@ -23,6 +23,20 @@ from PySide6.QtWidgets import (
 
 from src.ui.components import make_resettable_line_edit
 from src.ui.pages.pattern._spec import PARAM_SPECS
+from src.ui.pages.pattern.defaults import (
+    DEFAULT_BORDER_FADE,
+    DEFAULT_DENSITY_ANGLE,
+    DEFAULT_DENSITY_MODE,
+    DEFAULT_DENSITY_STRENGTH,
+    DEFAULT_FILL_ANGLE,
+    DEFAULT_FILL_INSET,
+    DEFAULT_FILL_MODE,
+    DEFAULT_FILL_SPACING,
+    DEFAULT_MIN_ISLAND_AREA,
+    DEFAULT_MIN_SEGMENT,
+    DEFAULT_PATTERN_ROTATION,
+    DEFAULT_PREVIEW_QUALITY,
+)
 
 # ── Internal widget helpers ───────────────────────────────────────────────────
 
@@ -141,6 +155,9 @@ def collect_pattern_params(tab: Any, pattern: str) -> dict:
             params[key] = tab._parse_float_field(widget, spec.label, **bounds)
 
     params["rotation"] = tab._parse_float_field(tab._pattern_rotation, "Pattern rotation")
+    params["size_percent"] = tab._parse_float_field(
+        tab._pattern_size_percent, "Pattern size", minimum=1.0, maximum=10000.0
+    )
     params["density_mode"] = tab._density_mode_combo.currentText()
     params["density_strength"] = tab._parse_float_field(
         tab._density_strength, "Density strength", minimum=0.0, maximum=1.0
@@ -166,6 +183,7 @@ def collect_form_state(page: Any) -> dict:
     data: dict = {
         "pattern": page._pattern_combo.currentText(),
         "rotation": page._pattern_rotation.text(),
+        "size_percent": page._pattern_size_percent.text(),
         "scale_w": page._scale_w.text(),
         "scale_h": page._scale_h.text(),
         "ar_locked": page._ar_lock_btn.isChecked(),
@@ -175,7 +193,7 @@ def collect_form_state(page: Any) -> dict:
         "density_strength": page._density_strength.text(),
         "density_angle": page._density_angle.text(),
         "density_reverse": page._density_reverse.isChecked(),
-        "fill_mode": page._fill_mode_combo.currentData() or "none",
+        "fill_mode": page._fill_mode_combo.currentData() or DEFAULT_FILL_MODE,
         "fill_spacing": page._fill_spacing.text(),
         "fill_angle": page._fill_angle.text(),
         "fill_inset": page._fill_inset.text(),
@@ -185,7 +203,7 @@ def collect_form_state(page: Any) -> dict:
         "minimum_segment": page._minimum_segment_edit.text(),
         "minimum_area": page._minimum_area_edit.text(),
         "optimize_paths": page._optimize_paths_cb.isChecked(),
-        "preview_quality": page._preview_quality_combo.currentData() or "balanced",
+        "preview_quality": page._preview_quality_combo.currentData() or DEFAULT_PREVIEW_QUALITY,
     }
     # All PARAM_SPECS pattern fields — key derived from attr name (strip leading _)
     for specs in PARAM_SPECS.values():
@@ -218,31 +236,32 @@ def restore_form_state(page: Any, payload: dict) -> None:
     page._refresh_pattern_choices(current=str(values.get("pattern", "— None —")))
     pattern = str(values.get("pattern", "— None —"))
     page._pattern_combo.setCurrentText(pattern)
-    page._pattern_rotation.setText(str(values.get("rotation", "0")))
+    page._pattern_rotation.setText(str(values.get("rotation", DEFAULT_PATTERN_ROTATION)))
+    page._pattern_size_percent.setText(str(values.get("size_percent", "100")))
     page._scale_w.setText(str(values.get("scale_w", "")))
     page._scale_h.setText(str(values.get("scale_h", "")))
     page._ar_lock_btn.setChecked(bool(values.get("ar_locked", True)))
     page._include_border_cb.setChecked(bool(values.get("include_border", True)))
-    page._border_fade.setText(str(values.get("border_fade", "0")))
-    page._density_mode_combo.setCurrentText(str(values.get("density_mode", "Uniform")))
-    page._density_strength.setText(str(values.get("density_strength", "0.75")))
-    page._density_angle.setText(str(values.get("density_angle", "0")))
+    page._border_fade.setText(str(values.get("border_fade", DEFAULT_BORDER_FADE)))
+    page._density_mode_combo.setCurrentText(str(values.get("density_mode", DEFAULT_DENSITY_MODE)))
+    page._density_strength.setText(str(values.get("density_strength", DEFAULT_DENSITY_STRENGTH)))
+    page._density_angle.setText(str(values.get("density_angle", DEFAULT_DENSITY_ANGLE)))
     page._density_reverse.setChecked(bool(values.get("density_reverse", False)))
-    fill_mode_value = str(values.get("fill_mode", "none") or "none")
+    fill_mode_value = str(values.get("fill_mode", DEFAULT_FILL_MODE) or DEFAULT_FILL_MODE)
     fill_idx = page._fill_mode_combo.findData(fill_mode_value)
     page._fill_mode_combo.setCurrentIndex(max(fill_idx, 0))
-    page._fill_spacing.setText(str(values.get("fill_spacing", "0.5")))
-    page._fill_angle.setText(str(values.get("fill_angle", "0")))
-    page._fill_inset.setText(str(values.get("fill_inset", "0")))
+    page._fill_spacing.setText(str(values.get("fill_spacing", DEFAULT_FILL_SPACING)))
+    page._fill_angle.setText(str(values.get("fill_angle", DEFAULT_FILL_ANGLE)))
+    page._fill_inset.setText(str(values.get("fill_inset", DEFAULT_FILL_INSET)))
     page._fill_keep_outline_cb.setChecked(bool(values.get("fill_keep_outline", True)))
     target_outline = bool(values.get("fill_target_outline", True))
     target_pattern = bool(values.get("fill_target_pattern", False))
     page._fill_target_outline_cb.setChecked(target_outline)
     page._fill_target_pattern_cb.setChecked(target_pattern)
-    page._minimum_segment_edit.setText(str(values.get("minimum_segment", "0")))
-    page._minimum_area_edit.setText(str(values.get("minimum_area", "0")))
+    page._minimum_segment_edit.setText(str(values.get("minimum_segment", DEFAULT_MIN_SEGMENT)))
+    page._minimum_area_edit.setText(str(values.get("minimum_area", DEFAULT_MIN_ISLAND_AREA)))
     page._optimize_paths_cb.setChecked(bool(values.get("optimize_paths", True)))
-    quality = str(values.get("preview_quality", "balanced"))
+    quality = str(values.get("preview_quality", DEFAULT_PREVIEW_QUALITY))
     page._preview_quality_combo.setCurrentIndex(
         max(0, page._preview_quality_combo.findData(quality))
     )
