@@ -49,7 +49,7 @@ from src.ui.components import (
 )
 from src.ui.pages.base import BasePage
 from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
-from src.ui.widgets.status_strip import CanvasStatusStrip
+from src.ui.widgets.canvas.status_strip import CanvasStatusStrip
 
 LOGGER = logging.getLogger(__name__)
 
@@ -74,8 +74,8 @@ def _append_ignored_entities_note(msg: str, stats: dict) -> str:
     return f"{msg}  · ignored {ignored} unsupported entity(s)"
 
 
-class _StatusMixin:
-    """Mixin that provides _set_status() and _add_picker_row() for subtabs."""
+class _ConversionSubTab(QWidget):
+    """Shared cancellation, status, and file-picker behavior for conversion tools."""
 
     _status: QLabel
     _thread: threading.Thread | None
@@ -134,7 +134,7 @@ class _StatusMixin:
         )
 
 
-class FviSubTab(_StatusMixin, QWidget):
+class FviSubTab(_ConversionSubTab):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -398,8 +398,7 @@ class FviSubTab(_StatusMixin, QWidget):
                 err += 1
 
         self.log_line.emit(
-            f"\nDone — {ok} converted, {warned} with warning(s), "
-            f"{skipped} skipped, {err} error(s)."
+            f"\nDone — {ok} converted, {warned} with warning(s), {skipped} skipped, {err} error(s)."
         )
         self._running = False
         self._btn_state.emit(True)
@@ -416,12 +415,14 @@ class FviSubTab(_StatusMixin, QWidget):
         elif err > 0:
             self._status_sig.emit(f"{err} error(s)", STATUS_ERR)
         elif skipped:
-            self._status_sig.emit(f"Done — {skipped} empty/unsupported file(s) skipped", STATUS_WARN)
+            self._status_sig.emit(
+                f"Done — {skipped} empty/unsupported file(s) skipped", STATUS_WARN
+            )
         if last_dxf:
             self.preview_path.emit(last_dxf)
 
 
-class FixerSubTab(_StatusMixin, QWidget):
+class FixerSubTab(_ConversionSubTab):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -585,7 +586,10 @@ class FixerSubTab(_StatusMixin, QWidget):
                 Path(out).mkdir(parents=True, exist_ok=True)
                 source_resolved = source_path.resolve()
                 output_resolved = Path(out).resolve()
-                if output_resolved != source_resolved and source_resolved in output_resolved.parents:
+                if (
+                    output_resolved != source_resolved
+                    and source_resolved in output_resolved.parents
+                ):
                     QMessageBox.warning(
                         self,
                         "Unsafe Output Folder",
@@ -773,7 +777,7 @@ class FixerSubTab(_StatusMixin, QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p if p.is_dir() else p.parent)))
 
 
-class SvgSubTab(_StatusMixin, QWidget):
+class SvgSubTab(_ConversionSubTab):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -1043,7 +1047,7 @@ class SvgSubTab(_StatusMixin, QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
 
 
-class SvgToDxfSubTab(_StatusMixin, QWidget):
+class SvgToDxfSubTab(_ConversionSubTab):
     log_line = Signal(str)
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -1240,7 +1244,9 @@ class SvgToDxfSubTab(_StatusMixin, QWidget):
             self._btn_state.emit(True)
             self._reveal_state.emit(True)
             self._status_sig.emit(
-                "Done" if not unsupported_paths and not unsupported_features else "Done with warnings",
+                "Done"
+                if not unsupported_paths and not unsupported_features
+                else "Done with warnings",
                 STATUS_OK if not unsupported_paths and not unsupported_features else STATUS_WARN,
             )
             self._last_out = out
@@ -1504,9 +1510,7 @@ class ConvertPage(BasePage):
         _ev_choose.setAccessibleDescription(
             "Choose the input for the currently selected conversion task"
         )
-        _ev_choose.clicked.connect(
-            lambda: self._tool_stack.currentWidget()._browse_src()
-        )
+        _ev_choose.clicked.connect(lambda: self._tool_stack.currentWidget()._browse_src())
         _ev.addSpacing(8)
         _ev.addWidget(_ev_choose, alignment=Qt.AlignmentFlag.AlignHCenter)
         _ev.addStretch()
@@ -1739,9 +1743,7 @@ class ConvertPage(BasePage):
         self._fix_subtab._include_subfolders.setChecked(
             bool(state.get("fix_include_subfolders", True))
         )
-        fix_mode_index = self._fix_subtab._repair_mode.findData(
-            str(state.get("fix_mode", "safe"))
-        )
+        fix_mode_index = self._fix_subtab._repair_mode.findData(str(state.get("fix_mode", "safe")))
         self._fix_subtab._repair_mode.setCurrentIndex(max(0, fix_mode_index))
         self._svg_subtab._src_edit.setText(str(state.get("svg_src", "")))
         self._svg_subtab._out_edit.setText(str(state.get("svg_out", "")))

@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.backend.recognition import recognize_polyline
+from src.backend.cad.recognition import recognize_polyline
 
 
 def test_recognizes_rotated_rectangle():

@@ -1,1 +1,1 @@
-"""Core package marker."""
+"""Qt-free domain and processing layer."""

@@ -1,7 +1,8 @@
 """Pure model tests for stable canvas identity and selection."""
 
-from src.ui.canvas.document import CanvasDocument, EntityRecord
-from src.ui.canvas.undo import UndoStore
+from src.backend.model.commands import CreateCommand, EntitySnapshot
+from src.backend.model.document import CanvasDocument, EntityRecord
+from src.backend.model.editor_history import CommandStack
 
 
 def test_entity_ids_are_unique_and_survive_reordering():
@@ -40,22 +41,15 @@ def test_selection_can_round_trip_through_stable_ids():
     assert document.selection == {0}
 
 
-def test_undo_middle_insertion_stores_only_inserted_record():
-    before = [
-        EntityRecord(points=[(0.0, 0.0), (1.0, 0.0)]),
-        EntityRecord(points=[(2.0, 0.0), (3.0, 0.0)]),
-        EntityRecord(points=[(4.0, 0.0), (5.0, 0.0)]),
-    ]
+def test_command_stack_records_only_the_changed_entity_snapshot():
     inserted = EntityRecord(points=[(10.0, 0.0), (11.0, 0.0)])
-    after = [before[0], inserted, before[1], before[2]]
-    store = UndoStore()
-    store.mark(before, set())
+    command = CreateCommand(entities=(EntitySnapshot.capture(inserted),))
+    stack = CommandStack()
+    stack.record(command, command.reverse())
 
-    undone = store.undo(after, set())
+    pair = stack.take_undo()
 
-    assert undone is not None
-    restored, _, _ = undone
-    assert [entity.id for entity in restored] == [entity.id for entity in before]
-    delta = store._redo[-1]
-    assert len(delta.fwd_changed) == 1
-    assert delta.fwd_changed[0][1].id == inserted.id
+    assert pair is not None
+    assert pair[0] == command
+    assert len(pair[0].entities) == 1
+    assert pair[0].entities[0].id == inserted.id

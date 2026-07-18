@@ -13,8 +13,8 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
-from src.backend.document import PatternTabState
-from src.ui.pages.pattern.fill import NULL_PATTERN
+from src.backend.model.document import PatternTabState
+from src.backend.pattern.fill import NULL_PATTERN
 from src.ui.pages.pattern.params import collect_form_state, restore_form_state
 
 LOGGER = logging.getLogger(__name__)

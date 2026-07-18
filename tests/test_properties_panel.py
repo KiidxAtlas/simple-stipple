@@ -10,7 +10,7 @@ from tests.test_canvas_behavior import bbox, make_canvas, square  # noqa: E402
 
 
 def make_panel(qapp, polys):
-    from src.ui.widgets.properties_panel import CanvasPropertiesPanel
+    from src.ui.widgets.canvas.properties_panel import CanvasPropertiesPanel
 
     canvas = make_canvas(qapp, polys)
     panel = CanvasPropertiesPanel(canvas)
@@ -89,7 +89,7 @@ def test_aspect_lock_applies_to_gizmo_edge_drag(qapp):
     canvas.set_aspect_ratio_locked(True)
 
     assert canvas._start_gizmo_drag("scale-e", 10.0, 5.0)
-    canvas._apply_handle_scale(20.0, 5.0, Qt.KeyboardModifier.NoModifier)
+    canvas._apply_gizmo_drag(20.0, 5.0, Qt.KeyboardModifier.NoModifier)
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(20.0, abs=0.01)
     assert y1 - y0 == pytest.approx(20.0, abs=0.01)  # edge-only drag still scaled H

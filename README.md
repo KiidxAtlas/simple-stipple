@@ -2,6 +2,10 @@
 
 Desktop app for drafting, tracing, and generating pattern fills for laser/vector workflows.
 
+The source layout and placement rules are documented in
+[ARCHITECTURE.md](ARCHITECTURE.md). That file is the maintained project memory
+for module responsibilities and dependency boundaries.
+
 ## StarFX FVI workflow
 
 The Draft page has one **Import Vector** entry point for opening, adding, or

@@ -1,7 +1,7 @@
 """Declarative canvas command registry.
 
 Single source of truth for canvas actions: id, label, shortcut, and
-enablement. The canvas keymap (``PolylineView.keyPressEvent``), the app's
+enablement. The canvas keymap (``CanvasView.keyPressEvent``), the app's
 Edit/View menus, the canvas context menu, and the keyboard-shortcuts
 reference dialog all read this table, so a label or shortcut changes in
 exactly one place and the surfaces can never drift apart.
@@ -271,6 +271,20 @@ COMMANDS: tuple[Command, ...] = (
         "Paste",
         lambda v: v._paste_clipboard(),
         "Ctrl+V",
+        category="Edit",
+    ),
+    Command(
+        "clipboard.paste_offset",
+        "Paste with Offset",
+        lambda v: v._paste_clipboard_with_offset(5.0),
+        "Ctrl+Shift+V",
+        category="Edit",
+    ),
+    Command(
+        "clipboard.paste_multiple",
+        "Paste Multiple…",
+        lambda v: v._paste_clipboard_multiple(),
+        "Ctrl+Shift+Alt+V",
         category="Edit",
     ),
     Command(

@@ -1,6 +1,6 @@
 """Settings schema validation and forward-compatibility tests."""
 
-from src.infra.settings import (
+from src.core.settings import (
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_WIDTH,
     DEFAULT_RADIAL_MENU_TOOLS,

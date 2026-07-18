@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.backend.coordinates import parse_coordinate
+from src.backend.cad.coordinates import parse_coordinate
 
 
 def test_absolute_relative_and_polar_coordinate_syntax():

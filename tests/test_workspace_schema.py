@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import pytest
 
-from src.backend.document import (
+from src.backend.model.document import (
     WORKSPACE_SCHEMA_VERSION,
     empty_workspace_document,
     validate_workspace_document,

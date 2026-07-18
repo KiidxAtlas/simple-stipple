@@ -156,7 +156,7 @@ def test_fvi_to_dxf_joins_segments_and_marks_closed_paths(tmp_path) -> None:
 
 
 def test_export_dialog_exposes_current_options(qapp) -> None:
-    from src.ui.widgets.fvi_dialog import FviExportDialog
+    from src.ui.widgets.dialogs.fvi_dialog import FviExportDialog
 
     dialog = FviExportDialog([{"polyline": [(0.0, 0.0), (1.0, 1.0)]}])
     try:

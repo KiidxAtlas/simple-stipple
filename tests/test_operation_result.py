@@ -1,6 +1,6 @@
 """Shared geometry-operation outcome contract."""
 
-from src.backend.document import OperationResult
+from src.backend.model.document import OperationResult
 
 
 def test_unchanged_operation_preserves_actionable_warning():

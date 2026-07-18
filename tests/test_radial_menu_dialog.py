@@ -10,8 +10,8 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 
-from src.infra.settings import DEFAULT_RADIAL_MENU_TOOLS  # noqa: E402
-from src.ui.widgets.customize_dialogs import _POOL, RadialMenuDialog  # noqa: E402
+from src.core.settings import DEFAULT_RADIAL_MENU_TOOLS  # noqa: E402
+from src.ui.widgets.dialogs.customize_dialogs import _POOL, RadialMenuDialog  # noqa: E402
 
 
 def test_pool_spans_far_more_than_just_draw_primitives():

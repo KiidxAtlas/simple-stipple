@@ -15,9 +15,10 @@ from typing import Any
 
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
-from src.ui.widgets.layer_tree import (
+from src.ui.widgets.canvas.precision_bar import CanvasPrecisionBar
+from src.ui.widgets.canvas.toolbar import canvas_toolbar
+from src.ui.widgets.layer_tree.logic import (
     CanvasLayerSidebarController,
-    DxfLayersTree,
     LayerRowsBuilder,
     LayerTreeState,
     build_layer_row,
@@ -26,8 +27,7 @@ from src.ui.widgets.layer_tree import (
     flatten_shape_keys,
     hidden_bucket,
 )
-from src.ui.widgets.precision_bar import CanvasPrecisionBar
-from src.ui.widgets.toolbar import canvas_toolbar
+from src.ui.widgets.layer_tree.widget import DxfLayersTree
 
 LOGGER = logging.getLogger(__name__)
 

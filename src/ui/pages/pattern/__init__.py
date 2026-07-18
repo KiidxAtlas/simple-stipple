@@ -1,0 +1,1 @@
+"""Pattern-generation page presentation."""

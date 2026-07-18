@@ -21,9 +21,9 @@ from PySide6.QtGui import QKeyEvent, QMouseEvent
 
 
 def make_view(qapp, polys=None, size=(800, 600)):
-    from src.ui.canvas.view import PolylineView
+    from src.ui.canvas.view import CanvasView
 
-    v = PolylineView()
+    v = CanvasView()
     v.resize(*size)
     if polys is not None:
         v.load(polys)
@@ -238,7 +238,8 @@ def test_rounding_parametric_rectangle_demotes_stale_metadata(qapp):
 @pytest.mark.parametrize("tool", ["rounded_rectangle", "star"])
 def test_new_shape_sidebar_tools_can_create_geometry(qapp, tool):
     canvas = make_canvas(qapp)
-    canvas._on_shapes_family_change(tool)
+    canvas.set_mode("draw")
+    canvas._set_draw_primitive(tool)
     assert canvas._draw_primitive == tool
     click(canvas, *canvas._w2c(100.0, 100.0))
     click(canvas, *canvas._w2c(120.0, 112.0))
@@ -538,7 +539,7 @@ def test_drag_move_translates_and_undo_restores(qapp):
     assert [tuple(p) for p in v._entities[0].points] == before
 
 
-def test_nudge_arrow_key_moves_selection_once_per_undo(qapp):
+def test_each_nudge_is_a_reversible_command(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v.set_selection([0])
     before = [tuple(p) for p in v._entities[0].points]
@@ -547,7 +548,9 @@ def test_nudge_arrow_key_moves_selection_once_per_undo(qapp):
     after = [tuple(p) for p in v._entities[0].points]
     assert after[0][0] > before[0][0]
     assert after[0][1] == pytest.approx(before[0][1])
-    assert v.undo()  # both nudges coalesce into one undo step
+    assert v.undo()
+    assert [tuple(p) for p in v._entities[0].points] != before
+    assert v.undo()
     assert [tuple(p) for p in v._entities[0].points] == before
 
 
@@ -875,7 +878,7 @@ def test_radial_menu_shifts_inward_near_canvas_edge(qapp):
 
     c._toggle_radial_menu()
 
-    outer, _inner = c._radial_geometry(len(c._radial_tools))
+    outer, _inner = c._radial_menu._radial_geometry(len(c._radial_tools))
     center = c._radial_center_c
     assert center.x() - outer >= 0
     assert center.y() + outer <= c.height()
@@ -1155,7 +1158,7 @@ def test_radial_menu_tools_include_the_full_command_registry(qapp):
 
 
 def test_radial_menu_tools_falls_back_below_minimum(qapp):
-    from src.infra.settings import DEFAULT_RADIAL_MENU_TOOLS
+    from src.core.settings import DEFAULT_RADIAL_MENU_TOOLS
 
     c = make_canvas(qapp, THREE_SQUARES)
     c.set_radial_menu_tools(["canvas.circle", "canvas.arc"])  # only 2 — below the minimum
@@ -1174,15 +1177,17 @@ def test_radial_menu_label_width_budget_never_exceeds_the_disc(qapp):
     the guarantee that stops a long label (e.g. "Duplicate with Offset")
     from spilling past the wheel's outer edge."""
     c = make_canvas(qapp, THREE_SQUARES)
-    outer = c._RADIAL_OUTER
+    outer = c._radial_menu._RADIAL_OUTER
     cy = 300.0
     for dy in (0.0, outer * 0.5, outer * 0.95, outer, outer * 1.5):
-        chord_half = c._radial_chord_half(cy + dy, cy, outer)
+        chord_half = c._radial_menu._radial_chord_half(cy + dy, cy, outer)
         assert 0.0 <= chord_half <= outer
     # Directly above/below center the full diameter is available; near the
     # top/bottom pole it shrinks to ~0 rather than going negative or over.
-    assert c._radial_chord_half(cy, cy, outer) == pytest.approx(outer)
-    assert c._radial_chord_half(cy + outer, cy, outer) == pytest.approx(0.0, abs=1e-6)
+    assert c._radial_menu._radial_chord_half(cy, cy, outer) == pytest.approx(outer)
+    assert c._radial_menu._radial_chord_half(cy + outer, cy, outer) == pytest.approx(
+        0.0, abs=1e-6
+    )
 
 
 def test_radial_menu_paints_long_labels_without_raising(qapp):
@@ -1199,19 +1204,16 @@ def test_radial_menu_paints_long_labels_without_raising(qapp):
     assert pix.width() > 0 and pix.height() > 0
 
 
-def test_undo_store_deltas_only_touch_changed_entities(qapp):
-    """Delta undo: a move records only the moved entity, not the document."""
+def test_command_history_targets_only_changed_entities(qapp):
+    """A move command references only the moved entity, not the document."""
     v = make_view(qapp, THREE_SQUARES)
     v.set_selection([0])
     v._nudge_selected(1.0, 0.0)
-    store = v._undo_store
-    # finalize by starting a different (non-coalescing) op
-    v.set_selection([1])
-    v.rotate_selected(90.0)
-    assert len(store._undo) >= 1
-    first = store._undo[0]
-    assert len(first.back_changed) == 1  # only square 0 stored
-    assert first.back_len == 3 and first.fwd_len == 3
+    history = v._canvas_service.documents.history
+    assert len(history._undo_commands) == 1
+    command, inverse = history._undo_commands[0]
+    assert command.entity_ids == inverse.entity_ids
+    assert command.entity_ids == (v._entities[0].id,)
 
 
 def test_undo_after_load_is_unavailable(qapp):
@@ -1601,7 +1603,7 @@ def test_multi_shape_nonuniform_gizmo_resize_keeps_transformed_geometry(qapp):
     )
     v.set_selection([0, 1])
     assert v._start_gizmo_drag("scale-e", 30.0, 5.0)
-    v._apply_handle_scale(60.0, 5.0, Qt.KeyboardModifier.NoModifier)
+    v._apply_gizmo_drag(60.0, 5.0, Qt.KeyboardModifier.NoModifier)
     assert [entity.kind for entity in v._entities] == ["polyline", "polyline"]
     assert all(entity.meta is None for entity in v._entities)
     assert bbox(v._entities[0].points) == pytest.approx((0.0, 0.0, 20.0, 10.0))
@@ -1609,7 +1611,7 @@ def test_multi_shape_nonuniform_gizmo_resize_keeps_transformed_geometry(qapp):
 
 
 def test_rotated_rectangle_uses_local_gizmo_and_preserves_parameters(qapp):
-    from src.backend.geometry import build_rect_poly
+    from src.backend.cad.geometry import build_rect_poly
 
     v = make_view(qapp, [])
     base_points = build_rect_poly(5, 5, 10, 6)

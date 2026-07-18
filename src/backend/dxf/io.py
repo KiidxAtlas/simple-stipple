@@ -19,7 +19,8 @@ from shapely.geometry import Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
-from src.backend.shapes import shape_from_meta
+from src.backend.cad.shapes import shape_from_meta
+from src.backend.dxf.schema import validate_dxf_document
 
 _LOG = logging.getLogger(__name__)
 OUTLINE_CLOSE_TOLERANCE_MM = 2.0
@@ -630,8 +631,29 @@ def write_polylines_dxf(
                     doc.layers.add(layer_from_name, color=2)
                 entity_attrs["layer"] = layer_from_name
 
+            if kind == "dimension" and isinstance(meta, dict):
+                try:
+                    p1 = tuple(meta.get("p1", c[0]))
+                    p2 = tuple(meta.get("p2", c[1]))
+                    offset = float(meta.get("offset", 5.0))
+                    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+                    length = math.hypot(dx, dy)
+                    if length > 1e-12:
+                        base = (p1[0] - dy * offset / length, p1[1] + dx * offset / length)
+                        override = msp.add_linear_dim(
+                            base=base,
+                            p1=p1,
+                            p2=p2,
+                            dimstyle="EZDXF",
+                            dxfattribs=entity_attrs or None,
+                        )
+                        override.render()
+                        continue
+                except (TypeError, ValueError, IndexError):
+                    _LOG.warning("Invalid dimension metadata; exporting fallback line")
+
             # Kind-specific entity emission is owned by the Shape classes
-            # (src/backend/shapes/shape.py). Each shape validates its own
+            # (src/backend/cad/shapes.py). Each shape validates its own
             # parameters (finite values, positive radii, ellipse axis swap,
             # spline degree clamp); to_dxf() returns False for degenerate or
             # unsupported shapes, and we fall through to the LWPOLYLINE path
@@ -717,25 +739,14 @@ def write_polylines_dxf(
     # Audit the document before persisting. Never write a malformed DXF —
     # a file that crashes or silently misbehaves in downstream CAD/CAM tools
     # is worse than a visible export error here.
-    auditor = None
     try:
-        auditor = doc.audit()
-    except (AttributeError, RuntimeError) as exc:
-        # Audit is best-effort; older ezdxf versions or unusual docs may
-        # not expose the same surface.
-        _LOG.debug("ezdxf audit unavailable: %s", exc)
-    if auditor is not None and auditor.has_errors:
-        details = "; ".join(str(e.message) for e in auditor.errors[:5])
+        validate_dxf_document(doc)
+    except ValueError:
         _LOG.error(
-            "write_polylines_dxf: refusing to write %s — %d audit error(s): %s",
+            "write_polylines_dxf: refusing to write invalid document to %s",
             out_path,
-            len(auditor.errors),
-            details,
         )
-        raise ValueError(
-            f"DXF export failed validation ({len(auditor.errors)} error(s)): "
-            f"{details}. The file was not written."
-        )
+        raise
 
     from ..persistence import atomic_write_via
 

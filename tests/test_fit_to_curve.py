@@ -35,7 +35,7 @@ def test_fit_selected_to_curve_converts_kind_to_bezier(qapp):
     assert n == 1
     ent = v._entities[0]
     assert ent.kind == "bezier"
-    assert ent.meta is not None and "tangents" in ent.meta
+    assert ent.meta is not None and "control_points" in ent.meta
     assert len(ent.points) < 80  # far fewer anchors than the original dense trace
 
 
@@ -77,7 +77,7 @@ def test_path_fit_curve_and_path_smooth_are_registered_commands():
 
 
 def test_path_fit_curve_appears_in_radial_menu_pool():
-    from src.ui.widgets.customize_dialogs import _POOL
+    from src.ui.widgets.dialogs.customize_dialogs import _POOL
 
     assert "path.fit_curve" in _POOL
     assert "path.smooth" in _POOL

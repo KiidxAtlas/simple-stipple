@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.backend.primitives import (
+from src.backend.cad.primitives import (
     chamfered_star,
     dovetail_box,
     finger_joint_box,

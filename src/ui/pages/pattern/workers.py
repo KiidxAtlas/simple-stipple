@@ -12,16 +12,22 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.pattern.cancellation import cancellation_scope
-from src.ui.pages.base import TaskPhase
-from src.ui.pages.pattern.output import prepare_output
+from src.backend.pattern.output import prepare_output
 
 LOGGER = logging.getLogger(__name__)
 CANCELLED_MESSAGE = "__task_cancelled__"
+
+
+class TaskPhase(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
 
 
 def _report_cancel(on_error: Callable, token: int) -> None:

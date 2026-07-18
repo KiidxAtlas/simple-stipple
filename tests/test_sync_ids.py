@@ -1,10 +1,10 @@
 """Outline-ID resolution when polylines are reordered."""
 
-from src.ui.pages.pattern.services import PatternProcessingService
+from src.backend.pattern.processing import PatternProcessor
 
 
 def test_sync_outline_ids_preserves_ids_across_reorder():
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     old_polys = [
         [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)],
         [(10.0, 10.0), (11.0, 10.0), (11.0, 11.0), (10.0, 10.0)],

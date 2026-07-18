@@ -1,14 +1,11 @@
 import threading
 
-from src.ui.pages.base import TaskPhase, TaskRevision
-from src.ui.pages.pattern.workers import CANCELLED_MESSAGE, CancellableTaskState, compute_preview
-
-
-def test_task_revision_rejects_stale_results():
-    current = TaskRevision(3)
-    assert current.accepts(3)
-    assert not current.accepts(2)
-    assert current.next() == TaskRevision(4)
+from src.ui.pages.pattern.workers import (
+    CANCELLED_MESSAGE,
+    CancellableTaskState,
+    TaskPhase,
+    compute_preview,
+)
 
 
 def test_cancellable_task_exposes_shared_phase_vocabulary():

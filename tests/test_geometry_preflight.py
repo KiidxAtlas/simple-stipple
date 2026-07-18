@@ -1,4 +1,4 @@
-from src.backend.preflight import analyze_geometry, scale_tolerance
+from src.backend.cad.preflight import analyze_geometry, scale_tolerance
 
 
 def test_preflight_detects_duplicates_zero_segments_and_open_paths():

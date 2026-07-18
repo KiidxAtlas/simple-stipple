@@ -2,8 +2,8 @@
 
 import pytest
 
-from src.ui.pages.pattern.fill import FillSpec, apply_fill, build_fill_region
-from src.ui.pages.pattern.services import PatternProcessingService
+from src.backend.pattern.fill import FillSpec, apply_fill, build_fill_region
+from src.backend.pattern.processing import PatternProcessor
 
 OUTER = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
 INNER = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
@@ -54,7 +54,7 @@ def test_outline_and_pattern_fill_targets_can_be_enabled_together():
 def test_outline_and_pattern_fills_partition_cells_without_overlap():
     from shapely.geometry import LineString, Polygon
 
-    service = PatternProcessingService()
+    service = PatternProcessor()
     params = {"brick_w": 20.0, "brick_h": 20.0, "gap": 2.0}
     pattern = service.build_pattern_polys(
         [OUTER],
@@ -149,7 +149,7 @@ def test_outline_and_pattern_fills_partition_cells_without_overlap():
 
 
 def test_pattern_cell_fill_ignores_open_strokes_instead_of_failing():
-    service = PatternProcessingService()
+    service = PatternProcessor()
     fill: list[list[tuple[float, float]]] = []
 
     result = service.build_pattern_polys(
@@ -168,7 +168,7 @@ def test_pattern_cell_fill_ignores_open_strokes_instead_of_failing():
 
 
 def test_topographic_generator_rejects_non_finite_spacing_without_crashing():
-    service = PatternProcessingService()
+    service = PatternProcessor()
     result = service.build_pattern_polys(
         [OUTER],
         pattern="Topographic",
@@ -181,7 +181,7 @@ def test_topographic_generator_rejects_non_finite_spacing_without_crashing():
 
 
 def test_voronoi_generator_rejects_non_finite_gap_without_crashing():
-    service = PatternProcessingService()
+    service = PatternProcessor()
     result = service.build_pattern_polys(
         [OUTER],
         pattern="Voronoi",
@@ -194,7 +194,7 @@ def test_voronoi_generator_rejects_non_finite_gap_without_crashing():
 
 
 def test_zone_explicit_no_fill_does_not_inherit_document_fill(monkeypatch):
-    service = PatternProcessingService()
+    service = PatternProcessor()
     calls = []
 
     def fake_build(*args, **kwargs):
@@ -222,7 +222,7 @@ def test_zone_explicit_no_fill_does_not_inherit_document_fill(monkeypatch):
 
 
 def test_fill_only_zone_suppresses_pattern_but_keeps_its_fill(monkeypatch):
-    service = PatternProcessingService()
+    service = PatternProcessor()
     calls = []
     zone_fill = {"mode": "crosshatch", "spacing": 1.25}
 

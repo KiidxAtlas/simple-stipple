@@ -8,7 +8,7 @@ depended on ``recent_files``, so there was no reason for them to be two files.
 
 Tracks the most-recently-opened file paths *per kind* (e.g. ``"dxf"``,
 ``"image"``) inside the shared settings dict and persists them to disk via
-:func:`src.settings.save_settings`.
+:func:`src.core.settings.save_settings`.
 
 Design notes:
 
@@ -29,7 +29,7 @@ Conservative wrappers — they only:
 
 * Read the saved directory from ``settings`` to seed the dialog.
 * Save the directory of the chosen path back to ``settings`` on success.
-* Call :func:`src.settings.save_settings` so the value survives a crash.
+* Call :func:`src.core.settings.save_settings` so the value survives a crash.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from PySide6.QtWidgets import QFileDialog
 
-from src.infra.settings import save_settings
+from src.core.settings import save_settings
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -90,9 +90,7 @@ def parse_numeric_expression(text: str, unit: str = "mm", *, is_length: bool = T
         source = re.sub(
             r"(?<![\w.])(\d+(?:\.\d+)?|\.\d+)\s*(mm|in)\b",
             lambda m: str(
-                float(m.group(1))
-                * (_MM_PER_INCH if m.group(2) == "in" else 1.0)
-                / factor
+                float(m.group(1)) * (_MM_PER_INCH if m.group(2) == "in" else 1.0) / factor
             ),
             source,
         )

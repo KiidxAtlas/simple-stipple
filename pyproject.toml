@@ -31,12 +31,15 @@ dev = [
 build = [
     "pyinstaller>=6.0",
 ]
+telemetry = [
+    "sentry-sdk>=2.0",
+]
 cad = [
     "python-solvespace>=3.0.8",
 ]
 
 [project.scripts]
-simple-stipple = "src.infra.launcher:main"
+simple-stipple = "src.core.launcher:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -63,8 +66,8 @@ exclude = ["src/simple_stipple.egg-info"]
 
 # These Qt canvas classes are composed from cooperative mixins at runtime.
 # Mypy checks each mixin in isolation and therefore cannot see attributes
-# supplied by the final QWidget subclass. Keep all value/flow checks enabled,
-# while disabling only the composition-specific diagnostics for this package.
+# supplied by the final QWidget subclass. Only disable the composition-
+# specific diagnostics — keep flow, type-arg, and return-type checks.
 [[tool.mypy.overrides]]
 module = [
     "src.ui.canvas.view",
@@ -73,15 +76,9 @@ module = [
 ]
 disable_error_code = [
     "abstract",
-    "arg-type",
-    "assignment",
     "attr-defined",
-    "call-overload",
     "has-type",
-    "index",
-    "misc",
     "no-redef",
-    "operator",
     "override",
     "union-attr",
 ]
@@ -93,7 +90,7 @@ module = [
     "src.ui.pages.pattern.tab",
     "src.ui.pages.trace.tab",
 ]
-disable_error_code = ["abstract", "assignment", "attr-defined", "has-type"]
+disable_error_code = ["abstract", "attr-defined"]
 
 [tool.setuptools]
 include-package-data = true

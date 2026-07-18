@@ -1,15 +1,10 @@
 {
   "include": ["src"],
-  "ignore": [
-    "src/ui/canvas"
-  ],
+  "ignore": [],
   "venvPath": ".",
   "venv": ".venv",
   "typeCheckingMode": "basic",
   "reportMissingModuleSource": false,
   "reportPrivateImportUsage": false,
-  "reportAbstractUsage": false,
-  "reportAttributeAccessIssue": false,
-  "reportIncompatibleMethodOverride": false,
-  "reportIncompatibleVariableOverride": false
+  "reportMissingTypeStubs": false
 }

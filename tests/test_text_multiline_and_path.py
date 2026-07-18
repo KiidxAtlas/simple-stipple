@@ -22,7 +22,7 @@ def _system_family() -> str:
 
 
 def test_multiline_text_stacks_vertically_not_side_by_side(qapp):
-    from src.ui.canvas.mixins.hud_text import text_to_polylines
+    from src.ui.canvas.services.hud_text import text_to_polylines
 
     family = _system_family()
     one_line = text_to_polylines("Hi", family=family, height_mm=10.0)
@@ -39,7 +39,7 @@ def test_multiline_text_stacks_vertically_not_side_by_side(qapp):
 
 
 def test_multiline_text_contour_count_matches_glyphs(qapp):
-    from src.ui.canvas.mixins.hud_text import text_to_polylines
+    from src.ui.canvas.services.hud_text import text_to_polylines
 
     family = _system_family()
     hi = text_to_polylines("Hi", family=family, height_mm=10.0)
@@ -65,7 +65,7 @@ def test_attach_text_to_path_moves_contours_onto_the_path(qapp):
     path_idx = v._append_entity([(0.0, 50.0), (100.0, 50.0)])
     assert v.attach_text_to_path(text_idx, path_idx)
 
-    members = v._text_member_indices(text_idx)
+    members = v._text_service._text_member_indices(text_idx)
     assert len(members) == n
     # Baseline (the lowest point across every glyph contour) sits exactly on
     # the (horizontal, unrotated) path; ascenders/cap-height sit above it.
@@ -88,14 +88,14 @@ def test_rebuild_text_reflows_onto_the_attached_path(qapp):
     # After the path was created (idx 1), text sits at indices [0, ...]; the
     # path is now the last entity. Rebuild the text with new content and
     # confirm it re-attaches to the (now index-shifted) path automatically.
-    text_idx = v._text_member_indices(0)[0]
+    text_idx = v._text_service._text_member_indices(0)[0]
     values = v.text_params_at(text_idx)
     assert values is not None
     values["text"] = "Bye"
-    assert v.rebuild_text(text_idx, values)
+    assert v._text_service.rebuild_text(text_idx, values)
 
     assert v._sel
-    new_members = v._text_member_indices(next(iter(v._sel)))
+    new_members = v._text_service._text_member_indices(next(iter(v._sel)))
     assert new_members
     ys = [y for i in new_members for _x, y in v._entities[i].points]
     assert min(ys) == pytest.approx(40.0, abs=0.1)

@@ -144,7 +144,11 @@ def dxf_to_svg(
     unit_code = int(document.header.get("$INSUNITS", 0) or 0)
     try:
         mm_factor = (
-            float(units.conversion_factor(cast(units.InsertUnits, unit_code), cast(units.InsertUnits, 4)))
+            float(
+                units.conversion_factor(
+                    cast(units.InsertUnits, unit_code), cast(units.InsertUnits, 4)
+                )
+            )
             if unit_code
             else 1.0
         )
@@ -181,9 +185,12 @@ def _matrix_multiply(left: Matrix, right: Matrix) -> Matrix:
     a, b, c, d, e, f = left
     g, h, i, j, k, offset_y = right
     return (
-        a * g + c * h, b * g + d * h,
-        a * i + c * j, b * i + d * j,
-        a * k + c * offset_y + e, b * k + d * offset_y + f,
+        a * g + c * h,
+        b * g + d * h,
+        a * i + c * j,
+        b * i + d * j,
+        a * k + c * offset_y + e,
+        b * k + d * offset_y + f,
     )
 
 
@@ -209,7 +216,14 @@ def _parse_transform(value: str) -> Matrix:
             current = (args[0], 0, 0, args[1] if len(args) > 1 else args[0], 0, 0)
         elif name == "rotate" and args:
             angle = math.radians(args[0])
-            rotation: Matrix = (math.cos(angle), math.sin(angle), -math.sin(angle), math.cos(angle), 0, 0)
+            rotation: Matrix = (
+                math.cos(angle),
+                math.sin(angle),
+                -math.sin(angle),
+                math.cos(angle),
+                0,
+                0,
+            )
             if len(args) >= 3:
                 cx, cy = args[1], args[2]
                 current = _matrix_multiply(
@@ -356,8 +370,15 @@ def _length_mm(value: str, *, default_px: float) -> float:
     if not match:
         return default_px * 25.4 / 96.0
     number = float(match.group(1))
-    factor = {None: 25.4 / 96.0, "px": 25.4 / 96.0, "mm": 1.0, "cm": 10.0,
-              "in": 25.4, "pt": 25.4 / 72.0, "pc": 25.4 / 6.0}[match.group(2)]
+    factor = {
+        None: 25.4 / 96.0,
+        "px": 25.4 / 96.0,
+        "mm": 1.0,
+        "cm": 10.0,
+        "in": 25.4,
+        "pt": 25.4 / 72.0,
+        "pc": 25.4 / 6.0,
+    }[match.group(2)]
     return number * factor
 
 
@@ -397,7 +418,7 @@ def svg_to_dxf(
     this function assembled its own ezdxf document and wrote it even when
     the audit reported errors.
     """
-    from src.backend.shapes import shape_from_meta
+    from src.backend.cad.shapes import shape_from_meta
 
     source = Path(input_path)
     size = source.stat().st_size
@@ -417,8 +438,12 @@ def svg_to_dxf(
     root_matrix, y_flip = _root_svg_matrix(root)
     viewbox = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
     if len(viewbox) == 4:
-        viewport_width_px = _length_mm(root.attrib.get("width", ""), default_px=viewbox[2]) * 96 / 25.4
-        viewport_height_px = _length_mm(root.attrib.get("height", ""), default_px=viewbox[3]) * 96 / 25.4
+        viewport_width_px = (
+            _length_mm(root.attrib.get("width", ""), default_px=viewbox[2]) * 96 / 25.4
+        )
+        viewport_height_px = (
+            _length_mm(root.attrib.get("height", ""), default_px=viewbox[3]) * 96 / 25.4
+        )
         user_per_px_x = viewbox[2] / viewport_width_px
         user_per_px_y = viewbox[3] / viewport_height_px
     else:
@@ -461,7 +486,9 @@ def svg_to_dxf(
     def collect_transforms(elem: ET.Element, parent: Matrix = root_matrix) -> None:
         transform_value = elem.attrib.get("transform", "")
         if not transform_value:
-            style_match = re.search(r"(?:^|;)\s*transform\s*:\s*([^;]+)", elem.attrib.get("style", ""))
+            style_match = re.search(
+                r"(?:^|;)\s*transform\s*:\s*([^;]+)", elem.attrib.get("style", "")
+            )
             transform_value = style_match.group(1).strip() if style_match else ""
         local = _parse_transform(transform_value)
         combined = _matrix_multiply(parent, local)
@@ -478,7 +505,11 @@ def svg_to_dxf(
         style = elem.attrib.get("style", "").replace(" ", "").lower()
         hidden = hidden or tag in {"defs", "clippath", "mask", "symbol", "marker"}
         hidden = hidden or elem.attrib.get("display", "").lower() == "none"
-        hidden = hidden or "display:none" in style or elem.attrib.get("visibility", "").lower() == "hidden"
+        hidden = (
+            hidden
+            or "display:none" in style
+            or elem.attrib.get("visibility", "").lower() == "hidden"
+        )
         if hidden:
             non_rendered.add(id(elem))
         for child in elem:
@@ -535,12 +566,16 @@ def svg_to_dxf(
                 if rx and ry:
                     pts = []
                     for arc_cx, arc_cy, start_angle in (
-                        (x + w - rx, y + ry, -90), (x + w - rx, y + h - ry, 0),
-                        (x + rx, y + h - ry, 90), (x + rx, y + ry, 180),
+                        (x + w - rx, y + ry, -90),
+                        (x + w - rx, y + h - ry, 0),
+                        (x + rx, y + h - ry, 90),
+                        (x + rx, y + ry, 180),
                     ):
                         for step in range(5):
                             angle = math.radians(start_angle + step * 22.5)
-                            pts.append((arc_cx + rx * math.cos(angle), arc_cy + ry * math.sin(angle)))
+                            pts.append(
+                                (arc_cx + rx * math.cos(angle), arc_cy + ry * math.sin(angle))
+                            )
                     pts.append(pts[0])
                 records.append(([tp(point) for point in pts], "polyline", None))
 
@@ -556,7 +591,10 @@ def svg_to_dxf(
                 if abs(rx2 - ry2) <= 1e-9 * max(rx2, ry2, 1.0):
                     _add_meta_entity("circle", {"center": center, "radius": rx2}, "CIRCLE")
                 else:
-                    pts = [tp((cx + r * math.cos(a), cy + r * math.sin(a))) for a in [i * math.tau / 64 for i in range(65)]]
+                    pts = [
+                        tp((cx + r * math.cos(a), cy + r * math.sin(a)))
+                        for a in [i * math.tau / 64 for i in range(65)]
+                    ]
                     records.append((pts, "polyline", None))
 
         elif tag == "ellipse":
@@ -565,7 +603,10 @@ def svg_to_dxf(
             rx = coord(elem.attrib.get("rx"), "x")
             ry = coord(elem.attrib.get("ry"), "y")
             if rx > 0 and ry > 0:
-                pts = [tp((cx + rx * math.cos(a), cy + ry * math.sin(a))) for a in [i * math.tau / 64 for i in range(65)]]
+                pts = [
+                    tp((cx + rx * math.cos(a), cy + ry * math.sin(a)))
+                    for a in [i * math.tau / 64 for i in range(65)]
+                ]
                 records.append((pts, "polyline", None))
 
         elif tag == "path":

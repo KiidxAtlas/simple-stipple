@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-from src.backend.document import TraceTabState
+from src.backend.model.document import TraceTabState
 from src.ui.pages.trace.form import trace_default
 
 

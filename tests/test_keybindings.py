@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 
-from src.infra.settings import DEFAULT_KEYBINDINGS  # noqa: E402
+from src.core.settings import DEFAULT_KEYBINDINGS  # noqa: E402
 from src.ui.canvas.interaction import commands as canvas_commands  # noqa: E402
 
 
@@ -114,7 +114,7 @@ def test_unified_mode_commands_point_at_their_app_level_settings_key(cmd_id, set
 
 
 def test_keybindings_dialog_has_one_row_per_settings_slot(qapp):
-    from src.ui.widgets.keybindings_dialog import _KEYBINDING_FIELDS
+    from src.ui.widgets.dialogs.keybindings_dialog import _KEYBINDING_FIELDS
 
     keys = [key for key, _label, _group, _default in _KEYBINDING_FIELDS]
     assert len(keys) == len(set(keys))
@@ -143,7 +143,7 @@ def test_pan_owns_p_and_bezier_pen_is_unbound_by_default():
     assert canvas_commands.get("mode.pan").shortcut == "P"
     assert canvas_commands.get("mode.pen").shortcut == ""
 
-    from src.ui.widgets.keybindings_dialog import _KEYBINDING_FIELDS
+    from src.ui.widgets.dialogs.keybindings_dialog import _KEYBINDING_FIELDS
 
     fields = {key: (label, default) for key, label, _group, default in _KEYBINDING_FIELDS}
     assert fields["mode.pan"] == ("Pan Tool", "P")

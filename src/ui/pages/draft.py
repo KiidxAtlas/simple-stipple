@@ -26,13 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.document import DraftTabState
+from src.backend.cad.recognition import convert_to_parametric, recognized_entities
 from src.backend.dxf.fvi import read_fvi, summarize_fvi_import, write_fvi
 from src.backend.dxf.io import (
     load_dxf_polylines_by_layer_with_report,
     write_polylines_dxf,
 )
 from src.backend.dxf.svg_dxf import svg_to_dxf, write_polylines_svg
+from src.backend.model.document import DraftTabState, EntityRecord
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
@@ -43,10 +44,11 @@ from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components import RecentFilesButton, content_splitter, surface_frame
 from src.ui.pages.base import BasePage
 from src.ui.util import KIND_VECTOR, pick_open_file, pick_save_file, record_recent
-from src.ui.widgets.fvi_dialog import FviExportDialog
-from src.ui.widgets.import_dialog import DxfImportPreviewDialog
-from src.ui.widgets.properties_panel import CanvasPropertiesPanel
-from src.ui.widgets.status_strip import CanvasStatusStrip
+from src.ui.widgets.canvas.properties_panel import CanvasPropertiesPanel
+from src.ui.widgets.canvas.status_strip import CanvasStatusStrip
+from src.ui.widgets.dialogs.fvi_dialog import FviExportDialog
+from src.ui.widgets.dialogs.import_dialog import DxfImportPreviewDialog
+from src.ui.widgets.shape_recognition_dialog import ShapeRecognitionDialog
 
 LOGGER = logging.getLogger(__name__)
 
@@ -316,6 +318,35 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
 
+    def _offer_shape_recognition(self) -> None:
+        candidates = recognized_entities(self._canvas._entities)
+        if not candidates:
+            return
+        dialog = ShapeRecognitionDialog([shape for _, shape in candidates], self)
+        recognized_by_id = {
+            self._canvas._entities[index].id: shape for index, shape in candidates
+        }
+
+        def convert() -> None:
+            def mutate(document) -> None:
+                document.entities = [
+                    convert_to_parametric(entity, recognized_by_id[entity.id])
+                    if entity.id in recognized_by_id
+                    else entity
+                    for entity in document.entities
+                ]
+
+            self._canvas._canvas_service.update_document(mutate)
+            self._canvas._sync_shape_storage_from_entities()
+            self._canvas._redraw()
+            self._canvas._notify()
+            self._canvas._show_flash(f"Converted {len(candidates)} parametric shapes", 1400)
+
+        dialog.accepted.connect(convert)
+        dialog.finished.connect(lambda _result: setattr(self, "_shape_recognition_dialog", None))
+        self._shape_recognition_dialog = dialog
+        dialog.open()
+
     def _on_layer_activated(self, layer: str) -> None:
         self._switch_active_layer(layer, fit=False)
 
@@ -446,7 +477,7 @@ class DraftPage(BasePage):
             self._refresh_status()
 
     def _on_shapes_delete_requested(self, layer: str, keys: list) -> None:
-        from src.ui.widgets.layer_tree import flatten_shape_keys
+        from src.ui.widgets.layer_tree.logic import flatten_shape_keys
 
         indices = flatten_shape_keys(keys)
         if not indices:
@@ -486,6 +517,18 @@ class DraftPage(BasePage):
 
     def _export(self) -> None:
         records = self._canvas.get_export_dxf_state()
+        active_name = self._rt().current_layer_name()
+        for dimension in self._canvas._dimensions:
+            p1 = tuple(dimension["p1"])
+            p2 = tuple(dimension["p2"])
+            records.append(
+                {
+                    "polyline": [p1, p2],
+                    "kind": "dimension",
+                    "meta": dict(dimension),
+                    "layer": active_name,
+                }
+            )
         if not records:
             QMessageBox.information(
                 self,
@@ -509,7 +552,6 @@ class DraftPage(BasePage):
         try:
             # Group export records by document layer, preserving layer order.
             # Entities carry their layer, so no graph capture is needed.
-            active_name = self._rt().current_layer_name()
             by_layer: dict[str, list[dict[str, Any]]] = {}
             for r in records:
                 by_layer.setdefault(str(r.get("layer") or active_name), []).append(r)
@@ -843,21 +885,24 @@ class DraftPage(BasePage):
         flat = [poly for polys in by_layer.values() for poly in polys]
         if append and self._canvas._entities:
             canvas = self._canvas
-            canvas._push_undo()
-            new_indices: list[int] = []
-            for layer, polys in by_layer.items():
-                if layer not in canvas._layer_order:
-                    canvas._layer_order.append(layer)
-                for poly in polys:
-                    index = canvas._append_entity(list(poly))
-                    canvas._entities[index].layer = layer
-                    new_indices.append(index)
-            canvas._sel = set(new_indices)
+            created_ids: list[str] = []
+
+            def mutate(document) -> None:
+                for layer, polys in by_layer.items():
+                    if layer not in document.layer_order:
+                        document.layer_order.append(layer)
+                    for poly in polys:
+                        entity = EntityRecord(points=list(poly), layer=layer)
+                        document.append(entity)
+                        created_ids.append(entity.id)
+                document.select_ids(created_ids)
+
+            canvas._canvas_service.update_document(mutate)
             canvas._sync_shape_storage_from_entities()
             canvas._redraw()
             canvas._notify()
             canvas._fire_poly_change()
-            canvas._show_flash(f"Added {len(new_indices)} shapes from {Path(path).name}", 1200)
+            canvas._show_flash(f"Added {len(created_ids)} shapes from {Path(path).name}", 1200)
         else:
             self._rt().load_polys_by_layer(by_layer, fit=bool(flat))
             self._canvas._show_flash(f"Loaded {source_kind}: {Path(path).name}", 1200)
@@ -865,6 +910,8 @@ class DraftPage(BasePage):
         record_recent(self._settings, KIND_VECTOR, path)
         self._refresh_status()
         self._emit_state_changed()
+        if source_kind == "DXF":
+            self._offer_shape_recognition()
 
     def load_outline_polys(
         self,

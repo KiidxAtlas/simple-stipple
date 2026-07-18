@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.ui.pages.pattern.output import clean_output, diagnose_output, order_paths
+from src.backend.pattern.output import clean_output, diagnose_output, order_paths
 
 
 def test_cleanup_removes_micro_island_and_short_vertex():

@@ -1,5 +1,5 @@
 """Shared UI building blocks used across every page: layout helpers, buttons,
-inputs, collapsible sections, status labels, and hand-drawn vector icons.
+inputs, collapsible sections, and status labels.
 
 One standardized place for the small widgets/factories every page needs,
 so pages don't each grow their own slightly-different copy. Merged from the
@@ -502,6 +502,32 @@ def collapsible_content_widget(*, spacing: int = 8) -> tuple[QWidget, QVBoxLayou
 # generic/wrong glyph (e.g. the settings gear rendering as a plain circle).
 # Drawing the icon ourselves guarantees it looks the same everywhere.
 # ══════════════════════════════════════════════════════════════════════════
+
+
+__all__ = [
+    "CollapsibleSection",
+    "EscapeBlurFilter",
+    "RecentFilesButton",
+    "blur_focused_line_edit",
+    "browse_row",
+    "clear_line_edit_error",
+    "collapsible_content_widget",
+    "content_splitter",
+    "info_chip",
+    "make_resettable_line_edit",
+    "parse_float_field",
+    "parse_float_field_with_feedback",
+    "primary_button",
+    "section_label",
+    "sep",
+    "set_line_edit_error",
+    "set_status_label",
+    "sidebar_panel",
+    "surface_frame",
+]
+
+
+# Vector icon factories
 
 
 def icon_from_painter(
@@ -1103,28 +1129,4 @@ def tool_icon(name: str, *, size: int = 20, color: str = "#c9d1d9") -> QIcon:
     return icon_from_painter(draw_fn, size=size, color=color)
 
 
-__all__ = [
-    "CollapsibleSection",
-    "EscapeBlurFilter",
-    "RecentFilesButton",
-    "blur_focused_line_edit",
-    "browse_row",
-    "clear_line_edit_error",
-    "collapsible_content_widget",
-    "content_splitter",
-    "download_icon",
-    "gear_icon",
-    "icon_from_painter",
-    "info_chip",
-    "make_resettable_line_edit",
-    "parse_float_field",
-    "parse_float_field_with_feedback",
-    "primary_button",
-    "section_label",
-    "sep",
-    "set_line_edit_error",
-    "set_status_label",
-    "sidebar_panel",
-    "surface_frame",
-    "tool_icon",
-]
+__all__ = ["download_icon", "gear_icon", "icon_from_painter", "tool_icon"]

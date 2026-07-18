@@ -1,14 +1,24 @@
 """Canvas visual and interaction constants — single source of truth.
 
-``SNAP_DIST``/``MIN_SCALE`` are re-exported from ``src.backend.geometry``
+``SNAP_DIST``/``MIN_SCALE`` are re-exported from ``src.backend.cad.geometry``
 (the actual single source of truth for those two) rather than duplicated
 here, so the interactive canvas and the pure-Python snap-resolution logic in
-``src.backend.snapping`` can't silently drift apart.
+``src.backend.cad.snapping`` can't silently drift apart.
 """
 
 from PySide6.QtGui import QColor
 
-from src.backend.geometry import MIN_SCALE, SNAP_DIST
+from src.backend.cad.geometry import MIN_SCALE, SNAP_DIST
+
+# ── Base canvas palette ───────────────────────────────────────────────────────
+BG = "#0d1117"
+POLY = "#4a9eff"
+SEL = "#f47067"
+DIM = "#8b949e"
+Q_BG = QColor(BG)
+
+# Minimum pointer travel before a press becomes a drag (pixels).
+DRAG_THRESH = 5
 
 # ── Vertex handle colors ──────────────────────────────────────────────────────
 HANDLE = QColor("#4a9eff")  # vertex handle — matches poly accent
@@ -62,6 +72,9 @@ __all__ = [
     "DRAW_COLOR",
     "DRAW_LINE_W",
     "DRAW_VERT_R",
+    "DRAG_THRESH",
+    "BG",
+    "DIM",
     "EDGE_HIT",
     "GRID_AXIS",
     "GRID_MAJOR",
@@ -76,9 +89,12 @@ __all__ = [
     "MEASURE_COLOR",
     "MIN_SCALE",
     "ORTHO_COLOR",
+    "POLY",
+    "Q_BG",
     "RUBBER_W",
     "SELECT_PT",
     "SELECT_PT_ACTIVE",
+    "SEL",
     "SNAP_CLOSE",
     "SNAP_DIST",
     "VERT_HIT",

@@ -126,7 +126,11 @@ def _safe_repair_dxf(input_path: Path, output_path: Path) -> dict[str, Any]:
     unit_code = int(doc.header.get("$INSUNITS", 0) or 0)
     try:
         mm_per_drawing_unit = (
-            float(units.conversion_factor(cast(units.InsertUnits, unit_code), cast(units.InsertUnits, 4)))
+            float(
+                units.conversion_factor(
+                    cast(units.InsertUnits, unit_code), cast(units.InsertUnits, 4)
+                )
+            )
             if unit_code
             else 1.0
         )
@@ -202,6 +206,7 @@ def _safe_repair_dxf(input_path: Path, output_path: Path) -> dict[str, Any]:
 
     if not stats["changed"]:
         if input_path.resolve() != output_path.resolve():
+
             def copy_unchanged(temporary: Path) -> None:
                 shutil.copyfile(input_path, temporary)
 
@@ -246,7 +251,11 @@ def fix_dxf(
     source_unit = int(source_doc.header.get("$INSUNITS", 0) or 0)
     try:
         mm_factor = (
-            float(units.conversion_factor(cast(units.InsertUnits, source_unit), cast(units.InsertUnits, 4)))
+            float(
+                units.conversion_factor(
+                    cast(units.InsertUnits, source_unit), cast(units.InsertUnits, 4)
+                )
+            )
             if source_unit
             else 1.0
         )

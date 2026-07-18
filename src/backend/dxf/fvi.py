@@ -403,9 +403,7 @@ def render_fvi(
         if options.include_comments:
             label = str((record.get("meta") or {}).get("name") or record.get("layer") or index)
             lines.append(f"; Path {index}: {label}")
-        lines.append(
-            f"MOVEDIST {move_x},{move_y}"
-        )
+        lines.append(f"MOVEDIST {move_x},{move_y}")
         cursor = (cursor[0] + actual_move_x, cursor[1] + actual_move_y)
 
         kind = str(record.get("kind", "polyline"))
@@ -432,11 +430,7 @@ def render_fvi(
                 1e-9, start_radius * 1e-6
             ):
                 raise ValueError("FVI precision is too low to preserve a native arc.")
-            lines.append(
-                "DRAWARC "
-                f"{ex_text},{ey_text},"
-                f"{cx_text},{cy_text}"
-            )
+            lines.append(f"DRAWARC {ex_text},{ey_text},{cx_text},{cy_text}")
             cursor = (cursor[0] + ex_actual, cursor[1] + ey_actual)
             draw_arcs += 1
         elif (
@@ -471,9 +465,7 @@ def render_fvi(
                     raise ValueError(
                         "FVI precision is too low to represent one or more drawing segments."
                     )
-                lines.append(
-                    f"DRAWLINE {dx_text},{dy_text}"
-                )
+                lines.append(f"DRAWLINE {dx_text},{dy_text}")
                 cursor = (cursor[0] + dx_actual, cursor[1] + dy_actual)
                 draw_lines += 1
             if kind in {"bezier", "spline", "ellipse"}:

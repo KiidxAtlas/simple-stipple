@@ -1,20 +1,20 @@
 """End-to-end preview and generation tests for the Pattern page."""
 
-from src.ui.pages.pattern.services import PatternProcessingService
+from src.backend.pattern.processing import PatternProcessor
 from src.ui.pages.pattern.workers import run_generate
 
 OUTLINE = [[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]]
 
 
 def test_available_patterns_have_exactly_one_parameter_definition():
-    from src.infra.constants import PATTERNS
-    from src.ui.pages.pattern._spec import PARAM_SPECS
+    from src.backend.pattern.processing import PATTERNS
+    from src.ui.pages.pattern.form_spec import PARAM_SPECS
 
     assert set(PATTERNS) - {"— None —"} == set(PARAM_SPECS)
 
 
 def test_open_paths_are_reported_as_neutral_linework():
-    warning = PatternProcessingService.validate_outline_inputs(
+    warning = PatternProcessor.validate_outline_inputs(
         [OUTLINE[0], [(20.0, 20.0), (30.0, 20.0), (30.0, 30.0)]]
     )
     assert warning == "Using 1 closed outline(s); keeping 1 open path(s) as unfilled linework."
@@ -25,17 +25,17 @@ def test_near_open_outline_does_not_pass_preflight_then_disappear():
 
     near_open = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0), (0.1, 0.0)]
     with pytest.raises(ValueError, match="1 open path"):
-        PatternProcessingService.validate_outline_inputs([near_open])
+        PatternProcessor.validate_outline_inputs([near_open])
 
 
 def test_small_closed_laser_feature_is_accepted_as_an_outline():
     small_closed = [(0.0, 0.0), (0.5, 0.0), (0.5, 0.5), (0.0, 0.5), (0.0, 0.0)]
 
-    assert PatternProcessingService.validate_outline_inputs([small_closed]) is None
+    assert PatternProcessor.validate_outline_inputs([small_closed]) is None
 
 
 def test_empty_legacy_zone_pattern_is_normalized_before_worker_snapshot():
-    service = PatternProcessingService()
+    service = PatternProcessor()
     jobs, warnings = service.snapshot_zone_jobs(
         [
             {
@@ -58,13 +58,13 @@ def test_invalid_closed_outline_is_not_reported_as_open():
 
     self_crossing = [(0.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (0.0, 0.0)]
     with pytest.raises(ValueError, match="boundary is closed.*invalid geometry"):
-        PatternProcessingService.validate_outline_inputs([self_crossing])
+        PatternProcessor.validate_outline_inputs([self_crossing])
 
 
 def test_basketweave_dispatch_is_available():
     from shapely.geometry import box
 
-    result = PatternProcessingService()._gen_pattern(
+    result = PatternProcessor()._gen_pattern(
         box(0, 0, 20, 20),
         "Basketweave",
         {"strip_w": 2.0, "strip_l": 8.0, "gap": 0.2},
@@ -73,7 +73,7 @@ def test_basketweave_dispatch_is_available():
 
 
 def test_build_preview_polys_honeycomb():
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     res = pps.build_preview_polys(
         OUTLINE,
         pattern="Honeycomb",
@@ -93,7 +93,7 @@ def test_build_preview_polys_honeycomb():
 
 
 def _run_generate_sync(active, out_path, pattern, params, scale, orig_w, orig_h):
-    svc = PatternProcessingService()
+    svc = PatternProcessor()
     results: dict = {}
     run_generate(
         active,

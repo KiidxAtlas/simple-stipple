@@ -51,7 +51,7 @@ def test_header_buttons_use_icons_not_unicode_glyphs(qapp):
     carry a real QIcon, not rely on a Unicode character as their label."""
     from PySide6.QtWidgets import QPushButton
 
-    from src.app import App
+    from src.app.window import App
 
     win = App()
     settings_btn = None

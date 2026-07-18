@@ -220,7 +220,6 @@ def test_tree_selection_activates_shape_layer(qapp):
 def test_tree_rows_number_per_layer(qapp):
     canvas, rt = make_rig(qapp)
     canvas.set_active_layer("Layer 2")
-    canvas._push_undo()
     canvas._append_entity(square(60, 0))
     rows = rt.build_layer_tree_rows()
     labels = {r["name"]: [s["label"][:2] for s in r["shapes"]] for r in rows}

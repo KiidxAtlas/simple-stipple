@@ -55,7 +55,9 @@ def test_trim_middle_piece_leaves_two(qapp):
     click_world(v, 2.0, 0.0)  # piece between x=0 and x=4
     assert v.poly_count == 4  # horizontal became two pieces
     lengths = sorted(
-        abs(v._entities[i].points[-1][0] - v._entities[i].points[0][0]) for i in (0, 3)
+        abs(entity.points[-1][0] - entity.points[0][0])
+        for entity in v._entities
+        if abs(entity.points[-1][1] - entity.points[0][1]) < 1e-9
     )
     assert lengths[0] == pytest.approx(6.0, abs=1e-6)  # x=4..10
     assert lengths[1] == pytest.approx(10.0, abs=1e-6)  # x=-10..0

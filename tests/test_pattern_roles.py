@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def _page(qapp):
-    from src.infra.settings import validate_settings
+    from src.core.settings import validate_settings
     from src.ui.pages.pattern.tab import PatternPage
 
     return PatternPage(settings=validate_settings({}))

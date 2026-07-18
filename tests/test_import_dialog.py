@@ -3,7 +3,7 @@
 from PySide6.QtCore import Qt
 
 from src.backend.dxf.io import DxfImportReport
-from src.ui.widgets.import_dialog import DxfImportPreviewDialog
+from src.ui.widgets.dialogs.import_dialog import DxfImportPreviewDialog
 
 
 def test_import_preview_defaults_and_layer_filter(qapp):

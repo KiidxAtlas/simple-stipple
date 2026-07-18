@@ -8,7 +8,7 @@ display text.
 
 Per-pattern generator parameters (hex radius, flow spacing, …) live in
 ``_spec.PARAM_SPECS``, and Settings-dialog-backed defaults live in
-``src.infra.settings`` — neither is duplicated here.
+``src.core.settings`` — neither is duplicated here.
 """
 
 # ── Modifiers ─────────────────────────────────────────────────────────────
@@ -39,4 +39,4 @@ DEFAULT_GRID_VISIBLE = True
 DEFAULT_GRID_SPACING_MM = 1.0
 
 # ── Preview scheduling ────────────────────────────────────────────────────
-PREVIEW_DEBOUNCE_MS = 400
+PREVIEW_DEBOUNCE_MS = 100

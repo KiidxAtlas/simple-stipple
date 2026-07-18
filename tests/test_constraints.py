@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.backend.constraints import GeometricConstraint, solve_constraints
+from src.backend.cad.constraints import GeometricConstraint, solve_constraints
 from tests.test_canvas_behavior import make_canvas
 
 

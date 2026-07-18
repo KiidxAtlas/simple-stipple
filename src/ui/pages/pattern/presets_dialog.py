@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.pages.pattern.presets import (
+from src.backend.pattern.presets import (
     export_to_file,
     import_from_file,
     merge_presets,

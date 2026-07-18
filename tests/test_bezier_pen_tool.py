@@ -24,7 +24,7 @@ def _assert_points_approx(actual, expected, abs_tol=1e-6):
 
 
 def test_straight_segment_when_tangents_are_zero():
-    from src.backend.geometry import build_bezier_poly
+    from src.backend.cad.geometry import build_bezier_poly
 
     poly = build_bezier_poly([(0.0, 0.0), (10.0, 0.0)], [(0.0, 0.0), (0.0, 0.0)])
     # A zero-handle cubic degenerates to the straight line — every sampled
@@ -35,7 +35,7 @@ def test_straight_segment_when_tangents_are_zero():
 
 
 def test_curve_bulges_toward_a_nonzero_tangent():
-    from src.backend.geometry import build_bezier_poly
+    from src.backend.cad.geometry import build_bezier_poly
 
     poly = build_bezier_poly([(0.0, 0.0), (10.0, 0.0)], [(0.0, 5.0), (0.0, 5.0)], segments=32)
     ys = [y for _x, y in poly]
@@ -43,7 +43,7 @@ def test_curve_bulges_toward_a_nonzero_tangent():
 
 
 def test_closed_flag_adds_a_return_segment():
-    from src.backend.geometry import build_bezier_poly
+    from src.backend.cad.geometry import build_bezier_poly
 
     anchors = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]
     tangents = [(0.0, 0.0)] * 3
@@ -54,14 +54,14 @@ def test_closed_flag_adds_a_return_segment():
 
 
 def test_too_few_anchors_returns_input_unchanged():
-    from src.backend.geometry import build_bezier_poly
+    from src.backend.cad.geometry import build_bezier_poly
 
     assert build_bezier_poly([], []) == []
     assert build_bezier_poly([(1.0, 2.0)], [(0.0, 0.0)]) == [(1.0, 2.0)]
 
 
 def test_independent_handles_control_each_side_without_forced_mirroring():
-    from src.backend.geometry import build_bezier_poly
+    from src.backend.cad.geometry import build_bezier_poly
 
     anchors = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
     poly = build_bezier_poly(
@@ -148,7 +148,7 @@ def test_bezier_entity_renders_via_build_bezier_poly(qapp):
     assert len(ent.points) == 2  # sparse anchors only
     assert ent.meta is not None
 
-    from src.backend.geometry import build_bezier_poly
+    from src.backend.cad.geometry import build_bezier_poly
 
     tessellated = build_bezier_poly(ent.points, ent.meta["tangents"], segments=ent.meta["segments"])
     assert len(tessellated) > len(ent.points)  # actually a curve, not a line
@@ -216,7 +216,7 @@ def test_polyline_family_bezier_entry_stays_in_draw_mode(qapp):
     switch to a separate mode or hide the draw sidebar."""
     v = make_view(qapp, [])
     v.set_mode("draw")
-    v._on_polyline_family_change("bezier")
+    v._set_draw_primitive("bezier")
     assert v.get_mode() == "draw"
     assert v._draw_primitive == "bezier"
     assert v._draw_sidebar_visible is True

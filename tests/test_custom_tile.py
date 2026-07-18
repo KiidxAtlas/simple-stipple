@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from shapely.geometry import LineString, box
 
-from src.ui.pages.pattern.services import PatternProcessingService
+from src.backend.pattern.processing import PatternProcessor
 
 
 def test_custom_tile_service_repeats_selected_geometry():
     tile = [[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]]
-    result = PatternProcessingService()._gen_pattern(
+    result = PatternProcessor()._gen_pattern(
         box(0, 0, 10, 10),
         "Custom Tile",
         {"tile_polys": tile, "gap": 1.0, "rotation": 0.0, "interlock": False},
@@ -23,7 +23,7 @@ def test_custom_tile_preserves_internal_closed_and_open_linework():
         [(6.0, 2.0), (8.0, 2.0), (8.0, 4.0), (6.0, 4.0), (6.0, 2.0)],
         [(2.0, 7.0), (8.0, 7.0)],
     ]
-    result = PatternProcessingService()._gen_pattern(
+    result = PatternProcessor()._gen_pattern(
         box(-20, -20, 30, 30),
         "Custom Tile",
         {
@@ -46,7 +46,7 @@ def test_custom_tile_preserves_internal_closed_and_open_linework():
 def test_clipped_custom_tile_cells_remain_closed_and_receive_pattern_fill():
     outline = [(0.0, 0.0), (9.0, 0.0), (9.0, 9.0), (0.0, 9.0), (0.0, 0.0)]
     motif = [[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0), (0.0, 0.0)]]
-    service = PatternProcessingService()
+    service = PatternProcessor()
     params = {
         "tile_polys": motif,
         "gap": 0.0,
@@ -92,7 +92,7 @@ def test_clipped_custom_tile_cells_remain_closed_and_receive_pattern_fill():
 
 
 def test_custom_tile_requires_geometry():
-    result = PatternProcessingService()._gen_pattern(
+    result = PatternProcessor()._gen_pattern(
         box(0, 0, 10, 10),
         "Custom Tile",
         {"tile_polys": [], "gap": 1.0, "rotation": 0.0, "interlock": False},
@@ -102,7 +102,7 @@ def test_custom_tile_requires_geometry():
 
 def test_custom_tile_repeat_modes_and_phase_change_output():
     tile = [[(0.0, 0.0), (3.0, 0.0), (2.0, 2.0), (0.0, 1.0), (0.0, 0.0)]]
-    service = PatternProcessingService()
+    service = PatternProcessor()
     base = {
         "tile_polys": tile,
         "gap": 1.0,
@@ -123,7 +123,7 @@ def test_custom_tile_repeat_modes_and_phase_change_output():
 
 
 def test_pattern_page_builds_custom_tile_parameters(qapp):
-    from src.infra.settings import validate_settings
+    from src.core.settings import validate_settings
     from src.ui.pages.pattern.tab import PatternPage
 
     page = PatternPage(settings=validate_settings({}))
@@ -145,7 +145,7 @@ def test_pattern_page_builds_custom_tile_parameters(qapp):
 
 
 def test_saved_custom_patterns_appear_in_main_pattern_picker(qapp):
-    from src.infra.settings import validate_settings
+    from src.core.settings import validate_settings
     from src.ui.pages.pattern.tab import PatternPage
 
     motif = [[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 0.0)]]
@@ -167,9 +167,9 @@ def test_saved_custom_patterns_appear_in_main_pattern_picker(qapp):
 def test_pattern_size_percent_scales_custom_tile_geometry():
     from shapely.geometry import box
 
-    from src.ui.pages.pattern.services import PatternProcessingService
+    from src.backend.pattern.processing import PatternProcessor
 
-    service = PatternProcessingService()
+    service = PatternProcessor()
     params = {
         "tile_polys": [[(0.0, 0.0), (2.0, 0.0)]],
         "gap": 1.0,
@@ -187,7 +187,7 @@ def test_pattern_size_percent_scales_custom_tile_geometry():
 
 
 def test_custom_tile_preset_state_includes_motif(qapp):
-    from src.infra.settings import validate_settings
+    from src.core.settings import validate_settings
     from src.ui.pages.pattern.params import collect_form_state, restore_form_state
     from src.ui.pages.pattern.tab import PatternPage
 
@@ -207,7 +207,7 @@ def test_custom_tile_preset_state_includes_motif(qapp):
 
 
 def test_custom_tile_geometry_survives_preset_serialization():
-    from src.ui.pages.pattern.presets import deserialize_presets, serialize_presets
+    from src.backend.pattern.presets import deserialize_presets, serialize_presets
 
     motif = [[[0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [0.0, 0.0]]]
     restored = deserialize_presets(

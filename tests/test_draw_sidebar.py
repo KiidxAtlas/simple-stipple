@@ -349,7 +349,7 @@ def test_sidebar_width_is_draggable_and_clamped(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")
     sb = v._draw_sidebar
-    from src.infra.settings import MAX_DRAW_SIDEBAR_WIDTH, MIN_DRAW_SIDEBAR_WIDTH
+    from src.core.settings import MAX_DRAW_SIDEBAR_WIDTH, MIN_DRAW_SIDEBAR_WIDTH
 
     changes = []
     v.drawSidebarWidthChanged.connect(changes.append)
@@ -375,7 +375,7 @@ def test_resize_handle_drag_uses_stable_delta_from_press(qapp):
     from PySide6.QtCore import QEvent, QPointF, Qt
     from PySide6.QtGui import QMouseEvent
 
-    from src.ui.widgets.draw_sidebar import _ResizeHandle
+    from src.ui.widgets.canvas.draw_sidebar import _ResizeHandle
 
     v = make_view(qapp, [])
     v.set_mode("draw")
@@ -471,7 +471,7 @@ def test_sidebar_sections_can_be_hidden_and_reordered(qapp):
 def test_customize_dialog_applies_unchecked_and_reordered_sections(qapp):
     from PySide6.QtCore import Qt
 
-    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
+    from src.ui.widgets.dialogs.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog(sections=["path", "shapes", "text"])
     for i in range(dlg._list.count()):
@@ -485,8 +485,8 @@ def test_customize_dialog_applies_unchecked_and_reordered_sections(qapp):
 def test_customize_dialog_falls_back_to_defaults_without_path_and_shapes(qapp):
     from PySide6.QtCore import Qt
 
-    from src.infra.settings import DEFAULT_DRAW_SIDEBAR_SECTIONS
-    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
+    from src.core.settings import DEFAULT_DRAW_SIDEBAR_SECTIONS
+    from src.ui.widgets.dialogs.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog(sections=["path"])
     for i in range(dlg._list.count()):
@@ -503,7 +503,7 @@ def test_customize_dialog_hides_and_reorders_individual_path_shape_icons(qapp):
     builds sections from."""
     from PySide6.QtCore import Qt
 
-    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
+    from src.ui.widgets.dialogs.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog(
         path_tools=["polyline", "spline", "arc", "bezier"],
@@ -537,11 +537,11 @@ def test_customize_dialog_hides_and_reorders_individual_path_shape_icons(qapp):
 def test_customize_dialog_path_shape_lists_require_at_least_one_checked(qapp):
     from PySide6.QtCore import Qt
 
-    from src.infra.settings import (
+    from src.core.settings import (
         DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
         DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS,
     )
-    from src.ui.widgets.customize_dialogs import DrawSidebarCustomizeDialog
+    from src.ui.widgets.dialogs.customize_dialogs import DrawSidebarCustomizeDialog
 
     dlg = DrawSidebarCustomizeDialog()
     for i in range(dlg._path_list.count()):
@@ -556,7 +556,7 @@ def test_customize_dialog_path_shape_lists_require_at_least_one_checked(qapp):
 def test_context_menu_customize_can_hide_sections_but_keeps_view(qapp):
     from PySide6.QtCore import Qt
 
-    from src.ui.widgets.customize_dialogs import ContextMenuCustomizeDialog
+    from src.ui.widgets.dialogs.customize_dialogs import ContextMenuCustomizeDialog
 
     dlg = ContextMenuCustomizeDialog(sections=["create", "transform", "view"])
     for i in range(dlg._list.count()):

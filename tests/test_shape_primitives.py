@@ -4,13 +4,13 @@ import math
 
 import pytest
 
-from src.backend.geometry import build_rounded_rect_poly, build_star_poly
-from src.backend.shapes import RoundedRectangleShape, ShapeFactory, StarShape
+from src.backend.cad.geometry import build_rounded_rect_poly, build_star_poly
+from src.backend.cad.shapes import RoundedRectangleShape, ShapeFactory, StarShape
 
 
 def test_circle_and_ellipse_control_drags_preserve_parametric_metadata():
-    from src.ui.canvas.document import EntityRecord
-    from src.ui.canvas.geometry_model import move_entity_control_point
+    from src.backend.cad.editor_geometry import move_entity_control_point
+    from src.backend.model.document import EntityRecord
 
     circle = EntityRecord(
         points=[], kind="circle", meta={"center": (0, 0), "radius": 5, "segments": 48}

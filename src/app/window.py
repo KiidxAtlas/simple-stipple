@@ -11,6 +11,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QLabel,
     QMainWindow,
     QTabWidget,
     QVBoxLayout,
@@ -25,9 +26,9 @@ from src.app.controllers import (
     WorkspaceController,
 )
 from src.app.page_runtime import PageRuntime, PageSpec, default_page_specs
-from src.infra.error_reporting import report_error
-from src.infra.paths import user_data_dir
-from src.infra.settings import (
+from src.core.error_reporting import report_error
+from src.core.paths import user_data_dir
+from src.core.settings import (
     DEFAULT_KEYBINDINGS,
     DEFAULT_RADIAL_MENU_TOOLS,
     load_settings,
@@ -35,7 +36,7 @@ from src.infra.settings import (
     settings_bus,
 )
 from src.ui.canvas.interaction import commands as canvas_commands
-from src.ui.style.theme import accessibility_palette, load_app_qss
+from src.ui.style.theme import accessibility_palette, apply_dark_theme, load_app_qss
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +48,18 @@ class App(QMainWindow):
     # window with no other referrers as soon as _new_window() returns) and
     # lets SingleInstanceGuard find/raise an existing window if relaunched.
     _open_windows: ClassVar[list[App]] = []
+    _grid_action: QAction
+    _snap_action: QAction
+    _new_workspace_action: QAction
+    _new_window_action: QAction
+    _open_workspace_action: QAction
+    _save_workspace_action: QAction
+    _save_workspace_as_action: QAction
+    _recover_workspace_action: QAction
+    _repo_dialog_action: QAction
+    _workspace_title_label: QLabel
+    _workspace_state_chip: QLabel
+    _shortcut_tooltip_specs: list[tuple[QWidget, str, str]]
 
     def _autosave_path(self) -> Path:
         return user_data_dir() / "recovery" / f"{self._recovery_id}.workspace.json"
@@ -54,15 +67,6 @@ class App(QMainWindow):
     def _autosave_workspace(self) -> None:
         """Compatibility entry point delegated to the task controller."""
         self._autosave_controller._autosave_workspace()
-
-    def __getattr__(self, name: str):
-        """Delegate extracted shell/command compatibility methods."""
-        state = object.__getattribute__(self, "__dict__")
-        for key in ("_workspace_controller", "_menu_controller", "_command_controller"):
-            controller = state.get(key)
-            if controller is not None and hasattr(type(controller), name):
-                return getattr(controller, name)
-        raise AttributeError(name)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -153,8 +157,106 @@ class App(QMainWindow):
         self._last_saved_document = self._collect_workspace_document()
         self._update_title()
 
+    # Explicit controller facade keeps every integration point named and its
+    # ownership discoverable to readers and type checkers.
+    def _build_shell_header(self) -> QWidget:
+        return self._menu_controller._build_shell_header()
+
+    def _build_edit_view_help_menus(self) -> None:
+        self._menu_controller._build_edit_view_help_menus()
+
+    def _setup_global_shortcuts(self) -> None:
+        self._command_controller._setup_global_shortcuts()
+
+    def _refresh_workspace_header(self) -> None:
+        self._menu_controller._refresh_workspace_header()
+
+    def _build_workspace_actions(self) -> None:
+        self._workspace_controller._build_workspace_actions()
+
+    def _rebuild_recent_workspaces_menu(self) -> None:
+        self._workspace_controller._rebuild_recent_workspaces_menu()
+
+    def _clear_workspace_state(self) -> None:
+        self._workspace_controller._clear_workspace_state()
+
+    def _collect_workspace_document(self) -> dict:
+        return self._workspace_controller._collect_workspace_document()
+
+    def _apply_workspace_document(self, document: dict) -> None:
+        self._workspace_controller._apply_workspace_document(document)
+
+    def _schedule_workspace_dirty_check(self) -> None:
+        self._workspace_controller._schedule_workspace_dirty_check()
+
+    def _update_workspace_dirty(self) -> None:
+        self._workspace_controller._update_workspace_dirty()
+
+    def _update_title(self) -> None:
+        self._workspace_controller._update_title()
+
+    def _confirm_discard_if_dirty(self) -> bool:
+        return self._workspace_controller._confirm_discard_if_dirty()
+
+    def _new_workspace(self) -> None:
+        self._workspace_controller._new_workspace()
+
+    def _open_workspace(self) -> None:
+        self._workspace_controller._open_workspace()
+
+    def _save_workspace(self) -> bool:
+        return self._workspace_controller._save_workspace()
+
+    def _save_workspace_as(self) -> bool:
+        return self._workspace_controller._save_workspace_as()
+
+    def _active_canvas(self):
+        return self._command_controller._active_canvas()
+
+    def _canvas_call(self, name: str, *args) -> None:
+        self._command_controller._canvas_call(name, *args)
+
+    def _menu_undo(self) -> None:
+        self._command_controller._menu_undo()
+
+    def _menu_redo(self) -> None:
+        self._command_controller._menu_redo()
+
+    def _menu_cut(self) -> None:
+        self._command_controller._menu_cut()
+
+    def _menu_copy(self) -> None:
+        self._command_controller._menu_copy()
+
+    def _menu_paste(self) -> None:
+        self._command_controller._menu_paste()
+
+    def _menu_select_all(self) -> None:
+        self._command_controller._menu_select_all()
+
+    def _run_canvas_command(self, command_id: str) -> None:
+        self._command_controller._run_canvas_command(command_id)
+
+    def _shortcut(self, action_id: str) -> str:
+        return self._command_controller._shortcut(action_id)
+
+    def _open_command_palette(self) -> None:
+        self._command_controller._open_command_palette()
+
+    def _open_settings(self) -> None:
+        self._command_controller._open_settings()
+
+    def _open_update_check(self) -> None:
+        self._command_controller._open_update_check()
+
+    def _show_help(self) -> None:
+        self._command_controller._show_help()
+
+    def _refresh_shortcut_tooltips(self) -> None:
+        self._menu_controller._refresh_shortcut_tooltips()
+
     def _init_tab_bindings(self) -> None:
-        from src.ui.pages.repo_tab import RepoPage
+        from src.ui.pages.repository import RepoPage
 
         self._draft_page: Any = self._page_runtime.get("draft")
         self._pattern_page: Any = cast(Any, self._page_runtime.get("pattern"))
@@ -267,7 +369,11 @@ class App(QMainWindow):
         high_contrast = bool(self._settings.get("high_contrast", False))
         app.setProperty("highContrast", high_contrast)
         app.setPalette(accessibility_palette(high_contrast))
-        app.setStyleSheet(load_app_qss(scale=float(self._settings.get("ui_scale", 1.0) or 1.0), high_contrast=high_contrast))
+        app.setStyleSheet(
+            load_app_qss(
+                scale=float(self._settings.get("ui_scale", 1.0) or 1.0), high_contrast=high_contrast
+            )
+        )
 
     def _on_draw_sidebar_height_changed(self, height: int) -> None:
         """Persist a live sidebar-resize drag and echo the new height to
@@ -351,3 +457,7 @@ class App(QMainWindow):
         self._task_controller.startup(
             check_updates=bool(self._settings.get("check_updates_on_startup", False))
         )
+    @staticmethod
+    def apply_theme(application: QApplication) -> None:
+        """Apply presentation styling at the application composition boundary."""
+        apply_dark_theme(application)

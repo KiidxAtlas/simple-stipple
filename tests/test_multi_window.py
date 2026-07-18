@@ -9,7 +9,7 @@ pytest.importorskip("PySide6")
 
 @pytest.fixture()
 def app_window(qapp):
-    from src.app import App
+    from src.app.window import App
 
     w = App()
     w.resize(1200, 800)
@@ -22,7 +22,7 @@ def app_window(qapp):
 
 
 def test_new_window_creates_independent_instance(app_window, qapp):
-    from src.app import App
+    from src.app.window import App
 
     before = len(App._open_windows)
     app_window._new_window()
@@ -37,13 +37,14 @@ def test_new_window_creates_independent_instance(app_window, qapp):
 
 
 def test_closing_new_window_removes_it_from_tracking(app_window, qapp, monkeypatch):
-    from src import app as app_module
-    from src.app import App
+    from src.app import window as window_module
+    from src.app.window import App
 
-    monkeypatch.setattr(app_module, "save_settings", lambda _settings: None)
+    monkeypatch.setattr(window_module, "save_settings", lambda _settings: None)
     app_window._new_window()
     qapp.processEvents()
     new_win = App._open_windows[-1]
+    monkeypatch.setattr(new_win, "_confirm_discard_if_dirty", lambda: True)
     new_win.close()
     qapp.processEvents()
     assert new_win not in App._open_windows

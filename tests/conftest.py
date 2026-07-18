@@ -32,7 +32,7 @@ def _reset_canvas_keymap():
 @pytest.fixture(autouse=True)
 def _isolate_app_autosave(monkeypatch, tmp_path):
     """Never let App tests read or write the developer's real recovery file."""
-    from src.app import App
+    from src.app.window import App
 
     monkeypatch.setattr(
         App,

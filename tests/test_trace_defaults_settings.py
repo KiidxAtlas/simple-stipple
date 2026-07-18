@@ -49,8 +49,8 @@ def test_clearing_the_workspace_reapplies_the_configured_default(qapp):
 
 
 def test_settings_dialog_save_persists_a_trace_default_override(qapp, monkeypatch):
-    import src.ui.widgets.settings_dialog as settings_dialog_mod
-    from src.ui.widgets.settings_dialog import SettingsDialog
+    import src.ui.widgets.dialogs.settings_dialog as settings_dialog_mod
+    from src.ui.widgets.dialogs.settings_dialog import SettingsDialog
 
     monkeypatch.setattr(settings_dialog_mod, "save_settings", lambda d: None)
 
@@ -73,8 +73,8 @@ def test_settings_dialog_save_persists_a_trace_default_override(qapp, monkeypatc
 
 
 def test_settings_dialog_save_clears_override_when_field_left_blank(qapp, monkeypatch):
-    import src.ui.widgets.settings_dialog as settings_dialog_mod
-    from src.ui.widgets.settings_dialog import SettingsDialog
+    import src.ui.widgets.dialogs.settings_dialog as settings_dialog_mod
+    from src.ui.widgets.dialogs.settings_dialog import SettingsDialog
 
     monkeypatch.setattr(settings_dialog_mod, "save_settings", lambda d: None)
 

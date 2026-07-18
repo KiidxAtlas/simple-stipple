@@ -11,7 +11,7 @@ from tests.test_canvas_behavior import square  # noqa: E402
 
 @pytest.fixture()
 def app_window(qapp):
-    from src.app import App
+    from src.app.window import App
 
     w = App()
     w.resize(1200, 800)
@@ -21,7 +21,7 @@ def app_window(qapp):
 
 
 def _draft_page(w):
-    for entry in w._workspace_pages():
+    for entry in w._page_runtime.iter_workspace_pages():
         page = entry[-1] if isinstance(entry, tuple) else entry
         if page.__class__.__name__ == "DraftPage":
             return page
@@ -99,22 +99,22 @@ def test_successful_save_removes_restored_snapshot(app_window, tmp_path):
 
 
 def test_failed_save_as_does_not_rebind_workspace(app_window, monkeypatch, tmp_path):
-    from src.app import controllers
+    from src.app.controllers import workspace as workspace_controller
 
     w = app_window
     old_path = tmp_path / "old.workspace.json"
     w._workspace_path = old_path
     monkeypatch.setattr(
-        controllers.QFileDialog,
+        workspace_controller.QFileDialog,
         "getSaveFileName",
         lambda *_args, **_kwargs: (str(tmp_path / "new.workspace.json"), ""),
     )
     monkeypatch.setattr(
-        controllers,
+        workspace_controller,
         "write_json_file_atomic",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
-    monkeypatch.setattr(controllers.QMessageBox, "critical", lambda *_args: None)
+    monkeypatch.setattr(workspace_controller.QMessageBox, "critical", lambda *_args: None)
 
     assert not w._save_workspace_as()
     assert w._workspace_path == old_path
@@ -125,7 +125,7 @@ def test_workspace_apply_rolls_back_after_page_failure(app_window, monkeypatch):
     draft = _draft_page(w)
     draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
     before = w._collect_workspace_document()
-    pages = list(w._workspace_pages())
+    pages = list(w._page_runtime.iter_workspace_pages())
     failing_page = pages[-1][1]
     original_apply = failing_page.apply_workspace_state
     calls = 0

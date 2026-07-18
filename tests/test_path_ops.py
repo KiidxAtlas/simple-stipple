@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from src.backend.path_ops import (
+from src.backend.cad.path_ops import (
     fit_circle,
     fit_line,
     morph_paths,

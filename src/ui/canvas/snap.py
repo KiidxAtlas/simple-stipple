@@ -2,7 +2,7 @@
 
 One entry point (``query``) merges every snap source — polyline vertices,
 midpoints, edges, intersections (via the pure candidate functions in
-src/backend/snapping.py), parametric-shape points (circle centers, arc
+src/backend/cad/snapping.py), parametric-shape points (circle centers, arc
 endpoints, …), the grid, and guide lines — and returns the best candidate in
 screen space. Previously this logic was split across three modules plus four
 glue methods on the view, and drag vs. hover snapping threaded 13+ parameters
@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from src.backend.shapes import (
+from src.backend.cad.shapes import (
     ArcShape,
     CircleShape,
     EllipseShape,
@@ -30,11 +30,11 @@ from src.backend.shapes import (
     SplineShape,
     StarShape,
 )
-from src.backend.snapping import angle_snap, resolve_drag_snap, resolve_snap
+from src.backend.cad.snapping import angle_snap, resolve_drag_snap, resolve_snap
 
 if TYPE_CHECKING:
-    from src.backend.shapes import Shape
-    from src.ui.canvas.view import PolylineView
+    from src.backend.cad.shapes import Shape
+    from src.ui.canvas.view import CanvasView
 
 SnapResult = tuple[float, float, str]
 
@@ -44,7 +44,7 @@ class SnapEngine:
 
     GUIDE_SNAP_PX = 8.0
 
-    def __init__(self, view: PolylineView) -> None:
+    def __init__(self, view: CanvasView) -> None:
         self.v = view
 
     # ── Public API ────────────────────────────────────────────────────────

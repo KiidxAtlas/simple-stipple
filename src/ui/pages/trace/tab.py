@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.trace import TraceCancelled, image_to_outlines
-from src.infra.settings import save_settings
+from src.core.settings import save_settings
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
@@ -62,7 +62,7 @@ from src.ui.pages.trace.session import (
 )
 from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 from src.ui.util import KIND_IMAGE, pick_open_file, pick_save_file, record_recent
-from src.ui.widgets.status_strip import CanvasStatusStrip
+from src.ui.widgets.canvas.status_strip import CanvasStatusStrip
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
 TRACE_BG_BLEND_ALPHA = 0.7
@@ -243,9 +243,7 @@ class TracePage(BasePage):
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(6)
         self._reload_btn = QPushButton("Refresh Preview")
-        self._reload_btn.setToolTip(
-            "Retrace immediately with the current settings."
-        )
+        self._reload_btn.setToolTip("Retrace immediately with the current settings.")
         self._reload_btn.clicked.connect(self._force_reload_trace)
         action_row.addWidget(self._reload_btn, stretch=1)
         self._smooth_btn = QPushButton("Smooth Curves…")
@@ -1076,7 +1074,7 @@ class TracePage(BasePage):
         width_mm_val = float(width_mm_val)
         height_mm_val = img_h_px / max(img_w_px, 1) * width_mm_val
         count = len(polys)
-        from src.backend.preflight import analyze_geometry
+        from src.backend.cad.preflight import analyze_geometry
 
         diagnostics = analyze_geometry(polys)
 

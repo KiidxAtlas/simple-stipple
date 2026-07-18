@@ -1,7 +1,6 @@
-"""Pattern parameter widget builder and parameter collector.
+"""Pattern parameter collection and restoration.
 
 Provides:
-  build_param_widget(tab, pattern_name, schedule_fn) -> QWidget
   collect_pattern_params(tab, pattern) -> dict
   collect_form_state(page) -> dict
   restore_form_state(page, payload)
@@ -11,18 +10,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QGridLayout,
     QLabel,
     QLineEdit,
-    QWidget,
 )
 
 from src.ui.components import make_resettable_line_edit
-from src.ui.pages.pattern._spec import PARAM_SPECS
 from src.ui.pages.pattern.defaults import (
     DEFAULT_BORDER_FADE,
     DEFAULT_DENSITY_ANGLE,
@@ -37,6 +31,7 @@ from src.ui.pages.pattern.defaults import (
     DEFAULT_PATTERN_ROTATION,
     DEFAULT_PREVIEW_QUALITY,
 )
+from src.ui.pages.pattern.form_spec import PARAM_SPECS
 
 # ── Internal widget helpers ───────────────────────────────────────────────────
 
@@ -56,78 +51,6 @@ def _hint_label(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setProperty("role", "hint-sm")
     return lbl
-
-
-# ── Generic declarative param builder ────────────────────────────────────────
-
-
-def build_param_widget(tab: Any, pattern_name: str, schedule_fn) -> QWidget:
-    """Build a param widget from the declarative PARAM_SPECS and attach fields to tab."""
-    w = QWidget()
-    g = QGridLayout(w)
-    g.setContentsMargins(0, 0, 0, 0)
-
-    specs = PARAM_SPECS.get(pattern_name, [])
-    grid_row = 0
-
-    for spec in specs:
-        if spec.kind in ("float", "int"):
-            entry = _param_entry(g, grid_row, spec.label, spec.default)
-            if spec.kind == "int":
-                entry.setValidator(
-                    QIntValidator(
-                        int(spec.minimum if spec.minimum is not None else -2_147_483_648),
-                        int(spec.maximum if spec.maximum is not None else 2_147_483_647),
-                        entry,
-                    )
-                )
-            else:
-                validator = QDoubleValidator(
-                    float(spec.minimum if spec.minimum is not None else -1e12),
-                    float(spec.maximum if spec.maximum is not None else 1e12),
-                    6,
-                    entry,
-                )
-                validator.setNotation(QDoubleValidator.Notation.StandardNotation)
-                entry.setValidator(validator)
-            entry.setToolTip(spec.tooltip)
-            setattr(tab, spec.attr, entry)
-            entry.textChanged.connect(schedule_fn)
-            grid_row += 1
-            if spec.hint is not None:
-                g.addWidget(_hint_label(spec.hint), grid_row, 0, 1, 2)
-                grid_row += 1
-
-        elif spec.kind == "checkbox":
-            cb = QCheckBox(spec.label)
-            cb.setChecked(False)
-            cb.setToolTip(spec.tooltip)
-            setattr(tab, spec.attr, cb)
-            g.addWidget(cb, grid_row, 0, 1, 2)
-            cb.stateChanged.connect(schedule_fn)
-            grid_row += 1
-            if spec.hint is not None:
-                g.addWidget(_hint_label(spec.hint), grid_row, 0, 1, 2)
-                grid_row += 1
-
-        elif spec.kind == "combobox":
-            g.addWidget(QLabel(spec.label), grid_row, 0)
-            combo = QComboBox()
-            combo.setFixedWidth(120)
-            combo.addItems(spec.items)
-            idx = combo.findText(spec.default)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            combo.setToolTip(spec.tooltip)
-            setattr(tab, spec.attr, combo)
-            g.addWidget(combo, grid_row, 1)
-            combo.currentTextChanged.connect(schedule_fn)
-            grid_row += 1
-            if spec.hint is not None:
-                g.addWidget(_hint_label(spec.hint), grid_row, 0, 1, 2)
-                grid_row += 1
-
-    return w
 
 
 # ── Parameter collection ──────────────────────────────────────────────────────

@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from src.ui.widgets.precision_bar import CanvasPrecisionBar
+from src.ui.widgets.canvas.precision_bar import CanvasPrecisionBar
 from tests.test_canvas_behavior import make_canvas
 
 

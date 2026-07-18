@@ -13,7 +13,7 @@ from tests.test_canvas_behavior import make_view  # noqa: E402
 
 
 def _spline_view(qapp):
-    from src.ui.canvas.undo import EntityRecord
+    from src.backend.model.document import EntityRecord
 
     v = make_view(qapp, [])
     v._entities = [
@@ -27,7 +27,7 @@ def _spline_view(qapp):
 
 
 def _bezier_view(qapp):
-    from src.ui.canvas.undo import EntityRecord
+    from src.backend.model.document import EntityRecord
 
     v = make_view(qapp, [])
     v._entities = [
@@ -41,7 +41,7 @@ def _bezier_view(qapp):
 
 
 def _arc_view(qapp):
-    from src.ui.canvas.undo import EntityRecord
+    from src.backend.model.document import EntityRecord
 
     # A big arc with only a couple of raw points stored — if consumers used
     # .points directly this would look like a two-segment zig-zag.

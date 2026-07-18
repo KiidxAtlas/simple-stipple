@@ -1,4 +1,4 @@
-"""Display-unit conversion helpers (src/ui/units.py) — pure functions, no Qt."""
+"""Display-unit conversion helpers in src/ui/util.py."""
 
 from __future__ import annotations
 

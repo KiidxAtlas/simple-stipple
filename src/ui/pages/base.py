@@ -2,32 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
-
-
-class TaskPhase(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    CANCELLING = "cancelling"
-    FAILED = "failed"
-    COMPLETE = "complete"
-
-
-@dataclass(frozen=True)
-class TaskRevision:
-    """Worker-result identity used to reject stale completions."""
-
-    value: int
-
-    def next(self) -> TaskRevision:
-        return TaskRevision(self.value + 1)
-
-    def accepts(self, result_revision: int) -> bool:
-        return result_revision == self.value
 
 
 class BasePage(QWidget):
@@ -75,4 +51,4 @@ class BasePage(QWidget):
         pass
 
 
-__all__ = ["BasePage", "TaskPhase", "TaskRevision"]
+__all__ = ["BasePage"]

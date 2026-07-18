@@ -2,16 +2,16 @@
 
 import pytest
 
-from src.backend.geometry import build_polygon_poly
-from src.backend.shapes import BezierShape, CircleShape, SlotShape
-from src.ui.canvas.document import EntityRecord
-from src.ui.canvas.geometry_model import (
+from src.backend.cad.editor_geometry import (
     PolylineGeometry,
     ShapeGeometry,
     entity_shows_point_handles,
     geometry_for_entity,
     update_entity_parameter,
 )
+from src.backend.cad.geometry import build_polygon_poly
+from src.backend.cad.shapes import BezierShape, CircleShape, SlotShape
+from src.backend.model.document import EntityRecord
 
 
 def test_generic_entity_uses_polyline_geometry():

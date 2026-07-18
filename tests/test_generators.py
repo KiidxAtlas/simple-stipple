@@ -1,6 +1,6 @@
 """Pattern generators produce geometry for a simple square outline.
 
-Param dicts use the same keys the UI sends (see src/ui/pages/pattern/_spec.py).
+Param dicts use the same keys the UI sends (see src/ui/pages/pattern/form_spec.py).
 """
 
 import pytest
@@ -10,7 +10,7 @@ from src.backend.pattern.cancellation import (
     PatternGenerationCancelled,
     cancellation_scope,
 )
-from src.ui.pages.pattern.services import PatternProcessingService
+from src.backend.pattern.processing import PatternProcessor
 
 OUTLINE = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])
 
@@ -26,7 +26,7 @@ CASES = [
 
 @pytest.mark.parametrize("name,params,expected", CASES, ids=[c[0] for c in CASES])
 def test_generator_produces_polylines(name, params, expected):
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     polys = pps._gen_pattern(OUTLINE, name, params)
     assert polys, f"{name} produced no geometry"
     assert all(len(p) >= 2 for p in polys)
@@ -35,7 +35,7 @@ def test_generator_produces_polylines(name, params, expected):
 
 
 def test_density_field_is_deterministic_and_reduces_elements():
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     params = {
         "r": 3,
         "gap": 1,
@@ -50,7 +50,7 @@ def test_density_field_is_deterministic_and_reduces_elements():
 
 
 def test_density_field_supports_direction_and_reversal():
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     base = {
         "r": 3,
         "gap": 1,
@@ -67,7 +67,7 @@ def test_density_field_supports_direction_and_reversal():
 
 
 def test_preview_quality_changes_curve_resolution_not_element_count():
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     base = {"r": 1, "spacing": 20}
     fast = pps._gen_pattern(OUTLINE, "Mesh", {**base, "quality": "fast"})
     high = pps._gen_pattern(OUTLINE, "Mesh", {**base, "quality": "high"})
@@ -76,7 +76,7 @@ def test_preview_quality_changes_curve_resolution_not_element_count():
 
 
 def test_complexity_guard_rejects_accidental_runaway_before_generation():
-    pps = PatternProcessingService()
+    pps = PatternProcessor()
     with pytest.raises(ValueError, match="safety limit"):
         pps._gen_pattern(
             OUTLINE,
@@ -86,10 +86,10 @@ def test_complexity_guard_rejects_accidental_runaway_before_generation():
 
 
 def test_complexity_estimator_reports_normal_jobs_without_rejecting():
-    estimate = PatternProcessingService.validate_pattern_complexity(
+    estimate = PatternProcessor.validate_pattern_complexity(
         OUTLINE, "Mesh", {"spacing": 10, "r": 1}
     )
-    assert 0 < estimate < PatternProcessingService.MAX_ESTIMATED_ELEMENTS
+    assert 0 < estimate < PatternProcessor.MAX_ESTIMATED_ELEMENTS
 
 
 def test_pattern_generation_can_cancel_during_outer_loop():
@@ -104,6 +104,6 @@ def test_pattern_generation_can_cancel_during_outer_loop():
         cancellation_scope(cancelled),
         pytest.raises(PatternGenerationCancelled, match="cancelled"),
     ):
-        PatternProcessingService()._gen_pattern(OUTLINE, "Mesh", {"r": 1, "spacing": 2})
+        PatternProcessor()._gen_pattern(OUTLINE, "Mesh", {"r": 1, "spacing": 2})
 
     assert checks == 3

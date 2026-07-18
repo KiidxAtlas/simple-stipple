@@ -1,32 +1,22 @@
-"""Shared helpers used across all generator sub-modules."""
+"""Shared geometry, topology, custom-tile, and modifier utilities."""
 
 from __future__ import annotations
 
 import logging
 import math
-from importlib import import_module
-from types import ModuleType
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import (
-    LineString,  # type: ignore[import-untyped]
-    MultiPolygon,
-    Polygon,
-)
+from shapely.geometry import LineString, MultiPolygon, Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
 from src.backend.pattern.cancellation import cancellation_checkpoint
 
-try:
-    _PIL_Image: ModuleType | None = import_module("PIL.Image")
-
-    _PIL_OK = True
-except ImportError:
-    _PIL_Image = None
-    _PIL_OK = False
-
+OUTLINE_WELD_TOL = 0.01
 LOGGER = logging.getLogger(__name__)
+
+
+# clipping
 
 
 def _hex_verts(cx: float, cy: float, r: float) -> list[tuple[float, float]]:
@@ -124,6 +114,428 @@ def _extract_all_rings(geom, out: list[list[tuple[float, float]]]) -> None:
     elif isinstance(geom, MultiPolygon) or hasattr(geom, "geoms"):
         for g in geom.geoms:
             _extract_all_rings(g, out)
+
+
+# topology
+
+
+def is_open_polyline(poly: list[tuple[float, float]], tol: float = OUTLINE_WELD_TOL) -> bool:
+    """True if ``poly`` is NOT a closed ring (first/last points not within
+    ``tol`` of each other, or fewer than 3 points so it can never close)."""
+    if len(poly) < 3:
+        return True
+    return math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) >= tol
+
+
+def weld_outline_endpoints(
+    polys: list[list[tuple[float, float]]], tol: float | None = None
+) -> list[list[tuple[float, float]]]:
+    """Snap near-coincident endpoints (within ``tol``) across ALL polylines
+    to a shared point, so segments drawn by hand (whose shared vertices are
+    close but not bit-identical) still reconnect via ``linemerge``. Only
+    each polyline's first/last point is touched — interior vertices are
+    left alone."""
+    if tol is None:
+        from src.backend.cad.preflight import scale_tolerance
+
+        tol = scale_tolerance(polys)
+    endpoints: list[tuple[int, bool, tuple[float, float]]] = []
+    for i, p in enumerate(polys):
+        if len(p) < 2:
+            continue
+        endpoints.append((i, True, p[0]))
+        endpoints.append((i, False, p[-1]))
+    n = len(endpoints)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        rx, ry = find(x), find(y)
+        if rx != ry:
+            parent[rx] = ry
+
+    buckets: dict[tuple[int, int], list[int]] = {}
+    for i, (_poly_idx, _is_first, (x, y)) in enumerate(endpoints):
+        cell = (math.floor(x / tol), math.floor(y / tol))
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in buckets.get((cell[0] + dx, cell[1] + dy), []):
+                    xj, yj = endpoints[j][2]
+                    if abs(x - xj) < tol and abs(y - yj) < tol:
+                        union(i, j)
+        buckets.setdefault(cell, []).append(i)
+
+    clusters: dict[int, list[tuple[float, float]]] = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(endpoints[i][2])
+    rep = {
+        r: (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+        for r, pts in clusters.items()
+    }
+
+    result = [list(p) for p in polys]
+    for i in range(n):
+        idx, is_first, _ = endpoints[i]
+        new_pt = rep[find(i)]
+        if is_first:
+            result[idx][0] = new_pt
+        else:
+            result[idx][-1] = new_pt
+    return result
+
+
+def merge_and_classify_outlines(
+    polys: list[list[tuple[float, float]]],
+) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
+    """Weld near-coincident endpoints, merge end-to-end-connected pieces
+    back into continuous paths, then classify each result as closed or
+    open. Returns (closed_polys, open_polys).
+
+    Without this, a shape broken into individual segments (via Explode, or
+    just drawn as separate strokes) would be entirely lost: no single small
+    piece is closed, and none has enough points to act as a cutout region
+    on its own either.
+    """
+    from shapely.ops import linemerge  # type: ignore[import-untyped]
+
+    welded = weld_outline_endpoints(polys)
+    lines = [LineString(p) for p in welded if len(p) >= 2]
+    if not lines:
+        return [], []
+    try:
+        # Pass the plain list directly — linemerge() raises on a bare single
+        # LineString (it wants a MultiLineString or a sequence of lines), and
+        # a single already-closed ring is common enough (any ordinary
+        # never-exploded outline) that this must not raise for it.
+        merged = linemerge(lines)
+    except (ValueError, TypeError):
+        merged = None
+    merged_geoms = getattr(merged, "geoms", None)
+    geoms = (
+        list(merged_geoms) if merged_geoms is not None else ([merged] if merged is not None else [])
+    )
+    closed: list[list[tuple[float, float]]] = []
+    open_: list[list[tuple[float, float]]] = []
+    for geom in geoms:
+        coords = [(float(x), float(y)) for x, y in geom.coords]
+        if len(coords) < 2:
+            continue
+        if len(coords) >= 3 and not is_open_polyline(coords):
+            closed.append(coords)
+        else:
+            open_.append(coords)
+    return closed, open_
+
+
+def nested_polygon_region(polylines: list[list[tuple[float, float]]]):
+    """Build a region from CLOSED polylines that respects nesting as holes.
+
+    A polyline fully contained inside another becomes a hole (even-odd
+    nesting, the standard SVG/DXF convention) instead of being silently
+    merged into a solid region by a plain union — that's why a donut used
+    to fill solid through the hole. Returns ``None`` if there are no usable
+    closed rings. Shared by the pattern-outline fill region computation
+    (``ui/pages/pattern/fill.py::build_fill_region``) and the custom-tile
+    generator below, so a nested closed ring means "hole" consistently
+    everywhere in the app, not just for the main outline.
+    """
+
+    rings: list[Polygon] = []
+    for pl in polylines:
+        if len(pl) < 3:
+            continue
+        try:
+            poly = Polygon(pl)
+        except (TypeError, ValueError):
+            continue
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty or poly.area <= 0:
+            continue
+        rings.append(poly)
+
+    if not rings:
+        return None
+
+    # Depth-of-nesting via a spatial index (STRtree) rather than an O(n^2)
+    # all-pairs comparison — for a large tiled pattern (hundreds/thousands
+    # of small rings from repeated tiles), naive all-pairs containment
+    # checks took over 10 SECONDS; almost every one of those comparisons
+    # was wasted work since a ring can only possibly be "inside" something
+    # whose bounding box it falls within. The STRtree prefilters candidates
+    # by bounding-box overlap first, so each ring only needs a handful of
+    # exact `.contains()` checks against genuinely nearby rings, not every
+    # other ring in the whole pattern. Even depth = solid, odd depth = hole
+    # (standard even-odd/SVG nesting rule) — this is purely GEOMETRIC
+    # nesting, not tied to whether a ring originated from an open shape.
+    from shapely import STRtree  # type: ignore[import-untyped]
+
+    tree = STRtree(rings)
+    depths = [0] * len(rings)
+    for i, p in enumerate(rings):
+        rp = p.representative_point()
+        for j in tree.query(rp):
+            j = int(j)
+            if j == i:
+                continue
+            other = rings[j]
+            if other.area > p.area and other.contains(rp):
+                depths[i] += 1
+
+    solids = [p for p, d in zip(rings, depths) if d % 2 == 0]
+    holes = [p for p, d in zip(rings, depths) if d % 2 == 1]
+
+    if not solids:
+        return None
+
+    solid_union = unary_union(solids)
+    if holes:
+        solid_union = solid_union.difference(unary_union(holes))
+
+    if solid_union.is_empty:
+        return None
+    if isinstance(solid_union, (Polygon, MultiPolygon)):
+        return solid_union
+    # GeometryCollection fallback: keep only polygonal parts.
+    polys = [g for g in getattr(solid_union, "geoms", []) if isinstance(g, (Polygon, MultiPolygon))]
+    if not polys:
+        return None
+    return polys[0] if len(polys) == 1 else unary_union(polys)
+
+
+# ─── Hatch infill (laser-fill) ─────────────────────────────────────────────
+
+
+HATCH_MODES = ("none", "lines", "crosshatch", "racecar", "concentric")
+
+
+def _polygon_from_polyline(
+    poly: list[tuple[float, float]],
+    *,
+    force_close: bool = True,
+) -> Polygon | None:
+    """Build a Shapely polygon from a flattened polyline.
+
+    ``force_close=True`` (default, matches historical behavior for callers
+    like the pattern-fade centroid calculation) implicitly closes an open
+    ring. Pass ``force_close=False`` to instead return None for a genuinely
+    open polyline — used by pattern-cell fill so open strokes aren't
+    silently treated as closed regions and filled unexpectedly.
+    """
+    if not poly or len(poly) < 3:
+        return None
+    pts = list(poly)
+    if pts[0] != pts[-1]:
+        if not force_close:
+            return None
+        pts = pts + [pts[0]]
+    try:
+        shape = Polygon(pts)
+    except (TypeError, ValueError):
+        return None
+    if not shape.is_valid:
+        try:
+            shape = shape.buffer(0)
+        except (TypeError, ValueError):
+            return None
+    if shape.is_empty or shape.area <= 1e-9:
+        return None
+    return shape
+
+
+# custom tile
+
+
+def _hatch_lines_for_polygon(
+    shape: Polygon,
+    spacing: float,
+    angle_deg: float,
+) -> list[list[tuple[float, float]]]:
+    """Return parallel hatch lines clipped to ``shape`` at the given angle."""
+    if spacing <= 0 or shape.is_empty:
+        return []
+    minx, miny, maxx, maxy = shape.bounds
+    cx = (minx + maxx) / 2.0
+    cy = (miny + maxy) / 2.0
+    diag = math.hypot(maxx - minx, maxy - miny) + spacing * 2.0
+    a = math.radians(angle_deg)
+    dx, dy = math.cos(a), math.sin(a)
+    nx, ny = -dy, dx  # perpendicular direction
+    half = diag
+    n_lines = int(diag / spacing) + 2
+    lines: list[list[tuple[float, float]]] = []
+    for i in range(-n_lines, n_lines + 1):
+        offset = i * spacing
+        ox = cx + offset * nx
+        oy = cy + offset * ny
+        p1 = (ox - dx * half, oy - dy * half)
+        p2 = (ox + dx * half, oy + dy * half)
+        clipped = shape.intersection(LineString([p1, p2]))
+        _collect_lines(clipped, lines)
+    return [[(float(x), float(y)) for x, y in ln] for ln in lines]
+
+
+def _serpentine_connect(
+    lines: list[list[tuple[float, float]]],
+    angle_deg: float,
+) -> list[list[tuple[float, float]]]:
+    """Stitch parallel hatch lines into a continuous racecar/zigzag path.
+
+    Lines are sorted along the perpendicular axis, alternate ones are reversed,
+    and successive endpoints are joined into a single polyline.
+    """
+    if not lines:
+        return []
+    a = math.radians(angle_deg)
+    nx, ny = -math.sin(a), math.cos(a)
+
+    def _key(ln: list[tuple[float, float]]) -> float:
+        x = (ln[0][0] + ln[-1][0]) / 2.0
+        y = (ln[0][1] + ln[-1][1]) / 2.0
+        return x * nx + y * ny
+
+    ordered = sorted(lines, key=_key)
+    path: list[tuple[float, float]] = []
+    flip = False
+    for ln in ordered:
+        seg = list(reversed(ln)) if flip else list(ln)
+        if not path:
+            path.extend(seg)
+        else:
+            # Connector from end of last segment to start of next.
+            path.append(seg[0])
+            path.extend(seg[1:])
+        flip = not flip
+    return [path] if len(path) >= 2 else []
+
+
+def gen_custom_tile(
+    outline_poly,
+    tile_polys: list[list[tuple[float, float]]],
+    gap: float,
+    angle_deg: float = 0.0,
+    interlock: bool = False,
+    *,
+    repeat_mode: str = "Straight",
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+) -> list[list[tuple[float, float]]]:
+    """Repeat every source path in an arbitrary motif, clipped to the outline.
+
+    Custom Tile is a linework operation, not a boolean fill-mask operation:
+    nested closed paths and open decorative strokes remain independent paths.
+    This preserves detailed motifs containing internal geometry instead of
+    collapsing them into an exterior plus alternating holes.
+    """
+    if not tile_polys:
+        return []
+    motif_paths = [list(path) for path in tile_polys if len(path) >= 2]
+    if not motif_paths:
+        return []
+    all_pts = [pt for path in motif_paths for pt in path]
+    if not all_pts:
+        return []
+    txs = [p[0] for p in all_pts]
+    tys = [p[1] for p in all_pts]
+    t_cx = (min(txs) + max(txs)) / 2
+    t_cy = (min(tys) + max(tys)) / 2
+    tw = max(txs) - min(txs)
+    th = max(tys) - min(tys)
+    a = math.radians(angle_deg)
+    ca, sa = math.cos(a), math.sin(a)
+    col_step = max(tw + gap, 0.01)
+    mode = str(repeat_mode or "Straight").strip().lower().replace("_", " ")
+    if interlock and mode == "straight":
+        mode = "half drop"  # backward compatibility with saved workspaces
+    row_step = max(th + gap, 0.01)
+    minx, miny, maxx, maxy = outline_poly.bounds
+    pad = max(tw, th) * 2.0 + gap
+    prep = prepared.prep(outline_poly)
+    result: list[list[tuple[float, float]]] = []
+    row = 0
+    phase_x = float(origin_x or 0.0) % col_step
+    phase_y = float(origin_y or 0.0) % row_step
+    y = miny - pad + phase_y
+    while y <= maxy + pad:
+        cancellation_checkpoint()
+        if mode == "half drop":
+            off = col_step / 2.0 if row & 1 else 0.0
+        elif mode == "brick offset":
+            off = col_step / 3.0 if row & 1 else 0.0
+        else:
+            off = 0.0
+        x = minx - pad + phase_x + off
+        col = 0
+        while x <= maxx + pad:
+            mirror_x = mode == "mirror rows" and bool(row & 1)
+            mirror_y = mode == "mirror columns" and bool(col & 1)
+            rotate_180 = mode == "alternate 180°" and bool((row + col) & 1)
+
+            def _place(
+                px: float,
+                py: float,
+                *,
+                flip_x: bool = mirror_x,
+                flip_y: bool = mirror_y,
+                turn: bool = rotate_180,
+                origin_x: float = x,
+                origin_y: float = y,
+            ) -> tuple[float, float]:
+                dx = px - t_cx
+                dy = py - t_cy
+                if flip_x or turn:
+                    dx = -dx
+                if flip_y or turn:
+                    dy = -dy
+                return (
+                    origin_x + dx * ca - dy * sa,
+                    origin_y + dx * sa + dy * ca,
+                )
+
+            for source_path in motif_paths:
+                transformed = [_place(px, py) for px, py in source_path]
+                # Closed motif paths are cells, not merely linework. Clip them
+                # as polygonal areas so a cell crossing the outline boundary
+                # comes back as a closed ring that pattern-cell fill can use.
+                # Open decorative strokes intentionally retain line clipping.
+                if len(transformed) >= 4 and transformed[0] == transformed[-1]:
+                    try:
+                        cell = Polygon(transformed)
+                        if not cell.is_valid:
+                            cell = cell.buffer(0)
+                    except (TypeError, ValueError):
+                        cell = None
+                    if cell is not None and not cell.is_empty and cell.area > 1e-9:
+                        if not prep.intersects(cell):
+                            continue
+                        if prep.contains(cell):
+                            result.append(transformed)
+                        else:
+                            _extract_polys(outline_poly.intersection(cell), result)
+                        continue
+                try:
+                    line = LineString(transformed)
+                except (TypeError, ValueError):
+                    continue
+                if line.is_empty or not prep.intersects(line):
+                    continue
+                if prep.contains(line):
+                    result.append(transformed)
+                else:
+                    _collect_lines(outline_poly.intersection(line), result)
+            x += col_step
+            col += 1
+        y += row_step
+        row += 1
+    return result
+
+
+# modifiers
 
 
 def apply_invert_fill(
@@ -437,420 +849,6 @@ def apply_interlace(
 # identical (unlike a programmatic "Explode", where pieces DO share exact
 # coordinates) — without welding first, Shapely's `linemerge()` treats even
 # a 0.0001 mm endpoint mismatch as two genuinely separate lines and never
-# reconnects them. Mirrors `PolylineView.merge_selected_segments_to_objects`'s
+# reconnects them. Mirrors `CanvasView.merge_selected_segments_to_objects`'s
 # own `_MERGE_TOL` constant for consistency.
 OUTLINE_WELD_TOL = 0.01
-
-
-def is_open_polyline(poly: list[tuple[float, float]], tol: float = OUTLINE_WELD_TOL) -> bool:
-    """True if ``poly`` is NOT a closed ring (first/last points not within
-    ``tol`` of each other, or fewer than 3 points so it can never close)."""
-    if len(poly) < 3:
-        return True
-    return math.hypot(poly[0][0] - poly[-1][0], poly[0][1] - poly[-1][1]) >= tol
-
-
-def weld_outline_endpoints(
-    polys: list[list[tuple[float, float]]], tol: float | None = None
-) -> list[list[tuple[float, float]]]:
-    """Snap near-coincident endpoints (within ``tol``) across ALL polylines
-    to a shared point, so segments drawn by hand (whose shared vertices are
-    close but not bit-identical) still reconnect via ``linemerge``. Only
-    each polyline's first/last point is touched — interior vertices are
-    left alone."""
-    if tol is None:
-        from src.backend.preflight import scale_tolerance
-
-        tol = scale_tolerance(polys)
-    endpoints: list[tuple[int, bool, tuple[float, float]]] = []
-    for i, p in enumerate(polys):
-        if len(p) < 2:
-            continue
-        endpoints.append((i, True, p[0]))
-        endpoints.append((i, False, p[-1]))
-    n = len(endpoints)
-    parent = list(range(n))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x: int, y: int) -> None:
-        rx, ry = find(x), find(y)
-        if rx != ry:
-            parent[rx] = ry
-
-    buckets: dict[tuple[int, int], list[int]] = {}
-    for i, (_poly_idx, _is_first, (x, y)) in enumerate(endpoints):
-        cell = (math.floor(x / tol), math.floor(y / tol))
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for j in buckets.get((cell[0] + dx, cell[1] + dy), []):
-                    xj, yj = endpoints[j][2]
-                    if abs(x - xj) < tol and abs(y - yj) < tol:
-                        union(i, j)
-        buckets.setdefault(cell, []).append(i)
-
-    clusters: dict[int, list[tuple[float, float]]] = {}
-    for i in range(n):
-        clusters.setdefault(find(i), []).append(endpoints[i][2])
-    rep = {
-        r: (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
-        for r, pts in clusters.items()
-    }
-
-    result = [list(p) for p in polys]
-    for i in range(n):
-        idx, is_first, _ = endpoints[i]
-        new_pt = rep[find(i)]
-        if is_first:
-            result[idx][0] = new_pt
-        else:
-            result[idx][-1] = new_pt
-    return result
-
-
-def merge_and_classify_outlines(
-    polys: list[list[tuple[float, float]]],
-) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]]]:
-    """Weld near-coincident endpoints, merge end-to-end-connected pieces
-    back into continuous paths, then classify each result as closed or
-    open. Returns (closed_polys, open_polys).
-
-    Without this, a shape broken into individual segments (via Explode, or
-    just drawn as separate strokes) would be entirely lost: no single small
-    piece is closed, and none has enough points to act as a cutout region
-    on its own either.
-    """
-    from shapely.ops import linemerge  # type: ignore[import-untyped]
-
-    welded = weld_outline_endpoints(polys)
-    lines = [LineString(p) for p in welded if len(p) >= 2]
-    if not lines:
-        return [], []
-    try:
-        # Pass the plain list directly — linemerge() raises on a bare single
-        # LineString (it wants a MultiLineString or a sequence of lines), and
-        # a single already-closed ring is common enough (any ordinary
-        # never-exploded outline) that this must not raise for it.
-        merged = linemerge(lines)
-    except (ValueError, TypeError):
-        merged = None
-    merged_geoms = getattr(merged, "geoms", None)
-    geoms = (
-        list(merged_geoms) if merged_geoms is not None else ([merged] if merged is not None else [])
-    )
-    closed: list[list[tuple[float, float]]] = []
-    open_: list[list[tuple[float, float]]] = []
-    for geom in geoms:
-        coords = [(float(x), float(y)) for x, y in geom.coords]
-        if len(coords) < 2:
-            continue
-        if len(coords) >= 3 and not is_open_polyline(coords):
-            closed.append(coords)
-        else:
-            open_.append(coords)
-    return closed, open_
-
-
-def nested_polygon_region(polylines: list[list[tuple[float, float]]]):
-    """Build a region from CLOSED polylines that respects nesting as holes.
-
-    A polyline fully contained inside another becomes a hole (even-odd
-    nesting, the standard SVG/DXF convention) instead of being silently
-    merged into a solid region by a plain union — that's why a donut used
-    to fill solid through the hole. Returns ``None`` if there are no usable
-    closed rings. Shared by the pattern-outline fill region computation
-    (``ui/pages/pattern/fill.py::build_fill_region``) and the custom-tile
-    generator below, so a nested closed ring means "hole" consistently
-    everywhere in the app, not just for the main outline.
-    """
-    from shapely.geometry import MultiPolygon  # type: ignore[import-untyped]
-
-    rings: list[Polygon] = []
-    for pl in polylines:
-        if len(pl) < 3:
-            continue
-        try:
-            poly = Polygon(pl)
-        except (TypeError, ValueError):
-            continue
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if poly.is_empty or poly.area <= 0:
-            continue
-        rings.append(poly)
-
-    if not rings:
-        return None
-
-    # Depth-of-nesting via a spatial index (STRtree) rather than an O(n^2)
-    # all-pairs comparison — for a large tiled pattern (hundreds/thousands
-    # of small rings from repeated tiles), naive all-pairs containment
-    # checks took over 10 SECONDS; almost every one of those comparisons
-    # was wasted work since a ring can only possibly be "inside" something
-    # whose bounding box it falls within. The STRtree prefilters candidates
-    # by bounding-box overlap first, so each ring only needs a handful of
-    # exact `.contains()` checks against genuinely nearby rings, not every
-    # other ring in the whole pattern. Even depth = solid, odd depth = hole
-    # (standard even-odd/SVG nesting rule) — this is purely GEOMETRIC
-    # nesting, not tied to whether a ring originated from an open shape.
-    from shapely import STRtree  # type: ignore[import-untyped]
-
-    tree = STRtree(rings)
-    depths = [0] * len(rings)
-    for i, p in enumerate(rings):
-        rp = p.representative_point()
-        for j in tree.query(rp):
-            j = int(j)
-            if j == i:
-                continue
-            other = rings[j]
-            if other.area > p.area and other.contains(rp):
-                depths[i] += 1
-
-    solids = [p for p, d in zip(rings, depths) if d % 2 == 0]
-    holes = [p for p, d in zip(rings, depths) if d % 2 == 1]
-
-    if not solids:
-        return None
-
-    solid_union = unary_union(solids)
-    if holes:
-        solid_union = solid_union.difference(unary_union(holes))
-
-    if solid_union.is_empty:
-        return None
-    if isinstance(solid_union, (Polygon, MultiPolygon)):
-        return solid_union
-    # GeometryCollection fallback: keep only polygonal parts.
-    polys = [g for g in getattr(solid_union, "geoms", []) if isinstance(g, (Polygon, MultiPolygon))]
-    if not polys:
-        return None
-    return polys[0] if len(polys) == 1 else unary_union(polys)
-
-
-# ─── Hatch infill (laser-fill) ─────────────────────────────────────────────
-
-
-HATCH_MODES = ("none", "lines", "crosshatch", "racecar", "concentric")
-
-
-def _polygon_from_polyline(
-    poly: list[tuple[float, float]],
-    *,
-    force_close: bool = True,
-) -> Polygon | None:
-    """Build a Shapely polygon from a flattened polyline.
-
-    ``force_close=True`` (default, matches historical behavior for callers
-    like the pattern-fade centroid calculation) implicitly closes an open
-    ring. Pass ``force_close=False`` to instead return None for a genuinely
-    open polyline — used by pattern-cell fill so open strokes aren't
-    silently treated as closed regions and filled unexpectedly.
-    """
-    if not poly or len(poly) < 3:
-        return None
-    pts = list(poly)
-    if pts[0] != pts[-1]:
-        if not force_close:
-            return None
-        pts = pts + [pts[0]]
-    try:
-        shape = Polygon(pts)
-    except (TypeError, ValueError):
-        return None
-    if not shape.is_valid:
-        try:
-            shape = shape.buffer(0)
-        except (TypeError, ValueError):
-            return None
-    if shape.is_empty or shape.area <= 1e-9:
-        return None
-    return shape
-
-
-def _hatch_lines_for_polygon(
-    shape: Polygon,
-    spacing: float,
-    angle_deg: float,
-) -> list[list[tuple[float, float]]]:
-    """Return parallel hatch lines clipped to ``shape`` at the given angle."""
-    if spacing <= 0 or shape.is_empty:
-        return []
-    minx, miny, maxx, maxy = shape.bounds
-    cx = (minx + maxx) / 2.0
-    cy = (miny + maxy) / 2.0
-    diag = math.hypot(maxx - minx, maxy - miny) + spacing * 2.0
-    a = math.radians(angle_deg)
-    dx, dy = math.cos(a), math.sin(a)
-    nx, ny = -dy, dx  # perpendicular direction
-    half = diag
-    n_lines = int(diag / spacing) + 2
-    lines: list[list[tuple[float, float]]] = []
-    for i in range(-n_lines, n_lines + 1):
-        offset = i * spacing
-        ox = cx + offset * nx
-        oy = cy + offset * ny
-        p1 = (ox - dx * half, oy - dy * half)
-        p2 = (ox + dx * half, oy + dy * half)
-        clipped = shape.intersection(LineString([p1, p2]))
-        _collect_lines(clipped, lines)
-    return [[(float(x), float(y)) for x, y in ln] for ln in lines]
-
-
-def _serpentine_connect(
-    lines: list[list[tuple[float, float]]],
-    angle_deg: float,
-) -> list[list[tuple[float, float]]]:
-    """Stitch parallel hatch lines into a continuous racecar/zigzag path.
-
-    Lines are sorted along the perpendicular axis, alternate ones are reversed,
-    and successive endpoints are joined into a single polyline.
-    """
-    if not lines:
-        return []
-    a = math.radians(angle_deg)
-    nx, ny = -math.sin(a), math.cos(a)
-
-    def _key(ln: list[tuple[float, float]]) -> float:
-        x = (ln[0][0] + ln[-1][0]) / 2.0
-        y = (ln[0][1] + ln[-1][1]) / 2.0
-        return x * nx + y * ny
-
-    ordered = sorted(lines, key=_key)
-    path: list[tuple[float, float]] = []
-    flip = False
-    for ln in ordered:
-        seg = list(reversed(ln)) if flip else list(ln)
-        if not path:
-            path.extend(seg)
-        else:
-            # Connector from end of last segment to start of next.
-            path.append(seg[0])
-            path.extend(seg[1:])
-        flip = not flip
-    return [path] if len(path) >= 2 else []
-
-
-def gen_custom_tile(
-    outline_poly,
-    tile_polys: list[list[tuple[float, float]]],
-    gap: float,
-    angle_deg: float = 0.0,
-    interlock: bool = False,
-    *,
-    repeat_mode: str = "Straight",
-    origin_x: float = 0.0,
-    origin_y: float = 0.0,
-) -> list[list[tuple[float, float]]]:
-    """Repeat every source path in an arbitrary motif, clipped to the outline.
-
-    Custom Tile is a linework operation, not a boolean fill-mask operation:
-    nested closed paths and open decorative strokes remain independent paths.
-    This preserves detailed motifs containing internal geometry instead of
-    collapsing them into an exterior plus alternating holes.
-    """
-    if not tile_polys:
-        return []
-    motif_paths = [list(path) for path in tile_polys if len(path) >= 2]
-    if not motif_paths:
-        return []
-    all_pts = [pt for path in motif_paths for pt in path]
-    if not all_pts:
-        return []
-    txs = [p[0] for p in all_pts]
-    tys = [p[1] for p in all_pts]
-    t_cx = (min(txs) + max(txs)) / 2
-    t_cy = (min(tys) + max(tys)) / 2
-    tw = max(txs) - min(txs)
-    th = max(tys) - min(tys)
-    a = math.radians(angle_deg)
-    ca, sa = math.cos(a), math.sin(a)
-    col_step = max(tw + gap, 0.01)
-    mode = str(repeat_mode or "Straight").strip().lower().replace("_", " ")
-    if interlock and mode == "straight":
-        mode = "half drop"  # backward compatibility with saved workspaces
-    row_step = max(th + gap, 0.01)
-    minx, miny, maxx, maxy = outline_poly.bounds
-    pad = max(tw, th) * 2.0 + gap
-    prep = prepared.prep(outline_poly)
-    result: list[list[tuple[float, float]]] = []
-    row = 0
-    phase_x = float(origin_x or 0.0) % col_step
-    phase_y = float(origin_y or 0.0) % row_step
-    y = miny - pad + phase_y
-    while y <= maxy + pad:
-        cancellation_checkpoint()
-        if mode == "half drop":
-            off = col_step / 2.0 if row & 1 else 0.0
-        elif mode == "brick offset":
-            off = col_step / 3.0 if row & 1 else 0.0
-        else:
-            off = 0.0
-        x = minx - pad + phase_x + off
-        col = 0
-        while x <= maxx + pad:
-            mirror_x = mode == "mirror rows" and bool(row & 1)
-            mirror_y = mode == "mirror columns" and bool(col & 1)
-            rotate_180 = mode == "alternate 180°" and bool((row + col) & 1)
-
-            def _place(
-                px: float,
-                py: float,
-                *,
-                flip_x: bool = mirror_x,
-                flip_y: bool = mirror_y,
-                turn: bool = rotate_180,
-                origin_x: float = x,
-                origin_y: float = y,
-            ) -> tuple[float, float]:
-                dx = px - t_cx
-                dy = py - t_cy
-                if flip_x or turn:
-                    dx = -dx
-                if flip_y or turn:
-                    dy = -dy
-                return (
-                    origin_x + dx * ca - dy * sa,
-                    origin_y + dx * sa + dy * ca,
-                )
-
-            for source_path in motif_paths:
-                transformed = [_place(px, py) for px, py in source_path]
-                # Closed motif paths are cells, not merely linework. Clip them
-                # as polygonal areas so a cell crossing the outline boundary
-                # comes back as a closed ring that pattern-cell fill can use.
-                # Open decorative strokes intentionally retain line clipping.
-                if len(transformed) >= 4 and transformed[0] == transformed[-1]:
-                    try:
-                        cell = Polygon(transformed)
-                        if not cell.is_valid:
-                            cell = cell.buffer(0)
-                    except (TypeError, ValueError):
-                        cell = None
-                    if cell is not None and not cell.is_empty and cell.area > 1e-9:
-                        if not prep.intersects(cell):
-                            continue
-                        if prep.contains(cell):
-                            result.append(transformed)
-                        else:
-                            _extract_polys(outline_poly.intersection(cell), result)
-                        continue
-                try:
-                    line = LineString(transformed)
-                except (TypeError, ValueError):
-                    continue
-                if line.is_empty or not prep.intersects(line):
-                    continue
-                if prep.contains(line):
-                    result.append(transformed)
-                else:
-                    _collect_lines(outline_poly.intersection(line), result)
-            x += col_step
-            col += 1
-        y += row_step
-        row += 1
-    return result
