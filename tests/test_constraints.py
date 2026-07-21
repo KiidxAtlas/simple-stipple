@@ -2,7 +2,11 @@ import math
 
 import pytest
 
-from src.backend.cad.constraints import GeometricConstraint, solve_constraints
+from src.backend.cad.constraints import (
+    GeometricConstraint,
+    constraint_residuals,
+    solve_constraints,
+)
 from tests.test_canvas_behavior import make_canvas
 
 
@@ -66,3 +70,25 @@ def test_fixed_constraint_restores_geometry_after_edit(qapp):
     canvas._entities[0].points = [(0, 0), (20, 5)]
     canvas._fire_poly_change()
     assert canvas._entities[0].points == [(0.0, 0.0), (10.0, 0.0)]
+
+
+def test_constraint_residuals_distinguish_satisfied_and_conflicting_geometry():
+    horizontal = GeometricConstraint("horizontal", ("a",))
+    vertical = GeometricConstraint("vertical", ("b",))
+    parallel = GeometricConstraint("parallel", ("a", "b"))
+    geometry = {
+        "a": [(0.0, 0.0), (10.0, 0.0)],
+        "b": [(0.0, 0.0), (0.0, 10.0)],
+    }
+
+    residuals = constraint_residuals(geometry, [horizontal, vertical, parallel])
+
+    assert residuals[horizontal.id] == pytest.approx(0.0)
+    assert residuals[vertical.id] == pytest.approx(0.0)
+    assert residuals[parallel.id] == pytest.approx(1.0)
+
+
+def test_constraint_residuals_report_broken_references_as_conflicts():
+    broken = GeometricConstraint("equal_length", ("present", "missing"))
+    residuals = constraint_residuals({"present": [(0.0, 0.0), (1.0, 0.0)]}, [broken])
+    assert math.isinf(residuals[broken.id])

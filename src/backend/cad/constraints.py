@@ -121,4 +121,71 @@ def solve_constraints(
     return solved
 
 
-__all__ = ["ConstraintKind", "GeometricConstraint", "solve_constraints"]
+def constraint_residuals(
+    geometry: dict[str, list[Point]], constraints: list[GeometricConstraint]
+) -> dict[str, float]:
+    """Return a scale-independent error for each enabled constraint.
+
+    A value near zero is satisfied. Non-finite or structurally invalid
+    constraints report infinity so the UI can identify conflicts instead of
+    silently drawing every badge as healthy.
+    """
+    residuals: dict[str, float] = {}
+    for constraint in constraints:
+        if not constraint.enabled:
+            residuals[constraint.id] = 0.0
+            continue
+        ids = constraint.entity_ids
+        first = _line(geometry.get(ids[0])) if ids else None
+        if first is None:
+            residuals[constraint.id] = math.inf
+            continue
+        if constraint.kind == "horizontal":
+            residuals[constraint.id] = abs(first[1][1] - first[0][1])
+            continue
+        if constraint.kind == "vertical":
+            residuals[constraint.id] = abs(first[1][0] - first[0][0])
+            continue
+        if constraint.kind == "fixed":
+            stored = constraint.parameters.get("points")
+            if not isinstance(stored, list):
+                residuals[constraint.id] = math.inf
+                continue
+            try:
+                residuals[constraint.id] = max(
+                    math.dist(point, (float(target[0]), float(target[1])))
+                    for point, target in zip(first, stored, strict=True)
+                )
+            except (TypeError, ValueError, IndexError):
+                residuals[constraint.id] = math.inf
+            continue
+        second = _line(geometry.get(ids[1])) if len(ids) >= 2 else None
+        if second is None:
+            residuals[constraint.id] = math.inf
+            continue
+        av = (first[1][0] - first[0][0], first[1][1] - first[0][1])
+        bv = (second[1][0] - second[0][0], second[1][1] - second[0][1])
+        al, bl = math.hypot(*av), math.hypot(*bv)
+        if min(al, bl) <= 1e-12:
+            residuals[constraint.id] = math.inf
+        elif constraint.kind == "parallel":
+            residuals[constraint.id] = abs(av[0] * bv[1] - av[1] * bv[0]) / (al * bl)
+        elif constraint.kind == "perpendicular":
+            residuals[constraint.id] = abs(av[0] * bv[0] + av[1] * bv[1]) / (al * bl)
+        elif constraint.kind == "equal_length":
+            residuals[constraint.id] = abs(al - bl) / max(al, bl)
+        elif constraint.kind == "coincident":
+            first_end = max(0, min(1, int(constraint.parameters.get("first_endpoint", 1))))
+            second_end = max(0, min(1, int(constraint.parameters.get("second_endpoint", 0))))
+            residuals[constraint.id] = math.dist(first[first_end], second[second_end])
+        else:
+            residuals[constraint.id] = math.inf
+    return residuals
+
+
+__all__ = [
+    "ConstraintKind",
+    "GeometricConstraint",
+    "constraint_residuals",
+    "solve_constraints",
+]

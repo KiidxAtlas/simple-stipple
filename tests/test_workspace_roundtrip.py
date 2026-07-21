@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -84,6 +86,52 @@ def test_autosave_skips_when_clean(app_window, tmp_path, monkeypatch):
     assert not (tmp_path / "auto.json").exists()
 
 
+def test_autosave_keeps_distinct_rolling_recovery_states(app_window, tmp_path, monkeypatch):
+    w = app_window
+    current = tmp_path / "window.workspace.json"
+    monkeypatch.setattr(type(w), "_autosave_path", staticmethod(lambda: current))
+    draft = _draft_page(w)
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    w._workspace_dirty = True
+    w._autosave_workspace()
+
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0), square(20, 0)]}, fit=False)
+    w._autosave_workspace()
+
+    snapshots = list(tmp_path.glob("window*.workspace.json"))
+    assert len(snapshots) == 2
+    documents = [
+        json.loads(snapshot.read_text(encoding="utf-8"))["document"] for snapshot in snapshots
+    ]
+    assert documents[0] != documents[1]
+
+
+def test_autosave_reads_existing_large_snapshot_with_workspace_limit(
+    app_window, tmp_path, monkeypatch
+):
+    from src.app.controllers import tasks
+    from src.backend.persistence import MAX_WORKSPACE_FILE_BYTES
+
+    w = app_window
+    current = tmp_path / "window.workspace.json"
+    current.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(type(w), "_autosave_path", staticmethod(lambda: current))
+    draft = _draft_page(w)
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    w._workspace_dirty = True
+    observed: list[int] = []
+    real_read = tasks.read_json_file
+
+    def capture_limit(path, default=None, *, max_bytes):
+        observed.append(max_bytes)
+        return real_read(path, default, max_bytes=max_bytes)
+
+    monkeypatch.setattr(tasks, "read_json_file", capture_limit)
+    w._autosave_workspace()
+
+    assert observed == [MAX_WORKSPACE_FILE_BYTES]
+
+
 def test_successful_save_removes_restored_snapshot(app_window, tmp_path):
     w = app_window
     snapshot = tmp_path / "restored.workspace.json"
@@ -96,6 +144,50 @@ def test_successful_save_removes_restored_snapshot(app_window, tmp_path):
     assert w._save_workspace()
     assert not snapshot.exists()
     assert w._restored_recovery_path is None
+
+
+def test_startup_recovery_keeps_snapshot_until_recovered_work_is_saved(
+    app_window, tmp_path, monkeypatch
+):
+    from src.app.controllers import tasks
+
+    w = app_window
+    draft = _draft_page(w)
+    draft._rt().load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    document = w._collect_workspace_document()
+    recovery_dir = tmp_path / "recovery"
+    recovery_dir.mkdir()
+    snapshot = recovery_dir / "crash.workspace.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "recovery": {
+                    "timestamp": "2026-07-20T12:00:00+00:00",
+                    "workspace_path": str(tmp_path / "original.workspace.json"),
+                },
+                "document": document,
+            }
+        ),
+        encoding="utf-8",
+    )
+    w._clear_workspace_state()
+    w._workspace_path = tmp_path / "unrelated.workspace.json"
+    w._autosave_controller._recovery_offered = False
+    monkeypatch.setattr(tasks, "user_data_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        tasks.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: (next(iter(_args[3])), True),
+    )
+
+    w._autosave_controller.offer_startup_autosave_recovery()
+
+    assert _draft_page(w)._canvas.poly_count == 1
+    assert w._workspace_path is None
+    assert w._workspace_dirty
+    assert w._has_unsaved_changes
+    assert w._restored_recovery_path == snapshot
+    assert snapshot.exists()
 
 
 def test_failed_save_as_does_not_rebind_workspace(app_window, monkeypatch, tmp_path):

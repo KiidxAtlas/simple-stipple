@@ -147,19 +147,168 @@ class SnapEngine:
                 cx, cy, best, self._curve_candidate(cx, cy, exclude=exclude_polys)
             )
         if (
-            best is None
-            and allow_polyline
+            allow_polyline
+            and edge_enabled
+            and reference_point is not None
+            and (
+                getattr(v, "_snap_angle_enabled", True)
+                or getattr(v, "_snap_equal_length_enabled", True)
+            )
+        ):
+            best = self._pick_better(
+                cx,
+                cy,
+                best,
+                self._relationship_candidate(
+                    cx, cy, wx, wy, reference_point, exclude=exclude_polys
+                ),
+            )
+        if allow_polyline and vertex_enabled and getattr(v, "_snap_axis_alignment_enabled", True):
+            best = self._pick_better(
+                cx,
+                cy,
+                best,
+                self._axis_alignment_candidate(cx, cy, wx, wy, exclude=exclude_polys),
+            )
+        if (
+            allow_polyline
             and edge_enabled
             and getattr(v, "_snap_extension_enabled", True)
         ):
-            best = self._extension_candidate(cx, cy, exclude=exclude_polys)
+            best = self._pick_better(
+                cx,
+                cy,
+                best,
+                self._extension_candidate(cx, cy, exclude=exclude_polys),
+            )
         best = self._pick_better(cx, cy, best, self._guide_candidate(cx, cy, wx, wy))
+        return best
+
+    def _relationship_candidate(
+        self,
+        cx: float,
+        cy: float,
+        wx: float,
+        wy: float,
+        reference: tuple[float, float],
+        *,
+        exclude: set[int] | None = None,
+    ) -> SnapResult | None:
+        """Infer parallel, perpendicular, and equal-length line endpoints.
+
+        Candidates must be genuinely close to the pointer in screen space.
+        This gives CAD-style intent hints without forcing the cursor onto a
+        remote construction line.
+        """
+        ax, ay = reference
+        radius = ShapeSnapEngine.SNAP_RADIUS
+        pointer_angle = math.atan2(wy - ay, wx - ax)
+        pointer_length = math.hypot(wx - ax, wy - ay)
+        if pointer_length <= 1e-12:
+            return None
+        hidden = self.v._flagged("hidden")
+        relationship_candidates: list[SnapResult] = []
+        lengths: set[float] = set()
+        angles: set[float] = set()
+        for index, entity in enumerate(self.v._entities):
+            if index in (exclude or ()) or index in hidden:
+                continue
+            for start, end in zip(entity.points, entity.points[1:]):
+                dx, dy = end[0] - start[0], end[1] - start[1]
+                length = math.hypot(dx, dy)
+                if length <= 1e-9:
+                    continue
+                lengths.add(round(length, 9))
+                angles.add(round(math.atan2(dy, dx) % math.pi, 9))
+        if getattr(self.v, "_snap_angle_enabled", True):
+            for angle in angles:
+                for target_angle, role in (
+                    (angle, "parallel"),
+                    (angle + math.pi / 2, "perpendicular"),
+                ):
+                    # Use the sign closest to the pointer direction.
+                    if math.cos(pointer_angle - target_angle) < 0:
+                        target_angle += math.pi
+                    relationship_candidates.append(
+                        (
+                            ax + pointer_length * math.cos(target_angle),
+                            ay + pointer_length * math.sin(target_angle),
+                            role,
+                        )
+                    )
+        ux, uy = (wx - ax) / pointer_length, (wy - ay) / pointer_length
+        equal_candidates = (
+            [(ax + length * ux, ay + length * uy, "equal_length") for length in lengths]
+            if getattr(self.v, "_snap_equal_length_enabled", True)
+            else []
+        )
+
+        def nearest(candidates: list[SnapResult]) -> SnapResult | None:
+            best: SnapResult | None = None
+            best_distance = radius
+            for candidate in candidates:
+                pcx, pcy = self.v._w2c(candidate[0], candidate[1])
+                distance = math.hypot(cx - pcx, cy - pcy)
+                if distance < best_distance:
+                    best, best_distance = candidate, distance
+            return best
+
+        # When the cursor is within acquisition tolerance of an existing
+        # segment length, length is the more specific constraint. A parallel
+        # candidate lies exactly under the raw pointer and otherwise always
+        # masks the tiny radial correction needed to make lengths equal.
+        equal = nearest(equal_candidates)
+        if equal is not None:
+            return equal
+        return nearest(relationship_candidates)
+
+    def _axis_alignment_candidate(
+        self,
+        cx: float,
+        cy: float,
+        wx: float,
+        wy: float,
+        *,
+        exclude: set[int] | None = None,
+    ) -> SnapResult | None:
+        """Align the moving endpoint's X or Y coordinate to visible endpoints."""
+        hidden = self.v._flagged("hidden")
+        best: SnapResult | None = None
+        best_distance = ShapeSnapEngine.SNAP_RADIUS
+        for index, entity in enumerate(self.v._entities):
+            if index in (exclude or ()) or index in hidden or not entity.points:
+                continue
+            # Open-path endpoints are the primary intent. Closed paths have no
+            # topological endpoint, so their vertices remain regular vertex
+            # snaps rather than creating alignment guides everywhere.
+            points = (
+                (entity.points[0], entity.points[-1])
+                if not self.v._is_poly_closed(entity.points)
+                else ()
+            )
+            for px, py in points:
+                pcx, _ = self.v._w2c(px, wy)
+                x_distance = abs(cx - pcx)
+                if x_distance < best_distance:
+                    best_distance = x_distance
+                    best = (px, wy, "axis_x")
+                _, pcy = self.v._w2c(wx, py)
+                y_distance = abs(cy - pcy)
+                if y_distance < best_distance:
+                    best_distance = y_distance
+                    best = (wx, py, "axis_y")
         return best
 
     def angle(self, ax: float, ay: float, wx: float, wy: float) -> tuple[float, float]:
         if not getattr(self.v, "_snap_angle_enabled", True):
             return (wx, wy)
-        return angle_snap(ax, ay, wx, wy)
+        return angle_snap(
+            ax,
+            ay,
+            wx,
+            wy,
+            getattr(self.v, "_rotation_snap_increment", 15.0),
+        )
 
     # ── Candidate sources ─────────────────────────────────────────────────
 
@@ -361,12 +510,71 @@ class SnapEngine:
         scx, scy = v._w2c(second[0], second[1])
         fd = math.hypot(cx - fcx, cy - fcy)
         sd = math.hypot(cx - scx, cy - scy)
+        first_priority = self._snap_priority(first[2])
+        second_priority = self._snap_priority(second[2])
+        first_explicit = first_priority >= 90
+        second_explicit = second_priority >= 90
+        if first_explicit != second_explicit:
+            # Explicit finite geometry always beats inferred construction
+            # when both candidates are inside their acquisition radii.
+            return first if first_explicit else second
+        if not first_explicit and first_priority != second_priority:
+            return first if first_priority > second_priority else second
+        # A point has a small magnetic core over an edge, but outside that
+        # core competing explicit targets resolve by proximity. This avoids a
+        # distant circle quadrant stealing an exact tangent/curve hit.
+        if self._is_magnetic_point(first[2]) and second_priority < 105 and fd <= 6.0:
+            return first
+        if self._is_magnetic_point(second[2]) and first_priority < 105 and sd <= 6.0:
+            return second
         # Preserve source priority for visually coincident candidates. Tiny
         # floating-point differences must not relabel a tangent as generic
         # "On Edge" or make overlapping snap roles flicker frame-to-frame.
         if abs(fd - sd) <= 0.25:
             return first
         return second if sd < fd else first
+
+    @staticmethod
+    def _snap_priority(snap_type: str) -> int:
+        """CAD-style hierarchy: exact geometry before inferred relationships."""
+        if snap_type == "intersection":
+            return 120
+        if snap_type == "vertex" or snap_type.startswith(
+            ("vertex_", "spline_control_", "arc_start", "arc_end")
+        ):
+            return 115
+        if snap_type == "center" or snap_type.startswith(
+            ("circle_", "ellipse_", "quadrant_")
+        ):
+            return 110
+        if snap_type == "midpoint":
+            return 105
+        if snap_type == "edge":
+            return 100
+        if snap_type == "tangent":
+            return 95
+        if snap_type == "grid":
+            return 80
+        if snap_type == "guide":
+            return 70
+        if snap_type == "extension":
+            return 60
+        if snap_type in {
+            "equal_length",
+            "axis_x",
+            "axis_y",
+            "parallel",
+            "perpendicular",
+        }:
+            return 40
+        return 50
+
+    @staticmethod
+    def _is_magnetic_point(snap_type: str) -> bool:
+        return (
+            snap_type in {"intersection", "vertex", "midpoint"}
+            or snap_type.startswith(("vertex_", "spline_control_", "arc_start", "arc_end"))
+        )
 
 
 class ShapeSnapEngine:

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from src.core.settings import (
     CONTEXT_MENU_SECTION_LABELS,
+    DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
@@ -334,9 +335,14 @@ class DrawSidebarCustomizeDialog(QDialog):
 
 
 class ContextMenuCustomizeDialog(QDialog):
-    """Choose which optional top-level canvas context-menu sections appear."""
+    """Choose visible sections and which live under More actions."""
 
-    def __init__(self, parent: QWidget | None = None, sections: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        sections: list[str] | None = None,
+        overflow_sections: list[str] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Customize Canvas Context Menu")
         self.resize(460, 540)
@@ -347,6 +353,10 @@ class ContextMenuCustomizeDialog(QDialog):
         if not current:
             current = list(DEFAULT_CONTEXT_MENU_SECTIONS)
         self._result = list(current)
+        overflow = [key for key in (overflow_sections or []) if key in labels]
+        if overflow_sections is None:
+            overflow = list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
+        self._overflow_result = overflow
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -355,20 +365,36 @@ class ContextMenuCustomizeDialog(QDialog):
         title.setProperty("role", "page-title")
         layout.addWidget(title)
         subtitle = QLabel(
-            "Uncheck optional sections you do not want on right-click. Direct Select, "
-            "Delete, and Cutout actions remain available when clicking a shape. View "
-            "remains enabled so an empty-canvas menu is never blank."
+            "The first list controls what appears. The second controls which visible "
+            "sections are grouped under More actions. Drag either list to set order. "
+            "Direct Select, Delete, and Cutout actions remain immediately available."
         )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
         self._list = _build_list(labels, current, DEFAULT_CONTEXT_MENU_SECTIONS)
         layout.addWidget(self._list, stretch=1)
+        overflow_label = QLabel("Place under More actions")
+        overflow_label.setProperty("role", "section-title")
+        layout.addWidget(overflow_label)
+        self._overflow_list = _build_list(
+            labels,
+            overflow,
+            DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
+        )
+        layout.addWidget(self._overflow_list, stretch=1)
         sep(layout)
         buttons = QHBoxLayout()
         reset = QPushButton("Reset to defaults")
         reset.clicked.connect(
             lambda: _fill_list(self._list, labels, list(DEFAULT_CONTEXT_MENU_SECTIONS))
+        )
+        reset.clicked.connect(
+            lambda: _fill_list(
+                self._overflow_list,
+                labels,
+                list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS),
+            )
         )
         buttons.addWidget(reset)
         buttons.addStretch()
@@ -386,10 +412,16 @@ class ContextMenuCustomizeDialog(QDialog):
         if "view" not in checked:
             checked.append("view")
         self._result = checked
+        self._overflow_result = [
+            key for key in _checked_keys(self._overflow_list) if key in checked
+        ]
         self.accept()
 
     def get_sections(self) -> list[str]:
         return list(self._result)
+
+    def get_overflow_sections(self) -> list[str]:
+        return list(self._overflow_result)
 
 
 __all__ = ["ContextMenuCustomizeDialog", "DrawSidebarCustomizeDialog", "RadialMenuDialog"]

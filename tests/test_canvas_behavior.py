@@ -572,6 +572,17 @@ def test_copy_paste_and_duplicate(qapp):
     assert v.poly_count == 3
 
 
+def test_plain_paste_preserves_position_while_offset_paste_moves_five_mm(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.set_selection([0])
+    original = list(v._entities[0].points)
+    v._copy_selected()
+    v._paste_clipboard()
+    assert v._entities[1].points == original
+    v._paste_clipboard_with_offset(5.0)
+    assert v._entities[2].points == [(x + 5.0, y + 5.0) for x, y in original]
+
+
 def test_clipboard_is_shared_across_canvas_instances(qapp):
     """Copy/paste must work across tabs — each tab has its own PolylineView
     instance, so the clipboard can't be plain per-instance state or a copy
@@ -696,6 +707,64 @@ def test_explode_then_merge_rectangle(qapp):
     assert len(set(map(tuple, pts))) == 4
 
 
+def test_merge_preserves_source_layer_and_tree_identity(qapp):
+    v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0)], [(10.0, 0.0), (20.0, 0.0)]])
+    for entity in v._entities:
+        entity.layer = "Engrave"
+    first_id = v._entities[0].id
+    v.set_active_layer("Engrave")
+    v.set_selection([0, 1])
+
+    assert v.merge_selected_segments_to_objects() == 1
+    assert v.poly_count == 1
+    assert v._entities[0].layer == "Engrave"
+    assert v._entities[0].id == first_id
+
+
+def test_crossing_draw_split_consumes_cutter_instead_of_leaving_middle_line(qapp):
+    v = make_view(qapp, [square(0.0, 0.0, 10.0)])
+    v._draw_split_enabled = True
+
+    assert v._selection_service._commit_drawn_polyline([(-5.0, 5.0), (15.0, 5.0)], primitive="line")
+    assert v.poly_count == 2
+    assert all(v._is_poly_closed(entity.points) for entity in v._entities)
+
+
+def test_internal_short_line_does_not_invisibly_extend_and_split_region(qapp):
+    v = make_view(qapp, [square(0.0, 0.0, 10.0)])
+    v._draw_split_enabled = True
+
+    assert v._selection_service._commit_drawn_polyline([(3.0, 5.0), (7.0, 5.0)], primitive="line")
+    assert v.poly_count == 2
+    assert sum(v._is_poly_closed(entity.points) for entity in v._entities) == 1
+
+
+def test_partial_region_intersection_keeps_line_and_does_not_cut(qapp):
+    original = square(0.0, 0.0, 10.0)
+    v = make_view(qapp, [original])
+    v._draw_split_enabled = True
+
+    assert v._selection_service._commit_drawn_polyline([(5.0, 5.0), (15.0, 5.0)], primitive="line")
+    assert v.poly_count == 2
+    assert v._entities[0].points == original
+    assert v._entities[1].points == [(5.0, 5.0), (15.0, 5.0)]
+
+
+def test_closed_shape_tool_carves_existing_region(qapp):
+    v = make_view(qapp, [square(0.0, 0.0, 10.0)])
+    v._draw_split_enabled = True
+    v._draw_primitive = "rectangle"
+    v._draw_shape_preview_active = True
+    v._draw_shape_anchor_w = (3.0, 3.0)
+    v._draw_shape_cursor_w = (7.0, 7.0)
+
+    assert v._draw_ops._commit_shape_preview()
+    # Outer boundary plus the carved inner boundary; no third duplicate
+    # rectangle entity is appended.
+    assert v.poly_count == 2
+    assert all(v._is_poly_closed(entity.points) for entity in v._entities)
+
+
 # ── draw mode ────────────────────────────────────────────────────────────────
 
 
@@ -817,7 +886,7 @@ def test_mode_switching_resets_interaction_state(qapp):
     assert v.get_mode() == "select"
 
 
-def test_measure_toggle(qapp):
+def test_scale_toggle(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v.toggle_measure()
     assert v._measure_mode
@@ -825,6 +894,75 @@ def test_measure_toggle(qapp):
     click_world(v, 10.0, 0.0)
     assert v._measure_locked
     v.toggle_measure()
+    assert not v._measure_mode
+
+
+def test_visible_precision_tool_buttons_activate_scale_and_angular_dimension(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.show()
+    qapp.processEvents()
+    v.grab()  # force chrome painting and hit-rectangle layout
+
+    mx1, my1, mx2, my2 = v._mbtn_rect
+    click(v, (mx1 + mx2) / 2, (my1 + my2) / 2)
+    assert v._measure_mode
+
+    ax1, ay1, ax2, ay2 = v._adbtn_rect
+    click(v, (ax1 + ax2) / 2, (ay1 + ay2) / 2)
+    assert not v._measure_mode
+    assert v._dimension_mode
+    assert v._dimension_kind == "angle"
+
+
+def test_scale_by_reference_affects_only_selection_and_keeps_first_point_fixed(qapp):
+    from PySide6.QtWidgets import QLineEdit
+
+    v = make_view(qapp, [square(10, 0), square(100, 0)])
+    v.set_selection([0])
+    v._measure_anchor = (10.0, 0.0)
+    v._measure_end = (20.0, 0.0)
+    v._measure_edit = QLineEdit(v)
+    v._measure_edit.setText("20")
+
+    v._apply_measure_scale()
+
+    assert v._entities[0].points[0] == pytest.approx((10.0, 0.0))
+    assert v._entities[0].points[1] == pytest.approx((30.0, 0.0))
+    assert v._entities[1].points == square(100, 0)
+    assert v.undo()
+    assert v._entities[0].points == square(10, 0)
+
+
+def test_scale_by_reference_does_not_fall_back_to_everything_for_locked_selection(qapp):
+    v = make_view(qapp, [square(0, 0), square(20, 0)])
+    v.set_locked_indices([0])
+    v.set_selection([0])
+
+    assert not v.scale_by_reference(2.0, (0.0, 0.0))
+    assert v._entities[0].points == square(0, 0)
+    assert v._entities[1].points == square(20, 0)
+
+
+def test_scale_rejects_zero_length_reference_without_locking(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.toggle_measure()
+    click_world(v, 0.0, 0.0)
+    click_world(v, 0.0, 0.0)
+
+    assert not v._measure_locked
+    assert v._measure_end is None
+
+
+def test_scale_right_click_steps_back_before_closing_tool(qapp):
+    v = make_view(qapp, [square(0, 0)])
+    v.toggle_measure()
+    click_world(v, 0.0, 0.0)
+    assert v._measure_anchor is not None
+
+    v._rightclick_cb(*v._w2c(0.0, 0.0))
+    assert v._measure_mode
+    assert v._measure_anchor is None
+    v._rightclick_cb(*v._w2c(0.0, 0.0))
     assert not v._measure_mode
 
 
@@ -890,6 +1028,24 @@ def test_escape_exits_idle_measure_mode(qapp):
     assert v._measure_mode
     key(v, Qt.Key.Key_Escape)
     assert not v._measure_mode
+
+
+def test_escape_exits_locked_scale_mode_even_when_target_input_has_focus(qapp):
+    v = make_view(qapp, THREE_SQUARES)
+    v.toggle_measure()
+    click_world(v, 0.0, 0.0)
+    click_world(v, 10.0, 0.0)
+    assert v._measure_locked
+    assert v._measure_edit is not None
+    v._measure_edit.setFocus()
+
+    key(v, Qt.Key.Key_Escape)
+
+    assert not v._measure_mode
+    assert not v._measure_locked
+    assert v._measure_anchor is None
+    assert v._measure_end is None
+    assert v._measure_edit is None
 
 
 def test_status_summary_counts(qapp):
@@ -1185,9 +1341,7 @@ def test_radial_menu_label_width_budget_never_exceeds_the_disc(qapp):
     # Directly above/below center the full diameter is available; near the
     # top/bottom pole it shrinks to ~0 rather than going negative or over.
     assert c._radial_menu._radial_chord_half(cy, cy, outer) == pytest.approx(outer)
-    assert c._radial_menu._radial_chord_half(cy + outer, cy, outer) == pytest.approx(
-        0.0, abs=1e-6
-    )
+    assert c._radial_menu._radial_chord_half(cy + outer, cy, outer) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_radial_menu_paints_long_labels_without_raising(qapp):
@@ -1453,6 +1607,32 @@ def test_double_click_empty_fits(qapp):
     assert v.get_zoom_percent() < z
 
 
+def test_double_click_inside_connected_edges_selects_enclosed_profile(qapp):
+    edges = [
+        [(0.0, 0.0), (10.0, 0.0)],
+        [(10.0, 0.0), (10.0, 10.0)],
+        [(10.0, 10.0), (0.0, 10.0)],
+        [(0.0, 10.0), (0.0, 0.0)],
+    ]
+    canvas = make_canvas(qapp, edges)
+    cx, cy = canvas._w2c(5.0, 5.0)
+    canvas.mouseDoubleClickEvent(_mouse_event(QEvent.Type.MouseButtonDblClick, cx, cy))
+    assert canvas._sel == {0, 1, 2, 3}
+
+
+def test_alt_click_cycles_overlapping_geometry(qapp):
+    canvas = make_canvas(
+        qapp,
+        [[(0.0, 0.0), (10.0, 0.0)], [(0.0, 0.0), (10.0, 0.0)]],
+    )
+    click_world(canvas, 5.0, 0.0, Qt.KeyboardModifier.AltModifier)
+    first = set(canvas._sel)
+    click_world(canvas, 5.0, 0.0, Qt.KeyboardModifier.AltModifier)
+    second = set(canvas._sel)
+    assert first == {0}
+    assert second == {1}
+
+
 # ── parametric text ──────────────────────────────────────────────────────────
 
 
@@ -1617,15 +1797,21 @@ def test_rotated_rectangle_uses_local_gizmo_and_preserves_parameters(qapp):
     base_points = build_rect_poly(5, 5, 10, 6)
     angle = math.radians(45)
     rotated_points = [
-        (5 + (x - 5) * math.cos(angle) - (y - 5) * math.sin(angle),
-         5 + (x - 5) * math.sin(angle) + (y - 5) * math.cos(angle))
+        (
+            5 + (x - 5) * math.cos(angle) - (y - 5) * math.sin(angle),
+            5 + (x - 5) * math.sin(angle) + (y - 5) * math.cos(angle),
+        )
         for x, y in base_points
     ]
-    v.set_entity_records([{
-        "points": rotated_points,
-        "kind": "rectangle",
-        "meta": {"center": (5, 5), "width": 10, "height": 6, "rotation": 45},
-    }])
+    v.set_entity_records(
+        [
+            {
+                "points": rotated_points,
+                "kind": "rectangle",
+                "meta": {"center": (5, 5), "width": 10, "height": 6, "rotation": 45},
+            }
+        ]
+    )
     v.set_selection([0])
     _paint_once(v)
     east = dict(v._gizmo_handle_rects)["e"].center()
@@ -1661,6 +1847,60 @@ def test_draw_inference_acquires_parallel_relationship(qapp):
     assert v._draw_snap_type == "parallel"
     assert v._draw_snap is not None
     assert v._draw_snap[0] - 20 == pytest.approx(v._draw_snap[1] - 20)
+
+
+def test_draw_inference_acquires_existing_line_length(qapp):
+    v = make_view(qapp, [[(0, 0), (10, 0)]])
+    v.set_mode("draw")
+    v._draw_pts = [(20, 20)]
+    target = v._w2c(29.9, 20.0)
+    event = _mouse_event(QEvent.Type.MouseMove, *target, button=Qt.MouseButton.NoButton)
+
+    v.mouseMoveEvent(event)
+
+    assert v._draw_snap_type == "equal_length"
+    assert v._draw_snap is not None
+    assert math.dist(v._draw_pts[-1], v._draw_snap) == pytest.approx(10.0)
+
+    v.set_snap_equal_length(False)
+    v.mouseMoveEvent(event)
+    assert v._draw_snap_type != "equal_length"
+
+
+def test_draw_endpoint_axis_alignment_is_independently_toggleable(qapp):
+    v = make_view(qapp, [[(0, 0), (10, 0)]])
+    v.set_mode("draw")
+    v._draw_pts = [(20, 30)]
+    target = v._w2c(10.1, 20.0)
+    event = _mouse_event(QEvent.Type.MouseMove, *target, button=Qt.MouseButton.NoButton)
+
+    v.mouseMoveEvent(event)
+    assert v._draw_snap_type == "axis_x"
+    assert v._draw_snap is not None
+    assert v._draw_snap[0] == pytest.approx(10.0)
+
+    v.set_snap_axis_alignment(False)
+    v.mouseMoveEvent(event)
+    assert v._draw_snap_type != "axis_x"
+
+
+@pytest.mark.parametrize("explicit_type", ["vertex", "edge"])
+def test_explicit_geometry_snap_outranks_inference_within_acquisition_radius(qapp, explicit_type):
+    v = make_view(qapp, [[(0, 0), (10, 0)]])
+    vertex_cx, vertex_cy = v._w2c(10.0, 0.0)
+    pointer_cx = vertex_cx + 5.0
+    pointer_cy = vertex_cy
+    inferred_x, inferred_y = v._c2w(pointer_cx, pointer_cy)
+
+    result = v._snap_engine._pick_better(
+        pointer_cx,
+        pointer_cy,
+        (10.0, 0.0, explicit_type),
+        (inferred_x, inferred_y, "equal_length"),
+    )
+
+    assert result is not None
+    assert result[2] == explicit_type
 
 
 @pytest.mark.parametrize(
@@ -1966,6 +2206,27 @@ def test_context_menu_configuration_removes_optional_sections(qapp, monkeypatch)
     assert any(label.startswith("Fit view") for label in labels)
 
 
+def test_context_menu_use_as_outline_passes_selected_polylines(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMenu
+
+    from src.ui.canvas.dxf_canvas import DxfCanvas
+
+    received: list[list[list[tuple[float, float]]]] = []
+    canvas = DxfCanvas(on_send_selected_to_pattern=received.append)
+    canvas.resize(800, 600)
+    canvas.load([square(0, 0)])
+    canvas.set_selection([0])
+    canvas.set_context_menu_sections(["share_diagnostics", "view"])
+    captured: list[QMenu] = []
+    monkeypatch.setattr(QMenu, "popup", lambda menu, _point: captured.append(menu))
+
+    canvas._rightclick_cb(*canvas._w2c(5.0, 0.0))
+    action = next(action for action in captured[0].actions() if action.text() == "Use as outline")
+    action.trigger()
+
+    assert received == [[square(0, 0)]]
+
+
 def test_context_menu_builds_for_mixed_editor_states(qapp, monkeypatch):
     from PySide6.QtWidgets import QMenu
 
@@ -1997,11 +2258,36 @@ def test_context_menu_builds_for_mixed_editor_states(qapp, monkeypatch):
 
     assert len(captured) == 5
     bezier_labels = [action.text() for action in captured[-1].actions()]
-    more = next((action.menu() for action in captured[-1].actions() if action.text() == "More actions…"), None)
+    more = next(
+        (action.menu() for action in captured[-1].actions() if action.text() == "More actions…"),
+        None,
+    )
     if more is not None:
         bezier_labels.extend(action.text() for action in more.actions())
     assert "Bézier node" in bezier_labels
     assert "Symbols" in bezier_labels
+
+
+def test_edit_mode_context_menu_exposes_corner_operations(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMenu
+
+    captured: list[QMenu] = []
+    monkeypatch.setattr(QMenu, "popup", lambda menu, _point: captured.append(menu))
+    canvas = make_canvas(qapp, [square(0, 0)])
+    canvas.set_selection([0])
+    canvas.set_mode("edit")
+
+    canvas._rightclick_cb(*canvas._w2c(0.0, 0.0))
+
+    assert captured
+    actions = captured[0].actions()
+    more = next((action.menu() for action in actions if action.text() == "More actions…"), None)
+    if more is not None:
+        actions = [*actions, *more.actions()]
+    corner = next(action.menu() for action in actions if action.text() == "Corner")
+    labels = [action.text() for action in corner.actions()]
+    assert any(label.startswith("Round Corner") for label in labels)
+    assert any(label.startswith("Chamfer Corner") for label in labels)
 
 
 def test_previous_and_next_view_restore_zoom_transform(qapp):

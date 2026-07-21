@@ -1,5 +1,6 @@
 """Settings schema validation and forward-compatibility tests."""
 
+from src.core.paths import custom_tiles_dir, project_root
 from src.core.settings import (
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_WIDTH,
@@ -16,6 +17,12 @@ def test_settings_schema_backfills_defaults():
     assert settings["draw_sidebar_width"] == DEFAULT_DRAW_SIDEBAR_WIDTH
     assert settings["radial_menu_tools"] == list(DEFAULT_RADIAL_MENU_TOOLS)
     assert settings["context_menu_sections"] == list(DEFAULT_CONTEXT_MENU_SECTIONS)
+    assert settings["custom_tiles_dir"] == str(project_root() / "tiles")
+    assert custom_tiles_dir(settings["custom_tiles_dir"]) == project_root() / "tiles"
+    assert settings["snap_vertex"] is True
+    assert settings["snap_equal_length"] is True
+    assert settings["snap_axis_alignment"] is True
+    assert settings["grid_snap"] is False
 
 
 def test_invalid_known_setting_resets_without_losing_other_values():

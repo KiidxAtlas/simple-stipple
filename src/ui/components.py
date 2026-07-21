@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -190,17 +191,10 @@ def sidebar_panel(content: QWidget, *, min_width: int = 340, max_width: int = 43
     frame.setMinimumWidth(min_width)
     frame.setMaximumWidth(max_width)
 
-    # The horizontal scrollbar is off, so the panel must be at least as wide
-    # as the content's minimum (plus the vertical scrollbar gutter) or the
-    # content gets clipped. Callers populate `content` after wrapping it, so
-    # measure on the next event-loop turn, once the layout has settled.
-    def _fit_width() -> None:
-        gutter = scroll.verticalScrollBar().sizeHint().width() + 2
-        needed = content.minimumSizeHint().width() + gutter
-        frame.setMinimumWidth(max(min_width, needed))
-        frame.setMaximumWidth(max(max_width, needed))
-
-    QTimer.singleShot(0, _fit_width)
+    # Wide translated labels and property rows must reflow rather than force
+    # the entire application wider than its declared compact breakpoint.
+    content.setMinimumWidth(0)
+    content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     return frame
 
 
@@ -226,13 +220,35 @@ def content_splitter(left: QWidget, right: QWidget, *, sizes: tuple[int, int]) -
 # ══════════════════════════════════════════════════════════════════════════
 
 
+class ActionButton(QPushButton):
+    """One semantic action hierarchy shared across all application surfaces."""
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        kind: str = "secondary",
+        tooltip: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(text, parent)
+        self.set_kind(kind)
+        self.setAccessibleName(text.replace("…", ""))
+        if tooltip:
+            self.setToolTip(tooltip)
+
+    def set_kind(self, kind: str) -> None:
+        if kind not in {"primary", "secondary", "danger", "ghost"}:
+            raise ValueError(f"Unsupported action kind: {kind}")
+        self.setProperty("role", kind)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
 def primary_button(text: str, *, height: int = 34, tooltip: str = "") -> QPushButton:
     """A primary call-to-action button (e.g. "Export DXF", "Push")."""
-    btn = QPushButton(text)
+    btn = ActionButton(text, kind="primary", tooltip=tooltip)
     btn.setMinimumHeight(height)
-    btn.setProperty("role", "primary")
-    if tooltip:
-        btn.setToolTip(tooltip)
     return btn
 
 
@@ -254,17 +270,22 @@ def browse_row(
 ) -> QLineEdit:
     """Add an optional standard section label, then a line-edit + Browse-button row
     to ``parent_layout``. Returns the line edit."""
+    lbl = None
     if heading:
         lbl = QLabel(heading)
         lbl.setProperty("role", "section-label")
         parent_layout.addWidget(lbl)
     row = QHBoxLayout()
     edit = QLineEdit()
+    edit.setAccessibleName(heading or placeholder or "File path")
+    if lbl is not None:
+        lbl.setBuddy(edit)
     if placeholder:
         edit.setPlaceholderText(placeholder)
     if tooltip:
         edit.setToolTip(tooltip)
     btn = QPushButton(btn_label)
+    btn.setAccessibleName(f"{btn_label} {heading or 'file'}")
     if btn_width is not None:
         btn.setFixedWidth(btn_width)
     if btn_tooltip:
@@ -355,6 +376,120 @@ def clear_line_edit_error(widget) -> None:
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     widget.setToolTip("")
+
+
+class WorkflowStepper(QFrame):
+    """Responsive workflow progress with explicit current/completed states."""
+
+    stepRequested = Signal(int)
+
+    def __init__(self, steps: tuple[str, ...], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._steps = steps
+        self._labels: list[QToolButton] = []
+        self.setProperty("surface", "panel")
+        self.setProperty("role", "workflow-strip")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(7)
+        for index, step in enumerate(steps):
+            button = QToolButton()
+            button.setText(f"{index + 1}  {step}")
+            button.setProperty("role", "workflow-step")
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            button.setAccessibleName(f"Step {index + 1}: {step}")
+            button.clicked.connect(
+                lambda _checked=False, value=index: self.stepRequested.emit(value)
+            )
+            layout.addWidget(button)
+            self._labels.append(button)
+            if index < len(steps) - 1:
+                arrow = QLabel("→")
+                arrow.setProperty("role", "workflow-arrow")
+                layout.addWidget(arrow)
+        layout.addStretch()
+        self.set_current_step(0)
+        self.setMaximumHeight(self.sizeHint().height())
+
+    def set_current_step(self, index: int) -> None:
+        current = max(0, min(index, len(self._labels) - 1)) if self._labels else 0
+        for item_index, label in enumerate(self._labels):
+            state = (
+                "current"
+                if item_index == current
+                else "complete"
+                if item_index < current
+                else "pending"
+            )
+            prefix = "✓" if state == "complete" else str(item_index + 1)
+            label.setText(f"{prefix}  {self._steps[item_index]}")
+            label.setProperty("state", state)
+            label.setEnabled(item_index <= current)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+
+def workflow_strip(steps: tuple[str, ...]) -> WorkflowStepper:
+    """Create the standard interactive page workflow stepper."""
+    return WorkflowStepper(steps)
+
+
+class StatusRegion(QFrame):
+    """Stable-height semantic operation status."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("role", "status-region")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 5, 8, 5)
+        self._icon = QLabel("•")
+        self._message = QLabel("Ready")
+        self._message.setWordWrap(True)
+        layout.addWidget(self._icon)
+        layout.addWidget(self._message, 1)
+        self.setMinimumHeight(30)
+
+    def set_status(self, message: str, tone: str = "neutral") -> None:
+        icons = {"success": "✓", "warn": "!", "danger": "!", "info": "i", "neutral": "•"}
+        self._icon.setText(icons.get(tone, "•"))
+        self._message.setText(message or "Ready")
+        self.setProperty("tone", tone)
+        self.setAccessibleDescription(self._message.text())
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
+class OperationProgress(QFrame):
+    """Consistent labelled progress and cancellation surface."""
+
+    cancelRequested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._label = QLabel("Working…")
+        self._bar = QProgressBar()
+        self._cancel = ActionButton("Cancel")
+        self._cancel.clicked.connect(self.cancelRequested)
+        layout.addWidget(self._label)
+        layout.addWidget(self._bar, 1)
+        layout.addWidget(self._cancel)
+        self.setVisible(False)
+
+    def start(self, label: str, *, maximum: int = 0, cancellable: bool = True) -> None:
+        self._label.setText(label)
+        self._bar.setRange(0, maximum)
+        self._bar.setValue(0)
+        self._cancel.setVisible(cancellable)
+        self.setVisible(True)
+
+    def set_value(self, value: int) -> None:
+        self._bar.setValue(value)
+
+    def finish(self) -> None:
+        self.setVisible(False)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -505,15 +640,20 @@ def collapsible_content_widget(*, spacing: int = 8) -> tuple[QWidget, QVBoxLayou
 
 
 __all__ = [
+    "ActionButton",
     "CollapsibleSection",
     "EscapeBlurFilter",
+    "OperationProgress",
     "RecentFilesButton",
+    "StatusRegion",
+    "WorkflowStepper",
     "blur_focused_line_edit",
     "browse_row",
     "clear_line_edit_error",
     "collapsible_content_widget",
     "content_splitter",
     "info_chip",
+    "icon_from_painter",
     "make_resettable_line_edit",
     "parse_float_field",
     "parse_float_field_with_feedback",
@@ -524,6 +664,10 @@ __all__ = [
     "set_status_label",
     "sidebar_panel",
     "surface_frame",
+    "download_icon",
+    "gear_icon",
+    "tool_icon",
+    "workflow_strip",
 ]
 
 
@@ -1128,5 +1272,3 @@ def tool_icon(name: str, *, size: int = 20, color: str = "#c9d1d9") -> QIcon:
     draw_fn = _ICON_FACTORIES[name]
     return icon_from_painter(draw_fn, size=size, color=color)
 
-
-__all__ = ["download_icon", "gear_icon", "icon_from_painter", "tool_icon"]

@@ -45,6 +45,22 @@ def test_self_intersecting_outline_is_repaired_to_polygonal_region():
     assert region.area > 0
 
 
+def test_self_intersection_that_repairs_to_multipolygon_is_supported():
+    split_bow_tie = [
+        (0.0, 0.0),
+        (4.0, 4.0),
+        (0.0, 8.0),
+        (8.0, 8.0),
+        (4.0, 4.0),
+        (8.0, 0.0),
+        (0.0, 0.0),
+    ]
+    region = build_fill_region([split_bow_tie])
+    assert region is not None
+    assert region.is_valid
+    assert region.area == pytest.approx(32.0)
+
+
 def test_outline_and_pattern_fill_targets_can_be_enabled_together():
     spec = FillSpec.from_dict({"mode": "lines", "target_outline": True, "target_pattern": True})
     assert spec.target_outline
@@ -203,14 +219,16 @@ def test_zone_explicit_no_fill_does_not_inherit_document_fill(monkeypatch):
 
     monkeypatch.setattr(service, "build_pattern_polys", fake_build)
     service.build_zone_pattern_polys(
-        [{
-            "polys": [OUTER],
-            "pattern": "Honeycomb",
-            "params": {},
-            "scale": (100.0, 100.0),
-            "fill": None,
-            "output_mode": "pattern",
-        }],
+        [
+            {
+                "polys": [OUTER],
+                "pattern": "Honeycomb",
+                "params": {},
+                "scale": (100.0, 100.0),
+                "fill": None,
+                "output_mode": "pattern",
+            }
+        ],
         include_border=True,
         orig_w=100.0,
         orig_h=100.0,
@@ -232,14 +250,16 @@ def test_fill_only_zone_suppresses_pattern_but_keeps_its_fill(monkeypatch):
 
     monkeypatch.setattr(service, "build_pattern_polys", fake_build)
     service.build_zone_pattern_polys(
-        [{
-            "polys": [OUTER],
-            "pattern": "Honeycomb",
-            "params": {},
-            "scale": (100.0, 100.0),
-            "fill": zone_fill,
-            "output_mode": "fill",
-        }],
+        [
+            {
+                "polys": [OUTER],
+                "pattern": "Honeycomb",
+                "params": {},
+                "scale": (100.0, 100.0),
+                "fill": zone_fill,
+                "output_mode": "fill",
+            }
+        ],
         include_border=True,
         orig_w=100.0,
         orig_h=100.0,

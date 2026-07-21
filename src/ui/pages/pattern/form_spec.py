@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+MAX_PATTERN_DIMENSION_MM = 20.0
+
 
 @dataclass
 class ParamField:
@@ -17,6 +19,15 @@ class ParamField:
     param_key: str = ""  # key in the generator params dict; defaults to attr[1:]
     minimum: float | None = None  # lower bound for numeric fields
     maximum: float | None = None  # upper bound for numeric fields
+
+    def __post_init__(self) -> None:
+        """Cap physical pattern controls for the app's small-format outlines."""
+        if self.kind in {"float", "int"} and "(mm)" in self.label:
+            self.maximum = (
+                min(self.maximum, MAX_PATTERN_DIMENSION_MM)
+                if self.maximum is not None
+                else MAX_PATTERN_DIMENSION_MM
+            )
 
 
 # ── Parameter specs for each named pattern ────────────────────────────────────
@@ -68,7 +79,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "Spacing between repetitions of the selected custom geometry",
             param_key="gap",
             minimum=0.0,
-            maximum=1000,
+            maximum=20,
         ),
         ParamField(
             "_custom_tile_repeat",
@@ -118,7 +129,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "Spacing between adjacent hexagons",
             param_key="gap",
             minimum=0.0,
-            maximum=1000,
+            maximum=20,
         ),
     ],
     "Gradient Honeycomb": [
@@ -129,7 +140,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "Smallest hex cell size at one end of the gradient",
             param_key="r_min",
             minimum=0.0,
-            maximum=1000,
+            maximum=20,
         ),
         ParamField(
             "_grad_r_max",
@@ -138,7 +149,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "Largest hex cell size at the other end",
             param_key="r_max",
             minimum=0.001,
-            maximum=1000,
+            maximum=20,
         ),
         ParamField(
             "_grad_gap",

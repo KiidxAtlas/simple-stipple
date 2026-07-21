@@ -37,6 +37,7 @@ from src.backend.cad.snapping import (
 from src.backend.model.commands import DocumentSnapshot
 from src.backend.model.document import CanvasDocument, EntityRecord, OperationResult
 from src.core.settings import (
+    DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
@@ -52,6 +53,7 @@ from src.ui.canvas.constants import DRAG_THRESH
 from src.ui.canvas.constants import MIN_SCALE as _MIN_SCALE
 from src.ui.canvas.interaction import commands as canvas_commands
 from src.ui.canvas.interaction import tools as canvas_tools
+from src.ui.canvas.interaction.dimension_tool import DimensionTool as SketchDimensionTool
 from src.ui.canvas.interaction.select import SelectionService
 from src.ui.canvas.rendering.renderer import CanvasRenderer
 from src.ui.canvas.services.clipboard import ClipboardService
@@ -376,6 +378,12 @@ class CanvasView(
     def _find_poly_at(self, cx: float, cy: float) -> int | None:
         return self._hit_test.entity_at(cx, cy)
 
+    def _find_polys_at(self, cx: float, cy: float) -> list[int]:
+        return self._hit_test.entities_at(cx, cy)
+
+    def _find_profile_at(self, cx: float, cy: float) -> set[int]:
+        return self._hit_test.profile_at(cx, cy)
+
     def _find_guide_at(self, cx: float, cy: float) -> int | None:
         return self._hit_test.guide_at(cx, cy)
 
@@ -457,6 +465,9 @@ class CanvasView(
 
     def _dismiss_measure_edit(self) -> None:
         self._hud_service._dismiss_measure_edit()
+
+    def _apply_measure_scale(self) -> None:
+        self._hud_service._apply_measure_scale()
 
     def add_text_at(self, *args, **kwargs) -> int:
         return self._text_service.add_text_at(*args, **kwargs)
@@ -597,13 +608,16 @@ class CanvasView(
         return self._selection_service._is_near_start()
 
     def _finish_draw(self, *, close: bool = False) -> None:
+        if self._draw_primitive == "bezier":
+            self._selection_service._finish_pen(close=close)
+            return
         self._selection_service._finish_draw(close=close)
 
     def _commit_drawn_polyline(self, *args, **kwargs) -> None:
         self._selection_service._commit_drawn_polyline(*args, **kwargs)
 
-    def _finish_pen(self) -> bool:
-        return self._selection_service._finish_pen()
+    def _finish_pen(self, *, close: bool = False) -> bool:
+        return self._selection_service._finish_pen(close=close)
 
     def _close_selected_polylines(self, *, record_undo: bool = True) -> int:
         return self._selection_service._close_selected_polylines(record_undo=record_undo)
@@ -736,6 +750,8 @@ class CanvasView(
         self._lasso_points: list[QPointF] = []
         self._lasso_additive: bool = False
         self._context_menu_sections: set[str] = set(DEFAULT_CONTEXT_MENU_SECTIONS)
+        self._context_menu_section_order: list[str] = list(DEFAULT_CONTEXT_MENU_SECTIONS)
+        self._context_menu_overflow_sections: set[str] = set(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
         # Named reusable geometry snippets. Definitions live in view state so
         # a workspace carries its own small symbol library without introducing
         # a second document format or global asset database.
@@ -792,7 +808,8 @@ class CanvasView(
         self._last_view_record_time = 0.0
         self._restoring_view = False
 
-        # Measure tool
+        # Scale-by-reference tool (legacy internal "measure" identifiers are
+        # retained for workspace and shortcut compatibility).
         self._measure_mode: bool = False
         self._measure_anchor: tuple[float, float] | None = None
         self._measure_hover: tuple[float, float] | None = None
@@ -802,16 +819,18 @@ class CanvasView(
         self._measure_snapped_b: bool = False
         self._measure_edit: QLineEdit | None = None
 
-        # Persistent dimension/annotation tool — reference-only overlay, like
-        # ruler guides: view-state (saved/loaded with the workspace) but not
-        # undo-tracked and never written to DXF, so a dimension line can
-        # never accidentally get cut/engraved.
+        # Persistent dimension/annotation tool. Dimensions are saved in view
+        # state and emitted as real DXF dimension entities during export.
         self._dimension_mode: bool = False
+        self._dimension_kind: str = "linear"
         self._dimensions: list[dict] = []
         self._dim_pending_p1: tuple[float, float] | None = None
         self._dim_pending_p2: tuple[float, float] | None = None
         self._dim_pending_offset: float = 5.0
+        self._dim_selected_segments: list[dict] = []
+        self._dim_hover_segment: dict | None = None
         self._selected_dimension: int | None = None
+        self._all_dimensions_selected = False
         self._dimension_drag: int | None = None
 
         # Mode: "select" | "draw" | "edit"
@@ -829,8 +848,8 @@ class CanvasView(
             "extend": trim_tool,
             "knife": canvas_tools.KnifeTool(self),
         }
-        self._measure_tool = canvas_tools.MeasureTool(self)
-        self._dimension_tool = canvas_tools.DimensionTool(self)
+        self._measure_tool = canvas_tools.ScaleTool(self)
+        self._dimension_tool = SketchDimensionTool(self)
 
         # Draw mode state
         self._draw_pts: list[tuple[float, float]] = []
@@ -906,9 +925,10 @@ class CanvasView(
         self._bg_pixmap: QPixmap | None = None
         self._bg_cached_scale: float = 0.0
 
-        # Measure / Dimension button rects
+        # Scale / Dimension button rects
         self._mbtn_rect: tuple[float, float, float, float] = (0, 0, 0, 0)
         self._dbtn_rect: tuple[float, float, float, float] = (0, 0, 0, 0)
+        self._adbtn_rect: tuple[float, float, float, float] = (0, 0, 0, 0)
 
         # Draw mode snap (world-space snap point under cursor)
         self._draw_snap: tuple[float, float] | None = None
@@ -924,7 +944,7 @@ class CanvasView(
         # match that's only aligned on one axis can appear at a point that's
         # visually far from the shape, looking like a snapping glitch.
         self._hover_snap_multi: list[tuple[tuple[float, float], str, tuple[float, float]]] = []
-        # Measure pre-anchor hover snap point
+        # Scale pre-anchor hover snap point
         self._measure_hover_pre: tuple[float, float] | None = None
 
         # Precision aids
@@ -945,6 +965,9 @@ class CanvasView(
         self._snap_tangent_enabled: bool = True
         self._snap_extension_enabled: bool = True
         self._snap_angle_enabled: bool = True
+        self._snap_equal_length_enabled: bool = True
+        self._snap_axis_alignment_enabled: bool = True
+        self._rotation_snap_increment: float = 15.0
 
         # Construction / reference lines: list of ("h", y_world) or ("v", x_world)
 
@@ -1184,10 +1207,29 @@ class CanvasView(
                     p1 = tuple(float(v) for v in d["p1"])
                     p2 = tuple(float(v) for v in d["p2"])
                     offset = float(d["offset"])
+                    precision = max(0, min(6, int(d.get("precision", 2))))
                 except (KeyError, TypeError, ValueError):
                     continue
                 if len(p1) == 2 and len(p2) == 2:
-                    restored.append({"p1": p1, "p2": p2, "offset": offset})
+                    restored.append(
+                        {
+                            "type": str(d.get("type", "linear")),
+                            "p1": p1,
+                            "p2": p2,
+                            "offset": offset,
+                            "precision": precision,
+                            **(
+                                {"p3": tuple(d["p3"]), "points": list(d.get("points", []))}
+                                if d.get("type") == "angle" and "p3" in d
+                                else {}
+                            ),
+                            **(
+                                {"driving": deepcopy(d["driving"])}
+                                if isinstance(d.get("driving"), dict)
+                                else {}
+                            ),
+                        }
+                    )
             self._dimensions = restored
         if "rulers_visible" in state:
             self._rulers_visible = bool(state.get("rulers_visible"))
@@ -1210,7 +1252,7 @@ class CanvasView(
         self._set_flagged("locked", locked_state)
         raw_groups = state.get("groups", {})
         if isinstance(raw_groups, dict):
-            parsed = {
+            parsed_groups = {
                 int(k): int(v)
                 for k, v in raw_groups.items()
                 if str(k).lstrip("-").isdigit()
@@ -1218,8 +1260,8 @@ class CanvasView(
                 and 0 <= int(k) < len(self._entities)
             }
             for i, e in enumerate(self._entities):
-                e.group = parsed.get(i)
-            self._next_group_id = max(parsed.values(), default=0) + 1
+                e.group = parsed_groups.get(i)
+            self._next_group_id = max(parsed_groups.values(), default=0) + 1
         raw_symbols = state.get("symbols", {})
         if isinstance(raw_symbols, dict):
             self._symbol_library = {
@@ -1405,7 +1447,9 @@ class CanvasView(
         if self._grid_snap:
             precision.append("Snap")
         if self._measure_mode:
-            precision.append("Measure")
+            precision.append("Scale")
+        if self._dimension_mode:
+            precision.append("Dimension")
         if self._draw_construction_mode:
             precision.append("Construction")
         topo = self.get_topology_summary()
@@ -1420,14 +1464,13 @@ class CanvasView(
     def get_command_guidance(self) -> tuple[str, str]:
         """Persistent next-step guidance for the active canvas command."""
         if self._dimension_mode:
-            step = 0 if self._dim_pending_p1 is None else 1
-            return (("Pick first point" if step == 0 else "Pick second point"), "accent")
+            return self._dimension_tool.guidance(), "accent"
         if self._measure_mode:
             if self._measure_anchor is None:
-                return "Measure: pick first point · Esc exits", "accent"
+                return "Scale: pick first reference point · Esc exits", "accent"
             if not self._measure_locked:
-                return "Measure: pick second point · Shift snaps angle", "accent"
-            return "Measurement locked · Enter edits scale · Esc exits", "success"
+                return "Scale: pick second reference point · Shift snaps angle", "accent"
+            return "Scale reference locked · Enter applies distance · Esc exits", "success"
         if self._mode == "draw":
             if not self._draw_pts and not self._draw_shape_preview_active:
                 return f"{self._draw_primitive.title()}: pick first point · Esc exits", "accent"
@@ -1465,6 +1508,8 @@ class CanvasView(
             "snap_tangent": self._snap_tangent_enabled,
             "snap_extension": self._snap_extension_enabled,
             "snap_angle": self._snap_angle_enabled,
+            "snap_equal_length": self._snap_equal_length_enabled,
+            "snap_axis_alignment": self._snap_axis_alignment_enabled,
         }
 
     def get_topology_summary(self) -> dict[str, int]:
@@ -1509,6 +1554,7 @@ class CanvasView(
         result = self._canvas_service.execute(DeleteCommand(entity_ids=entity_ids))
         if not result.changed:
             return 0
+        self._remove_dimensions_for_entities(set(entity_ids))
         self._redraw()
         self._notify()
         self._fire_poly_change()
@@ -1525,14 +1571,40 @@ class CanvasView(
         result = self._canvas_service.execute(DeleteCommand(entity_ids=entity_ids))
         if not result.changed:
             return 0
+        self._remove_dimensions_for_entities(set(entity_ids))
         self._redraw()
         self._notify()
         self._fire_poly_change()
         return n
 
+    def _remove_dimensions_for_entities(self, entity_ids: set[str]) -> int:
+        """Remove annotations whose driving references include deleted geometry."""
+
+        def references_deleted(dimension: dict) -> bool:
+            driving = dimension.get("driving")
+            if not isinstance(driving, dict):
+                return False
+            sources = driving.get("sources", [])
+            return any(
+                isinstance(source, dict) and str(source.get("entity_id", "")) in entity_ids
+                for source in sources
+            )
+
+        before = len(self._dimensions)
+        self._dimensions = [
+            dimension for dimension in self._dimensions if not references_deleted(dimension)
+        ]
+        removed = before - len(self._dimensions)
+        if removed:
+            self._selected_dimension = None
+            self._all_dimensions_selected = False
+            self._dimension_drag = None
+        return removed
+
     def undo(self) -> bool:
         command_result = self._canvas_service.undo()
         if command_result.changed:
+            self._refresh_driving_dimensions()
             self._reset_edit_interaction_state()
             self._redraw()
             self._notify()
@@ -1548,6 +1620,9 @@ class CanvasView(
 
     def _split_geometry_with_line(self, *args, **kwargs):
         return self._editing._split_geometry_with_line(*args, **kwargs)
+
+    def _carve_geometry_with_shape(self, *args, **kwargs):
+        return self._editing._carve_geometry_with_shape(*args, **kwargs)
 
     def _snap_to_polyline(self, *args, **kwargs):
         return self._editing._snap_to_polyline(*args, **kwargs)
@@ -1626,6 +1701,9 @@ class CanvasView(
 
     def _scale_all(self, *args, **kwargs):
         return self._editing._scale_all(*args, **kwargs)
+
+    def scale_by_reference(self, *args, **kwargs):
+        return self._editing.scale_by_reference(*args, **kwargs)
 
     def _apply_shape_size_inputs(self, *args, **kwargs):
         return self._editing._apply_shape_size_inputs(*args, **kwargs)
@@ -1756,6 +1834,7 @@ class CanvasView(
     def redo(self) -> bool:
         command_result = self._canvas_service.redo()
         if command_result.changed:
+            self._refresh_driving_dimensions()
             self._reset_edit_interaction_state()
             self._redraw()
             self._notify()
@@ -1765,6 +1844,8 @@ class CanvasView(
 
     def select_all(self) -> None:
         self._sel = set(range(len(self._entities))) - self._noninteractive_indices()
+        self._all_dimensions_selected = bool(self._dimensions)
+        self._selected_dimension = 0 if self._dimensions else None
         self._redraw()
         self._notify()
 
@@ -1829,6 +1910,8 @@ class CanvasView(
 
     def deselect_all(self) -> None:
         self._sel = set()
+        self._selected_dimension = None
+        self._all_dimensions_selected = False
         self._redraw()
         self._notify()
 
@@ -1841,6 +1924,14 @@ class CanvasView(
 
     def toggle_measure(self) -> None:
         self._measure_mode = not self._measure_mode
+        if self._measure_mode:
+            if self._mode != "select":
+                self.set_mode("select")
+            self._dimension_mode = False
+            self._dim_pending_p1 = None
+            self._dim_pending_p2 = None
+            self._dim_selected_segments.clear()
+            self._dim_hover_segment = None
         self._measure_anchor = None
         self._measure_hover = None
         self._measure_locked = False
@@ -1850,13 +1941,45 @@ class CanvasView(
         self._dismiss_measure_edit()
         self._update_cursor()
         self._redraw()
+        self.modeChanged.emit(self._mode)
+        if self._measure_mode:
+            count = len(self._mutable_selected_indices())
+            scope = (
+                f"{count} selected object{'s' if count != 1 else ''}"
+                if count
+                else "all visible objects"
+            )
+            self._show_flash(f"Scale by reference · affects {scope}", 1800)
 
-    def toggle_dimension_mode(self) -> None:
-        self._dimension_mode = not self._dimension_mode
+    def toggle_dimension_mode(self, kind: str = "linear") -> None:
+        if self._dimension_mode and self._dimension_kind == kind:
+            self._dimension_mode = False
+        else:
+            self._dimension_mode = True
+            if self._mode != "select":
+                self.set_mode("select")
+            self._dimension_kind = "angle" if kind == "angle" else "linear"
+            self._measure_mode = False
+            self._measure_anchor = None
+            self._measure_hover = None
+            self._measure_locked = False
+            self._measure_end = None
+            self._dismiss_measure_edit()
         self._dim_pending_p1 = None
         self._dim_pending_p2 = None
+        self._dim_selected_segments.clear()
+        self._dim_hover_segment = None
+        self._dimension_tool.reset()
         self._update_cursor()
         self._redraw()
+        self.modeChanged.emit(self._mode)
+        if self._dimension_mode:
+            label = (
+                "Angular dimension"
+                if self._dimension_kind == "angle"
+                else "Smart dimension · segments, vertices, or circle"
+            )
+            self._show_flash(f"{label} · snap points with clicks · Alt bypasses snap", 1800)
 
     def _dimension_line_points(
         self, dim: dict
@@ -1886,36 +2009,84 @@ class CanvasView(
         return (wx - ax) * nx + (wy - ay) * ny
 
     def _find_dimension_at(self, cx: float, cy: float) -> int | None:
-        """Placed-dimension index within grab distance of the cursor
-        (screen px) — hit-tests the offset dimension line, not p1/p2."""
+        """Find a placed dimension by its line, arc, rays, or value badge."""
+
+        def segment_distance(start, end) -> float:
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length_sq = dx * dx + dy * dy
+            if length_sq < 1e-9:
+                return math.dist((cx, cy), start)
+            t = max(
+                0.0,
+                min(1.0, ((cx - start[0]) * dx + (cy - start[1]) * dy) / length_sq),
+            )
+            return math.dist((cx, cy), (start[0] + t * dx, start[1] + t * dy))
+
         best: int | None = None
-        best_d = 6.0
+        best_d = 9.0
         for i, dim in enumerate(self._dimensions):
+            if dim.get("type") == "angle" and "p3" in dim:
+                first = self._w2c(*dim["p1"])
+                vertex = self._w2c(*dim["p2"])
+                third = self._w2c(*dim["p3"])
+                a1 = math.atan2(first[1] - vertex[1], first[0] - vertex[0])
+                a2 = math.atan2(third[1] - vertex[1], third[0] - vertex[0])
+                sweep = (a2 - a1 + math.pi) % math.tau - math.pi
+                mid = a1 + sweep / 2.0
+                label = (
+                    vertex[0] + math.cos(mid) * 46.0,
+                    vertex[1] + math.sin(mid) * 46.0,
+                )
+                if abs(cx - label[0]) <= 58 and abs(cy - label[1]) <= 15:
+                    return i
+                # The two rays usually lie directly on top of the measured
+                # shape segments. They are visual witnesses, not dimension
+                # handles; treating them as hits makes the underlying shape
+                # impossible to select or edit. Only the badge and arc own
+                # pointer interaction for angular dimensions.
+                arc_distance = abs(math.dist((cx, cy), vertex) - 28.0)
+                angle_from_first = (
+                    math.atan2(cy - vertex[1], cx - vertex[0]) - a1 + math.pi
+                ) % math.tau - math.pi
+                within_sweep = (
+                    0.0 <= angle_from_first <= sweep
+                    if sweep >= 0.0
+                    else sweep <= angle_from_first <= 0.0
+                )
+                if within_sweep and arc_distance < best_d:
+                    best, best_d = i, arc_distance
+                continue
             line = self._dimension_line_points(dim)
             if line is None:
                 continue
             (lax_w, lay_w), (lbx_w, lby_w) = line
             lax, lay = self._w2c(lax_w, lay_w)
             lbx, lby = self._w2c(lbx_w, lby_w)
-            ldx, ldy = lbx - lax, lby - lay
-            llen = math.hypot(ldx, ldy)
-            if llen < 1e-9:
-                continue
-            t = max(0.0, min(1.0, ((cx - lax) * ldx + (cy - lay) * ldy) / (llen * llen)))
-            px, py = lax + t * ldx, lay + t * ldy
-            d = math.hypot(cx - px, cy - py)
+            label_x, label_y = (lax + lbx) / 2.0, (lay + lby) / 2.0 - 12.0
+            if abs(cx - label_x) <= 62 and abs(cy - label_y) <= 15:
+                return i
+            d = segment_distance((lax, lay), (lbx, lby))
             if d < best_d:
                 best_d = d
                 best = i
         return best
 
     def _delete_selected_dimension(self) -> None:
+        if self._all_dimensions_selected:
+            self._dimensions.clear()
+            self._selected_dimension = None
+            self._all_dimensions_selected = False
+            self._redraw()
+            self._notify()
+            self._fire_poly_change()
+            return
         di = self._selected_dimension
         if di is None or not (0 <= di < len(self._dimensions)):
             self._selected_dimension = None
             return
         del self._dimensions[di]
         self._selected_dimension = None
+        self._all_dimensions_selected = False
         self._dimension_drag = None
         self._redraw()
         self._notify()
@@ -2048,7 +2219,16 @@ class CanvasView(
     def set_context_menu_sections(self, sections: list[str]) -> None:
         from src.core.settings import normalize_context_menu_sections
 
-        self._context_menu_sections = set(normalize_context_menu_sections(sections))
+        normalized = normalize_context_menu_sections(sections)
+        self._context_menu_sections = set(normalized)
+        self._context_menu_section_order = normalized
+
+    def set_context_menu_overflow_sections(self, sections: list[str]) -> None:
+        from src.core.settings import normalize_context_menu_overflow_sections
+
+        self._context_menu_overflow_sections = set(
+            normalize_context_menu_overflow_sections(sections)
+        )
 
     def _context_menu_section_enabled(self, section: str) -> bool:
         return section in self._context_menu_sections
@@ -2087,12 +2267,23 @@ class CanvasView(
         self._snap_angle_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
 
+    def set_snap_equal_length(self, enabled: bool) -> None:
+        self._snap_equal_length_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_axis_alignment(self, enabled: bool) -> None:
+        self._snap_axis_alignment_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
     # ── Inlined from removed mixins (methods actually called from view.py) ──
 
     def set_construction_mode(self, enabled: bool) -> None:
         self._draw_construction_mode = bool(enabled)
         self._refresh_draw_sidebar_state()
         self._redraw()
+
+    def set_rotation_snap_increment(self, value: float) -> None:
+        self._rotation_snap_increment = max(0.1, min(180.0, float(value)))
 
     def set_aspect_ratio_locked(self, enabled: bool) -> None:
         """Keep width/height proportional for both the properties panel's
@@ -2173,7 +2364,17 @@ class CanvasView(
                 else Qt.CursorShape.OpenHandCursor
             )
             return
-        if self._measure_mode or self._mode in ("draw", "edit", "trim", "extend"):
+        if (
+            self._measure_mode
+            or self._dimension_mode
+            or self._mode
+            in (
+                "draw",
+                "edit",
+                "trim",
+                "extend",
+            )
+        ):
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._mode == "select" and self._hover_vert is not None and self._sel:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
@@ -2246,11 +2447,13 @@ class CanvasView(
             self._redraw()
         self._notify()
 
-    def get_export_dxf_state(self) -> list[dict[str, Any]]:
+    def get_export_dxf_state(self, *, include_hidden: bool = False) -> list[dict[str, Any]]:
         self._sync_shape_storage_from_entities()
         result: list[dict[str, Any]] = []
         for idx, poly in enumerate(e.points for e in self._entities):
-            if self._entities[idx].construction:
+            if self._entities[idx].construction or (
+                self._entities[idx].hidden and not include_hidden
+            ):
                 continue
             kind = self._entities[idx].kind
             meta = self._entities[idx].meta
@@ -2606,7 +2809,13 @@ class CanvasView(
     def paintEvent(self, event) -> None:
         """Render the canvas, then paint active-tool and chrome overlays."""
         self._renderer.paintEvent(event)
-        tool = self._measure_tool if self._measure_mode else self._tools.get(self._mode)
+        tool = (
+            self._measure_tool
+            if self._measure_mode
+            else self._dimension_tool
+            if self._dimension_mode
+            else self._tools.get(self._mode)
+        )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         if tool is not None:
@@ -2623,16 +2832,20 @@ class CanvasView(
                 if (
                     self._draw_shape_w_edit is not None
                     and self._draw_shape_h_edit is not None
-                    and (obj is self._draw_shape_w_edit or obj is self._draw_shape_h_edit)
+                    and obj
+                    in {
+                        self._draw_shape_w_edit,
+                        self._draw_shape_h_edit,
+                        self._draw_shape_sides_spin,
+                    }
                 ):
-                    if (obj is self._draw_shape_w_edit and not reverse) or (
-                        obj is self._draw_shape_h_edit and reverse
-                    ):
-                        self._draw_shape_h_edit.setFocus()
-                        self._draw_shape_h_edit.selectAll()
-                    else:
-                        self._draw_shape_w_edit.setFocus()
-                        self._draw_shape_w_edit.selectAll()
+                    fields: list[Any] = [self._draw_shape_w_edit, self._draw_shape_h_edit]
+                    if self._draw_shape_sides_spin is not None:
+                        fields.append(self._draw_shape_sides_spin)
+                    current = fields.index(obj)
+                    target = fields[(current + (-1 if reverse else 1)) % len(fields)]
+                    target.setFocus()
+                    target.selectAll()
                     return True
                 if (
                     self._dim_distance_edit is not None
@@ -2685,12 +2898,16 @@ class CanvasView(
 
         w_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
         w_edit.setText(f"{w:.2f}")
+        w_edit.setAccessibleName("Shape width")
+        w_edit.setToolTip("Width · enter a value or expression")
         w_edit.setProperty("shape_hud_temp", True)
         w_edit.move(field_x, field_y)
         w_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
 
         h_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
         h_edit.setText(f"{h:.2f}")
+        h_edit.setAccessibleName("Shape height")
+        h_edit.setToolTip("Height · enter a value or expression")
         h_edit.setProperty("shape_hud_temp", True)
         h_edit.move(field_x, field_y + 28)
         h_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
@@ -2708,7 +2925,15 @@ class CanvasView(
             )
             sides_spin = self._make_hud_spinbox(minimum=3, maximum=64, value=count)
             sides_spin.setProperty("shape_hud_temp", True)
-            sides_spin.move(field_x, field_y + 56)
+            sides_spin.setAccessibleName(
+                "Star points" if self._draw_primitive == "star" else "Polygon sides"
+            )
+            sides_spin.setPrefix("Points: " if self._draw_primitive == "star" else "Sides: ")
+            sides_spin.setFixedWidth(112)
+            sides_spin.move(
+                max(8, min(field_x, self.width() - sides_spin.width() - 8)),
+                field_y + 56,
+            )
             sides_spin.valueChanged.connect(self._on_polygon_sides_spin_changed)
             self._draw_shape_sides_spin = sides_spin
 
@@ -2757,6 +2982,10 @@ class CanvasView(
 
     def _hit_dimension_button(self, cx: float, cy: float) -> bool:
         x1, y1, x2, y2 = self._dbtn_rect
+        return x1 <= cx <= x2 and y1 <= cy <= y2
+
+    def _hit_angle_dimension_button(self, cx: float, cy: float) -> bool:
+        x1, y1, x2, y2 = self._adbtn_rect
         return x1 <= cx <= x2 and y1 <= cy <= y2
 
     # ── Events ────────────────────────────────────────────────────────────────
@@ -2818,6 +3047,32 @@ class CanvasView(
             fw = QApplication.focusWidget()
             if isinstance(fw, QLineEdit) and bool(fw.property("shape_hud_temp")):
                 self._dismiss_shape_dim_inputs()
+            # Scale and Dimension are modal canvas tools: one Escape always
+            # exits the mode completely, even when a target-distance field
+            # has focus or a multi-click placement is in progress.
+            if self._dimension_mode or self._measure_mode:
+                self._dimension_mode = False
+                self._dim_pending_p1 = None
+                self._dim_pending_p2 = None
+                self._dim_selected_segments.clear()
+                self._dim_hover_segment = None
+                self._dimension_tool.reset()
+                self._measure_mode = False
+                self._measure_anchor = None
+                self._measure_hover = None
+                self._measure_locked = False
+                self._measure_end = None
+                self._measure_snapped_a = False
+                self._measure_snapped_b = False
+                self._dismiss_measure_edit()
+                self.setFocus()
+                if self._mode != "select":
+                    self.set_mode("select")
+                else:
+                    self._update_cursor()
+                    self._redraw()
+                    self.modeChanged.emit("select")
+                return
             if blur_focused_line_edit(self, within=self):
                 return
             # If a dim field has focus or is dirty, blur and reset it first
@@ -2829,36 +3084,11 @@ class CanvasView(
                 self._dim_angle_dirty = False
                 self.setFocus()  # return focus to canvas
                 return
-            # Cancel an in-progress dimension placement and exit dimension
-            # mode outright — Escape should back all the way out, not just
-            # drop the pending point and leave the tool armed.
-            if self._dim_pending_p1 is not None:
-                self._dim_pending_p1 = None
-                self._dim_pending_p2 = None
-                self._dimension_mode = False
-                self._update_cursor()
-                self._redraw()
-                return
             # Cancel a live move/gizmo/vertex drag before it can be
             # mistaken for a plain "clear selection" — otherwise the drag
             # keeps applying to a selection that was just emptied out from
             # under it, freezing the shape at its half-dragged position.
             if self._cancel_active_drag():
-                return
-            # Idle in dimension/measure mode (no pending point, no drag) —
-            # Escape exits the mode rather than doing nothing.
-            if self._dimension_mode or self._measure_mode:
-                self._dimension_mode = False
-                self._measure_mode = False
-                self._measure_anchor = None
-                self._measure_hover = None
-                self._measure_locked = False
-                self._measure_end = None
-                self._measure_snapped_a = False
-                self._measure_snapped_b = False
-                self._dismiss_measure_edit()
-                self._update_cursor()
-                self._redraw()
                 return
             # In select mode, Escape clears selection
             if self._mode == "select" and self._sel:
@@ -3152,6 +3382,19 @@ class CanvasView(
         if btn != Qt.MouseButton.LeftButton:
             return
 
+        # Persistent, visible tool buttons. These used to be painted by dead
+        # renderer helpers and had no event routing, so they were effectively
+        # invisible and unclickable.
+        if self._hit_measure_button(pos.x(), pos.y()):
+            self.toggle_measure()
+            return
+        if self._hit_dimension_button(pos.x(), pos.y()):
+            self.toggle_dimension_mode("linear")
+            return
+        if self._hit_angle_dimension_button(pos.x(), pos.y()):
+            self.toggle_dimension_mode("angle")
+            return
+
         # Rulers: press inside a ruler strip drags out a new guide.
         if self._rulers_visible and self._selectable:
             r = self.RULER_PX
@@ -3192,22 +3435,26 @@ class CanvasView(
             self._selected_guide = None
             self._redraw()
 
-        # Grab an existing placed dimension the same way guides work — click
-        # selects it (Delete removes it); dragging moves it perpendicular.
-        if (
-            self._selectable
-            and self._mode == "select"
-            and self._dimensions
-            and self._find_poly_at(pos.x(), pos.y()) is None
-        ):
+        # Existing dimensions take priority even while the Dimension tool is
+        # armed, so clicking a value edits/selects it instead of starting a
+        # new placement. Offset dragging remains a Select-mode interaction.
+        if self._selectable and self._dimensions:
             di = self._find_dimension_at(pos.x(), pos.y())
             if di is not None:
-                self._dimension_drag = di
                 self._selected_dimension = di
+                self._all_dimensions_selected = False
+                self._sel.clear()
+                self._dimension_drag = (
+                    di
+                    if self._mode == "select" and self._dimensions[di].get("type") != "angle"
+                    else None
+                )
+                self._notify()
                 self._redraw()
                 return
         if self._selected_dimension is not None:
             self._selected_dimension = None
+            self._notify()
             self._redraw()
 
         # Selection badges / transform gizmo take priority over tools.
@@ -3388,11 +3635,102 @@ class CanvasView(
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        dimension = self._find_dimension_at(event.position().x(), event.position().y())
+        if dimension is not None:
+            self._selected_dimension = dimension
+
+            if isinstance(self._dimensions[dimension].get("driving"), dict):
+                self._edit_driving_dimension(dimension)
+                return
+
+            def set_precision(value: float) -> None:
+                self._dimensions[dimension]["precision"] = max(0, min(6, int(round(value))))
+                self._notify()
+                self._redraw()
+
+            self._show_hud_prompt(
+                "Dimension decimals",
+                float(self._dimensions[dimension].get("precision", 2)),
+                set_precision,
+                minimum=0,
+                maximum=6,
+            )
+            return
         tool = self._tools.get(self._mode)
         if tool is not None:
             tool.double_click(event)
 
+    def _refresh_driving_dimensions(self) -> None:
+        for dimension in self._dimensions:
+            self._dimension_tool.refresh_driving_dimension(dimension)
+
+    def _edit_driving_dimension(self, index: int) -> None:
+        if not (0 <= index < len(self._dimensions)):
+            return
+        angular = self._dimensions[index].get("type") == "angle"
+
+        def set_driving_value(value: float) -> None:
+            if not self._dimension_tool.set_value(index, value):
+                self._show_flash("This driving dimension could not update its geometry", 1800)
+
+        self._show_hud_prompt(
+            "Target angle" if angular else "Target measurement",
+            self._dimension_tool.value(self._dimensions[index]),
+            set_driving_value,
+            minimum=0.001,
+            is_length=not angular,
+        )
+
     def _rightclick_cb(self, cx: float, cy: float) -> None:
+        if self._dimension_mode:
+            if self._dimension_tool.back():
+                self._show_flash("Last dimension step cleared", 900)
+            else:
+                self.toggle_dimension_mode(self._dimension_kind)
+                self._show_flash("Dimension tool closed", 800)
+            self._redraw()
+            return
+
+        if self._measure_mode:
+            if self._measure_locked:
+                self._measure_locked = False
+                self._measure_end = None
+                self._dismiss_measure_edit()
+                self._show_flash("Target entry canceled · pick the second reference point", 1200)
+            elif self._measure_anchor is not None:
+                self._measure_anchor = None
+                self._measure_hover = None
+                self._show_flash("Reference point cleared", 900)
+            else:
+                self.toggle_measure()
+                self._show_flash("Scale tool closed", 800)
+            self._redraw()
+            return
+
+        dimension = self._find_dimension_at(cx, cy)
+        if dimension is not None:
+            self._selected_dimension = dimension
+            menu = QMenu(self)
+            if isinstance(self._dimensions[dimension].get("driving"), dict):
+                menu.addAction("Edit measurement…", lambda: self._edit_driving_dimension(dimension))
+                menu.addSeparator()
+            precision_menu = menu.addMenu("Decimal places")
+            current_precision = int(self._dimensions[dimension].get("precision", 2))
+            for decimals in range(7):
+                action = precision_menu.addAction(str(decimals))
+                action.setCheckable(True)
+                action.setChecked(decimals == current_precision)
+                action.triggered.connect(
+                    lambda _checked=False, value=decimals: self._set_dimension_precision(
+                        dimension, value
+                    )
+                )
+            menu.addSeparator()
+            menu.addAction("Delete dimension", self._delete_selected_dimension)
+            menu.popup(self.mapToGlobal(QPointF(cx, cy).toPoint()))
+            self._redraw()
+            return
+
         if self._mode == "draw":
             if self._draw_shape_preview_active and self._shape_primitive_active():
                 self._cancel_draw_points()
@@ -3438,6 +3776,13 @@ class CanvasView(
                 menu.addAction("Delete polyline", lambda: self._delete_poly(pi))
                 menu.popup(self.mapToGlobal(QPointF(cx, cy).toPoint()))
             return
+
+    def _set_dimension_precision(self, index: int, precision: int) -> None:
+        if not (0 <= index < len(self._dimensions)):
+            return
+        self._dimensions[index]["precision"] = max(0, min(6, int(precision)))
+        self._notify()
+        self._redraw()
 
     def _delete_poly(self, pi: int) -> None:
         self._compact_entities({pi})

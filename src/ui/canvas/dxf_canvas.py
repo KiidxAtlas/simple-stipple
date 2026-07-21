@@ -321,24 +321,36 @@ class DxfCanvas(CanvasView):
             self._radial_active = False
             self._redraw()
             return
-        if not self._selectable or self._mode in ("draw", "edit"):
+        # Draw mode owns right-click as an in-progress gesture/back action.
+        # Edit mode still needs the normal object menu: this is where vertex
+        # operations such as round and chamfer belong.
+        draw_gesture_active = bool(
+            self._draw_pts
+            or self._pen_pts
+            or self._draw_shape_preview_active
+            or self._quick_shape_enabled
+        )
+        if not self._selectable or (self._mode == "draw" and draw_gesture_active):
             super()._rightclick_cb(cx, cy)
             return
 
         menu = QMenu(self)
         section_enabled = self._context_menu_section_enabled
 
-        def _hide_section(section: str, start: int) -> None:
-            if section_enabled(section):
-                return
-            for action in menu.actions()[start:]:
-                menu.removeAction(action)
+        def _finish_section(section: str, start: int) -> None:
+            actions = menu.actions()[start:]
+            for action in actions:
+                action.setProperty("context_section", section)
+            if not section_enabled(section):
+                for action in actions:
+                    menu.removeAction(action)
 
         # "Create shape" only leads the menu when there is nothing to act on —
         # with a selection or a shape under the cursor, the actions the user
         # actually came for (delete/duplicate/close/group) come first.
         poly_hit_early = self._find_poly_at(cx, cy)
         if not self._sel and poly_hit_early is None and section_enabled("create"):
+            create_start = len(menu.actions())
             shape_menu = menu.addMenu("Create shape")
             shape_menu.addAction("Rectangle (drag)", lambda: self.set_quick_shape_mode("rectangle"))
             shape_menu.addAction("Circle (drag)", lambda: self.set_quick_shape_mode("circle"))
@@ -363,6 +375,7 @@ class DxfCanvas(CanvasView):
                     lambda _checked=False, value=primitive: self.create_procedural_primitive(value),
                 )
             menu.addSeparator()
+            _finish_section("create", create_start)
 
         poly_hit = poly_hit_early
         if poly_hit is not None:
@@ -376,11 +389,13 @@ class DxfCanvas(CanvasView):
             menu.addAction("Delete", lambda: self._ctx_delete_poly(idx))
             if idx in self._pattern_cell_indices and callable(self._on_pattern_cell_cutout_toggle):
                 is_cutout = idx in self._pattern_cell_cutout_indices
+                toggle_pattern_cutout = self._on_pattern_cell_cutout_toggle
                 menu.addAction(
                     "Restore Pattern Cell Fill" if is_cutout else "Mark Pattern Cell as Cutout",
-                    lambda _checked=False, target=idx: self._on_pattern_cell_cutout_toggle(target),
+                    lambda _checked=False, target=idx: toggle_pattern_cutout(target),
                 )
             elif callable(self._on_outline_role_change):
+                change_outline_role = self._on_outline_role_change
                 role_menu = menu.addMenu("Outline role")
                 current_role = self._outline_roles.get(idx, "boundary")
                 for role, label in (
@@ -393,15 +408,16 @@ class DxfCanvas(CanvasView):
                     action.setCheckable(True)
                     action.setChecked(role == current_role)
                     action.triggered.connect(
-                        lambda _checked=False, value=role, target=idx: self._on_outline_role_change(
+                        lambda _checked=False, value=role, target=idx: change_outline_role(
                             target, value
                         )
                     )
                 if callable(self._on_outline_role_explain):
+                    explain_outline_role = self._on_outline_role_explain
                     role_menu.addSeparator()
                     role_menu.addAction(
                         "Explain this role…",
-                        lambda _checked=False, target=idx: self._on_outline_role_explain(target),
+                        lambda _checked=False, target=idx: explain_outline_role(target),
                     )
             if callable(self._on_cutout_toggle) and not callable(self._on_outline_role_change):
                 is_cutout = idx in self._cutout_indices
@@ -453,6 +469,7 @@ class DxfCanvas(CanvasView):
         ) -> None:
             self._show_hud_prompt(label, default, callback, minimum=minimum, is_length=is_length)
 
+        selected_start = len(menu.actions())
         if self._sel and section_enabled("selected"):
             if callable(self._on_create_zone_from_selection):
                 menu.addAction("Create Zone from Selection", self._on_create_zone_from_selection)
@@ -529,6 +546,23 @@ class DxfCanvas(CanvasView):
                     lambda _checked=False, value=command_id: canvas_commands.run(self, value)
                 )
             vertex_hit = self._find_nearest_vertex(cx, cy)
+            if vertex_hit is not None and vertex_hit[0] in self._sel:
+                entity_index, vertex_index = vertex_hit
+                corner_menu = menu.addMenu("Corner")
+
+                def _run_vertex_command(command_id: str) -> None:
+                    # Corner commands intentionally operate on the vertex at
+                    # the menu invocation point, not whichever vertex the
+                    # pointer happens to hover after the menu opens.
+                    self._hover_vert = (entity_index, vertex_index)
+                    canvas_commands.run(self, command_id)
+
+                for command_id in ("vertex.round", "vertex.chamfer"):
+                    action = corner_menu.addAction(canvas_commands.menu_text(command_id))
+                    action.setEnabled(canvas_commands.can_run(self, command_id))
+                    action.triggered.connect(
+                        lambda _checked=False, value=command_id: _run_vertex_command(value)
+                    )
             if (
                 vertex_hit is not None
                 and vertex_hit[0] in self._sel
@@ -593,6 +627,7 @@ class DxfCanvas(CanvasView):
                 action.triggered.connect(
                     lambda _checked=False, value=command_id: canvas_commands.run(self, value)
                 )
+        _finish_section("selected", selected_start)
         section_start = len(menu.actions())
         if not self._sel:
             menu.addAction("Select all", self.select_all)
@@ -641,10 +676,11 @@ class DxfCanvas(CanvasView):
                 label, lambda _checked=False, value=category: self.select_geometry_category(value)
             )
         select_menu.addAction("Invert selection", self._invert_selection)
-        _hide_section("selection", section_start)
+        _finish_section("selection", section_start)
 
         section_start = len(menu.actions())
-        menu.addAction("Use as outline", lambda: _run_transform(self._send_selected_to_pattern))
+        if callable(self._send_selected_to_pattern_cb):
+            menu.addAction("Use as outline", lambda: _run_transform(self._send_selected_to_pattern))
         if callable(self._use_selected_as_custom_tile_cb):
             menu.addAction(
                 "Use as Custom Tile",
@@ -662,7 +698,7 @@ class DxfCanvas(CanvasView):
             lambda: self.set_geometry_health_visible(not self._geometry_health_visible)
         )
         menu.addAction("Geometry Preflight…", self._show_geometry_preflight)
-        _hide_section("share_diagnostics", section_start)
+        _finish_section("share_diagnostics", section_start)
 
         section_start = len(menu.actions())
         if len(self._sel) >= 2:
@@ -677,7 +713,7 @@ class DxfCanvas(CanvasView):
                     canvas_commands.menu_text(cmd_id),
                     lambda _c=cmd_id: canvas_commands.run(self, _c),
                 )
-        _hide_section("boolean", section_start)
+        _finish_section("boolean", section_start)
 
         section_start = len(menu.actions())
         arrange_menu = menu.addMenu("Arrange")
@@ -739,7 +775,7 @@ class DxfCanvas(CanvasView):
                     )
                 ),
             )
-        _hide_section("arrange", section_start)
+        _finish_section("arrange", section_start)
 
         section_start = len(menu.actions())
         transform_menu = menu.addMenu("Transform")
@@ -808,7 +844,7 @@ class DxfCanvas(CanvasView):
             "Merge segments to object",
             lambda: _run_transform(self.merge_selected_segments_to_objects),
         )
-        _hide_section("transform", section_start)
+        _finish_section("transform", section_start)
 
         section_start = len(menu.actions())
         wx_txt, wy_txt = self._c2w(cx, cy)
@@ -816,7 +852,7 @@ class DxfCanvas(CanvasView):
             canvas_commands.menu_text("text.add", "Add text…"),
             lambda: self.prompt_add_text(wx_txt, wy_txt),
         )
-        _hide_section("text", section_start)
+        _finish_section("text", section_start)
 
         section_start = len(menu.actions())
         menu.addSeparator()
@@ -847,20 +883,31 @@ class DxfCanvas(CanvasView):
             canvas_commands.menu_text("mode.edit", "Edit"),
             lambda: self.set_mode("edit"),
         )
-        _hide_section("view", section_start)
-        # Keep the first, context-specific verbs immediately scannable and
-        # place expert/less-frequent families behind one progressive-disclosure
-        # tier. The command palette and persistent Draw controls remain direct
-        # homes for the same commands.
-        top_actions = list(menu.actions())
-        direct_limit = 8 if (self._sel or poly_hit is not None) else 5
-        overflow_actions = top_actions[direct_limit:]
+        _finish_section("view", section_start)
+        # Overflow is semantic and user-configurable. Never bury an action
+        # merely because unrelated items happened to be inserted before it.
+        tagged_actions = [action for action in menu.actions() if action.property("context_section")]
+        grouped: dict[str, list] = {}
+        for action in tagged_actions:
+            grouped.setdefault(str(action.property("context_section")), []).append(action)
+            menu.removeAction(action)
+        section_order = list(self._context_menu_section_order)
+        section_order.extend(section for section in grouped if section not in section_order)
+        for section in section_order:
+            if section not in self._context_menu_overflow_sections:
+                for action in grouped.get(section, []):
+                    menu.addAction(action)
+        overflow_actions = [
+            action
+            for section in section_order
+            if section in self._context_menu_overflow_sections
+            for action in grouped.get(section, [])
+        ]
         if overflow_actions:
             for action in overflow_actions:
                 menu.removeAction(action)
             more_menu = QMenu("More actions…", menu)
             menu.addMenu(more_menu)
-            menu._more_actions_menu = more_menu
             for action in overflow_actions:
                 more_menu.addAction(action)
         menu.popup(self.mapToGlobal(QPoint(int(cx), int(cy))))

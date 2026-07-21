@@ -11,13 +11,12 @@ from src.backend.model.document import (
     build_workspace_document,
     validate_workspace_document,
 )
+from src.core.paths import saved_workspaces_dir
 
 
 def workspace_default_dir(settings: dict) -> str:
-    return settings.get(
-        "workspace_dir",
-        settings.get("last_workspace_dir", str(Path.home())),
-    )
+    configured = settings.get("workspace_dir") or settings.get("last_workspace_dir")
+    return str(configured) if configured else str(saved_workspaces_dir())
 
 
 def collect_workspace_document(

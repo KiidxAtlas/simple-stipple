@@ -19,7 +19,32 @@ class RecognizedShape:
 
 def _closed_vertices(points: list[Point]) -> list[Point]:
     if len(points) >= 2 and math.dist(points[0], points[-1]) <= 1e-6:
-        return points[:-1]
+        vertices = [point for index, point in enumerate(points[:-1]) if index == 0 or math.dist(point, points[index - 1]) > 1e-8]
+        if len(vertices) <= 4:
+            return vertices
+        # Imported rectangles commonly contain many collinear tessellation
+        # points. Remove only points that are effectively on the segment
+        # joining their neighbours so true curved/organic paths stay intact.
+        extent = max(
+            max(point[0] for point in vertices) - min(point[0] for point in vertices),
+            max(point[1] for point in vertices) - min(point[1] for point in vertices),
+            1e-9,
+        )
+        simplified: list[Point] = []
+        for index, current in enumerate(vertices):
+            previous = vertices[index - 1]
+            following = vertices[(index + 1) % len(vertices)]
+            dx, dy = following[0] - previous[0], following[1] - previous[1]
+            span = math.hypot(dx, dy)
+            distance = (
+                abs(dx * (previous[1] - current[1]) - (previous[0] - current[0]) * dy)
+                / span
+                if span > 1e-12
+                else math.inf
+            )
+            if distance > extent * 0.002:
+                simplified.append(current)
+        return simplified if len(simplified) >= 3 else vertices
     return []
 
 

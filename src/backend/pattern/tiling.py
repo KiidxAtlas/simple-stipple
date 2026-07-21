@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+import shapely  # type: ignore[import-untyped]
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Polygon
 
+from src.backend.jit import tessellate_circles
 from src.backend.pattern._shared import (
     _clip_to_outline,
     _extract_polys,
@@ -189,15 +192,29 @@ def gen_mesh(
     pad = r * 2.0
     prep = prepared.prep(outline_poly)
     result: list[list[tuple[float, float]]] = []
+    centers: list[tuple[float, float]] = []
 
     y = miny - pad
     while y <= maxy + pad:
         cancellation_checkpoint()
         x = minx - pad
         while x <= maxx + pad:
-            quad_segs = {"fast": 4, "balanced": 12}.get(quality, 24)
-            circle = Point(x, y).buffer(r, quad_segs=quad_segs)
-            _clip_to_outline(circle, outline_poly, prep, result)
+            centers.append((x, y))
             x += spacing
         y += spacing
+
+    segments = 4 * {"fast": 4, "balanced": 12}.get(quality, 24)
+    center_array = np.asarray(centers)
+    circles = tessellate_circles(center_array, r, segments)
+    center_geometries = shapely.points(center_array)
+    fully_inside = np.asarray(shapely.contains(outline_poly, center_geometries)) & (
+        np.asarray(shapely.distance(outline_poly.boundary, center_geometries)) >= r
+    )
+    for points, contained in zip(circles, fully_inside):
+        cancellation_checkpoint()
+        if contained:
+            result.append([(float(x), float(y)) for x, y in points])
+        else:
+            circle = Polygon(points)
+            _clip_to_outline(circle, outline_poly, prep, result)
     return result

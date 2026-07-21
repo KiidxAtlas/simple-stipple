@@ -235,11 +235,22 @@ class DocumentService:
                 output.append(_snapshot(copy))
             snapshots = tuple(output)
         elif isinstance(command, MergeCommand):
+            merged = merge_paths(
+                [PathInput(entity.points, entity.construction) for entity in sources]
+            )
             snapshots = tuple(
-                _snapshot(EntityRecord(points=item.points, construction=item.construction))
-                for item in merge_paths(
-                    [PathInput(entity.points, entity.construction) for entity in sources]
+                _snapshot(
+                    EntityRecord(
+                        points=item.points,
+                        id=sources[0].id if index == 0 else new_entity_id(),
+                        kind="polyline",
+                        construction=item.construction,
+                        hidden=sources[0].hidden,
+                        locked=sources[0].locked,
+                        layer=sources[0].layer,
+                    )
                 )
+                for index, item in enumerate(merged)
             )
         elif isinstance(command, ExplodeCommand):
             snapshots = tuple(

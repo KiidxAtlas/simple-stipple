@@ -30,6 +30,7 @@ from src.ui.components import section_label, sep, set_status_label, surface_fram
 from src.ui.style.theme import STATUS_ERR
 
 _LOG = logging.getLogger(__name__)
+_DETACHED_THREADS: set[QThread] = set()
 
 
 class UpdateCheckThread(QThread):
@@ -338,7 +339,12 @@ class UpdateDialog(QDialog):
             self._close_btn.setEnabled(not busy)
 
     def closeEvent(self, event) -> None:
-        """Ensure background QThreads are stopped before the dialog dies."""
+        """Detach in-flight network threads before the dialog is destroyed.
+
+        ``quit()`` cannot stop a QThread whose ``run`` method is blocked in a
+        network request. Destroying a parented, still-running QThread is fatal
+        in Qt, so suppress late UI delivery and retain it until completion.
+        """
         for attr in ("_check_thread", "_download_thread"):
             thread = getattr(self, attr, None)
             if thread is None:
@@ -346,9 +352,17 @@ class UpdateDialog(QDialog):
             try:
                 if thread.isRunning():
                     thread.requestInterruption()
-                    thread.quit()
-                    thread.wait(1500)
+                    if isinstance(thread, UpdateCheckThread):
+                        thread.checkComplete.disconnect()
+                    else:
+                        thread.downloadComplete.disconnect()
+                    thread.setParent(None)
+                    _DETACHED_THREADS.add(thread)
+                    thread.finished.connect(
+                        lambda active=thread: _DETACHED_THREADS.discard(active)
+                    )
             except RuntimeError:
                 # Thread already deleted by Qt
                 pass
+            setattr(self, attr, None)
         super().closeEvent(event)

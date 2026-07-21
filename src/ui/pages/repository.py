@@ -40,8 +40,10 @@ class RepoPage(BasePage):
         super().__init__(parent)
         self._settings: dict = settings or {}
         self._git_busy = False
+        self._shutting_down = False
         self._git_cancel = threading.Event()
         self._git_process: subprocess.Popen[str] | None = None
+        self._git_thread: threading.Thread | None = None
         self._git_op_done.connect(self._on_git_op_done)
 
         root = QVBoxLayout(self)
@@ -175,6 +177,7 @@ class RepoPage(BasePage):
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
+        self._log.document().setMaximumBlockCount(2000)
         self._log.setPlaceholderText("Git command output appears here.")
         _clear_btn.clicked.connect(self._log.clear)
         right.addWidget(self._log, stretch=1)
@@ -311,12 +314,16 @@ class RepoPage(BasePage):
                 results.append((args, ok, out.strip()))
                 if not ok:
                     break
-            self._git_op_done.emit((results, on_done))
+            if not self._shutting_down:
+                self._git_op_done.emit((results, on_done))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._git_thread = threading.Thread(target=work, daemon=True)
+        self._git_thread.start()
         return True
 
     def _on_git_op_done(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         results, on_done = payload
         for args, _ok, out in results:
             self._append_log_line(f"$ git {' '.join(args)}")
@@ -436,7 +443,12 @@ class RepoPage(BasePage):
         )
 
     def shutdown(self) -> None:
+        self._shutting_down = True
         self._git_cancel.set()
+        self.blockSignals(True)
         process = self._git_process
         if process is not None and process.poll() is None:
             process.terminate()
+        thread = self._git_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)

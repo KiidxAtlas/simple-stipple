@@ -17,10 +17,11 @@ class PatternSlider(QWidget):
         minimum: float,
         maximum: float,
         *,
-        decimals: int = 3,
+        decimals: int = 2,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        decimals = min(2, max(0, int(decimals)))
         self._factor = float(10**decimals)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.spin_box = QDoubleSpinBox()

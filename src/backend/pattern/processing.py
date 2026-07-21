@@ -19,6 +19,9 @@ from src.backend.pattern._shared import (
     _collect_lines as _collect_lines_shared,
 )
 from src.backend.pattern._shared import (
+    _extract_all_rings as _extract_all_rings_shared,
+)
+from src.backend.pattern._shared import (
     _extract_polys as _extract_polys_shared,
 )
 from src.backend.pattern._shared import (
@@ -737,12 +740,17 @@ class PatternProcessor:
                 try:
                     outline_fill_region = fill_outline
                     if cell_shapes:
-                        from shapely.ops import unary_union  # type: ignore[import-untyped]
+                        from src.backend.editing.clipper_engine import clipper_difference
 
-                        outline_fill_region = outline_fill_region.difference(
-                            unary_union([shape for shape, _signature in cell_shapes])
-                        )
-                    fill_strokes.extend(apply_fill(outline_fill_region, spec))
+                        outline_paths: list[list[tuple[float, float]]] = []
+                        _extract_all_rings_shared(fill_outline, outline_paths)
+                        cell_paths: list[list[tuple[float, float]]] = []
+                        for shape, _signature in cell_shapes:
+                            _extract_all_rings_shared(shape, cell_paths)
+                        clipped_paths = clipper_difference(outline_paths, cell_paths)
+                        outline_fill_region = build_fill_region(clipped_paths)
+                    if outline_fill_region is not None:
+                        fill_strokes.extend(apply_fill(outline_fill_region, spec))
                 except (ValueError, TypeError) as exc:
                     raise ValueError(
                         "Outline fill failed because the fill boundary is invalid."

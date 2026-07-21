@@ -7,7 +7,7 @@ state. Single-purpose actions (Text, Dimension, the contextual
 polyline-editing row) use the same widget with one state so the visuals
 stay consistent.
 
-Snap toggles (master/grid/vertex/edge/angle), Construction, and Measure
+Snap toggles (master/grid/vertex/edge/angle), Construction, and Scale
 live only in the Precision bar (``src.ui.widgets.canvas.precision_bar``) — it's
 docked in every mode, not just Draw, so it's the single home for those
 instead of duplicating them here.
@@ -239,7 +239,7 @@ class DrawSidebar(QFrame):
         # that's *already* shown (the common case — you open Draw wanting
         # the default/last tool) instead switched to the next one. Each
         # icon here is its own single-state CycleIconButton (same pattern
-        # already used for Text/Dimension/Measure/the editing row below) —
+        # already used for Text/Dimension/Scale/the editing row below) —
         # clicking it always re-selects that exact tool, no cycling, and
         # set_active_tool() drives which one shows checked/highlighted.
         self._polyline_buttons: dict[str, CycleIconButton] = {

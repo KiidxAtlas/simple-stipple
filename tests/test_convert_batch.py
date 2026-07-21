@@ -12,6 +12,18 @@ from src.backend.dxf.svg_dxf import svg_to_dxf
 from src.ui.pages.convert import ConvertPage, FixerSubTab, FviSubTab
 
 
+def test_conversion_shutdown_suppresses_late_worker_signals(qapp):
+    tab = FviSubTab(settings={})
+    received: list[str] = []
+    tab.log_line.connect(received.append)
+
+    tab.shutdown()
+    tab.log_line.emit("late result")
+
+    assert received == []
+    tab.deleteLater()
+
+
 def _write_dxf(path, points) -> None:
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4
@@ -42,9 +54,7 @@ def test_safe_fix_preserves_lwpolyline_bulges_and_vertex_widths(tmp_path):
     assert stats["changed"] is False
     assert stats["protected_polylines"] == 1
     repaired = ezdxf.readfile(output).modelspace()[0]
-    assert list(repaired.get_points(format="xyseb")) == list(
-        entity.get_points(format="xyseb")
-    )
+    assert list(repaired.get_points(format="xyseb")) == list(entity.get_points(format="xyseb"))
     assert repaired.dxf.layer == "CUT"
     assert repaired.closed is False
 

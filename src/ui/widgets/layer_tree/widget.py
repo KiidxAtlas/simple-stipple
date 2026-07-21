@@ -122,6 +122,16 @@ class DxfLayersTree(QFrame):
             )
             super().mousePressEvent(event)
 
+        def keyPressEvent(self, event) -> None:  # type: ignore[override]
+            if self._owner._editable and event.key() in (
+                Qt.Key.Key_Delete,
+                Qt.Key.Key_Backspace,
+            ):
+                self._owner._delete_current_layer()
+                event.accept()
+                return
+            super().keyPressEvent(event)
+
         def startDrag(self, supportedActions) -> None:  # type: ignore[override]
             if not self._owner._editable:
                 return
@@ -329,12 +339,6 @@ class DxfLayersTree(QFrame):
             self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self._tree.customContextMenuRequested.connect(self._show_context_menu)
             self._tree.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
-            # Del key on the focused tree row deletes the active layer.
-            self._delete_shortcut = QShortcut(
-                QKeySequence(QKeySequence.StandardKey.Delete), self._tree
-            )
-            self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            self._delete_shortcut.activated.connect(self._delete_current_layer)
 
         # Esc should always leave focused layer-tree inputs (search/rename editors).
         self._esc_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)

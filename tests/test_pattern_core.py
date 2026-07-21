@@ -6,11 +6,42 @@ from src.ui.pages.pattern.workers import run_generate
 OUTLINE = [[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]]
 
 
+def test_interlace_clipping_failure_never_falls_back_to_unclipped_geometry(monkeypatch):
+    from src.backend.pattern import _shared
+
+    class BrokenOutline:
+        is_empty = False
+
+        def intersection(self, _line):
+            raise RuntimeError("forced clipping failure")
+
+    monkeypatch.setattr(_shared.prepared, "prep", lambda _outline: object())
+
+    import pytest
+
+    with pytest.raises(ValueError, match="no unclipped geometry was emitted"):
+        _shared.apply_interlace(
+            [[(0.0, 0.0), (1.0, 0.0)], [(0.0, 1.0), (1.0, 1.0)]],
+            BrokenOutline(),  # type: ignore[arg-type]
+            spacing=1.0,
+        )
+
+
 def test_available_patterns_have_exactly_one_parameter_definition():
     from src.backend.pattern.processing import PATTERNS
     from src.ui.pages.pattern.form_spec import PARAM_SPECS
 
     assert set(PATTERNS) - {"— None —"} == set(PARAM_SPECS)
+
+
+def test_all_physical_pattern_sliders_are_capped_at_twenty_mm():
+    from src.ui.pages.pattern.form_spec import MAX_PATTERN_DIMENSION_MM, PARAM_SPECS
+
+    physical_fields = [
+        spec for specs in PARAM_SPECS.values() for spec in specs if "(mm)" in spec.label
+    ]
+    assert physical_fields
+    assert all(spec.maximum == MAX_PATTERN_DIMENSION_MM for spec in physical_fields)
 
 
 def test_open_paths_are_reported_as_neutral_linework():

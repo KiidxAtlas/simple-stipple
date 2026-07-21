@@ -7,6 +7,12 @@ from collections.abc import Iterable
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.ops import polygonize, unary_union
 
+from src.backend.editing.clipper_engine import (
+    clipper_difference,
+    clipper_intersection,
+    clipper_union,
+)
+
 Point = tuple[float, float]
 Polyline = list[Point]
 
@@ -40,17 +46,17 @@ def boolean_polylines(polylines: Iterable[Polyline], operation: str) -> list[Pol
             shapes.append(shape)
     if len(shapes) < 2:
         return []
+    valid_paths = [_rings(shape)[0] for shape in shapes]
     if operation == "union":
-        geometry = unary_union(shapes)
-    elif operation == "subtract":
-        geometry = shapes[0]
-        for shape in shapes[1:]:
-            geometry = geometry.difference(shape)
-    elif operation == "intersect":
-        geometry = shapes[0]
-        for shape in shapes[1:]:
-            geometry = geometry.intersection(shape)
-    elif operation == "divide":
+        return clipper_union(valid_paths)
+    if operation == "subtract":
+        return clipper_difference(valid_paths[:1], valid_paths[1:])
+    if operation == "intersect":
+        result = valid_paths[:1]
+        for path in valid_paths[1:]:
+            result = clipper_intersection(result, [path])
+        return result
+    if operation == "divide":
         geometry = MultiPolygon(list(polygonize(unary_union([shape.boundary for shape in shapes]))))
     else:
         raise ValueError(f"Unsupported boolean operation: {operation}")

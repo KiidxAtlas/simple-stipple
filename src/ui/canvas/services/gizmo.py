@@ -69,6 +69,7 @@ class GizmoService:
                         "width",
                     )
             if dims is not None and min(dims[0], dims[1]) > 1e-9:
+                assert meta is not None
                 cx, cy = (float(v) for v in meta.get("center", (cx, cy)))
                 rotation = float(meta.get("rotation", 0.0))
                 angle = math.radians(rotation)
@@ -227,6 +228,7 @@ class GizmoService:
                     # that redraw would use to restore the old shape.
                     self._host._entities[idx].kind = "polyline"
                     self._host._entities[idx].meta = None
+        self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
     def _apply_local_parametric_scale(
@@ -288,6 +290,7 @@ class GizmoService:
         self._host._entities[idx] = candidate
         self._host._gizmo_drag_moved = True
         self._host._sync_shape_storage_from_entities()
+        self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
     def _apply_gizmo_drag(
@@ -323,7 +326,7 @@ class GizmoService:
             cur_a = math.atan2(cur_vy, cur_vx)
             angle = cur_a - start_a
             if mods is not None and mods & Qt.KeyboardModifier.ShiftModifier:
-                increment = math.radians(15.0)
+                increment = math.radians(self._host._rotation_snap_increment)
                 angle = round(angle / increment) * increment
             if abs(angle) > math.radians(0.2):
                 self._host._gizmo_drag_moved = True
@@ -353,6 +356,7 @@ class GizmoService:
                     factor=scale,
                 )
                 self._host._entities[idx].meta = new_meta if new_meta is not None else snap_meta
+        self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
     def _end_gizmo_drag(self) -> bool:

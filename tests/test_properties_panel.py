@@ -31,7 +31,7 @@ def test_panel_omits_vertex_edit_and_open_path_actions(qapp):
 
     assert "edit" not in panel._context_buttons
     assert "open" not in panel._context_buttons
-    assert set(panel._context_buttons) == {"duplicate", "close", "delete"}
+    assert set(panel._context_buttons) == {"duplicate", "constraints", "close", "delete"}
 
 
 def test_panel_moves_selection(qapp):
@@ -51,6 +51,37 @@ def test_panel_resizes_selection(qapp):
     panel._commit_size("w")
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
     assert x1 - x0 == pytest.approx(40.0)
+
+
+def test_panel_edits_selected_driving_dimension(qapp):
+    canvas, panel = make_panel(qapp, [[(0.0, 0.0), (10.0, 0.0)]])
+    entity_id = canvas._entities[0].id
+    canvas._dimensions = [
+        {
+            "type": "linear",
+            "p1": (0.0, 0.0),
+            "p2": (10.0, 0.0),
+            "offset": 5.0,
+            "precision": 2,
+            "driving": {
+                "kind": "point_distance",
+                "sources": [
+                    {"entity_id": entity_id, "vertex_index": 0},
+                    {"entity_id": entity_id, "vertex_index": 1},
+                ],
+            },
+        }
+    ]
+    canvas._selected_dimension = 0
+    panel.refresh()
+
+    assert panel._summary.text() == "Driving Linear Dimension"
+    assert panel._dimension_container.isHidden() is False
+    panel._dimension_value.setText("25")
+    panel._commit_dimension_value()
+
+    assert canvas._entities[0].points[1] == pytest.approx((25.0, 0.0))
+    assert canvas._dimensions[0]["p2"] == pytest.approx((25.0, 0.0))
 
 
 def test_aspect_lock_toggle_syncs_with_canvas_flag(qapp):
@@ -190,11 +221,15 @@ def test_panel_edits_ellipse_radius(qapp):
 
 def test_property_expression_preserves_parametric_width_and_focus_highlights(qapp):
     canvas, panel = make_panel(qapp, [])
-    canvas.set_entity_records([{
-        "points": [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)],
-        "kind": "rectangle",
-        "meta": {"center": (5, 2.5), "width": 10, "height": 5, "rotation": 0},
-    }])
+    canvas.set_entity_records(
+        [
+            {
+                "points": [(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)],
+                "kind": "rectangle",
+                "meta": {"center": (5, 2.5), "width": 10, "height": 5, "rotation": 0},
+            }
+        ]
+    )
     canvas.set_selection([0])
     panel.refresh()
     panel.show()

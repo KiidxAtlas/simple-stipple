@@ -44,9 +44,27 @@ def _build_dark_palette() -> QPalette:
     return p
 
 
-def accessibility_palette(high_contrast: bool = False) -> QPalette:
+def _build_light_palette() -> QPalette:
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor("#f6f8fa"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#1f2328"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#eef1f4"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#1f2328"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#1f2328"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#f0f2f4"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#1f2328"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#0969da"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6e7781"))
+    palette.setColor(QPalette.ColorRole.Mid, QColor("#d0d7de"))
+    return palette
+
+
+def accessibility_palette(high_contrast: bool = False, appearance: str = "dark") -> QPalette:
     """Return the application palette, optionally with stronger separation."""
-    palette = _build_dark_palette()
+    palette = _build_light_palette() if appearance == "light" else _build_dark_palette()
     if high_contrast:
         palette.setColor(QPalette.ColorRole.Window, QColor("#000000"))
         palette.setColor(QPalette.ColorRole.Base, QColor("#000000"))
@@ -59,7 +77,9 @@ def accessibility_palette(high_contrast: bool = False) -> QPalette:
     return palette
 
 
-def load_app_qss(*, scale: float = 1.0, high_contrast: bool = False) -> str:
+def load_app_qss(
+    *, scale: float = 1.0, high_contrast: bool = False, appearance: str = "dark"
+) -> str:
     bundled_root = getattr(sys, "_MEIPASS", None)
     candidates = [Path(__file__).with_name("theme.qss")]
     if bundled_root:
@@ -89,6 +109,24 @@ def load_app_qss(*, scale: float = 1.0, high_contrast: bool = False) -> str:
                     "#6e7681": "#d0d0d0",
                     "#8b949e": "#e0e0e0",
                     "#e6edf3": "#ffffff",
+                }.items():
+                    qss = qss.replace(source, target)
+            elif appearance == "light":
+                for source, target in {
+                    "#0d1117": "#f6f8fa",
+                    "#161b22": "#ffffff",
+                    "#1a222d": "#f0f2f4",
+                    "#1c2128": "#ffffff",
+                    "#21262d": "#eaeef2",
+                    "#2b3440": "#d0d7de",
+                    "#30363d": "#d0d7de",
+                    "#303a47": "#b6bec8",
+                    "#484f58": "#8c959f",
+                    "#6e7681": "#57606a",
+                    "#8b949e": "#57606a",
+                    "#c9d1d9": "#24292f",
+                    "#e6edf3": "#1f2328",
+                    "#f0f6fc": "#1f2328",
                 }.items():
                     qss = qss.replace(source, target)
             return qss

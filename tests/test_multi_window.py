@@ -48,3 +48,13 @@ def test_closing_new_window_removes_it_from_tracking(app_window, qapp, monkeypat
     new_win.close()
     qapp.processEvents()
     assert new_win not in App._open_windows
+    assert not new_win._task_controller._recovery_start_timer.isActive()
+    assert not new_win._task_controller._update_start_timer.isActive()
+    assert new_win._autosave_controller._shutting_down is True
+
+
+def test_update_checker_shutdown_tolerates_partially_initialized_instance(app_window):
+    checker = app_window._task_controller.updates
+    del checker._startup_update_thread
+    checker.shutdown()
+    assert checker._shutting_down is True

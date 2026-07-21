@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
+from src.backend.jit import resample_path
+
 Point = tuple[float, float]
 
 
@@ -35,10 +39,12 @@ def resample_by_count(points: list[Point], count: int) -> list[Point]:
     distances, total = _cumulative(points)
     if total <= 1e-12:
         raise ValueError("Cannot resample a zero-length path")
-    if closed:
-        samples = [_sample(points, distances, total * index / count) for index in range(count)]
-        return samples + [samples[0]]
-    return [_sample(points, distances, total * index / (count - 1)) for index in range(count)]
+    sample_count = count if closed else count
+    denominator = count if closed else count - 1
+    targets = np.linspace(0.0, total * (sample_count - 1) / denominator, sample_count)
+    sampled, _ = resample_path(np.asarray(points, dtype=np.float64), targets)
+    result = [(float(x), float(y)) for x, y in sampled]
+    return result + [result[0]] if closed else result
 
 
 def resample_by_spacing(points: list[Point], spacing: float) -> list[Point]:

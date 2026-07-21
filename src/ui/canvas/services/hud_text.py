@@ -133,6 +133,7 @@ class HudTextService:
         spin.setFixedHeight(height)
         spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         spin.setStyleSheet(self._DIM_STYLE)
+        spin.installEventFilter(cast("QWidget", self._host))
         spin.show()
         return spin
 
@@ -143,6 +144,7 @@ class HudTextService:
         callback,
         *,
         minimum: float | None = None,
+        maximum: float | None = None,
         is_length: bool = True,
         preview=None,
     ) -> None:
@@ -177,6 +179,9 @@ class HudTextService:
             if minimum is not None and value < minimum:
                 self._host._clear_operation_preview()
                 return
+            if maximum is not None and value > maximum:
+                self._host._clear_operation_preview()
+                return
             preview(value)
 
         if preview is not None:
@@ -190,6 +195,9 @@ class HudTextService:
                 self._dismiss_hud_prompt()
                 return
             if minimum is not None and value < minimum:
+                self._dismiss_hud_prompt()
+                return
+            if maximum is not None and value > maximum:
                 self._dismiss_hud_prompt()
                 return
             self._dismiss_hud_prompt()
@@ -521,8 +529,14 @@ class HudTextService:
         mx, my = (cax + chx) / 2, (cay + chy) / 2
 
         le = QLineEdit(cast("QWidget", self._host))
-        le.setText(f"{dist:.2f}")
-        le.setFixedWidth(100)
+        display_dist = _to_display(dist, self._host._unit_system)
+        le.setText(f"{display_dist:.4g}")
+        le.setPlaceholderText(f"Target distance ({_unit_suffix(self._host._unit_system)})")
+        le.setToolTip(
+            "Enter the real target distance. The first picked point remains fixed.\n"
+            "Expressions such as 25.4/2 are accepted."
+        )
+        le.setFixedWidth(150)
         le.setFixedHeight(24)
         le.setAlignment(Qt.AlignmentFlag.AlignCenter)
         le.setStyleSheet(
@@ -533,9 +547,9 @@ class HudTextService:
             *self._hud_position_near(
                 mx,
                 my,
-                100,
+                150,
                 24,
-                offset_x=-50,
+                offset_x=-75,
                 offset_y=-40,
             )
         )
@@ -562,18 +576,37 @@ class HudTextService:
             self._dismiss_measure_edit()
             return
         try:
-            new_dist = float(self._host._measure_edit.text())
+            new_dist = _parse_expression(
+                self._host._measure_edit.text(),
+                self._host._unit_system,
+                is_length=True,
+            )
         except ValueError:
-            self._dismiss_measure_edit()
+            self._host._show_flash("Enter a positive target distance", 1400)
+            self._host._measure_edit.setFocus()
+            self._host._measure_edit.selectAll()
             return
         ax, ay = self._host._measure_anchor
         hx, hy = self._host._measure_end
         old_dist = math.hypot(hx - ax, hy - ay)
         if old_dist < 1e-9 or new_dist <= 0:
-            self._dismiss_measure_edit()
+            self._host._show_flash("Target distance must be greater than zero", 1400)
+            self._host._measure_edit.setFocus()
+            self._host._measure_edit.selectAll()
             return
         factor = new_dist / old_dist
-        self._host._scale_all(factor)
+        if not math.isfinite(factor) or factor > 1_000_000:
+            self._host._show_flash("Scale factor is outside the supported range", 1600)
+            return
+        if abs(factor - 1.0) <= 1e-12:
+            self._host._show_flash("Target matches the reference; nothing changed", 1200)
+        elif not self._host.scale_by_reference(factor, self._host._measure_anchor):
+            self._host._show_flash("Nothing available to scale", 1400)
+            return
+        else:
+            self._host._show_flash(
+                f"Scaled by {factor:.4g}× · Undo restores the previous size", 1800
+            )
         self._dismiss_measure_edit()
         self._host._measure_locked = False
         self._host._measure_anchor = None

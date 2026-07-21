@@ -19,8 +19,9 @@ class CanvasStatusStrip(QFrame):
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(6)
 
-        self._mode_label = QLabel("Select")
+        self._mode_label = QLabel("MODE · SELECT")
         self._mode_label.setProperty("role", "status-mode")
+        self._mode_label.setAccessibleName("Active canvas mode")
         layout.addWidget(self._mode_label)
 
         self._readiness_dot = self._dot()
@@ -85,7 +86,15 @@ class CanvasStatusStrip(QFrame):
         zoom_percent: int = 100,
         cursor_pos: tuple[float, float] | None = None,
     ) -> None:
-        self._mode_label.setText(mode.title())
+        normalized_mode = mode.replace("_", " ").title()
+        self._mode_label.setText(
+            f"MODE · {normalized_mode.upper()}"
+            + (" · Esc to exit" if mode.lower() != "select" else "")
+        )
+        self._mode_label.setAccessibleDescription(
+            f"{normalized_mode} mode"
+            + (". Press Escape to return to Select mode." if mode.lower() != "select" else "")
+        )
         self._objects_label.setText(f"{object_count} obj")
         self._selection_label.setText(f"{selected_count} sel")
         self._selection_label.setProperty("active", bool(selected_count))

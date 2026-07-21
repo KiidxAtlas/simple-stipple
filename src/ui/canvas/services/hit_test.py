@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
 
 from src.ui.canvas.constants import EDGE_HIT, SNAP_DIST, VERT_HIT
 
@@ -58,7 +58,8 @@ class HitTestService:
 
     def nearest_endpoint(self, cx: float, cy: float) -> Point | None:
         host = self._host
-        best_distance, best = SNAP_DIST, None
+        best_distance: float = SNAP_DIST
+        best: Point | None = None
         for index, entity in enumerate(host._entities):
             if not host._entity_selectable(index) or len(entity.points) < 2:
                 continue
@@ -70,7 +71,8 @@ class HitTestService:
 
     def nearest_vertex(self, cx: float, cy: float) -> tuple[int, int] | None:
         host = self._host
-        best_distance, best = VERT_HIT, None
+        best_distance: float = VERT_HIT
+        best: tuple[int, int] | None = None
         for path_index, entity in enumerate(host._entities):
             if not host._entity_selectable(path_index):
                 continue
@@ -119,12 +121,14 @@ class HitTestService:
     def nearest_edge(self, cx: float, cy: float) -> tuple[int, int, Point] | None:
         host = self._host
         wx, wy = host._c2w(cx, cy)
-        best_distance, best = EDGE_HIT, None
+        best_distance: float = float(EDGE_HIT)
+        best: tuple[int, int, Point] | None = None
         for path_index, entity in enumerate(host._entities):
             if not host._entity_selectable(path_index):
                 continue
-            distance, result = self.closest_point(
-                entity.points, wx, wy, cx, cy, return_segment=True
+            distance, result = cast(
+                tuple[float | None, tuple[int, Point] | None],
+                self.closest_point(entity.points, wx, wy, cx, cy, return_segment=True),
             )
             if distance is not None and distance < best_distance and result is not None:
                 best_distance = distance
@@ -134,7 +138,8 @@ class HitTestService:
     def entity_at(self, cx: float, cy: float) -> int | None:
         host = self._host
         wx, wy = host._c2w(cx, cy)
-        best_distance, best = 8.0, None
+        best_distance: float = 8.0
+        best: int | None = None
         for index, entity in enumerate(host._entities):
             if not host._entity_selectable(index):
                 continue
@@ -142,6 +147,45 @@ class HitTestService:
             if isinstance(distance, float) and distance < best_distance:
                 best_distance, best = distance, index
         return best
+
+    def entities_at(self, cx: float, cy: float) -> list[int]:
+        """Return every selectable entity under the pointer, nearest first."""
+        host = self._host
+        wx, wy = host._c2w(cx, cy)
+        hits: list[tuple[float, int]] = []
+        for index, entity in enumerate(host._entities):
+            if not host._entity_selectable(index):
+                continue
+            distance = self.closest_point(entity.points, wx, wy, cx, cy)
+            if isinstance(distance, float) and distance < 8.0:
+                hits.append((distance, index))
+        return [index for _distance, index in sorted(hits)]
+
+    def profile_at(self, cx: float, cy: float) -> set[int]:
+        """Find entities bounding the smallest enclosed profile at a point."""
+        from shapely.geometry import LineString
+        from shapely.geometry import Point as ShapelyPoint
+        from shapely.ops import polygonize, unary_union
+
+        host = self._host
+        wx, wy = host._c2w(cx, cy)
+        lines: list[tuple[int, LineString]] = []
+        for index in range(len(host._entities)):
+            if not host._entity_selectable(index):
+                continue
+            points = host._flattened_points(index)
+            if len(points) >= 2:
+                lines.append((index, LineString(points)))
+        if not lines:
+            return set()
+        merged = unary_union([line for _index, line in lines])
+        candidates = [
+            polygon for polygon in polygonize(merged) if polygon.covers(ShapelyPoint(wx, wy))
+        ]
+        if not candidates:
+            return set()
+        profile = min(candidates, key=lambda polygon: polygon.area)
+        return {index for index, line in lines if line.intersection(profile.boundary).length > 1e-7}
 
     def guide_at(self, cx: float, cy: float) -> int | None:
         best, best_distance = None, 6.0

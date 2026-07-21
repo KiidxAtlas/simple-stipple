@@ -311,7 +311,7 @@ class SelectionService:
                 if vi == anchor_index
             }
             anchor = entity.points[anchor_index]
-            out = handles.get("out", anchor)
+            out = handles.get("out") or anchor
             vector = (out[0] - anchor[0], out[1] - anchor[1])
             self._set_bezier_handle(entity_index, anchor_index, "out", out)
             if math.hypot(*vector) <= 1e-12:
@@ -395,6 +395,7 @@ class SelectionService:
         split_happened = False
         split_closed = 0
         split_open = 0
+        carved_regions = 0
         can_cut_split = getattr(self._host, "_draw_split_enabled", True) and primitive in {
             "line",
             "polyline",
@@ -403,6 +404,10 @@ class SelectionService:
         }
         if can_cut_split and not close and len(poly) >= 2:
             split_happened, split_closed, split_open = self._host._split_geometry_with_line(poly)
+        elif getattr(self._host, "_draw_split_enabled", True) and close and len(poly) >= 4:
+            split_happened, carved_regions = self._host._carve_geometry_with_shape(poly)
+
+        consume_cutter = bool(split_closed or carved_regions)
 
         kind = "polyline"
         meta: dict[str, Any] | None = None
@@ -435,17 +440,22 @@ class SelectionService:
                 "degree": 3,
             }
 
-        rec = EntityRecord(points=list(poly), kind=kind, meta=meta, layer=self._host._active_layer)
-        self._host._entities.append(rec)
-        new_idx = len(self._host._entities) - 1
-        if getattr(self._host, "_draw_construction_mode", False):
-            self._host._entities[new_idx].construction = True
+        new_idx: int | None = None
+        if not consume_cutter:
+            rec = EntityRecord(
+                points=list(poly), kind=kind, meta=meta, layer=self._host._active_layer
+            )
+            self._host._entities.append(rec)
+            new_idx = len(self._host._entities) - 1
+            if getattr(self._host, "_draw_construction_mode", False):
+                self._host._entities[new_idx].construction = True
 
         merged_idx: int | None = None
         if (
             primitive in {"line", "polyline"}
             and not getattr(self._host, "_draw_construction_mode", False)
             and not split_happened
+            and new_idx is not None
             and any(
                 snap_type == "vertex"
                 for snap_type in getattr(self._host, "_draw_point_snap_types", [])
@@ -455,7 +465,10 @@ class SelectionService:
             if merged_idx is not None:
                 new_idx = merged_idx
 
-        self._host._document.selection = {new_idx}
+        if consume_cutter:
+            self._host._document.selection = set(self._host._last_split_result_indices)
+        elif new_idx is not None:
+            self._host._document.selection = {new_idx}
         self._host._canvas_service.commit_preview(before)
         self._host._notify()
         self._host._fire_poly_change()
@@ -465,14 +478,18 @@ class SelectionService:
         self._host._dismiss_dim_inputs()
         self._host._refresh_draw_sidebar_state()
         if split_happened:
-            if split_closed and split_open:
+            if carved_regions:
+                self._host._show_flash(f"Carved {carved_regions} region(s)", 1000)
+            elif split_closed and split_open:
                 self._host._show_flash("Regions cut + segments split", 900)
             elif split_closed:
                 self._host._show_flash("Regions cut", 900)
             else:
-                self._host._show_flash("Segments split", 900)
-        elif merged_idx is not None and self._host._is_poly_closed(
-            self._host._entities[new_idx].points
+                self._host._show_flash("Segments split · cutter kept", 1000)
+        elif (
+            merged_idx is not None
+            and new_idx is not None
+            and self._host._is_poly_closed(self._host._entities[new_idx].points)
         ):
             self._host._show_flash("Polyline closed", 800)
         elif merged_idx is not None:
@@ -482,13 +499,17 @@ class SelectionService:
         self._host._redraw()
         return True
 
-    def _finish_pen(self) -> bool:
+    def _finish_pen(self, *, close: bool = False) -> bool:
         """Commit the in-progress pen-tool curve as a ``kind="bezier"``
         entity (anchors on ``.points``, tangent offsets in ``meta``)."""
         if len(self._host._pen_pts) < 2:
             self._cancel_pen()
             return False
         entity = EntityRecord(
+            # Keep one anchor per tangent.  ``build_bezier_poly`` closes the
+            # final-to-first segment from this flag; duplicating anchor zero
+            # here created an extra zero-handle node and made later editing
+            # disagree with what was drawn.
             points=list(self._host._pen_pts),
             kind="bezier",
             meta={
@@ -500,7 +521,7 @@ class SelectionService:
                     for x, y in self._host._pen_tangents
                 ],
                 "segments": 16,
-                "closed": False,
+                "closed": close,
             },
             layer=self._host._active_layer,
         )

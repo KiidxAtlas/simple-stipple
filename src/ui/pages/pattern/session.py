@@ -49,8 +49,11 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "orig_w": page._orig_w,
         "orig_h": page._orig_h,
         "canvas_view": page._canvas.get_view_state(),
-        "preview_polys": page._preview_polys_cache,
-        "showing_preview": page._showing_preview,
+        # Preview cells are derived from the outline, zones, and parameters.
+        # Persisting them duplicated the largest geometry in the document and
+        # produced 30–40 MB recovery snapshots. Regenerate after restore.
+        "preview_polys": [],
+        "showing_preview": False,
         "zones": list(page._zones),
         "exclusion_ids": list(page._exclusion_ids),
         "custom_tile_polys": page._custom_tile_polys,

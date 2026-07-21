@@ -17,8 +17,14 @@ from src.app.workspace_session import (
     workspace_title,
 )
 from src.backend.model.document import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
-from src.backend.persistence import read_json_file, write_json_file_atomic
+from src.backend.persistence import (
+    MAX_WORKSPACE_FILE_BYTES,
+    read_json_file,
+    write_json_file_atomic,
+)
+from src.core.paths import saved_workspaces_dir, user_data_dir
 from src.core.settings import save_settings
+from src.ui.widgets.dialogs.workspace_library import WorkspaceLibraryDialog
 
 if TYPE_CHECKING:
     from src.app.window import App
@@ -114,6 +120,10 @@ class WorkspaceController(_WorkspaceStateController):
         self._app._open_workspace_action.triggered.connect(self._open_workspace)
         self._app._workspace_menu.addAction(self._app._open_workspace_action)
 
+        self._app._saved_workspaces_action = QAction("Workspaces and Recovery…", self._app)
+        self._app._saved_workspaces_action.triggered.connect(self._open_saved_workspaces)
+        self._app._workspace_menu.addAction(self._app._saved_workspaces_action)
+
         self._app._save_workspace_action = QAction("Save Workspace", self._app)
         self._app._save_workspace_action.setShortcut(
             QKeySequence(self._app._shortcut("workspace.save"))
@@ -130,7 +140,7 @@ class WorkspaceController(_WorkspaceStateController):
 
         self._app._recover_workspace_action = QAction("Recover Unsaved Work…", self._app)
         self._app._recover_workspace_action.triggered.connect(
-            self._app._autosave_controller.open_recovery_manager
+            lambda: self._open_saved_workspaces(initial_source="recovery")
         )
         self._app._workspace_menu.addAction(self._app._recover_workspace_action)
 
@@ -160,7 +170,14 @@ class WorkspaceController(_WorkspaceStateController):
         path, _ = QFileDialog.getSaveFileName(
             self._app,
             "Save Workspace As",
-            str(Path(self._workspace_default_dir()) / default_name),
+            str(
+                (
+                    self._app._workspace_path.parent
+                    if self._app._workspace_path
+                    else saved_workspaces_dir()
+                )
+                / default_name
+            ),
             f"Workspace files (*{WORKSPACE_FILE_SUFFIX});;JSON files (*.json)",
         )
         if not path:
@@ -224,7 +241,10 @@ class WorkspaceController(_WorkspaceStateController):
                 self._collect_workspace_document() != self._app._last_saved_document
             )
         else:
-            self._app._workspace_dirty = False
+            # Recovered documents intentionally have no saved baseline. They
+            # remain dirty until Save As establishes one; treating a missing
+            # baseline as clean allowed restored work to close without warning.
+            self._app._workspace_dirty = self._app._has_unsaved_changes
         self._update_title()
 
     def _workspace_pages(self):
@@ -254,7 +274,11 @@ class WorkspaceController(_WorkspaceStateController):
         if check_dirty and not self._confirm_discard_if_dirty():
             return
         try:
-            data = read_json_file(path, default=None)
+            data = read_json_file(
+                path,
+                default=None,
+                max_bytes=MAX_WORKSPACE_FILE_BYTES,
+            )
             if not isinstance(data, dict):
                 raise TypeError("Workspace file is invalid or is not a JSON object.")
             self._apply_workspace_document(data)
@@ -278,6 +302,49 @@ class WorkspaceController(_WorkspaceStateController):
         )
         if path:
             self._load_workspace_file(Path(path), check_dirty=False)
+
+    def _open_saved_workspaces(self, *, initial_source: str = "saved") -> None:
+        active_path = self._app._workspace_path
+        dialog = WorkspaceLibraryDialog(
+            saved_workspaces_dir(),
+            self._app,
+            recent_paths=recent_workspace_paths(self._app._settings),
+            recovery_dir=user_data_dir() / "recovery",
+            initial_source=initial_source,
+        )
+        accepted = dialog.exec()
+        if active_path in dialog.renamed_paths:
+            self._app._workspace_path = dialog.renamed_paths[active_path]
+            self._remember_workspace_path(self._app._workspace_path)
+            self._update_title()
+        elif active_path in dialog.deleted_paths:
+            # Keep the open document in memory after its backing file is
+            # deleted, but make the next save ask for a new name.
+            self._app._workspace_path = None
+            self._app._last_saved_document = None
+            self._app._workspace_dirty = True
+            self._app._has_unsaved_changes = True
+            self._update_title()
+        if accepted and dialog.selected_document is not None:
+            if not self._confirm_discard_if_dirty():
+                return
+            try:
+                self._apply_workspace_document(dialog.selected_document)
+            except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                QMessageBox.warning(
+                    self._app,
+                    "Recovery Failed",
+                    f"Could not restore this snapshot:\n{exc}",
+                )
+                return
+            self._app._workspace_path = None
+            self._app._last_saved_document = None
+            self._app._workspace_dirty = True
+            self._app._has_unsaved_changes = True
+            self._app._restored_recovery_path = dialog.selected_path
+            self._update_title()
+        elif accepted and dialog.selected_path is not None:
+            self._load_workspace_file(dialog.selected_path)
 
     def _clear_workspace_state(self) -> None:
         self._app._workspace_controller.clear()

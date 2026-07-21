@@ -55,6 +55,8 @@ class TextField(QWidget):
             self.entry.setText(default)
         self.entry.setFixedWidth(width)
         self.entry.setPlaceholderText(placeholder)
+        self.entry.setAccessibleName(label)
+        marker.setBuddy(self.entry)
         if tooltip:
             self.entry.setToolTip(tooltip)
         lay.addWidget(marker, stretch=1)
@@ -77,10 +79,12 @@ class PathField(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
         self.entry = QLineEdit()
+        self.entry.setAccessibleName("Image file")
         self.entry.setPlaceholderText(placeholder)
         if tooltip:
             self.entry.setToolTip(tooltip)
         browse_btn = QPushButton(browse_label)
+        browse_btn.setAccessibleName(f"Browse for {placeholder.removesuffix('…')}")
         browse_btn.setFixedWidth(64)
         browse_btn.clicked.connect(on_browse)
         lay.addWidget(self.entry, stretch=1)

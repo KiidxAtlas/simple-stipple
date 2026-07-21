@@ -41,18 +41,6 @@ def _equal(first: PointTuple, second: PointTuple) -> bool:
     return math.dist(first, second) < 1e-6
 
 
-def _extend(line: LineString, amount: float) -> LineString:
-    coordinates = list(line.coords)
-    for end, neighbor in ((0, 1), (-1, -2)):
-        x, y = coordinates[end]
-        nx, ny = coordinates[neighbor]
-        dx, dy = x - nx, y - ny
-        length = math.hypot(dx, dy)
-        if length > 1e-12:
-            coordinates[end] = x + dx / length * amount, y + dy / length * amount
-    return LineString(coordinates)
-
-
 def _intersection_points(geometry: object) -> list[PointTuple]:
     if isinstance(geometry, Point):
         return [(float(geometry.x), float(geometry.y))]
@@ -101,16 +89,12 @@ def _polygon_pieces(polygon: Polygon, cutter: LineString) -> list[list[PointTupl
     inner = polygon.buffer(-1e-6)
     if (inner if not inner.is_empty else polygon).intersection(cutter).is_empty:
         return []
-    minx, miny, maxx, maxy = polygon.bounds
-    extended = _extend(cutter, max(math.hypot(maxx - minx, maxy - miny) * 2.0, 1.0))
-    candidates: list[tuple[int, list[Polygon]]] = []
-    for order, candidate in enumerate((cutter, extended)):
-        pieces = [item for item in split(polygon, candidate).geoms if isinstance(item, Polygon)]
-        if len(pieces) >= 2:
-            candidates.append((order, pieces))
-    if not candidates:
+    # A cutter must actually cross the region boundary and divide it. Never
+    # extend a short line invisibly: that made a line drawn merely inside a
+    # shape cut the entire region in half.
+    geometries = [item for item in split(polygon, cutter).geoms if isinstance(item, Polygon)]
+    if len(geometries) < 2:
         return []
-    geometries = min(candidates, key=lambda item: (len(item[1]), item[0]))[1]
     return [[(float(x), float(y)) for x, y in geometry.exterior.coords] for geometry in geometries]
 
 
@@ -143,21 +127,9 @@ def split_paths(paths: list[list[PointTuple]], cutter_points: list[PointTuple]) 
                     output.extend(SplitPath(source_index, points, True) for points in pieces)
                     closed_count += 1
                     continue
-                vertices = list(path[:-1])
-                rebuilt = [vertices[0]]
-                changed = False
-                for index, first in enumerate(vertices):
-                    pieces = _split_segment(first, vertices[(index + 1) % len(vertices)], cutter)
-                    changed |= len(pieces) > 1
-                    rebuilt.extend(
-                        piece[1] for piece in pieces if not _equal(rebuilt[-1], piece[1])
-                    )
-                if changed:
-                    if not _equal(rebuilt[0], rebuilt[-1]):
-                        rebuilt.append(rebuilt[0])
-                    output.append(SplitPath(source_index, rebuilt, True))
-                    closed_count += 1
-                    continue
+                # A touch or partial entry may add an intersection vertex,
+                # but it does not divide the region. Leave the region intact
+                # and let the newly drawn line remain normal geometry.
             else:
                 chains: list[list[PointTuple]] = [[path[0]]]
                 changed = False

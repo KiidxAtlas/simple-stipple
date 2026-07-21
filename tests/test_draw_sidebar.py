@@ -565,6 +565,18 @@ def test_context_menu_customize_can_hide_sections_but_keeps_view(qapp):
     assert dlg.get_sections() == ["view"]
 
 
+def test_context_menu_customize_controls_more_actions(qapp):
+    from src.ui.widgets.dialogs.customize_dialogs import ContextMenuCustomizeDialog
+
+    dlg = ContextMenuCustomizeDialog(
+        sections=["selected", "transform", "view"],
+        overflow_sections=["view"],
+    )
+    dlg._apply()
+    assert dlg.get_sections() == ["selected", "transform", "view"]
+    assert dlg.get_overflow_sections() == ["view"]
+
+
 def test_smoothing_button_cycles_and_stays_in_sync_with_settings(qapp):
     v = make_view(qapp, [])
     v.set_mode("draw")

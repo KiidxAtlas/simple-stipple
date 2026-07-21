@@ -152,3 +152,31 @@ def test_shape_rename_still_works_after_layer_rename_fix(qapp):
     tree.shapeRenamed.connect(lambda layer, key, new: renamed.append((layer, key, new)))
     shape_item.setText(0, "Renamed Shape")
     assert renamed == [("Layer 1", 0, "Renamed Shape")]
+
+
+def test_delete_key_on_selected_shape_requests_shape_deletion(qapp):
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    tree = make_tree(qapp)
+    tree.set_layers(
+        [
+            {
+                **_make_layer_row("Layer 1"),
+                "shapes": [
+                    {"key": 7, "label": "Shape 1", "editable": True, "visible": True}
+                ],
+            }
+        ]
+    )
+    shape = tree._tree.topLevelItem(0).child(0)
+    shape.setSelected(True)
+    tree._tree.setCurrentItem(shape)
+    received: list[tuple[str, list]] = []
+    tree.shapesDeleteRequested.connect(lambda layer, keys: received.append((layer, keys)))
+
+    tree._tree.keyPressEvent(
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier)
+    )
+
+    assert received == [("Layer 1", [7])]

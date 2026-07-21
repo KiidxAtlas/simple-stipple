@@ -105,7 +105,7 @@ def keyhole(
         ]
     )
     merged = head.union(stem)
-    if merged.geom_type != "Polygon":
+    if not isinstance(merged, Polygon):
         return []
     return [(float(x), float(y)) for x, y in merged.exterior.coords]
 

@@ -96,6 +96,12 @@ class CanvasPrecisionBar(QFrame):
             ("snap_tangent", "Tangents", "set_snap_tangent"),
             ("snap_extension", "Edge extensions", "set_snap_extension"),
             ("snap_angle", "Angle constraints", "set_snap_angle"),
+            ("snap_equal_length", "Match existing line length", "set_snap_equal_length"),
+            (
+                "snap_axis_alignment",
+                "Align endpoint X/Y with other endpoints",
+                "set_snap_axis_alignment",
+            ),
         ):
             action = self._snap_menu.addAction(label_text)
             action.setCheckable(True)

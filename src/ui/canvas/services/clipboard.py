@@ -71,7 +71,7 @@ class ClipboardService:
         wanted = set(result.created_ids)
         return [index for index, entity in enumerate(host._entities) if entity.id in wanted]
 
-    def paste(self, offset: float = 1.0) -> None:
+    def paste(self, offset: float = 0.0) -> None:
         if not self.records:
             return
         self._finish(self.paste_records(offset))
@@ -79,7 +79,7 @@ class ClipboardService:
     def duplicate(self) -> None:
         if self._host._sel:
             self.copy_selected()
-            self.paste()
+            self.paste(1.0)
 
     def duplicate_with_offset(self) -> None:
         host = self._host

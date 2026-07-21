@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 MAX_JSON_FILE_BYTES = 32 * 1024 * 1024
+# Workspaces can legitimately contain hundreds of thousands of generated
+# vertices. Keep the conservative default for settings/metadata while giving
+# explicitly identified workspace documents a practical, still-bounded limit.
+MAX_WORKSPACE_FILE_BYTES = 256 * 1024 * 1024
 
 
 def read_json_file(

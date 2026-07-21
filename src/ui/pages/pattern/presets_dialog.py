@@ -73,6 +73,7 @@ class PresetManagerDialog(QDialog):
             "Duplicate", self._duplicate, "Copy the selected preset under a new name"
         )
         self._delete_btn = self._make_button("Delete", self._delete, "Remove the selected preset")
+        self._delete_btn.setProperty("role", "danger")
         for btn in (self._rename_btn, self._duplicate_btn, self._delete_btn):
             sidebar.addWidget(btn)
         sidebar.addSpacing(12)
@@ -121,6 +122,7 @@ class PresetManagerDialog(QDialog):
         save_btn = buttons.button(QDialogButtonBox.StandardButton.Save)
         if save_btn is not None:
             save_btn.setText("Done")
+            save_btn.setProperty("role", "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)

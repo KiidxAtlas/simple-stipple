@@ -41,6 +41,7 @@ def _param_entry(
 ) -> QLineEdit:
     grid.addWidget(QLabel(label), row, 0)
     e = QLineEdit(default)
+    e.setAccessibleName(label)
     make_resettable_line_edit(e, default)
     e.setFixedWidth(width)
     grid.addWidget(e, row, 1)

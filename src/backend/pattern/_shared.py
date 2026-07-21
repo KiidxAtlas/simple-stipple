@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import logging
 import math
+from typing import Any
 
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import LineString, MultiPolygon, Polygon  # type: ignore[import-untyped]
+from shapely.geometry import (  # type: ignore[import-untyped]
+    GeometryCollection,
+    LineString,
+    MultiLineString,
+    MultiPolygon,
+    Polygon,
+)
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
@@ -253,11 +260,17 @@ def nested_polygon_region(polylines: list[list[tuple[float, float]]]):
             poly = Polygon(pl)
         except (TypeError, ValueError):
             continue
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        if poly.is_empty or poly.area <= 0:
-            continue
-        rings.append(poly)
+        repaired: Any = poly.buffer(0) if not poly.is_valid else poly
+        polygon_parts: list[Polygon]
+        if isinstance(repaired, Polygon):
+            polygon_parts = [repaired]
+        elif isinstance(repaired, MultiPolygon):
+            polygon_parts = list(repaired.geoms)
+        elif isinstance(repaired, GeometryCollection):
+            polygon_parts = [part for part in repaired.geoms if isinstance(part, Polygon)]
+        else:
+            polygon_parts = []
+        rings.extend(part for part in polygon_parts if not part.is_empty and part.area > 0)
 
     if not rings:
         return None
@@ -293,9 +306,49 @@ def nested_polygon_region(polylines: list[list[tuple[float, float]]]):
     if not solids:
         return None
 
-    solid_union = unary_union(solids)
-    if holes:
-        solid_union = solid_union.difference(unary_union(holes))
+    # Native integer clipping handles the expensive union/difference. Convert
+    # its non-overlapping result contours back to Shapely only at the boundary
+    # required by downstream line/polygon intersection APIs.
+    from src.backend.editing.clipper_engine import clipper_difference, clipper_union
+
+    solid_paths = clipper_union(
+        [[(float(x), float(y)) for x, y in poly.exterior.coords] for poly in solids]
+    )
+    result_paths = (
+        clipper_difference(
+            solid_paths,
+            [[(float(x), float(y)) for x, y in poly.exterior.coords] for poly in holes],
+        )
+        if holes
+        else solid_paths
+    )
+    result_rings = [Polygon(path) for path in result_paths if len(path) >= 4]
+    if not result_rings:
+        return None
+
+    result_tree = STRtree(result_rings)
+    result_depths = [0] * len(result_rings)
+    parents: list[list[int]] = [[] for _ in result_rings]
+    for i, polygon in enumerate(result_rings):
+        point = polygon.representative_point()
+        for candidate in result_tree.query(point):
+            j = int(candidate)
+            if i != j and result_rings[j].area > polygon.area and result_rings[j].contains(point):
+                result_depths[i] += 1
+                parents[i].append(j)
+
+    output_polygons: list[Polygon] = []
+    for i, polygon in enumerate(result_rings):
+        if result_depths[i] % 2:
+            continue
+        interior_paths = [
+            list(result_rings[j].exterior.coords)
+            for j in range(len(result_rings))
+            if result_depths[j] == result_depths[i] + 1 and i in parents[j]
+        ]
+        output_polygons.append(Polygon(polygon.exterior.coords, interior_paths))
+
+    solid_union = output_polygons[0] if len(output_polygons) == 1 else MultiPolygon(output_polygons)
 
     if solid_union.is_empty:
         return None
@@ -575,14 +628,13 @@ def apply_invert_fill(
         return result
 
     try:
-        pattern_union = unary_union(shapes)
-        gap_geom = outline_poly.difference(pattern_union)
-    except (ValueError, TypeError):
-        return polys
+        from src.backend.editing.clipper_engine import clipper_difference
 
-    result = []
-    _extract_all_rings(gap_geom, result)
-    return result
+        outline_rings: list[list[tuple[float, float]]] = []
+        _extract_all_rings(outline_poly, outline_rings)
+        return clipper_difference(outline_rings, polys)
+    except (RuntimeError, ValueError, TypeError):
+        return polys
 
 
 def apply_border_fade(
@@ -801,18 +853,26 @@ def apply_interlace(
                                         (float(point[0]), float(point[1]))
                                         for point in clipped.coords
                                     )
-                                elif clipped.geom_type == "MultiLineString":
+                                elif isinstance(clipped, MultiLineString):
                                     for part in clipped.geoms:
-                                        new_poly.extend(list(part.coords))
-                                elif clipped.geom_type == "GeometryCollection":
+                                        new_poly.extend(
+                                            (float(x), float(y)) for x, y in part.coords
+                                        )
+                                elif isinstance(clipped, GeometryCollection):
                                     for part in clipped.geoms:
                                         if part.geom_type == "LineString":
-                                            new_poly.extend(list(part.coords))
-                                        elif part.geom_type == "MultiLineString":
+                                            new_poly.extend(
+                                                (float(x), float(y)) for x, y in part.coords
+                                            )
+                                        elif isinstance(part, MultiLineString):
                                             for subpart in part.geoms:
-                                                new_poly.extend(list(subpart.coords))
-                    except Exception:
-                        new_poly.extend(seg)
+                                                new_poly.extend(
+                                                    (float(x), float(y)) for x, y in subpart.coords
+                                                )
+                    except Exception as exc:
+                        raise ValueError(
+                            "Pattern interlace clipping failed; no unclipped geometry was emitted."
+                        ) from exc
                 else:
                     new_poly.extend(seg)
 

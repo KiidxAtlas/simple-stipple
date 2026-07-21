@@ -243,12 +243,15 @@ def _build_dimension_tool() -> str:
     Dimension Tool
 </h2>
 
-<p>The Dimension tool (<kbd>Shift+M</kbd>, or the dimension button in the canvas corner) adds drafting-style dimension lines with a measured length label — for documenting a drawing, not for cutting.</p>
+<p>The Dimension tool (<kbd>Shift+M</kbd>, or the dimension button in the canvas corner) creates persistent CAD-style measurements. Driving dimensions reshape supported geometry when edited; reference dimensions report geometry without changing it.</p>
 <ul>
-    <li><strong>Click two points</strong> to set what's being measured, then <strong>click a third time</strong> to set how far the dimension line sits from the measured segment.</li>
-    <li>Dimensions snap to vertices/edges/guides while placing, exactly like the Draw and Measure tools.</li>
+    <li><strong>Select segments:</strong> the same segment measures length; intersecting segments measure angle; parallel segments measure spacing; separate segments measure their shortest distance. Circles produce diameter dimensions. Point-to-point dimensions remain available for exact vertex measurements.</li>
+    <li><strong>Edit a value:</strong> double-click a supported driving dimension and enter a value or expression. Its fixed anchor stays in place while the affected edge or angle changes. If other dimensions cannot all be satisfied, the conflicting target is marked visibly instead of displaying a false value.</li>
+    <li><strong>Place the label:</strong> move the pointer and click to choose the dimension-line offset. Drag a placed dimension later to adjust that offset.</li>
+    <li>Dimensions snap to vertices/edges/guides while placing, exactly like the Draw and Scale tools.</li>
     <li><strong>Deleting one:</strong> select it (click its line) and press Delete or Backspace.</li>
-    <li>Dimensions are saved and reloaded with your workspace, but — unlike every other shape on the canvas — they are <strong>never undo-tracked and never exported to DXF</strong>, by design. They behave like ruler guides: reference-only, so a stray dimension line can never accidentally get cut or engraved.</li>
+    <li>Dimensions are saved with the workspace and exported as DXF dimension entities. Linear dimensions use <kbd>Shift+M</kbd>; diameter dimensions can be placed directly on circles, and Angular Dimension is available from the command palette.</li>
+    <li>Right-click a dimension to change display precision, toggle driving/reference behavior where supported, or delete it. Press <kbd>Esc</kbd> to leave Dimension mode.</li>
 </ul>
 """
 
@@ -657,7 +660,8 @@ def _build_canvas_commands() -> str:
     <li><strong>Quick radial menu:</strong> Press Q to open — customizable in Settings, see Draft Page → Quick Radial Menu</li>
     <li><strong>Grid:</strong> Toggle with G, snap to grid with Shift+G</li>
     <li><strong>Rulers:</strong> Toggle with Ctrl+R. Drag from rulers to create guides.</li>
-    <li><strong>Measure tool:</strong> Toggle with M (transient). Dimension tool: Shift+M (persistent, saved with the workspace).</li>
+    <li><strong>Scale by reference:</strong> Press M, pick the fixed base point and a second reference point, then enter the real target distance. The explicit selection is scaled; with no selection, all visible unlocked geometry is used. Expressions and the active unit are supported. Shift constrains the reference angle, Alt bypasses snapping, right-click steps back, and Undo reverses the result.</li>
+    <li><strong>Smart dimensions:</strong> Press Shift+M and hover an edge to highlight its exact segment. Selecting the same segment twice measures its length; two intersecting segments create an angle; two parallel segments create perpendicular spacing; and two separate segments create their shortest distance. Precise vertex-to-vertex dimensions and circle diameters remain available. Free point dimensions use two snapped points plus a third click for label offset. Drag a placed linear dimension to change its offset, double-click it to edit precision, or right-click for precision and delete actions. Dimensions persist with the workspace.</li>
     <li><strong>Fit view:</strong> Double-click empty space or press F</li>
     <li><strong>Snap engine:</strong> Automatically snaps to vertices, edges, and guides</li>
     <li><strong>Rubber band selection:</strong> Plain drag = window select (fully enclosed), Shift+drag = crossing select (touched)</li>
@@ -691,7 +695,7 @@ def _build_shortcuts() -> str:
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>F</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Fit view to all content</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>G</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle grid visibility</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>P</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Switch to Pen tool (bezier curves)</td></tr>
-    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>M</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle Measure tool (transient)</td></tr>
+    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>M</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle Scale-by-reference tool</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Shift+M</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle Dimension tool (persistent annotation)</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>K</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle Trim tool</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>L</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle Extend tool</td></tr>
@@ -792,7 +796,7 @@ def _build_troubleshooting() -> str:
     <li><strong>Save custom presets:</strong> Once you find a combination you love, save it as a preset for one-click recall.</li>
     <li><strong>Use exclusions for lettering:</strong> Mark text outlines as exclusion cutouts to have patterns flow around them.</li>
     <li><strong>Command palette (⌘K):</strong> Search for any command by name, page, or shortcut — the fastest way to navigate.</li>
-    <li><strong>Workspace auto-save:</strong> The app saves your workspace every 60 seconds. If the app crashes, a recovery prompt appears on restart.</li>
+    <li><strong>Workspace auto-save:</strong> The app saves named workspaces every 60 seconds and keeps rolling crash-recovery snapshots for unsaved work. Use <strong>File → Recover Workspace…</strong> to restore or permanently delete snapshots; <strong>File → Saved Workspaces…</strong> opens the normal workspace library.</li>
     <li><strong>Send between pages:</strong> Use the "Send to Pattern" button on Draft, or "Send to Draft" / "Send to Pattern" on Trace pages to move geometry between workflows.</li>
 </ul>
 

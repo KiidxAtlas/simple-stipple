@@ -95,3 +95,14 @@ def test_reload_button_forces_a_fresh_retrace_even_if_running_is_stuck(qapp, tmp
     assert page._running is True
     assert page._trace_pending is False
     page.shutdown()
+
+
+def test_trace_shutdown_suppresses_late_worker_delivery(qapp):
+    page = TracePage(None, None)
+    received: list[object] = []
+    page._trace_done.connect(received.append)
+
+    page.shutdown()
+    page._trace_done.emit((999, None, [], 1, 1, 1.0))
+
+    assert received == []

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import platform
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,7 @@ from src.ui.components import (
     set_status_label,
     sidebar_panel,
     surface_frame,
+    workflow_strip,
 )
 from src.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
 from src.ui.canvas.canvas_runtime import (
@@ -108,8 +110,12 @@ from src.ui.pages.pattern.workers import CancellableTaskState
 from src.backend.dxf.io import (
     load_dxf_polylines_with_report,
     summarize_dxf_import_report,
+    write_polylines_dxf,
 )
+from src.backend.dxf.fvi import read_fvi
+from src.backend.dxf.svg_dxf import svg_to_dxf
 from src.core.settings import save_settings
+from src.core.paths import custom_tiles_dir
 from src.ui.util import (
     KIND_DXF,
     pick_open_file,
@@ -140,7 +146,10 @@ class PatternPage(BasePage):
         self._generate_task = CancellableTaskState()
         self._preview_thread: threading.Thread | None = None
         self._generate_thread: threading.Thread | None = None
+        self._shutting_down = False
         self._last_out_path: str | None = None
+        self._zones_section: CollapsibleSection
+        self._zone_output_combo: QComboBox
         self._presets: dict[str, dict] = dict(self._settings.get("pattern_presets", {}))
         # Seed factory starter presets once on first run; respects deletions.
         seeded = ensure_builtins_seeded(self._settings, self._presets)
@@ -171,6 +180,7 @@ class PatternPage(BasePage):
                     continue
                 if normalized:
                     self._tile_motifs[name] = normalized
+        self._load_custom_tiles_from_disk()
 
         self._showing_preview: bool = False
         self._preview_user_opt_out: bool = False
@@ -206,6 +216,10 @@ class PatternPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
+        self._workflow_strip = workflow_strip(
+            ("Choose outline", "Define zones", "Choose treatment", "Preview", "Export")
+        )
+        root.addWidget(self._workflow_strip)
 
         left_w = QWidget()
         left = QVBoxLayout(left_w)
@@ -223,7 +237,7 @@ class PatternPage(BasePage):
             right_w,
             sizes=(320, 950),
         )
-        root.addWidget(self._splitter)
+        root.addWidget(self._splitter, stretch=1)
 
         self._build_left(left)
         self._build_right(right)
@@ -239,7 +253,7 @@ class PatternPage(BasePage):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith(".dxf"):
+                if url.toLocalFile().lower().endswith((".dxf", ".fvi", ".svg")):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -247,9 +261,9 @@ class PatternPage(BasePage):
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".dxf"):
+            if path.lower().endswith((".dxf", ".fvi", ".svg")):
                 self._dxf_edit.setText(path)
-                self._load_dxf(path)
+                self._load_outline_file(path)
                 event.acceptProposedAction()
                 return
         event.ignore()
@@ -764,6 +778,10 @@ class PatternPage(BasePage):
         Threads are daemon=True so the process can still exit even if a join
         times out — this is a best-effort head start, not a hard guarantee.
         """
+        self._shutting_down = True
+        self._preview_timer.stop()
+        self._preview_revision += 1
+        self._generation_revision += 1
         self._preview_task.cancel()
         self._generate_task.cancel()
         for thread in (self._preview_thread, self._generate_thread):
@@ -954,26 +972,27 @@ class PatternPage(BasePage):
         shape_content, shape_layout = collapsible_content_widget(spacing=8)
         file_row = QHBoxLayout()
         self._dxf_edit = QLineEdit()
-        self._dxf_edit.setPlaceholderText("Select .dxf…")
-        self._dxf_edit.setToolTip("Path to a DXF outline file (drag-and-drop)")
+        self._dxf_edit.setPlaceholderText("Select DXF, FVI, or SVG…")
+        self._dxf_edit.setToolTip("Path to a DXF, FVI, or SVG outline (drag-and-drop supported)")
+        self._dxf_edit.editingFinished.connect(self._reload_dxf)
         file_row.addWidget(self._dxf_edit, stretch=1)
         self._recent_btn = RecentFilesButton(
             self._settings,
             KIND_DXF,
-            empty_message="No recent DXF files.",
+            empty_message="No recent vector files.",
         )
-        self._recent_btn.setToolTip("Pick from recently opened DXF files")
+        self._recent_btn.setToolTip("Pick from recently opened vector files")
         self._recent_btn.fileSelected.connect(self._quick_load)
         file_row.addWidget(self._recent_btn)
         browse_btn = QPushButton("Browse")
         browse_btn.setFixedWidth(72)
-        browse_btn.setToolTip("Browse for a DXF outline file on disk")
+        browse_btn.setToolTip("Browse for a DXF, FVI, or SVG outline")
         browse_btn.clicked.connect(self._browse_dxf)
         file_row.addWidget(browse_btn)
         _reload_btn = QToolButton()
         _reload_btn.setText("↺")
         _reload_btn.setFixedWidth(28)
-        _reload_btn.setToolTip("Re-read the current DXF file from disk  (⌘R)")
+        _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
         _reload_btn.clicked.connect(self._reload_dxf)
         file_row.addWidget(_reload_btn)
         shape_layout.addLayout(file_row)
@@ -1095,6 +1114,10 @@ class PatternPage(BasePage):
         self._delete_tile_btn.setToolTip("Delete the selected custom pattern")
         self._delete_tile_btn.clicked.connect(self._delete_tile_motif)
         tile_actions.addWidget(self._delete_tile_btn)
+        open_tiles_btn = QPushButton("Open Tiles Folder")
+        open_tiles_btn.setToolTip("Open the configured DXF custom-tile library")
+        open_tiles_btn.clicked.connect(self._open_custom_tiles_folder)
+        tile_actions.addWidget(open_tiles_btn)
         self._save_tile_btn.hide()
         self._delete_tile_btn.hide()
         pattern_layout.addLayout(tile_actions)
@@ -1438,7 +1461,7 @@ class PatternPage(BasePage):
         )
         self._optimize_paths_cb.setChecked(True)
         card_layout.addWidget(self._optimize_paths_cb)
-        self._summary_chip = QLabel("")
+        self._summary_chip = QLabel("Preflight · Load an outline to begin")
         self._summary_chip.setProperty("role", "summary-banner")
         self._summary_chip.setProperty("tone", "neutral")
         self._summary_chip.setWordWrap(True)
@@ -1446,7 +1469,7 @@ class PatternPage(BasePage):
         card_layout.addWidget(self._summary_chip)
         layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
         self._gen_btn = primary_button(
-            "Export Pattern + Fill DXF",
+            "Export DXF",
             height=38,
             tooltip="Generate the pattern fill and save as a DXF  (⌘E)",
         )
@@ -1514,12 +1537,30 @@ class PatternPage(BasePage):
         self._canvas._show_flash(f"Custom tile: {len(normalized)} shape(s)", 1200)
 
     def _refresh_tile_motif_combo(self, current: str | None = None) -> None:
+        self._load_custom_tiles_from_disk()
         selected = f"Custom · {current}" if current else None
         self._refresh_pattern_choices(current=selected or self._pattern_combo.currentText())
+
+    def _load_custom_tiles_from_disk(self) -> None:
+        """Discover user-managed DXF tiles without requiring an app restart."""
+        folder = custom_tiles_dir(self._settings.get("custom_tiles_dir"))
+        for path in sorted(folder.glob("*.dxf"), key=lambda item: item.name.lower()):
+            try:
+                polys, _report = load_dxf_polylines_with_report(str(path))
+            except (OSError, ValueError, RuntimeError):
+                LOGGER.warning("Skipping unreadable custom tile: %s", path)
+                continue
+            if polys:
+                self._tile_motifs[path.stem] = [list(poly) for poly in polys]
 
     def _persist_tile_motifs(self) -> None:
         self._settings["custom_tile_motifs"] = self._tile_motifs
         save_settings(self._settings)
+
+    def _open_custom_tiles_folder(self) -> None:
+        folder = custom_tiles_dir(self._settings.get("custom_tiles_dir"))
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _save_tile_motif(self) -> None:
         if self._pattern_combo.currentText() != "Custom Tile":
@@ -1532,10 +1573,19 @@ class PatternPage(BasePage):
         if not accepted or not name:
             return
         self._tile_motifs[name] = [list(poly) for poly in self._custom_tile_polys]
+        safe_name = "".join(
+            character for character in name if character not in '<>:"/\\|?*'
+        ).strip()
+        if not safe_name:
+            self._set_status("Choose a name that can be used as a file name.", STATUS_ERR)
+            return
+        tile_path = custom_tiles_dir(self._settings.get("custom_tiles_dir")) / f"{safe_name}.dxf"
+        tile_path.parent.mkdir(parents=True, exist_ok=True)
+        write_polylines_dxf(self._custom_tile_polys, str(tile_path), close=False)
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo(name)
         self._pattern_combo.setCurrentText(f"Custom · {name}")
-        self._set_status(f"Saved custom pattern: {name}", STATUS_OK)
+        self._set_status(f"Saved custom tile: {tile_path.name} · Custom Tiles", STATUS_OK)
 
     def _load_tile_motif(self) -> None:
         name = self._custom_pattern_name(self._pattern_combo.currentText()) or ""
@@ -1551,11 +1601,35 @@ class PatternPage(BasePage):
         name = self._custom_pattern_name(self._pattern_combo.currentText()) or ""
         if not name or name not in self._tile_motifs:
             return
+        answer = QMessageBox.question(
+            self,
+            "Delete custom pattern?",
+            f'Delete the custom pattern "{name}"? This cannot be undone.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         del self._tile_motifs[name]
+        safe_name = "".join(
+            character for character in name if character not in '<>:"/\\|?*'
+        ).strip()
+        (custom_tiles_dir(self._settings.get("custom_tiles_dir")) / f"{safe_name}.dxf").unlink(
+            missing_ok=True
+        )
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo()
         self._pattern_combo.setCurrentText("— None —")
         self._set_status(f"Deleted custom pattern: {name}")
+
+    def apply_settings(self, settings: dict) -> None:
+        """Apply folder changes immediately without rebuilding the page."""
+        old_folder = custom_tiles_dir(self._settings.get("custom_tiles_dir"))
+        self._settings = settings
+        new_folder = custom_tiles_dir(settings.get("custom_tiles_dir"))
+        if old_folder != new_folder and hasattr(self, "_pattern_combo"):
+            self._refresh_tile_motif_combo()
+            self._set_status(f"Custom tile library: {new_folder}", STATUS_OK)
 
     def _refresh_section_subtitles(self) -> None:
         if not getattr(self, "_pattern_section", None):
@@ -1665,22 +1739,27 @@ class PatternPage(BasePage):
         modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
         QShortcut(QKeySequence(f"{modifier}+E"), self, self._generate)
         QShortcut(QKeySequence(f"{modifier}+R"), self, self._reload_dxf)
-        QShortcut(QKeySequence(f"{modifier}+K"), self, self._open_command_palette)
         QShortcut(QKeySequence(f"{modifier}+P"), self, self._apply_selected_preset)
 
-    def _open_command_palette(self) -> None:
-        from src.ui.widgets.dialogs.command_palette import CommandPaletteDialog
+    def command_palette_commands(self) -> list[dict]:
+        """Commands contributed to the application's single global palette."""
+        modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
+
+        def shortcut(key: str) -> str:
+            return QKeySequence(f"{modifier}+{key}").toString(
+                QKeySequence.SequenceFormat.NativeText
+            )
 
         commands: list[dict] = [
             {
                 "title": "Export DXF",
-                "shortcut": "⌘E",
+                "shortcut": shortcut("E"),
                 "subtitle": "Generate & save the current pattern + fill",
                 "run": self._generate,
             },
             {
                 "title": "Reload source DXF",
-                "shortcut": "⌘R",
+                "shortcut": shortcut("R"),
                 "subtitle": "Re-read the outline file from disk",
                 "run": self._reload_dxf,
             },
@@ -1696,7 +1775,7 @@ class PatternPage(BasePage):
             },
             {
                 "title": "Apply selected preset",
-                "shortcut": "⌘P",
+                "shortcut": shortcut("P"),
                 "subtitle": "Load the highlighted preset parameters",
                 "run": self._apply_selected_preset,
             },
@@ -1724,8 +1803,7 @@ class PatternPage(BasePage):
                 ),
             },
         ]
-        dlg = CommandPaletteDialog(commands, parent=self)
-        dlg.exec()
+        return commands
 
     def _on_scale_w_changed(self, *_) -> None:
         if self._updating_dims or not self._ar_lock_btn.isChecked() or self._orig_w <= 0:
@@ -1878,6 +1956,15 @@ class PatternPage(BasePage):
         name = self._preset_combo.currentText().strip()
         if not name or name not in self._presets:
             return
+        answer = QMessageBox.question(
+            self,
+            "Delete preset?",
+            f'Delete the preset "{name}"? This cannot be undone.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
         self._presets.pop(name, None)
         self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
         save_settings(self._settings)
@@ -1912,13 +1999,38 @@ class PatternPage(BasePage):
             self,
             self._settings,
             "pattern_outline_dxf",
-            "Select outline DXF",
-            "DXF files (*.dxf *.Dxf *.DXF);;All files (*)",
+            "Select outline vector file",
+            "Vector files (*.dxf *.DXF *.fvi *.FVI *.svg *.SVG);;"
+            "DXF files (*.dxf *.DXF);;FVI files (*.fvi *.FVI);;"
+            "SVG files (*.svg *.SVG);;All files (*)",
             fallback_dir=self._settings.get("outline_dxf_dir", ""),
         )
         if path:
             self._dxf_edit.setText(path)
+            self._load_outline_file(path)
+
+    def _load_outline_file(self, path: str) -> None:
+        suffix = Path(path).suffix.lower()
+        if suffix == ".dxf":
             self._load_dxf(path)
+            return
+        try:
+            if suffix == ".fvi":
+                document = read_fvi(path)
+                polys = [list(poly) for poly in document.paths]
+            elif suffix == ".svg":
+                with tempfile.TemporaryDirectory(prefix="simple-stipple-pattern-svg-") as folder:
+                    converted = Path(folder) / "outline.dxf"
+                    svg_to_dxf(path, converted)
+                    polys, _report = load_dxf_polylines_with_report(str(converted))
+            else:
+                raise ValueError("Choose a DXF, FVI, or SVG vector file.")
+            if not polys:
+                raise ValueError(f"No supported outline geometry was found in {Path(path).name}.")
+            self.load_outline_polys(polys, source_label=Path(path).name)
+            self._dxf_edit.setText(path)
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Import Failed", str(exc))
 
     def load_outline_polys(
         self,
@@ -1981,7 +2093,7 @@ class PatternPage(BasePage):
     def _reload_dxf(self) -> None:
         path = self._dxf_edit.text().strip()
         if path:
-            self._load_dxf(path)
+            self._load_outline_file(path)
 
     def _load_dxf(self, path: str) -> None:
         self._preview_user_opt_out = False
@@ -2150,35 +2262,42 @@ class PatternPage(BasePage):
         values = params or {}
         row = 0
         for spec in PARAM_SPECS.get(pattern, []):
+            field: QWidget
             key = spec.param_key or spec.attr[1:]
             if spec.kind == "checkbox":
-                field = QCheckBox(spec.label)
-                field.setChecked(bool(values.get(key, spec.default.lower() == "true")))
-                self._zone_params_grid.addWidget(field, row, 0, 1, 2)
+                checkbox = QCheckBox(spec.label)
+                checkbox.setChecked(bool(values.get(key, spec.default.lower() == "true")))
+                self._zone_params_grid.addWidget(checkbox, row, 0, 1, 2)
+                field = checkbox
             elif spec.kind == "combobox":
-                field = QComboBox()
-                field.addItems(spec.items)
-                field.setCurrentText(str(values.get(key, spec.default)))
+                combo = QComboBox()
+                combo.addItems(spec.items)
+                combo.setCurrentText(str(values.get(key, spec.default)))
                 self._zone_params_grid.addWidget(QLabel(spec.label), row, 0)
-                self._zone_params_grid.addWidget(field, row, 1)
+                self._zone_params_grid.addWidget(combo, row, 1)
+                field = combo
             else:
-                field = QLineEdit(str(values.get(key, spec.default)))
+                line_edit = QLineEdit(str(values.get(key, spec.default)))
                 if spec.kind == "int":
-                    field.setValidator(
+                    line_edit.setValidator(
                         QIntValidator(
                             int(spec.minimum or -2_147_483_648),
                             int(spec.maximum or 2_147_483_647),
-                            field,
+                            line_edit,
                         )
                     )
                 else:
-                    field.setValidator(
+                    line_edit.setValidator(
                         QDoubleValidator(
-                            float(spec.minimum or -1e12), float(spec.maximum or 1e12), 6, field
+                            float(spec.minimum or -1e12),
+                            float(spec.maximum or 1e12),
+                            6,
+                            line_edit,
                         )
                     )
                 self._zone_params_grid.addWidget(QLabel(spec.label), row, 0)
-                self._zone_params_grid.addWidget(field, row, 1)
+                self._zone_params_grid.addWidget(line_edit, row, 1)
+                field = line_edit
             field.setToolTip(spec.tooltip)
             if isinstance(field, QLineEdit):
                 field.textChanged.connect(self._live_update_selected_zone)
@@ -2659,9 +2778,15 @@ class PatternPage(BasePage):
     # ── Presets ───────────────────────────────────────────────────────────────
 
     def _schedule_preview(self, *_) -> None:
+        if self._shutting_down:
+            return
         self._refresh_section_subtitles()
         if self._suspend_state:
             return
+        # Parameter-only work is still workspace state. Emit before the
+        # geometry guards so configuring a future pattern can be saved,
+        # recovered, and protected by the close confirmation.
+        self._emit_state_changed()
         fill_active = bool(self._collect_fill_options())
         if not self._zones and not fill_active and self._current_pattern_key() == "— None —":
             return
@@ -2672,9 +2797,20 @@ class PatternPage(BasePage):
         if self._preview_task.running:
             self._preview_task.pending = True
         self._preview_timer.start(PREVIEW_DEBOUNCE_MS)
-        self._emit_state_changed()
+
+    def has_workspace_content(self) -> bool:
+        return bool(
+            self._edit_polys
+            or self._zones
+            or self._dxf_edit.text().strip()
+            or self._current_pattern_key() != "— None —"
+            or self._custom_tile_polys
+            or self._pattern_cell_cutouts
+        )
 
     def _start_preview_thread(self) -> None:
+        if self._shutting_down:
+            return
         from src.ui.pages.pattern.workers import compute_preview, compute_preview_zones
 
         can_start, cancel_event = self._preview_task.request_start()
@@ -2772,6 +2908,8 @@ class PatternPage(BasePage):
             self._preview_thread.start()
 
     def _handle_preview_done(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         if len(payload) == 4:
             preview_token, display_polys, count, categories = payload
         else:
@@ -2853,6 +2991,8 @@ class PatternPage(BasePage):
         return not getattr(self._canvas, "sel_count", 0)
 
     def _handle_preview_error(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         from src.ui.pages.pattern.workers import CANCELLED_MESSAGE
 
         preview_token, msg = payload
@@ -2867,6 +3007,8 @@ class PatternPage(BasePage):
                 self._preview_timer.start(0)
             return
         self._set_preview_status(f"Preview error: {msg}", "error")
+        if self._showing_preview:
+            self._canvas.setToolTip("Preview refresh failed; showing the last completed result.")
         self._update_preview_controls()
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
@@ -2934,8 +3076,14 @@ class PatternPage(BasePage):
     def _update_preview_controls(self) -> None:
         has_preview = bool(self._preview_polys_cache)
         is_computing = self._preview_task.running
+        if has_preview:
+            self._workflow_strip.set_current_step(2)
+        elif self._edit_polys or self._zones:
+            self._workflow_strip.set_current_step(1)
+        else:
+            self._workflow_strip.set_current_step(0)
         if self._showing_preview:
-            self._preview_btn.setText("Show Preview")
+            self._preview_btn.setText("Edit Outline")
             self._preview_btn.setEnabled(True)
             self._preview_btn.setToolTip(
                 "Checked: showing preview. Click to return to outline editing"
@@ -2970,6 +3118,34 @@ class PatternPage(BasePage):
             else:
                 export_tip = "Load an outline and choose a pattern before exporting"
             self._gen_btn.setToolTip(export_tip)
+            open_outlines = sum(
+                1 for poly in self._edit_polys if len(poly) > 1 and poly[0] != poly[-1]
+            )
+            if not self._edit_polys:
+                preflight = "Preflight · Load an outline to begin"
+                preflight_tone = "neutral"
+            elif self._preview_task.running:
+                preflight = "Preflight · Preview is still computing"
+                preflight_tone = "neutral"
+            elif open_outlines and not self._export_open_paths_cb.isChecked():
+                preflight = (
+                    f"Preflight · {open_outlines} open outline"
+                    f"{'s' if open_outlines != 1 else ''} require attention"
+                )
+                preflight_tone = "warn"
+            elif self._preview_polys_cache:
+                preflight = (
+                    f"Ready · {len(self._preview_polys_cache)} output paths · "
+                    f"{len(self._zones) or 1} zone{'s' if len(self._zones) != 1 else ''}"
+                )
+                preflight_tone = "success"
+            else:
+                preflight = "Preflight · Update the preview before export"
+                preflight_tone = "warn"
+            self._summary_chip.setText(preflight)
+            self._summary_chip.setProperty("tone", preflight_tone)
+            self._summary_chip.style().unpolish(self._summary_chip)
+            self._summary_chip.style().polish(self._summary_chip)
         # Keep the core Pattern controls discoverable in the empty state.
         # They serve as editable defaults before an outline or zone exists.
         if hasattr(self, "_zones_section"):
@@ -3118,6 +3294,8 @@ class PatternPage(BasePage):
             self._generate_thread.start()
 
     def _handle_gen_done(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         generation_token, count, name, out_path, polys = payload
         self._generate_task.finish_run()
         if generation_token != self._generation_revision:
@@ -3125,9 +3303,10 @@ class PatternPage(BasePage):
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(100)
-        self._gen_btn.setEnabled(True)
+        self._update_preview_controls()
         self._cancel_generate_btn.setVisible(False)
         self._set_status(f"Done — {count} shapes → {name}", STATUS_OK)
+        self._workflow_strip.set_current_step(3)
         self._last_out_path = out_path
         self._reveal_btn.setVisible(True)
         self._preview_polys_cache = list(polys)
@@ -3144,6 +3323,8 @@ class PatternPage(BasePage):
         self._refresh_canvas_panels()
 
     def _handle_gen_error(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         from src.ui.pages.pattern.workers import CANCELLED_MESSAGE
 
         generation_token, msg = payload

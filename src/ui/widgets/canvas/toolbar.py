@@ -5,7 +5,7 @@ from __future__ import annotations
 import platform as _platform
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 # Platform modifier for human-readable shortcut hints
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
@@ -77,12 +77,22 @@ def canvas_toolbar(
             btn.clicked.connect(slot)
             shell_layout.addWidget(btn)
 
+    guidance_label = QLabel("Select geometry · Esc clears selection")
+    guidance_label.setProperty("role", "toolbar-guidance")
+    guidance_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    guidance_label.setToolTip("Current tool and next expected action")
+    guidance_label.setMinimumWidth(0)
+    guidance_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    shell_layout.addWidget(guidance_label, stretch=1)
+
     selection_label = QLabel("")
     selection_label.setProperty("role", "toolbar-selection")
     selection_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-    shell_layout.addWidget(selection_label, stretch=1)
+    selection_label.setMinimumWidth(0)
+    selection_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    shell_layout.addWidget(selection_label)
 
-    return shell, mode_buttons, selection_label
+    return shell, mode_buttons, selection_label, guidance_label
 
 
 __all__ = ["canvas_toolbar"]

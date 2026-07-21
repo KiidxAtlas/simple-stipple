@@ -38,9 +38,11 @@ def build_param_widget(
     row = 0
 
     for spec in PARAM_SPECS.get(pattern_name, []):
+        field: QWidget
         if spec.kind in {"float", "int"}:
             grid.addWidget(QLabel(spec.label), row, 0)
             field = _numeric_field(spec.default)
+            field.setAccessibleName(spec.label)
             if spec.kind == "int":
                 field.setValidator(
                     QIntValidator(
@@ -64,6 +66,7 @@ def build_param_widget(
             # The page's existing 100 ms preview timer performs the debounce.
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setObjectName(f"{spec.attr.removeprefix('_')}_slider")
+            slider.setAccessibleName(f"{spec.label} slider")
             slider.setRange(0, 1000)
             default = float(spec.default)
             low = float(spec.minimum if spec.minimum is not None else min(-360.0, default))
@@ -103,17 +106,20 @@ def build_param_widget(
             grid.addWidget(slider, row, 2)
             setattr(page, f"{spec.attr}_slider", slider)
         elif spec.kind == "checkbox":
-            field = QCheckBox(spec.label)
-            field.stateChanged.connect(schedule_preview)
-            grid.addWidget(field, row, 0, 1, 2)
+            checkbox = QCheckBox(spec.label)
+            checkbox.stateChanged.connect(schedule_preview)
+            grid.addWidget(checkbox, row, 0, 1, 2)
+            field = checkbox
         else:
             grid.addWidget(QLabel(spec.label), row, 0)
-            field = QComboBox()
-            field.setFixedWidth(120)
-            field.addItems(spec.items)
-            field.setCurrentText(spec.default)
-            field.currentTextChanged.connect(schedule_preview)
-            grid.addWidget(field, row, 1)
+            combo = QComboBox()
+            combo.setAccessibleName(spec.label)
+            combo.setFixedWidth(120)
+            combo.addItems(spec.items)
+            combo.setCurrentText(spec.default)
+            combo.currentTextChanged.connect(schedule_preview)
+            grid.addWidget(combo, row, 1)
+            field = combo
 
         field.setToolTip(spec.tooltip)
         setattr(page, spec.attr, field)

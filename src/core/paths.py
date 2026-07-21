@@ -49,4 +49,32 @@ def user_cache_dir() -> Path:
     return base
 
 
-__all__ = ["user_cache_dir", "user_data_dir", "user_log_dir", "user_runtime_dir"]
+def saved_workspaces_dir() -> Path:
+    """Return the user-visible folder used by the workspace library."""
+    documents = Path.home() / "Documents"
+    base = documents / "Simple Stipple Saves"
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def project_root() -> Path:
+    """Return the source checkout/application root."""
+    return Path(__file__).resolve().parents[2]
+
+
+def custom_tiles_dir(configured: str | os.PathLike[str] | None = None) -> Path:
+    """Return the configured tile library, defaulting to ``<project>/tiles``."""
+    if configured and str(configured).strip():
+        return Path(configured).expanduser().resolve()
+    return project_root() / "tiles"
+
+
+__all__ = [
+    "custom_tiles_dir",
+    "project_root",
+    "saved_workspaces_dir",
+    "user_cache_dir",
+    "user_data_dir",
+    "user_log_dir",
+    "user_runtime_dir",
+]

@@ -238,8 +238,15 @@ class MenuController:
         layout.addWidget(sep)
 
         # Workspace name
-        self._app._workspace_title_label = QLabel()
+        self._app._workspace_title_label = QPushButton()
         self._app._workspace_title_label.setProperty("role", "shell-meta")
+        self._app._workspace_title_label.setToolTip(
+            "Open saved workspaces, recent files, and recovery snapshots"
+        )
+        self._app._workspace_title_label.setAccessibleName("Current workspace")
+        self._app._workspace_title_label.clicked.connect(
+            self._app._open_saved_workspaces
+        )
         layout.addWidget(self._app._workspace_title_label)
 
         # Status chip
@@ -253,6 +260,7 @@ class MenuController:
         for text, slot, role in [
             ("New", self._app._new_workspace, None),
             ("Open", self._app._open_workspace, None),
+            ("Workspaces", self._app._open_saved_workspaces, None),
             ("Save", self._app._save_workspace, "primary"),
         ]:
             btn = QPushButton(text)
@@ -458,7 +466,7 @@ class CommandController:
             ),
             CommandSpec(
                 "canvas.measure",
-                "Canvas: Toggle Measure",
+                "Canvas: Toggle Scale",
                 "canvas measure",
                 self._invoke_canvas_measure,
             ),
@@ -573,8 +581,8 @@ class CommandController:
             self._app._update_checker._configure_auto_fetch_timer()
 
     def _build_command_palette_commands(self) -> list[dict[str, object]]:
-        """Return command-palette entries derived from _build_commands()."""
-        return [
+        """Return every shell and canvas command from their live registries."""
+        entries: list[dict[str, object]] = [
             {
                 "id": spec.action_id,
                 "title": spec.title,
@@ -584,6 +592,36 @@ class CommandController:
             }
             for spec in self._build_commands()
         ]
+        represented_bindings = {spec.action_id for spec in self._build_commands()}
+        for command in canvas_commands.COMMANDS:
+            if command.hidden or command.keybinding_id in represented_bindings:
+                continue
+            category = command.category or "Canvas"
+            entries.append(
+                {
+                    "id": command.id,
+                    "title": f"{category}: {command.label}",
+                    # Read the effective registry shortcut, which reflects
+                    # user overrides and platform-native modifier labels.
+                    "shortcut": canvas_commands.native_shortcut(command.id),
+                    "keywords": f"canvas {category} {command.id.replace('.', ' ')}",
+                    "run": lambda command_id=command.id: self._run_canvas_command(command_id),
+                }
+            )
+        active_page = self._app._tabs.currentWidget()
+        page_commands = getattr(active_page, "command_palette_commands", None)
+        if callable(page_commands):
+            contributed = page_commands()
+            if not isinstance(contributed, list):
+                contributed = []
+            for entry in contributed:
+                if not isinstance(entry, dict) or not callable(entry.get("run")):
+                    continue
+                item = dict(entry)
+                title = str(item.get("title", "Command"))
+                item["title"] = title if ":" in title else f"Page: {title}"
+                entries.append(item)
+        return entries
 
     def _open_update_check(self) -> None:
         """Open the update check dialog."""

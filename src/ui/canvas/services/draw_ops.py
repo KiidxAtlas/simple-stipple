@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation
 
-from src.backend.cad.constraints import GeometricConstraint, solve_constraints
+from src.backend.cad.constraints import ConstraintKind, GeometricConstraint, solve_constraints
 from src.backend.cad.geometry import (
     build_circle_poly,
     build_ellipse_poly,
@@ -274,6 +274,18 @@ class DrawOpsService:
         self._host._draw_shape_cursor_w = None
 
         if len(poly) >= 2:
+            if self._host._draw_split_enabled and self._host._is_poly_closed(poly):
+                before = self._host._canvas_service.begin_preview()
+                carved, count = self._host._carve_geometry_with_shape(poly)
+                if carved:
+                    self._host._document.selection = set(self._host._last_split_result_indices)
+                    self._host._canvas_service.commit_preview(before)
+                    self._host._notify()
+                    self._host._fire_poly_change()
+                    self._host._show_flash(f"Carved {count} region(s)", 1000)
+                    self._host._refresh_draw_sidebar_state()
+                    self._host._redraw()
+                    return True
             self._host._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
             self._host._show_flash(f"{self._host._draw_primitive.title()} created", 800)
             self._host._refresh_draw_sidebar_state()
@@ -436,9 +448,12 @@ class ConstructionService:
             return 0
         before = self._host._canvas_service.begin_preview()
         additions: list[GeometricConstraint] = []
+        constraint_kind = cast(ConstraintKind, kind)
         if kind in {"horizontal", "vertical"}:
             additions = [
-                GeometricConstraint(kind=kind, entity_ids=(self._host._entities[index].id,))
+                GeometricConstraint(
+                    kind=constraint_kind, entity_ids=(self._host._entities[index].id,)
+                )
                 for index in line_indices
             ]
         elif kind == "fixed":
@@ -467,7 +482,7 @@ class ConstructionService:
                 parameters = {"first_endpoint": choice[1], "second_endpoint": choice[2]}
             additions = [
                 GeometricConstraint(
-                    kind=kind,
+                    kind=constraint_kind,
                     entity_ids=(first.id, second.id),
                     parameters=parameters,
                 )

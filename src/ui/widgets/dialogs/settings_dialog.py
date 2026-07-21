@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.core.paths import custom_tiles_dir
 from src.core.settings import (
+    DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
@@ -50,6 +52,7 @@ class SettingsDialog(QDialog):
     _FOLDER_FIELDS = [
         ("workspace_dir", "Workspace folder"),
         ("outline_dxf_dir", "Pattern outline folder"),
+        ("custom_tiles_dir", "Custom Tiles folder"),
         ("pattern_output_dir", "Pattern fill output folder"),
         ("draft_output_dir", "Draft output folder"),
         ("fvi_source_dir", "FVI conversion source folder"),
@@ -62,6 +65,8 @@ class SettingsDialog(QDialog):
 
     _TOGGLE_FIELDS = [
         ("check_updates_on_startup", "Check for app updates on startup", False),
+        ("auto_fetch_on_startup", "Fetch repository updates on startup", False),
+        ("auto_fetch_periodic", "Periodically fetch repository updates", False),
         ("high_contrast", "High-contrast status and focus indicators", False),
         ("reduced_motion", "Reduce transient UI animation", False),
         ("persistent_notifications", "Keep canvas notifications visible longer", False),
@@ -88,6 +93,10 @@ class SettingsDialog(QDialog):
         self._smooth_iterations_edit: QLineEdit | None = None
         self._simplify_tolerance_edit: QLineEdit | None = None
         self._ui_scale_combo: QComboBox | None = None
+        self._appearance_combo: QComboBox | None = None
+        self._rotation_snap_edit: QLineEdit | None = None
+        self._grid_spacing_edit: QLineEdit | None = None
+        self._fetch_interval_edit: QLineEdit | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -152,6 +161,34 @@ class SettingsDialog(QDialog):
         for key, label, default in self._TOGGLE_FIELDS:
             self._add_toggle(behavior_layout, key, label, default)
 
+        fetch_row = QHBoxLayout()
+        fetch_label = QLabel("Repository fetch interval")
+        self._fetch_interval_edit = QLineEdit(
+            str(self._settings.get("auto_fetch_interval_minutes", 10))
+        )
+        self._fetch_interval_edit.setValidator(QIntValidator(1, 1440, self))
+        self._fetch_interval_edit.setMaximumWidth(72)
+        fetch_label.setBuddy(self._fetch_interval_edit)
+        fetch_row.addWidget(fetch_label)
+        fetch_row.addWidget(self._fetch_interval_edit)
+        fetch_row.addWidget(QLabel("minutes"))
+        fetch_row.addStretch()
+        behavior_layout.addLayout(fetch_row)
+
+        appearance_row = QHBoxLayout()
+        appearance_label = QLabel("Appearance")
+        self._appearance_combo = QComboBox()
+        self._appearance_combo.addItem("System", "system")
+        self._appearance_combo.addItem("Light", "light")
+        self._appearance_combo.addItem("Dark", "dark")
+        appearance = str(self._settings.get("appearance", "system"))
+        self._appearance_combo.setCurrentIndex(max(0, self._appearance_combo.findData(appearance)))
+        appearance_label.setBuddy(self._appearance_combo)
+        appearance_row.addWidget(appearance_label)
+        appearance_row.addWidget(self._appearance_combo)
+        appearance_row.addStretch()
+        behavior_layout.addLayout(appearance_row)
+
         unit_row = QHBoxLayout()
         unit_row.addWidget(QLabel("Display units"))
         self._unit_combo = QComboBox()
@@ -186,6 +223,58 @@ class SettingsDialog(QDialog):
         scale_row.addWidget(self._ui_scale_combo)
         scale_row.addStretch()
         behavior_layout.addLayout(scale_row)
+
+        rotation_snap_row = QHBoxLayout()
+        rotation_snap_label = QLabel("Rotation snap increment")
+        self._rotation_snap_edit = QLineEdit(
+            str(self._settings.get("rotation_snap_increment", 15.0))
+        )
+        self._rotation_snap_edit.setValidator(QDoubleValidator(0.1, 180.0, 2, self))
+        self._rotation_snap_edit.setAccessibleName("Rotation snap increment in degrees")
+        self._rotation_snap_edit.setToolTip(
+            "Angle used by drawing and rotation snapping while Shift is held"
+        )
+        rotation_snap_label.setBuddy(self._rotation_snap_edit)
+        rotation_snap_row.addWidget(rotation_snap_label)
+        rotation_snap_row.addWidget(self._rotation_snap_edit)
+        rotation_snap_row.addWidget(QLabel("°"))
+        rotation_snap_row.addStretch()
+        behavior_layout.addLayout(rotation_snap_row)
+
+        grid_spacing_row = QHBoxLayout()
+        grid_spacing_label = QLabel("Default grid spacing")
+        self._grid_spacing_edit = QLineEdit(str(self._settings.get("grid_spacing", 10.0)))
+        self._grid_spacing_edit.setValidator(QDoubleValidator(0.001, 100000.0, 2, self))
+        self._grid_spacing_edit.setMaximumWidth(90)
+        grid_spacing_label.setBuddy(self._grid_spacing_edit)
+        grid_spacing_row.addWidget(grid_spacing_label)
+        grid_spacing_row.addWidget(self._grid_spacing_edit)
+        grid_spacing_row.addWidget(QLabel("mm"))
+        grid_spacing_row.addStretch()
+        behavior_layout.addLayout(grid_spacing_row)
+
+        section_label(behavior_layout, "Canvas & Snapping")
+        for key, label, default in (
+            ("grid_visible", "Show grid by default", True),
+            ("grid_snap", "Snap to grid by default", False),
+            ("snap_master", "Enable object snapping", True),
+            ("snap_vertex", "Snap to vertices and shape control points", True),
+            ("snap_edge", "Snap to edges and curves", True),
+            ("snap_tangent", "Infer tangent points", True),
+            ("snap_extension", "Infer extended edges", True),
+            ("snap_angle", "Enable angle, parallel, and perpendicular inference", True),
+            ("snap_equal_length", "Snap new lines to existing line lengths", True),
+            (
+                "snap_axis_alignment",
+                "Align new endpoints on the same X or Y axis as existing endpoints",
+                True,
+            ),
+            ("construction_mode_default", "Start drawing as construction geometry", False),
+            ("aspect_ratio_locked_default", "Lock aspect ratio while resizing", False),
+            ("geometry_health_visible", "Show geometry-health warnings on canvas", False),
+            ("curvature_visible", "Show curvature analysis while editing curves", False),
+        ):
+            self._add_toggle(behavior_layout, key, label, default)
 
         smoothing_row = QHBoxLayout()
         smoothing_row.addWidget(QLabel("Smoothing method"))
@@ -331,13 +420,23 @@ class SettingsDialog(QDialog):
 
     def _open_context_menu_customize(self) -> None:
         current = self._settings.get("context_menu_sections", list(DEFAULT_CONTEXT_MENU_SECTIONS))
-        dlg = ContextMenuCustomizeDialog(self, sections=current)
+        overflow = self._settings.get(
+            "context_menu_overflow_sections",
+            list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS),
+        )
+        dlg = ContextMenuCustomizeDialog(
+            self,
+            sections=current,
+            overflow_sections=overflow,
+        )
         if dlg.exec():
             self._settings["context_menu_sections"] = dlg.get_sections()
+            self._settings["context_menu_overflow_sections"] = dlg.get_overflow_sections()
 
     def _add_row(self, layout: QVBoxLayout, key: str, label: str, browse: bool = False) -> None:
         """Add a folder path input row with optional browse button."""
-        row, e = self._add_text_row(layout, label, self._settings.get(key, ""))
+        fallback = str(custom_tiles_dir()) if key == "custom_tiles_dir" else ""
+        row, e = self._add_text_row(layout, label, self._settings.get(key, fallback))
         self._entries[key] = e
         if browse:
             btn = QPushButton("Browse")
@@ -421,6 +520,25 @@ class SettingsDialog(QDialog):
             self._settings["unit_system"] = self._unit_combo.currentData()
         if self._ui_scale_combo is not None:
             self._settings["ui_scale"] = self._ui_scale_combo.currentData()
+        if self._appearance_combo is not None:
+            self._settings["appearance"] = self._appearance_combo.currentData()
+        if self._rotation_snap_edit is not None:
+            try:
+                self._settings["rotation_snap_increment"] = float(self._rotation_snap_edit.text())
+            except ValueError:
+                pass
+        if self._grid_spacing_edit is not None:
+            try:
+                self._settings["grid_spacing"] = float(self._grid_spacing_edit.text())
+            except ValueError:
+                pass
+        if self._fetch_interval_edit is not None:
+            try:
+                self._settings["auto_fetch_interval_minutes"] = int(
+                    self._fetch_interval_edit.text()
+                )
+            except ValueError:
+                pass
 
         if self._smoothing_combo is not None:
             self._settings["smoothing_method"] = self._smoothing_combo.currentData()

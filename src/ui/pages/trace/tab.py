@@ -45,6 +45,7 @@ from src.ui.components import (
     set_status_label,
     sidebar_panel,
     surface_frame,
+    workflow_strip,
 )
 from src.ui.pages.base import BasePage
 from src.ui.pages.trace.form import (
@@ -99,6 +100,7 @@ class TracePage(BasePage):
         self._trace_pending: bool = False
         self._cancel_event = threading.Event()
         self._trace_thread: threading.Thread | None = None
+        self._shutting_down = False
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -109,7 +111,7 @@ class TracePage(BasePage):
         self._trace_progress.connect(self._on_trace_progress)
         self._trace_cancelled.connect(self._handle_trace_cancelled)
         self._last_out: str | None = None
-        self._last_display_img = None
+        self._last_display_img: Image.Image | None = None
         self._last_width_mm: float = 0.0
         self._last_height_mm: float = 0.0
         self._img_w_px: int = 0
@@ -125,6 +127,10 @@ class TracePage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
+        self._workflow_strip = workflow_strip(
+            ("Choose image", "Adjust trace", "Preview and edit", "Export")
+        )
+        root.addWidget(self._workflow_strip)
 
         left_w = QWidget()
         left = QVBoxLayout(left_w)
@@ -142,7 +148,7 @@ class TracePage(BasePage):
             right_w,
             sizes=(320, 950),
         )
-        root.addWidget(self._splitter)
+        root.addWidget(self._splitter, stretch=1)
 
         self._build_left(left)
         self._build_right(right)
@@ -201,6 +207,7 @@ class TracePage(BasePage):
             tooltip="Path to a raster image file (drag-and-drop supported)",
         )
         self._img_edit = self._source_field.entry
+        self._img_edit.editingFinished.connect(self._commit_typed_image_path)
         self._recent_btn = RecentFilesButton(
             self._settings,
             KIND_IMAGE,
@@ -736,15 +743,15 @@ class TracePage(BasePage):
         for key, widget in text_fields.items():
             if key in recipe:
                 widget.setText(str(recipe[key]))
-        checks = {
+        checks: dict[str, QCheckBox] = {
             "auto_threshold": self._auto_thresh_cb,
             "invert": self._invert_cb,
             "edge_mode": self._edge_mode_cb,
             "outer_only": self._outer_only_cb,
         }
-        for key, widget in checks.items():
+        for key, check_widget in checks.items():
             if key in recipe:
-                widget.setChecked(bool(recipe[key]))
+                check_widget.setChecked(bool(recipe[key]))
         self._schedule_trace()
         self._set_status(f"Applied trace recipe ‘{name}’.", STATUS_OK)
 
@@ -784,6 +791,12 @@ class TracePage(BasePage):
         self._reveal_action.setEnabled(bool(self._last_out))
         self._reload_btn.setEnabled(has_image)
         self._smooth_btn.setEnabled(has_polys)
+        if has_polys:
+            self._workflow_strip.set_current_step(2)
+        elif has_image:
+            self._workflow_strip.set_current_step(1)
+        else:
+            self._workflow_strip.set_current_step(0)
 
     def _parse_float_field(
         self,
@@ -808,7 +821,7 @@ class TracePage(BasePage):
             self._settings,
             "trace_image",
             "Select image",
-            "Image files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)",
+            "Image files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.gif *.webp);;All files (*)",
             recent_kind=KIND_IMAGE,
         )
         if path:
@@ -827,6 +840,19 @@ class TracePage(BasePage):
         record_recent(self._settings, KIND_IMAGE, path)
         self._schedule_trace()
         self._emit_state_changed()
+
+    def _commit_typed_image_path(self) -> None:
+        path = self._img_edit.text().strip()
+        if not path or path == self._img_path:
+            return
+        candidate = Path(path).expanduser()
+        if not candidate.is_file() or candidate.suffix.casefold() not in self._IMAGE_EXTENSIONS:
+            self._set_status("Choose an existing supported image file.", STATUS_ERR)
+            return
+        self._load_image_from_recent(str(candidate))
+
+    def has_workspace_content(self) -> bool:
+        return bool(self._img_edit.text().strip() or self._canvas.poly_count)
 
     def _load_thumbnail(self, path: str) -> None:
         try:
@@ -976,6 +1002,8 @@ class TracePage(BasePage):
             self._set_status("Nothing could be smoothed.", STATUS_ERR)
 
     def _start_trace_thread(self) -> None:
+        if self._shutting_down:
+            return
         if not self._img_path:
             return
         if self._running:
@@ -1068,6 +1096,8 @@ class TracePage(BasePage):
             self._trace_error.emit((trace_token, str(exc)))
 
     def _handle_trace_done(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         trace_token, _display_img, polys, img_w_px, img_h_px, width_mm_val = payload
         if trace_token != self._trace_revision:
             return
@@ -1126,6 +1156,8 @@ class TracePage(BasePage):
             self._preview_timer.start(0)
 
     def _handle_trace_error(self, payload: tuple) -> None:
+        if self._shutting_down:
+            return
         trace_token, msg = payload
         if trace_token != self._trace_revision:
             return
@@ -1141,6 +1173,8 @@ class TracePage(BasePage):
             self._preview_timer.start(0)
 
     def _handle_trace_cancelled(self, _trace_token: int) -> None:
+        if self._shutting_down:
+            return
         """A stale, superseded trace bailed out early instead of running to
         completion (see cancel_check in image_to_outlines). This still has
         to reset _running and drain _trace_pending exactly like the done/
@@ -1289,13 +1323,14 @@ class TracePage(BasePage):
             write_polylines_dxf(
                 [list(r["polyline"]) for r in records],
                 out,
-                close=True,
+                close=False,
                 entity_kinds=[str(r.get("kind", "polyline")) for r in records],
                 entity_meta=[r.get("meta") for r in records],
             )
             self._last_out = out
             self._reveal_action.setEnabled(True)
             self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", STATUS_OK)
+            self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
@@ -1314,7 +1349,7 @@ class TracePage(BasePage):
             write_polylines_dxf(
                 [list(r["polyline"]) for r in records],
                 out,
-                close=True,
+                close=False,
                 entity_kinds=[str(r.get("kind", "polyline")) for r in records],
                 entity_meta=[r.get("meta") for r in records],
             )
@@ -1324,6 +1359,7 @@ class TracePage(BasePage):
                 f"Exported {len(records)} selected shapes → {Path(out).name}",
                 STATUS_OK,
             )
+            self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
 
@@ -1362,7 +1398,11 @@ class TracePage(BasePage):
         short window to actually exit, instead of leaving it to run to
         completion (or crash) against a page that's already being destroyed.
         """
+        self._shutting_down = True
+        self._preview_timer.stop()
+        self._trace_revision += 1
         self._cancel_event.set()
+        self.blockSignals(True)
         if self._trace_thread is not None and self._trace_thread.is_alive():
             self._trace_thread.join(timeout=2.0)
 

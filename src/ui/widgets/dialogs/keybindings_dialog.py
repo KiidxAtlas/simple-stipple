@@ -49,7 +49,7 @@ _APP_LABELS: dict[str, str] = {
     "canvas.select_mode": "Select Mode",
     "canvas.draw_mode": "Draw Mode",
     "canvas.edit_mode": "Edit Mode",
-    "canvas.measure": "Measure Tool",
+    "canvas.measure": "Scale Tool",
     "canvas.dimension": "Dimension Tool",
     "canvas.fit": "Fit View",
     "tab.draft": "Switch to Draft Tab",

@@ -14,13 +14,15 @@ from pathlib import Path
 from typing import Any, cast
 
 from pydantic import ValidationError
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -207,7 +209,10 @@ class DraftPage(BasePage):
         side_layout.setSpacing(8)
 
         self._props_panel = CanvasPropertiesPanel(self._canvas)
-        side_layout.addWidget(self._props_panel)
+        props_scroll = QScrollArea()
+        props_scroll.setWidgetResizable(True)
+        props_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        props_scroll.setWidget(self._props_panel)
 
         self._layer_module = CanvasLayerTreeModule(
             canvas=self._canvas,
@@ -236,7 +241,15 @@ class DraftPage(BasePage):
         self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
         self._layers_tree.shapesDeleteRequested.connect(self._on_shapes_delete_requested)
         self._layers_tree.layerColorChangeRequested.connect(self._on_layer_color_change_requested)
-        side_layout.addWidget(self._layer_module, stretch=1)
+        inspector_splitter = QSplitter(Qt.Orientation.Vertical)
+        inspector_splitter.setChildrenCollapsible(False)
+        inspector_splitter.addWidget(props_scroll)
+        inspector_splitter.addWidget(self._layer_module)
+        inspector_splitter.setStretchFactor(0, 1)
+        inspector_splitter.setStretchFactor(1, 1)
+        inspector_splitter.setSizes([360, 300])
+        side_layout.addWidget(inspector_splitter, stretch=1)
+        self._inspector_splitter = inspector_splitter
         side_layout.addWidget(self._build_export_controls())
 
         splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
@@ -279,7 +292,7 @@ class DraftPage(BasePage):
 
     def _on_canvas_mode_change(self, mode: str) -> None:
         if hasattr(self, "_toolbar_module"):
-            self._toolbar_module.set_active_mode(mode)
+            self._toolbar_module.sync_from_canvas()
         self._refresh_status()
 
     def _on_quick_shape_changed(self, mode: str) -> None:
@@ -323,15 +336,21 @@ class DraftPage(BasePage):
         if not candidates:
             return
         dialog = ShapeRecognitionDialog([shape for _, shape in candidates], self)
-        recognized_by_id = {
-            self._canvas._entities[index].id: shape for index, shape in candidates
-        }
 
         def convert() -> None:
+            chosen = set(dialog.selected_indices())
+            selected_by_id = {
+                self._canvas._entities[index].id: shape
+                for candidate_index, (index, shape) in enumerate(candidates)
+                if candidate_index in chosen
+            }
+            if not selected_by_id:
+                return
+
             def mutate(document) -> None:
                 document.entities = [
-                    convert_to_parametric(entity, recognized_by_id[entity.id])
-                    if entity.id in recognized_by_id
+                    convert_to_parametric(entity, selected_by_id[entity.id])
+                    if entity.id in selected_by_id
                     else entity
                     for entity in document.entities
                 ]
@@ -340,7 +359,7 @@ class DraftPage(BasePage):
             self._canvas._sync_shape_storage_from_entities()
             self._canvas._redraw()
             self._canvas._notify()
-            self._canvas._show_flash(f"Converted {len(candidates)} parametric shapes", 1400)
+            self._canvas._show_flash(f"Converted {len(selected_by_id)} parametric shape(s)", 1400)
 
         dialog.accepted.connect(convert)
         dialog.finished.connect(lambda _result: setattr(self, "_shape_recognition_dialog", None))
@@ -526,7 +545,7 @@ class DraftPage(BasePage):
                     "polyline": [p1, p2],
                     "kind": "dimension",
                     "meta": dict(dimension),
-                    "layer": active_name,
+                    "layer": str(dimension.get("layer") or active_name),
                 }
             )
         if not records:
@@ -570,7 +589,7 @@ class DraftPage(BasePage):
             write_polylines_dxf(
                 [list(r["polyline"]) for r in first],
                 out_path,
-                close=True,
+                close=False,
                 pattern_layer=first_name,
                 entity_kinds=[str(r.get("kind", "polyline")) for r in first],
                 entity_meta=[r.get("meta") for r in first],

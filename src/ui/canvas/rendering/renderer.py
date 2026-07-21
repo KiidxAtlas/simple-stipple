@@ -369,38 +369,87 @@ class CanvasRenderer:
 
     def _paint_dimensions(self, painter: QPainter, w: int, h: int) -> None:
         for i, dim in enumerate(self._host._dimensions):
-            selected = i == self._host._selected_dimension
+            selected = self._host._all_dimensions_selected or i == self._host._selected_dimension
             dragging = i == self._host._dimension_drag
-            color = QColor("#f5a623") if (selected or dragging) else QColor("#8957e5")
+            driving_meta = dim.get("driving")
+            driving = isinstance(driving_meta, dict)
+            target = driving_meta.get("target") if isinstance(driving_meta, dict) else None
+            actual = self._host._dimension_tool.value(dim)
+            conflicted = (
+                driving
+                and isinstance(target, (int, float))
+                and math.isfinite(float(target))
+                and abs(actual - float(target)) > max(1e-5, abs(float(target)) * 1e-6)
+            )
+            color = (
+                QColor("#f5a623")
+                if (selected or dragging)
+                else QColor("#f85149")
+                if conflicted
+                else QColor("#39c5cf")
+                if driving
+                else QColor("#8957e5")
+            )
             ax, ay = dim["p1"]
             bx, by = dim["p2"]
+            if dim.get("type") == "angle" and "p3" in dim:
+                cx, cy = dim["p3"]
+                a1 = math.atan2(ay - by, ax - bx)
+                a2 = math.atan2(cy - by, cx - bx)
+                angle = abs(math.degrees((a2 - a1 + math.pi) % math.tau - math.pi))
+                painter.setPen(QPen(color, 1.4))
+                first_c = self._host._w2c(ax, ay)
+                vertex_c = self._host._w2c(bx, by)
+                third_c = self._host._w2c(cx, cy)
+                painter.drawLine(QPointF(*vertex_c), QPointF(*first_c))
+                painter.drawLine(QPointF(*vertex_c), QPointF(*third_c))
+                # Draw the measured angle as an arc rather than leaving two
+                # rays and a label floating at the vertex.
+                screen_a1 = math.atan2(first_c[1] - vertex_c[1], first_c[0] - vertex_c[0])
+                screen_a2 = math.atan2(third_c[1] - vertex_c[1], third_c[0] - vertex_c[0])
+                sweep = (screen_a2 - screen_a1 + math.pi) % math.tau - math.pi
+                radius = 28.0
+                arc_points = QPolygonF(
+                    [
+                        QPointF(
+                            vertex_c[0] + math.cos(screen_a1 + sweep * step / 20) * radius,
+                            vertex_c[1] + math.sin(screen_a1 + sweep * step / 20) * radius,
+                        )
+                        for step in range(21)
+                    ]
+                )
+                painter.setPen(QPen(color, 2.0))
+                painter.drawPolyline(arc_points)
+                precision = max(0, min(6, int(dim.get("precision", 1))))
+                label = f"{angle:.{precision}f}°"
+                if driving:
+                    label = f"{'⚠' if conflicted else '◆'} {label}"
+                mid_angle = screen_a1 + sweep / 2.0
+                self._draw_badge(
+                    painter,
+                    vertex_c[0] + math.cos(mid_angle) * (radius + 18),
+                    vertex_c[1] + math.sin(mid_angle) * (radius + 18),
+                    label,
+                    9,
+                )
+                continue
             length_mm = math.hypot(bx - ax, by - ay)
-            label = _fmt_len(length_mm, self._host._unit_system)
+            precision = max(0, min(6, int(dim.get("precision", 2))))
+            label = _fmt_len(length_mm, self._host._unit_system, decimals=precision)
+            if dim.get("type") == "diameter":
+                label = f"Ø {label}"
+            if driving:
+                label = f"{'⚠' if conflicted else '◆'} {label}"
             self._paint_dimension_line(
                 painter, dim["p1"], dim["p2"], dim["offset"], label, color=color
             )
 
-        # In-progress placement preview.
-        if self._host._dim_pending_p1 is not None:
-            if self._host._dim_pending_p2 is not None:
-                length_mm = math.hypot(
-                    self._host._dim_pending_p2[0] - self._host._dim_pending_p1[0],
-                    self._host._dim_pending_p2[1] - self._host._dim_pending_p1[1],
-                )
-                label = _fmt_len(length_mm, self._host._unit_system)
-                self._paint_dimension_line(
-                    painter,
-                    self._host._dim_pending_p1,
-                    self._host._dim_pending_p2,
-                    self._host._dim_pending_offset,
-                    label,
-                    color=QColor("#39c5cf"),
-                )
-            elif self._host._cursor_wx is not None and self._host._cursor_wy is not None:
-                ax, ay = self._host._w2c(*self._host._dim_pending_p1)
-                cx, cy = self._host._w2c(self._host._cursor_wx, self._host._cursor_wy)
-                painter.setPen(QPen(QColor("#39c5cf"), 1.0, Qt.PenStyle.DashLine))
-                painter.drawLine(QPointF(ax, ay), QPointF(cx, cy))
+    def _format_dimension_value(self, dimension: dict) -> str:
+        """Format a linear candidate with the same units as placed dimensions."""
+        length = math.dist(dimension["p1"], dimension["p2"])
+        precision = max(0, min(6, int(dimension.get("precision", 2))))
+        label = _fmt_len(length, self._host._unit_system, decimals=precision)
+        return f"Ø {label}" if dimension.get("type") == "diameter" else label
 
     def _paint_guides(self, painter: QPainter, w: int, h: int) -> None:
         if not self._host._guides:
@@ -956,7 +1005,7 @@ class CanvasRenderer:
                 painter.drawPath(path)
 
     def _paint_spline_preview(self, painter: QPainter) -> None:
-        if self._host._draw_primitive != "spline" or len(self._host._draw_pts) < 2:
+        if self._host._draw_primitive != "spline" or len(self._host._draw_pts) < 1:
             return
 
         pts = list(self._host._draw_pts)
@@ -1062,6 +1111,15 @@ class CanvasRenderer:
         elif snap_t == "extension":
             painter.setPen(QPen(_SNAP_CLOSE, 1.5, Qt.PenStyle.DashLine))
             painter.drawLine(QPointF(_dsx - 6, _dsy), QPointF(_dsx + 6, _dsy))
+        elif snap_t in {"axis_x", "axis_y"}:
+            painter.setPen(QPen(_SNAP_CLOSE, 1.5, Qt.PenStyle.DashLine))
+            if snap_t == "axis_x":
+                painter.drawLine(QPointF(_dsx, _dsy - 7), QPointF(_dsx, _dsy + 7))
+            else:
+                painter.drawLine(QPointF(_dsx - 7, _dsy), QPointF(_dsx + 7, _dsy))
+        elif snap_t == "equal_length":
+            painter.drawLine(QPointF(_dsx - 5, _dsy - 2), QPointF(_dsx + 5, _dsy - 2))
+            painter.drawLine(QPointF(_dsx - 5, _dsy + 2), QPointF(_dsx + 5, _dsy + 2))
         elif snap_t == "circle_rim":
             # Diamond with an inner dot — signals radius lock
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1086,6 +1144,12 @@ class CanvasRenderer:
             _label = "Tangent"
         elif snap_t == "extension":
             _label = "Extension"
+        elif snap_t == "equal_length":
+            _label = "Equal Length"
+        elif snap_t == "axis_x":
+            _label = "Align X"
+        elif snap_t == "axis_y":
+            _label = "Align Y"
         else:
             _label = ""
         if _label:
@@ -1321,6 +1385,23 @@ class CanvasRenderer:
                 )
             )
         self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
+        width = _to_display(max(xs) - min(xs), self._host._unit_system)
+        height = _to_display(max(ys) - min(ys), self._host._unit_system)
+        suffix = _unit_suffix(self._host._unit_system)
+        size_text = f"W {width:.2f}  H {height:.2f} {suffix}"
+        if self._host._gizmo_drag_mode and self._host._gizmo_drag_mode.startswith("scale-"):
+            size_text += "  ·  Shift lock  ·  Alt center"
+        painter.setFont(_FONT_HEL_9)
+        metrics = painter.fontMetrics()
+        badge_w = metrics.horizontalAdvance(size_text) + 16
+        badge_x = (bx0 + bx1 - badge_w) / 2.0
+        badge_y = max(by0, by1) + 18.0
+        badge = QRectF(badge_x, badge_y, badge_w, 22.0)
+        painter.setPen(QPen(QColor("#2f81f7"), 1.0))
+        painter.setBrush(QBrush(QColor(13, 17, 23, 235)))
+        painter.drawRoundedRect(badge, 5, 5)
+        painter.setPen(QColor("#b9d7ff"))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, size_text)
         key = self._host._property_highlight
         if key:
             left, right = min(bx0, bx1), max(bx0, bx1)
@@ -1542,6 +1623,12 @@ class CanvasRenderer:
             if 0 <= index < len(self._host._entities)
         }
         entity_by_id = {entity.id: entity for entity in self._host._entities}
+        from src.backend.cad.constraints import constraint_residuals
+
+        residuals = constraint_residuals(
+            {entity.id: entity.points for entity in self._host._entities},
+            list(constraints),
+        )
         symbols = {
             "horizontal": "H",
             "vertical": "V",
@@ -1563,10 +1650,13 @@ class CanvasRenderer:
                 mid = entity.points[len(entity.points) // 2]
                 cx, cy = self._host._w2c(*mid)
                 rect = QRectF(cx + 6, cy - 15, 16, 16)
-                painter.setPen(QPen(QColor("#a371f7"), 1))
-                painter.setBrush(QBrush(QColor(31, 24, 55, 220)))
+                conflicting = residuals.get(constraint.id, math.inf) > 1e-5
+                painter.setPen(QPen(QColor("#f85149" if conflicting else "#3fb950"), 1))
+                painter.setBrush(
+                    QBrush(QColor(60, 20, 25, 225) if conflicting else QColor(18, 50, 32, 225))
+                )
                 painter.drawRoundedRect(rect, 3, 3)
-                painter.setPen(QColor("#d2a8ff"))
+                painter.setPen(QColor("#ffb4ae" if conflicting else "#7ee787"))
                 painter.drawText(
                     rect, Qt.AlignmentFlag.AlignCenter, symbols.get(constraint.kind, "?")
                 )
@@ -1576,7 +1666,7 @@ class CanvasRenderer:
 
     def _paint_measure_button(self, painter: QPainter, canvas_w: int) -> None:
         pad, bh, bw = 6, 22, 114
-        label = "\u2715 Measure [M]" if self._host._measure_mode else "\u2295 Measure [M]"
+        label = "\u2715 Scale [M]" if self._host._measure_mode else "\u2295 Scale [M]"
         color = _MEASURE_COLOR if self._host._measure_mode else QColor(DIM)
         bg = QColor("#002233") if self._host._measure_mode else QColor("#14141e")
         top = pad + self._chrome_top()
@@ -1593,14 +1683,15 @@ class CanvasRenderer:
     def _paint_dimension_button(self, painter: QPainter, canvas_w: int) -> None:
         pad, bh, bw, gap = 6, 22, 114, 6
         label = (
-            "\u2715 Dimension [\u21e7M]"
-            if self._host._dimension_mode
-            else "\u2295 Dimension [\u21e7M]"
+            "\u2715 Linear [\u21e7M]"
+            if self._host._dimension_mode and self._host._dimension_kind == "linear"
+            else "\u2295 Linear [\u21e7M]"
         )
-        color = QColor("#8957e5") if self._host._dimension_mode else QColor(DIM)
-        bg = QColor("#1c1233") if self._host._dimension_mode else QColor("#14141e")
+        active = self._host._dimension_mode and self._host._dimension_kind == "linear"
+        color = QColor("#a371f7") if active else QColor(DIM)
+        bg = QColor("#1c1233") if active else QColor("#14141e")
         top = pad + self._chrome_top()
-        # Sits immediately to the left of the Measure button.
+        # Sits immediately to the left of the Scale button.
         mx1, _my1, _mx2, _my2 = self._host._mbtn_rect
         x2 = mx1 - gap
         x1 = x2 - bw
@@ -1612,6 +1703,92 @@ class CanvasRenderer:
         painter.setPen(color)
         painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
         self._host._dbtn_rect = (x1, y1, x2, y2)
+
+        angle_bw = 88
+        angle_x2 = x1 - gap
+        angle_x1 = angle_x2 - angle_bw
+        angle_active = self._host._dimension_mode and self._host._dimension_kind == "angle"
+        painter.setPen(QPen(QColor("#a371f7") if angle_active else QColor(DIM), 1))
+        painter.setBrush(QBrush(QColor("#1c1233") if angle_active else QColor("#14141e")))
+        painter.drawRect(QRectF(angle_x1, y1, angle_bw, bh))
+        painter.setPen(QColor("#a371f7") if angle_active else QColor(DIM))
+        painter.drawText(
+            QRectF(angle_x1, y1, angle_bw, bh),
+            Qt.AlignmentFlag.AlignCenter,
+            "\u2715 Angular" if angle_active else "\u2295 Angular",
+        )
+        self._host._adbtn_rect = (angle_x1, y1, angle_x2, y2)
+
+    def _paint_active_precision_tool_panel(self, painter: QPainter, canvas_w: int) -> None:
+        if not (self._host._measure_mode or self._host._dimension_mode):
+            return
+        available = max(280.0, float(canvas_w - self._chrome_left() - 16))
+        panel_w, panel_h = min(390.0, available), 106.0
+        x = max(float(self._chrome_left() + 8), canvas_w - panel_w - 6.0)
+        y = float(self._chrome_top() + 36)
+        accent = QColor("#00d8ff") if self._host._measure_mode else QColor("#a371f7")
+        painter.setPen(QPen(accent, 1.4))
+        painter.setBrush(QBrush(QColor(10, 16, 28, 238)))
+        painter.drawRoundedRect(QRectF(x, y, panel_w, panel_h), 8, 8)
+
+        painter.setPen(QColor("#f0f6fc"))
+        painter.setFont(_FONT_HEL_11_BOLD)
+        if self._host._measure_mode:
+            title = "SCALE BY REFERENCE"
+            selected = len(self._host._mutable_selected_indices())
+            scope = (
+                f"Affects {selected} selected object{'s' if selected != 1 else ''}"
+                if selected
+                else "Affects all visible unlocked objects"
+            )
+            stage = (
+                0
+                if self._host._measure_anchor is None
+                else (2 if self._host._measure_locked else 1)
+            )
+            steps = ("1  Base point", "2  Reference point", "3  Target distance")
+        else:
+            title = "SKETCH DIMENSION"
+            scope = "Target-aware · segment, vertex, circle, or existing dimension"
+            stage = (
+                2
+                if self._host._dimension_tool.stage == "place"
+                else min(1, len(self._host._dimension_tool.targets))
+            )
+            steps = ("1  Select target", "2  Select relation", "3  Position & place")
+        painter.drawText(QRectF(x + 14, y + 10, panel_w - 28, 18), title)
+        painter.setFont(_FONT_HEL_9)
+        painter.setPen(QColor("#9da7b3"))
+        painter.drawText(QRectF(x + 14, y + 30, panel_w - 28, 16), scope)
+
+        chip_y = y + 54
+        chip_w = (panel_w - 40.0) / 3.0
+        for index, step in enumerate(steps):
+            chip_x = x + 12 + index * (chip_w + 8)
+            active = index == stage
+            completed = index < stage
+            painter.setPen(QPen(accent if active or completed else QColor("#3d4652"), 1))
+            painter.setBrush(
+                QBrush(
+                    QColor(accent.red(), accent.green(), accent.blue(), 45)
+                    if active
+                    else QColor("#151c26")
+                )
+            )
+            painter.drawRoundedRect(QRectF(chip_x, chip_y, chip_w, 25), 5, 5)
+            painter.setPen(accent if active or completed else QColor("#788391"))
+            painter.drawText(QRectF(chip_x, chip_y, chip_w, 25), Qt.AlignmentFlag.AlignCenter, step)
+        painter.setPen(QColor("#788391"))
+        footer = (
+            "Esc exits  ·  Right-click steps back  ·  Shift constrains"
+            if self._host._measure_mode
+            else "Select targets  ·  Double-click a ◆ value to change geometry  ·  Esc exits"
+        )
+        painter.drawText(
+            QRectF(x + 14, y + 84, panel_w - 28, 15),
+            Qt.AlignmentFlag.AlignLeft,
+            footer,
+        )
 
     def _paint_measure_overlay(self, painter: QPainter) -> None:
         if self._host._measure_anchor is None or self._host._measure_hover is None:
@@ -1939,7 +2116,7 @@ class CanvasRenderer:
             painter.setPen(QPen(QColor("#f85149"), 1.5, Qt.PenStyle.DashLine))
             painter.drawLine(QPointF(sx, sy), QPointF(ex, ey))
 
-        # Measure overlay
+        # Scale reference overlay
         if self._host._measure_mode and self._host._measure_anchor and self._host._measure_hover:
             self._paint_measure_overlay(painter)
 
@@ -1990,6 +2167,13 @@ class CanvasRenderer:
                     Qt.AlignmentFlag.AlignCenter,
                     hint,
                 )
+
+        # Always-visible Scale/Dimension entry points, followed by a prominent
+        # staged workflow card while either tool is active. Paint this as UI
+        # chrome after geometry so it cannot disappear behind the drawing.
+        self._paint_measure_button(painter, w)
+        self._paint_dimension_button(painter, w)
+        self._paint_active_precision_tool_panel(painter, w)
 
         # Cursor position
         if self._host._cursor_wx is not None and self._host._cursor_wy is not None:

@@ -131,35 +131,57 @@ class CanvasRuntime:
 
     # ── Visibility (entity-native) ────────────────────────────────────────
 
+    def _commit_visibility(self, apply) -> None:
+        canvas = self._canvas
+
+        def mutate(document) -> None:
+            apply(document.entities)
+            document.drop_inactive_selection()
+
+        result = canvas._canvas_service.update_document(mutate)
+        if not result.changed:
+            return
+        canvas._reset_edit_interaction_state()
+        canvas._redraw()
+        canvas._notify()
+        canvas._fire_poly_change()
+
     def set_shapes_hidden(self, keys: object, hidden: bool) -> None:
         canvas = self._canvas
-        for idx in flatten_shape_keys(keys):
-            if 0 <= idx < len(canvas._entities):
-                canvas._entities[idx].hidden = hidden
-        canvas._drop_inactive_selection()
-        canvas._redraw()
+        entity_ids = {
+            canvas._entities[idx].id
+            for idx in flatten_shape_keys(keys)
+            if 0 <= idx < len(canvas._entities)
+        }
+
+        def apply(entities) -> None:
+            for entity in entities:
+                if entity.id in entity_ids:
+                    entity.hidden = hidden
+
+        self._commit_visibility(apply)
 
     def set_layer_hidden(self, layer: str, hidden: bool) -> None:
-        canvas = self._canvas
-        for e in canvas._entities:
-            if e.layer == layer:
-                e.hidden = hidden
-        canvas._drop_inactive_selection()
-        canvas._redraw()
+        def apply(entities) -> None:
+            for entity in entities:
+                if entity.layer == layer:
+                    entity.hidden = hidden
+
+        self._commit_visibility(apply)
 
     def solo_layer(self, target_layer: str) -> None:
-        canvas = self._canvas
-        for e in canvas._entities:
-            e.hidden = e.layer != target_layer
-        canvas._drop_inactive_selection()
-        canvas._redraw()
+        def apply(entities) -> None:
+            for entity in entities:
+                entity.hidden = entity.layer != target_layer
+
+        self._commit_visibility(apply)
 
     def set_all_hidden(self, hidden: bool) -> None:
-        canvas = self._canvas
-        for e in canvas._entities:
-            e.hidden = hidden
-        canvas._drop_inactive_selection()
-        canvas._redraw()
+        def apply(entities) -> None:
+            for entity in entities:
+                entity.hidden = hidden
+
+        self._commit_visibility(apply)
 
     # ── Shape labels ──────────────────────────────────────────────────────
 
@@ -677,16 +699,17 @@ class CanvasToolbarModule(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        toolbar, mode_buttons, selection_label = canvas_toolbar(
+        toolbar, mode_buttons, selection_label, guidance_label = canvas_toolbar(
             self._handle_mode,
             self._handle_fit,
             modes=modes,
             show_fit=show_fit,
         )
         toolbar_layout = toolbar.layout()
+        self.state_buttons: dict[str, QPushButton] = {}
         if isinstance(toolbar_layout, QHBoxLayout) and canvas is not None:
             for text, shortcut, method_name, state_name in (
-                ("Measure", "M", "toggle_measure", "_measure_mode"),
+                ("Scale", "M", "toggle_measure", "_measure_mode"),
                 ("Dimension", "Shift+M", "toggle_dimension_mode", "_dimension_mode"),
             ):
                 if not hasattr(canvas, method_name):
@@ -696,6 +719,7 @@ class CanvasToolbarModule(QWidget):
                 button.setMinimumHeight(28)
                 button.setToolTip(f"Toggle {text.lower()} tool ({shortcut})")
                 button.setAccessibleName(f"{text} tool")
+                self.state_buttons[state_name] = button
 
                 def _toggle(_checked=False, *, b=button, method=method_name, state=state_name):
                     getattr(canvas, method)()
@@ -712,6 +736,7 @@ class CanvasToolbarModule(QWidget):
         self.toolbar = toolbar
         self.mode_buttons = mode_buttons
         self.selection_label = selection_label
+        self.guidance_label = guidance_label
         self.sync_from_canvas()
 
     def bind_canvas(self, canvas: Any | None) -> None:
@@ -752,6 +777,20 @@ class CanvasToolbarModule(QWidget):
         if hasattr(self._canvas, "get_mode"):
             self.set_active_mode(str(self._canvas.get_mode()))
         self.set_selection_count(int(getattr(self._canvas, "sel_count", 0)))
+        for state_name, button in self.state_buttons.items():
+            button.setChecked(bool(getattr(self._canvas, state_name, False)))
+        if hasattr(self._canvas, "get_command_guidance"):
+            guidance, _tone = self._canvas.get_command_guidance()
+            active_tool = "Select"
+            if bool(getattr(self._canvas, "_dimension_mode", False)):
+                active_tool = "Dimension"
+            elif bool(getattr(self._canvas, "_measure_mode", False)):
+                active_tool = "Scale"
+            elif hasattr(self._canvas, "get_mode"):
+                active_tool = str(self._canvas.get_mode()).replace("_", " ").title()
+            self.guidance_label.setText(f"{active_tool} · {guidance}")
+            self.guidance_label.setAccessibleName(f"Active tool: {active_tool}")
+            self.guidance_label.setAccessibleDescription(str(guidance))
 
 
 class CanvasGridModule(CanvasPrecisionBar):

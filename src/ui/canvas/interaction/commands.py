@@ -827,7 +827,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         "measure.toggle",
-        "Measure",
+        "Scale",
         lambda v: v.toggle_measure(),
         "M",
         category="Modes",
@@ -842,6 +842,13 @@ COMMANDS: tuple[Command, ...] = (
         category="Modes",
         requires_selectable=False,
         settings_key="canvas.dimension",
+    ),
+    Command(
+        "mode.dimension_angle",
+        "Angular Dimension",
+        lambda v: v.toggle_dimension_mode("angle"),
+        category="Modes",
+        requires_selectable=False,
     ),
     Command(
         "canvas.radial_menu",

@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import Any, ClassVar, cast
 from uuid import uuid4
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -53,11 +56,12 @@ class App(QMainWindow):
     _new_workspace_action: QAction
     _new_window_action: QAction
     _open_workspace_action: QAction
+    _saved_workspaces_action: QAction
     _save_workspace_action: QAction
     _save_workspace_as_action: QAction
     _recover_workspace_action: QAction
     _repo_dialog_action: QAction
-    _workspace_title_label: QLabel
+    _workspace_title_label: QPushButton
     _workspace_state_chip: QLabel
     _shortcut_tooltip_specs: list[tuple[QWidget, str, str]]
 
@@ -65,8 +69,16 @@ class App(QMainWindow):
         return user_data_dir() / "recovery" / f"{self._recovery_id}.workspace.json"
 
     def _autosave_workspace(self) -> None:
-        """Compatibility entry point delegated to the task controller."""
+        """Compatibility entry point that waits for the delegated snapshot.
+
+        The periodic timer calls the controller directly and remains fully
+        asynchronous.  Explicit callers historically relied on this helper
+        returning only after the recovery file was durable.
+        """
         self._autosave_controller._autosave_workspace()
+        thread = self._autosave_controller._recovery_write_thread
+        if thread is not None:
+            thread.join(timeout=10.0)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -133,6 +145,8 @@ class App(QMainWindow):
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
         self._shell_header = self._build_shell_header()
         central_layout.insertWidget(0, self._shell_header)
+        self._system_banner = self._build_system_banner()
+        central_layout.insertWidget(1, self._system_banner)
         self._init_tab_bindings()
         self._settings_controller = SettingsController(
             self._settings, self._page_runtime, source=self
@@ -161,6 +175,37 @@ class App(QMainWindow):
     # ownership discoverable to readers and type checkers.
     def _build_shell_header(self) -> QWidget:
         return self._menu_controller._build_shell_header()
+
+    def _build_system_banner(self) -> QFrame:
+        banner = QFrame()
+        banner.setProperty("role", "system-banner")
+        layout = QHBoxLayout(banner)
+        layout.setContentsMargins(12, 7, 8, 7)
+        self._system_banner_text = QLabel("")
+        self._system_banner_text.setWordWrap(True)
+        layout.addWidget(self._system_banner_text, 1)
+        retry = QPushButton("Retry")
+        retry.clicked.connect(self._autosave_controller._autosave)
+        layout.addWidget(retry)
+        save_as = QPushButton("Save As…")
+        save_as.setProperty("role", "primary")
+        save_as.clicked.connect(self._save_workspace_as)
+        layout.addWidget(save_as)
+        dismiss = QPushButton("Dismiss")
+        dismiss.setProperty("role", "ghost")
+        dismiss.clicked.connect(banner.hide)
+        layout.addWidget(dismiss)
+        banner.hide()
+        return banner
+
+    def show_system_failure(self, message: str) -> None:
+        """Show a persistent, actionable failure above every workflow."""
+        self._system_banner_text.setText(message)
+        self._system_banner.setAccessibleDescription(message)
+        self._system_banner.show()
+
+    def clear_system_failure(self) -> None:
+        self._system_banner.hide()
 
     def _build_edit_view_help_menus(self) -> None:
         self._menu_controller._build_edit_view_help_menus()
@@ -203,6 +248,9 @@ class App(QMainWindow):
 
     def _open_workspace(self) -> None:
         self._workspace_controller._open_workspace()
+
+    def _open_saved_workspaces(self) -> None:
+        self._workspace_controller._open_saved_workspaces()
 
     def _save_workspace(self) -> bool:
         return self._workspace_controller._save_workspace()
@@ -353,7 +401,13 @@ class App(QMainWindow):
             return
         self._settings[key] = value
         self._page_runtime.apply(key, value)
-        if key in {"ui_scale", "high_contrast", "reduced_motion", "persistent_notifications"}:
+        if key in {
+            "appearance",
+            "ui_scale",
+            "high_contrast",
+            "reduced_motion",
+            "persistent_notifications",
+        }:
             self._apply_accessibility_settings()
 
     def _apply_accessibility_settings(self) -> None:
@@ -367,11 +421,21 @@ class App(QMainWindow):
         font.setPointSizeF(base_size * float(self._settings.get("ui_scale", 1.0) or 1.0))
         app.setFont(font)
         high_contrast = bool(self._settings.get("high_contrast", False))
+        appearance = str(self._settings.get("appearance", "system"))
+        if appearance == "system":
+            appearance = (
+                "dark"
+                if app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+                else "light"
+            )
         app.setProperty("highContrast", high_contrast)
-        app.setPalette(accessibility_palette(high_contrast))
+        app.setProperty("appearance", appearance)
+        app.setPalette(accessibility_palette(high_contrast, appearance))
         app.setStyleSheet(
             load_app_qss(
-                scale=float(self._settings.get("ui_scale", 1.0) or 1.0), high_contrast=high_contrast
+                scale=float(self._settings.get("ui_scale", 1.0) or 1.0),
+                high_contrast=high_contrast,
+                appearance=appearance,
             )
         )
 
@@ -457,6 +521,7 @@ class App(QMainWindow):
         self._task_controller.startup(
             check_updates=bool(self._settings.get("check_updates_on_startup", False))
         )
+
     @staticmethod
     def apply_theme(application: QApplication) -> None:
         """Apply presentation styling at the application composition boundary."""

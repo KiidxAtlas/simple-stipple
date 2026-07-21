@@ -54,6 +54,18 @@ QLabel[role="shell-meta"] {
     font-size: 12px;
     font-weight: 600;
 }
+QPushButton[role="shell-meta"] {
+    color: #c9d1d9;
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 3px 6px;
+}
+QPushButton[role="shell-meta"]:hover {
+    background: rgba(47, 129, 247, 0.12);
+    border-color: rgba(88, 166, 255, 0.45);
+}
 QLabel[role="page-title"] {
     color: #f0f6fc;
     font-size: 20px;
@@ -236,6 +248,38 @@ QPushButton[role="secondary"], QToolButton {
     border-color: #303a47;
     color: #c9d1d9;
 }
+QPushButton[role="ghost"] {
+    background: transparent;
+    border-color: transparent;
+    color: #c9d1d9;
+}
+
+QFrame[role="status-region"] {
+    background: rgba(31, 42, 56, 0.72);
+    border: 1px solid #303a47;
+    border-radius: 6px;
+}
+QFrame[role="status-region"][tone="success"] { border-color: rgba(63, 185, 80, 0.55); }
+QFrame[role="status-region"][tone="warn"] { border-color: rgba(227, 179, 65, 0.65); }
+QFrame[role="status-region"][tone="danger"] { border-color: rgba(248, 81, 73, 0.7); }
+QFrame[role="system-banner"] {
+    background: rgba(248, 81, 73, 0.13);
+    border: 1px solid rgba(248, 81, 73, 0.75);
+    border-radius: 7px;
+    color: #ffb4ab;
+}
+
+QToolButton[role="workflow-step"] {
+    border: none;
+    padding: 3px 7px;
+    color: #6e7681;
+}
+QToolButton[role="workflow-step"][state="current"] {
+    color: #ffffff;
+    background: rgba(47, 129, 247, 0.18);
+    font-weight: 700;
+}
+QToolButton[role="workflow-step"][state="complete"] { color: #7ee787; }
 QPushButton[role="secondary"]:hover, QToolButton:hover {
     background: #212b37;
     border-color: #58a6ff;
@@ -323,6 +367,24 @@ QLabel[role="toolbar-label"] {
     color: #8b949e;
     font-size: 10px;
     font-weight: 700;
+}
+QLabel[role="toolbar-guidance"] {
+    color: #b7c3d0;
+    font-size: 11px;
+    padding-left: 8px;
+}
+QFrame[role="workflow-strip"] {
+    background: #111720;
+    border-bottom: 1px solid #26303b;
+}
+QLabel[role="workflow-step"] {
+    color: #b7c3d0;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel[role="workflow-arrow"] {
+    color: #484f58;
+    font-size: 12px;
 }
 QLabel[role="toolbar-selection"], QLabel[role="status-meta"],
 QLabel[role="status-selection"], QLabel[role="status-zoom"] {

@@ -122,6 +122,33 @@ def test_layer_visibility_entity_native(qapp):
     assert not any(e.hidden for e in canvas._entities)
 
 
+def test_layer_visibility_is_atomic_and_undoable(qapp):
+    canvas, rt = make_rig(qapp)
+
+    rt.solo_layer("Layer 1")
+    assert [entity.hidden for entity in canvas._entities] == [False, True]
+    assert canvas.undo()
+    assert [entity.hidden for entity in canvas._entities] == [False, False]
+    assert canvas.redo()
+    assert [entity.hidden for entity in canvas._entities] == [False, True]
+
+
+def test_visibility_change_notifies_workspace_dirty_callback(qapp):
+    from src.ui.canvas.canvas_runtime import CanvasRuntime
+    from src.ui.canvas.dxf_canvas import DxfCanvas
+
+    changes: list[bool] = []
+    canvas = DxfCanvas(on_poly_change=lambda: changes.append(True))
+    runtime = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
+    runtime.load_polys_by_layer({"Layer 1": [square(0, 0)]}, fit=True)
+    changes.clear()
+
+    runtime.set_all_hidden(True)
+
+    assert changes == [True]
+    assert canvas.get_entity_records()[0]["hidden"] is True
+
+
 def test_layer_tree_rows_use_entity_indices(qapp):
     canvas, rt = make_rig(qapp)
     rows = rt.build_layer_tree_rows()

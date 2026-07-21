@@ -226,7 +226,7 @@ class SplitCommand(EntityChangeCommand):
     command_type: ClassVar[str] = "split"
     cutter: tuple[Point, ...] = ()
 
-    def reverse(self) -> Command:
+    def reverse(self) -> EntityChangeCommand:
         return RestoreEntitiesCommand(
             entity_ids=tuple(entity.id for entity in self.after),
             before=self.after,

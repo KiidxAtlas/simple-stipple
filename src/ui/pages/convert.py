@@ -56,7 +56,7 @@ LOGGER = logging.getLogger(__name__)
 # ── Page default settings ────────────────────────────────────────────────
 DEFAULT_GRID_VISIBLE = True
 DEFAULT_GRID_SPACING_MM = 1.0
-LOG_PANEL_MAX_HEIGHT = 140
+LOG_PANEL_MAX_HEIGHT = 260
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -77,10 +77,18 @@ def _append_ignored_entities_note(msg: str, stats: dict) -> str:
 class _ConversionSubTab(QWidget):
     """Shared cancellation, status, and file-picker behavior for conversion tools."""
 
+    log_line = Signal(str)
+    _btn_state = Signal(bool)
+    _status_sig = Signal(str, str)
     _status: QLabel
     _thread: threading.Thread | None
 
+    def _browse_src(self) -> None:
+        raise NotImplementedError
+
     def _start_job(self) -> threading.Event:
+        self._shutting_down = False
+        self.blockSignals(False)
         self._cancel_event = threading.Event()
         self._running = True
         return self._cancel_event
@@ -105,13 +113,30 @@ class _ConversionSubTab(QWidget):
         wait for an in-flight one to finish rather than abandoning it
         outright — the thread is daemon=True either way, so a timeout here
         never blocks the app from actually closing."""
+        self._shutting_down = True
         self.cancel()
+        self.blockSignals(True)
         thread = getattr(self, "_thread", None)
         if thread is not None and thread.is_alive():
             thread.join(timeout=2.0)
 
     def _set_status(self, text: str, color: str = STATUS_NEUTRAL) -> None:
         set_status_label(self._status, text, color)
+
+    def _confirm_replace(self, paths: list[Path]) -> bool:
+        existing = [path for path in paths if path.exists()]
+        if not existing:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Replace Existing Files?",
+            f"{len(existing)} destination file(s) already exist and will be replaced.\n\n"
+            + "\n".join(path.name for path in existing[:5])
+            + ("\n…" if len(existing) > 5 else ""),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def _add_picker_row(
         self,
@@ -600,6 +625,23 @@ class FixerSubTab(_ConversionSubTab):
             except OSError as exc:
                 QMessageBox.warning(self, "Output Folder Error", str(exc))
                 return
+        if self._is_batch():
+            iterator = (
+                source_path.rglob("*")
+                if self._include_subfolders.isChecked()
+                else source_path.iterdir()
+            )
+            files = sorted(
+                path
+                for path in iterator
+                if path.is_file() and path.suffix.casefold() == ".dxf"
+            )
+            root = source_path
+            destinations = [Path(out) / file.relative_to(root) for file in files]
+        else:
+            destinations = [Path(out)]
+        if not self._confirm_replace(destinations):
+            return
         cancel_event = self._start_job()
         self._btn.setEnabled(False)
         self._set_status("Fixing…")
@@ -922,9 +964,6 @@ class SvgSubTab(_ConversionSubTab):
                 f"The source {'folder' if self._is_batch() else 'file'} does not exist:\n{src}",
             )
             return
-        cancel_event = self._start_job()
-        self._btn.setEnabled(False)
-        self._set_status("Converting…")
         if self._is_batch():
             out_dir = self._out_edit.text().strip()
             if not out_dir:
@@ -933,8 +972,24 @@ class SvgSubTab(_ConversionSubTab):
                     "Output Folder Required",
                     "Please select an output folder for batch conversion.",
                 )
-                self._btn.setEnabled(True)
                 return
+            iterator = (
+                source_path.rglob("*")
+                if self._include_subfolders.isChecked()
+                else source_path.iterdir()
+            )
+            files = sorted(
+                path
+                for path in iterator
+                if path.is_file() and path.suffix.casefold() == ".dxf"
+            )
+            destinations = [
+                Path(out_dir) / file.relative_to(source_path).with_suffix(".svg")
+                for file in files
+            ]
+            if not self._confirm_replace(destinations):
+                return
+            cancel_event = self._start_job()
             self._thread = threading.Thread(
                 target=self._convert_batch,
                 args=(src, out_dir, cancel_event, self._include_subfolders.isChecked()),
@@ -949,11 +1004,15 @@ class SvgSubTab(_ConversionSubTab):
                 QMessageBox.warning(
                     self, "Unsafe Output Path", "Output must not overwrite the input DXF."
                 )
-                self._btn.setEnabled(True)
                 return
+            if not self._confirm_replace([Path(out)]):
+                return
+            cancel_event = self._start_job()
             self._thread = threading.Thread(
                 target=self._convert, args=(src, out, cancel_event), daemon=True
             )
+        self._btn.setEnabled(False)
+        self._set_status("Converting…")
         self._thread.start()
 
     def _convert(self, src: str, out: str, cancel_event: threading.Event) -> None:
@@ -1189,9 +1248,6 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 f"The source {'folder' if self._is_batch() else 'file'} does not exist:\n{src}",
             )
             return
-        cancel_event = self._start_job()
-        self._btn.setEnabled(False)
-        self._set_status("Converting…")
         if self._is_batch():
             out_dir = self._out_edit.text().strip()
             if not out_dir:
@@ -1200,8 +1256,24 @@ class SvgToDxfSubTab(_ConversionSubTab):
                     "Output Folder Required",
                     "Please select an output folder for batch conversion.",
                 )
-                self._btn.setEnabled(True)
                 return
+            iterator = (
+                source_path.rglob("*")
+                if self._include_subfolders.isChecked()
+                else source_path.iterdir()
+            )
+            files = sorted(
+                path
+                for path in iterator
+                if path.is_file() and path.suffix.casefold() == ".svg"
+            )
+            destinations = [
+                Path(out_dir) / file.relative_to(source_path).with_suffix(".dxf")
+                for file in files
+            ]
+            if not self._confirm_replace(destinations):
+                return
+            cancel_event = self._start_job()
             self._thread = threading.Thread(
                 target=self._convert_batch,
                 args=(src, out_dir, cancel_event, self._include_subfolders.isChecked()),
@@ -1216,11 +1288,15 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 QMessageBox.warning(
                     self, "Unsafe Output Path", "Output must not overwrite the input SVG."
                 )
-                self._btn.setEnabled(True)
                 return
+            if not self._confirm_replace([Path(out)]):
+                return
+            cancel_event = self._start_job()
             self._thread = threading.Thread(
                 target=self._convert, args=(src, out, cancel_event), daemon=True
             )
+        self._btn.setEnabled(False)
+        self._set_status("Converting…")
         self._thread.start()
 
     def _convert(self, src: str, out: str, cancel_event: threading.Event) -> None:
@@ -1510,7 +1586,7 @@ class ConvertPage(BasePage):
         _ev_choose.setAccessibleDescription(
             "Choose the input for the currently selected conversion task"
         )
-        _ev_choose.clicked.connect(lambda: self._tool_stack.currentWidget()._browse_src())
+        _ev_choose.clicked.connect(self._browse_current_source)
         _ev.addSpacing(8)
         _ev.addWidget(_ev_choose, alignment=Qt.AlignmentFlag.AlignHCenter)
         _ev.addStretch()
@@ -1578,9 +1654,32 @@ class ConvertPage(BasePage):
             lambda b: self._update_sec_action_if_active(3, b)
         )
 
+        self._active_tab_idx: int | None = None
         self._tool_group.idClicked.connect(self._on_tool_changed)
+        self._tool_group.idClicked.connect(lambda _index: self._emit_state_changed())
+        # Every persisted Convert control participates in workspace dirty
+        # tracking. Previously all of these values round-tripped through JSON
+        # while producing zero stateChanged signals, so close/autosave lost
+        # them silently.
+        for subtab in (
+            self._fvi_subtab,
+            self._fix_subtab,
+            self._svg_subtab,
+            self._svg_dxf_subtab,
+        ):
+            for edit in subtab.findChildren(QLineEdit):
+                edit.textChanged.connect(lambda _value: self._emit_state_changed())
+            for check in subtab.findChildren(QCheckBox):
+                check.toggled.connect(lambda _checked: self._emit_state_changed())
+            for combo in subtab.findChildren(QComboBox):
+                combo.currentIndexChanged.connect(lambda _index: self._emit_state_changed())
         self._on_tool_changed(0)
         self._refresh_preview_ui()
+
+    def _browse_current_source(self) -> None:
+        current = self._tool_stack.currentWidget()
+        if isinstance(current, _ConversionSubTab):
+            current._browse_src()
 
     def _on_tool_changed(self, idx: int) -> None:
         self._tool_stack.setCurrentIndex(idx)
@@ -1598,7 +1697,7 @@ class ConvertPage(BasePage):
             self._svg_subtab,
             self._svg_dxf_subtab,
         )
-        if hasattr(self, "_active_tab_idx"):
+        if self._active_tab_idx is not None:
             prev = _all[self._active_tab_idx]
             prev._btn_state.disconnect(self._footer_btn.setEnabled)
             prev._status_sig.disconnect(self._set_footer_status)
@@ -1721,6 +1820,7 @@ class ConvertPage(BasePage):
         }
 
     def apply_workspace_state(self, state: dict | None) -> None:
+        self._suspend_state = True
         if not isinstance(state, dict):
             state = {}
         try:
@@ -1755,6 +1855,7 @@ class ConvertPage(BasePage):
             self._right_stack.setCurrentIndex(1)
             if state.get("preview_view"):
                 self._preview_canvas.set_view_state(state["preview_view"])
+        self._suspend_state = False
         self._refresh_preview_ui()
 
     def clear_workspace_state(self) -> None:
@@ -1762,6 +1863,25 @@ class ConvertPage(BasePage):
         self._log.clear()
         self._right_stack.setCurrentIndex(0)
         self._footer_status.setVisible(False)
+
+    def has_workspace_content(self) -> bool:
+        state = self.get_workspace_state()
+        return bool(
+            state["preview_polys"]
+            or any(
+                str(state[key]).strip()
+                for key in (
+                    "fvi_src",
+                    "fvi_out",
+                    "fix_src",
+                    "fix_out",
+                    "svg_src",
+                    "svg_out",
+                    "svg_dxf_src",
+                    "svg_dxf_out",
+                )
+            )
+        )
 
     def _load_preview(self, dxf_path: str) -> None:
         try:

@@ -16,6 +16,7 @@ from src.backend.cad.geometry import (
 from src.backend.cad.geometry import (
     SNAP_DIST as _SNAP_DIST,
 )
+from src.backend.spatial import build_snap_tree, find_nearest_index
 
 # Geometry epsilons (kept local to avoid pulling backend.geometry into the
 # UI-only behaviors layer; values mirror src/backend/cad/geometry.py).
@@ -71,15 +72,18 @@ def snap_to_grid(wx: float, wy: float, spacing: float) -> Point:
     return (round(wx / spacing) * spacing, round(wy / spacing) * spacing)
 
 
-def angle_snap(ax: float, ay: float, wx: float, wy: float) -> Point:
-    """Snap a point to the nearest 45-degree ray from an anchor point."""
+def angle_snap(
+    ax: float, ay: float, wx: float, wy: float, increment_degrees: float = 45.0
+) -> Point:
+    """Snap a point to the nearest configured angle ray from an anchor."""
     dxx = wx - ax
     dyy = wy - ay
     dist = math.hypot(dxx, dyy)
     if dist < 1e-9:
         return (wx, wy)
     ang = math.degrees(math.atan2(dyy, dxx))
-    snapped_ang = round(ang / 45.0) * 45.0
+    increment = max(0.1, min(180.0, float(increment_degrees)))
+    snapped_ang = round(ang / increment) * increment
     rad = math.radians(snapped_ang)
     return (ax + math.cos(rad) * dist, ay + math.sin(rad) * dist)
 
@@ -95,8 +99,8 @@ def find_nearest_vertex_snap(
     exclude: set[tuple[int, int]] | None = None,
 ) -> Point | None:
     """Return nearest vertex world position within snap distance."""
-    best_dist = snap_dist
-    best_pt: Point | None = None
+    canvas_points: list[Point] = []
+    world_points: list[Point] = []
     excluded = exclude or set()
     for pi, poly in enumerate(polylines):
         if pi in hidden_polys:
@@ -104,12 +108,12 @@ def find_nearest_vertex_snap(
         for vi, pt in enumerate(poly):
             if (pi, vi) in excluded:
                 continue
-            sx, sy = w2c(*pt)
-            dist = math.hypot(cx - sx, cy - sy)
-            if dist < best_dist:
-                best_dist = dist
-                best_pt = pt
-    return best_pt
+            canvas_points.append(w2c(*pt))
+            world_points.append(pt)
+    nearest = find_nearest_index(build_snap_tree(canvas_points), (cx, cy), snap_dist)
+    if nearest is None:
+        return None
+    return world_points[nearest]
 
 
 def _candidate_polylines(
@@ -180,22 +184,21 @@ def snap_to_polyline(
     excluded = exclude_vertices or set()
 
     if allow_vertex:
-        best_dist = snap_dist
-        best_pt: Point | None = None
+        canvas_points: list[Point] = []
+        world_points: list[Point] = []
         for pi, poly in candidate_polys:
             for vi, pt in enumerate(poly):
                 if (pi, vi) in excluded:
                     continue
-                sx, sy = w2c(*pt)
-                d = math.hypot(cx - sx, cy - sy)
-                if d < best_dist:
-                    best_dist = d
-                    best_pt = pt
-        if best_pt is not None:
-            return (best_pt[0], best_pt[1], "vertex")
+                canvas_points.append(w2c(*pt))
+                world_points.append(pt)
+        nearest = find_nearest_index(build_snap_tree(canvas_points), (cx, cy), snap_dist)
+        if nearest is not None:
+            vertex_pt = world_points[nearest]
+            return (vertex_pt[0], vertex_pt[1], "vertex")
 
         best_dist = snap_dist
-        best_pt = None
+        best_pt: Point | None = None
         for _pi, poly in candidate_polys:
             n = len(poly)
             closed = is_poly_closed(poly)

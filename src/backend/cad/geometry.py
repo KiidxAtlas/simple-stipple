@@ -405,7 +405,10 @@ def shape_rect(w: float, h: float) -> list[tuple[float, float]]:
 
 @lru_cache(maxsize=256)
 def _shape_circle_cached(r: float, n: int) -> tuple[PointTuple, ...]:
-    return tuple(_to_coords(Point(0, 0).buffer(r, quad_segs=max(3, n // 4))))
+    from src.backend.jit import tessellate_arc
+
+    segments = max(12, int(n))
+    return tuple((float(x), float(y)) for x, y in tessellate_arc(0.0, 0.0, r, 0.0, math.tau, segments))
 
 
 def shape_circle(r: float, n: int = 64) -> list[PointTuple]:

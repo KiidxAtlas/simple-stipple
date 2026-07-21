@@ -82,6 +82,20 @@ class CanvasPropertiesPanel(QWidget):
         self._empty_hint.setWordWrap(True)
         root.addWidget(self._empty_hint)
 
+        self._dimension_container = QWidget()
+        dimension_layout = QGridLayout(self._dimension_container)
+        dimension_layout.setContentsMargins(0, 0, 0, 0)
+        dimension_layout.addWidget(QLabel("Value"), 0, 0)
+        self._dimension_value = _num_edit(self._commit_dimension_value)
+        self._dimension_value.setToolTip(
+            "Edit a driving dimension to change geometry; reference dimensions change precision"
+        )
+        dimension_layout.addWidget(self._dimension_value, 0, 1)
+        self._dimension_delete = QPushButton("Delete Dimension")
+        self._dimension_delete.clicked.connect(canvas._delete_selected_dimension)
+        dimension_layout.addWidget(self._dimension_delete, 1, 0, 1, 2)
+        root.addWidget(self._dimension_container)
+
         self._fields_container = QWidget()
         fields_root = QVBoxLayout(self._fields_container)
         fields_root.setContentsMargins(0, 0, 0, 0)
@@ -172,6 +186,12 @@ class CanvasPropertiesPanel(QWidget):
                     canvas.duplicate_selected,
                 ),
                 (
+                    "constraints",
+                    "Remove Constraints",
+                    "Remove geometric constraints attached to the selection",
+                    canvas.remove_constraints_for_selection,
+                ),
+                (
                     "close",
                     "Close path",
                     "Close selected open paths",
@@ -216,6 +236,49 @@ class CanvasPropertiesPanel(QWidget):
             for axis, lbl in self._axis_labels.items():
                 lbl.setText(f"{axis} ({unit_suffix(unit)})")
             self._aspect_lock_btn.setChecked(getattr(self._canvas, "_aspect_ratio_locked", False))
+            dimension_index = getattr(self._canvas, "_selected_dimension", None)
+            dimension = (
+                self._canvas._dimensions[dimension_index]
+                if isinstance(dimension_index, int)
+                and 0 <= dimension_index < len(self._canvas._dimensions)
+                else None
+            )
+            self._dimension_container.setVisible(dimension is not None)
+            if dimension is not None:
+                angular = dimension.get("type") == "angle"
+                driving = isinstance(dimension.get("driving"), dict)
+                value = self._canvas._dimension_tool.value(dimension)
+                self._summary.setText(
+                    f"{'Driving' if driving else 'Reference'} "
+                    f"{'Angle' if angular else 'Linear'} Dimension"
+                )
+                target = (
+                    dimension.get("driving", {}).get("target") if driving else None
+                )
+                conflict = isinstance(target, (int, float)) and abs(value - float(target)) > max(
+                    1e-5, abs(float(target)) * 1e-6
+                )
+                self._metrics.setText(
+                    "Driving target conflicts with constrained geometry"
+                    if conflict
+                    else "Editing updates geometry"
+                    if driving
+                    else "Reference measurement"
+                )
+                shown = value if angular else to_display(value, unit)
+                self._dimension_value.setText(f"{shown:g}")
+                self._dimension_value.setEnabled(driving)
+                if driving:
+                    self._dimension_value.setToolTip(
+                        "Enter an angle in degrees" if angular else "Accepts arithmetic and units"
+                    )
+                else:
+                    self._dimension_value.setToolTip(
+                        "Reference values follow geometry; use the dimension context menu to change decimals"
+                    )
+                self._fields_container.hide()
+                self._empty_hint.hide()
+                return
             info = self._canvas.selection_geometry()
             enabled = info is not None
             self._fields_container.setVisible(enabled)
@@ -265,6 +328,31 @@ class CanvasPropertiesPanel(QWidget):
                 for i in getattr(self._canvas, "_sel", set())
                 if 0 <= i < len(self._canvas._entities)
             ]
+            selected_ids = {entity.id for entity in selected}
+            constraint_count = sum(
+                1
+                for constraint in getattr(self._canvas, "_constraints", [])
+                if selected_ids.intersection(constraint.entity_ids)
+            )
+            from src.backend.cad.constraints import constraint_residuals
+
+            residuals = constraint_residuals(
+                {entity.id: entity.points for entity in self._canvas._entities},
+                list(getattr(self._canvas, "_constraints", [])),
+            )
+            conflict_count = sum(
+                1
+                for constraint in getattr(self._canvas, "_constraints", [])
+                if selected_ids.intersection(constraint.entity_ids)
+                and residuals.get(constraint.id, float("inf")) > 1e-5
+            )
+            if constraint_count:
+                self._metrics.setText(
+                    f"{self._metrics.text()} · {constraint_count} constraint"
+                    f"{'s' if constraint_count != 1 else ''}"
+                    f"{' · ' + str(conflict_count) + ' conflicting' if conflict_count else ''}"
+                )
+            self._context_buttons["constraints"].setVisible(constraint_count > 0)
             self._context_buttons["close"].setVisible(
                 any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
             )
@@ -346,6 +434,26 @@ class CanvasPropertiesPanel(QWidget):
         x = self._value(self._x)
         y = self._value(self._y)
         if self._canvas.move_selection_to(x, y):
+            self.refresh()
+
+    def _commit_dimension_value(self) -> None:
+        if self._updating:
+            return
+        index = getattr(self._canvas, "_selected_dimension", None)
+        if not isinstance(index, int) or not 0 <= index < len(self._canvas._dimensions):
+            return
+        dimension = self._canvas._dimensions[index]
+        angular = dimension.get("type") == "angle"
+        try:
+            value = parse_numeric_expression(
+                self._dimension_value.text(),
+                self._unit(),
+                is_length=not angular,
+            )
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            self.refresh()
+            return
+        if value <= 0 or not self._canvas._dimension_tool.set_value(index, value):
             self.refresh()
 
     def _commit_size(self, axis: str) -> None:

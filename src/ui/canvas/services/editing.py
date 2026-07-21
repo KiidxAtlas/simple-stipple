@@ -13,6 +13,7 @@ from typing import Any
 from PySide6.QtCore import (
     QRectF,
 )
+from shapely.geometry import Polygon
 
 from src.backend.cad.editor_geometry import (
     transform_entity_metadata,
@@ -23,6 +24,7 @@ from src.backend.cad.shapes import ShapeFactory
 from src.backend.cad.snapping import (
     snap_to_polyline as _snap_to_polyline_candidates,
 )
+from src.backend.editing.boolean import boolean_polylines
 from src.backend.editing.offset import offset_polyline
 from src.backend.editing.split import split_paths
 from src.backend.editing.transform import scale
@@ -87,6 +89,46 @@ class EditingService:
         self._host._document.ensure_unique_ids()
         self._host._last_split_result_indices = changed_indices
         return True, result.closed_splits, result.open_splits
+
+    def _carve_geometry_with_shape(self, cutter: list[tuple[float, float]]) -> tuple[bool, int]:
+        """Subtract a closed drawn profile from every overlapping closed region."""
+        if len(cutter) < 4 or not self._is_poly_closed(cutter):
+            return False, 0
+        cutter_shape = Polygon(cutter).buffer(0)
+        if cutter_shape.is_empty:
+            return False, 0
+        entities: list[EntityRecord] = []
+        changed_indices: set[int] = set()
+        carved = 0
+        for source in self._host._entities:
+            if not self._is_poly_closed(source.points) or source.locked:
+                entities.append(source)
+                continue
+            source_shape = Polygon(source.points).buffer(0)
+            if source_shape.is_empty or source_shape.intersection(cutter_shape).area <= 1e-9:
+                entities.append(source)
+                continue
+            rings = boolean_polylines([source.points, cutter], "subtract")
+            carved += 1
+            for ring_index, ring in enumerate(rings):
+                entities.append(
+                    EntityRecord(
+                        points=ring,
+                        id=source.id if ring_index == 0 else new_entity_id(),
+                        kind="polyline",
+                        construction=source.construction,
+                        hidden=source.hidden,
+                        locked=source.locked,
+                        layer=source.layer,
+                    )
+                )
+                changed_indices.add(len(entities) - 1)
+        if not carved:
+            return False, 0
+        self._host._document.entities = entities
+        self._host._document.ensure_unique_ids()
+        self._host._last_split_result_indices = changed_indices
+        return True, carved
 
     # ---- Snap helpers (inlined from _SnapMixin) ----
 
@@ -671,7 +713,7 @@ class EditingService:
             info["meta"] = deepcopy(e.meta) if e.meta else {}
             info["index"] = indices[0]
             display_kind = e.kind
-            display_meta = info["meta"]
+            display_meta: dict[str, Any] = info["meta"]  # type: ignore[assignment]
             if e.kind == "polyline":
                 from src.backend.cad.recognition import recognize_polyline
 
@@ -881,6 +923,40 @@ class EditingService:
         self._host._notify()
         self._host._fire_poly_change()
 
+    def scale_by_reference(self, factor: float, origin: tuple[float, float]) -> bool:
+        """Uniformly scale the current selection (or all visible geometry).
+
+        The first reference point is the fixed base point, matching standard
+        CAD scale-by-reference behavior. Locked and hidden entities are never
+        changed implicitly.
+        """
+        selected = self._host._selected_indices()
+        indices = self._host._mutable_selected_indices()
+        if not selected:
+            indices = [
+                index
+                for index, entity in enumerate(self._host._entities)
+                if not entity.hidden and not entity.locked
+            ]
+        if not indices or not math.isfinite(factor) or factor <= 0:
+            return False
+        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        result = self._host._canvas_service.execute(
+            TransformCommand(
+                entity_ids=entity_ids,
+                operation="scale",
+                origin=origin,
+                x=factor,
+                y=factor,
+            )
+        )
+        if not result.changed:
+            return False
+        self._host._redraw()
+        self._host._notify()
+        self._host._fire_poly_change()
+        return True
+
     def _apply_shape_size_inputs(self) -> None:
         if (
             self._host._draw_shape_w_edit is None
@@ -1061,7 +1137,7 @@ class EditingService:
     #    (menu actions) that the call-only audit missed. ──
 
     def _send_selected_to_draft(self) -> None:
-        cb = getattr(self, "_send_selected_to_draft_cb", None)
+        cb = getattr(self._host, "_send_selected_to_draft_cb", None)
         if not callable(cb):
             return
         selected = self._host.get_selected()
@@ -1073,7 +1149,7 @@ class EditingService:
         self._host._show_flash("Sent to Draft", 900)
 
     def _send_selected_to_pattern(self) -> None:
-        cb = getattr(self, "_send_selected_to_pattern_cb", None)
+        cb = getattr(self._host, "_send_selected_to_pattern_cb", None)
         if not callable(cb):
             return
         selected = self._host.get_selected()
@@ -1085,7 +1161,7 @@ class EditingService:
         self._host._show_flash("Sent to Pattern", 900)
 
     def _use_selected_as_custom_tile(self) -> None:
-        cb = getattr(self, "_use_selected_as_custom_tile_cb", None)
+        cb = getattr(self._host, "_use_selected_as_custom_tile_cb", None)
         if not callable(cb):
             return
         selected = self._host.get_selected()
@@ -1104,7 +1180,7 @@ class EditingService:
         report = analyze_geometry(polys)
         minimum = "—" if report.minimum_segment is None else f"{report.minimum_segment:.4g} mm"
         QMessageBox.information(
-            self,
+            self._host,
             "Geometry Preflight",
             f"{report.summary()}\n\n"
             f"Analysis tolerance: {report.tolerance:.4g} mm\n"
@@ -1254,22 +1330,22 @@ class EditingService:
         for index in indices:
             points = self._host._entities[index].points
             if primitive == "line":
-                result = fit_line(points)
-                if result is not None:
+                line_result = fit_line(points)
+                if line_result is not None:
                     replacements[index] = (
-                        list(result),
+                        list(line_result),
                         "line",
-                        {"start": result[0], "end": result[1]},
+                        {"start": line_result[0], "end": line_result[1]},
                     )
             elif primitive in {"circle", "arc"}:
-                result = fit_circle(points)
-                if result is None:
+                circle_result = fit_circle(points)
+                if circle_result is None:
                     continue
-                center, radius = result
+                center, radius = circle_result
                 if primitive == "circle":
-                    shape = ShapeFactory.circle(center, radius)
+                    circle_shape = ShapeFactory.circle(center, radius)
                     replacements[index] = (
-                        list(shape.points),
+                        list(circle_shape.points),
                         "circle",
                         {"center": center, "radius": radius},
                     )
@@ -1295,9 +1371,9 @@ class EditingService:
                     )
                     if (middle - start) % 360 > (end - start) % 360:
                         start, end = end, start
-                    shape = ShapeFactory.arc(center, radius, start, end, segments=48)
+                    arc_shape = ShapeFactory.arc(center, radius, start, end, segments=48)
                     replacements[index] = (
-                        list(shape.points),
+                        list(arc_shape.points),
                         "arc",
                         {
                             "center": center,

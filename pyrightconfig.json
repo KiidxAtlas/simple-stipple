@@ -1,6 +1,6 @@
 {
   "include": ["src"],
-  "ignore": [],
+  "exclude": ["build", ".venv"],
   "venvPath": ".",
   "venv": ".venv",
   "typeCheckingMode": "basic",

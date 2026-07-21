@@ -6,19 +6,17 @@ import math
 import random
 
 import numpy as np
-from scipy.stats.qmc import PoissonDisk  # type: ignore[import-untyped]
+import shapely  # type: ignore[import-untyped]
 from shapely import prepared  # type: ignore[import-untyped]
 from shapely.geometry import (
     GeometryCollection,
     LineString,  # type: ignore[import-untyped]
     MultiLineString,
-    MultiPoint,
     MultiPolygon,
-    Point,
     Polygon,
 )
-from shapely.ops import voronoi_diagram  # type: ignore[import-untyped]
 
+from src.backend.jit import poisson_disk_points, tessellate_circles
 from src.backend.pattern._shared import (
     LOGGER,
     _clip_to_outline,
@@ -26,6 +24,7 @@ from src.backend.pattern._shared import (
     _extract_polys,
 )
 from src.backend.pattern.cancellation import cancellation_checkpoint
+from src.backend.voronoi import voronoi_diagram
 
 
 def gen_flow_lines(
@@ -92,31 +91,31 @@ def gen_stipple_dots(
     if w <= 0 or h <= 0:
         return []
 
-    scale = max(w, h)
-    r_scaled = spacing / scale
-
     rng_seed = 42 if seed is None else int(seed)
-    engine = PoissonDisk(d=2, radius=r_scaled, rng=np.random.default_rng(rng_seed))
-    n_candidates = max(64, int(w * h / (spacing**2) * 4))
-    samples = engine.random(n_candidates)
-
-    centres_world = [(minx + s[0] * w, miny + s[1] * h) for s in samples]
+    centers_array = poisson_disk_points(minx, miny, maxx, maxy, spacing, rng_seed)
+    centres_world = [(float(x), float(y)) for x, y in centers_array]
 
     prep = prepared.prep(outline_poly)
     n_seg = {"fast": 12, "balanced": 24}.get(quality, 48)
     result: list[list[tuple[float, float]]] = []
 
-    for cx, cy in centres_world:
+    circles = tessellate_circles(np.asarray(centres_world), radius, n_seg)
+    center_geometries = shapely.points(np.asarray(centres_world))
+    fully_inside = np.asarray(shapely.contains(outline_poly, center_geometries)) & (
+        np.asarray(shapely.distance(outline_poly.boundary, center_geometries)) >= radius
+    )
+    for points, contained in zip(circles, fully_inside):
         cancellation_checkpoint()
-        result.extend(_circle_segments(cx, cy, radius, n_seg, outline_poly, prep))
+        if contained:
+            result.append([(float(x), float(y)) for x, y in points])
+        else:
+            result.extend(_circle_segments(points, radius, outline_poly, prep))
     return result
 
 
 def _circle_segments(
-    cx: float,
-    cy: float,
+    points,
     radius: float,
-    n_seg: int,
     outline_poly,
     prep,
 ) -> list[list[tuple[float, float]]]:
@@ -124,14 +123,7 @@ def _circle_segments(
 
     Returns the exterior coordinate polylines of all valid clipped pieces.
     """
-    pts = [
-        (
-            cx + radius * math.cos(2 * math.pi * i / n_seg),
-            cy + radius * math.sin(2 * math.pi * i / n_seg),
-        )
-        for i in range(n_seg)
-    ]
-    pts.append(pts[0])
+    pts = [(float(x), float(y)) for x, y in points]
     circ = Polygon(pts)
     if not prep.intersects(circ):
         return []
@@ -174,6 +166,7 @@ def gen_stipple_interlaced(
     n_cols = int((w / col_spacing) + 2)
     n_rows = int((h / row_spacing) + 2)
 
+    centers: list[tuple[float, float]] = []
     for row in range(n_rows):
         cancellation_checkpoint()
         for col in range(n_cols):
@@ -181,9 +174,19 @@ def gen_stipple_interlaced(
             if row % 2 == 1:
                 x += col_spacing / 2.0
             y = miny + row * row_spacing
-            cx, cy = x, y
+            centers.append((x, y))
 
-            result.extend(_circle_segments(cx, cy, radius, n_seg, outline_poly, prep))
+    circles = tessellate_circles(np.asarray(centers), radius, n_seg)
+    center_geometries = shapely.points(np.asarray(centers))
+    fully_inside = np.asarray(shapely.contains(outline_poly, center_geometries)) & (
+        np.asarray(shapely.distance(outline_poly.boundary, center_geometries)) >= radius
+    )
+    for points, contained in zip(circles, fully_inside):
+        cancellation_checkpoint()
+        if contained:
+            result.append([(float(x), float(y)) for x, y in points])
+        else:
+            result.extend(_circle_segments(points, radius, outline_poly, prep))
 
     return result
 
@@ -201,17 +204,18 @@ def gen_voronoi(
     if extent <= 0:
         return []
     rng = random.Random(seed)
-    pts = [Point(rng.uniform(minx, maxx), rng.uniform(miny, maxy)) for _ in range(n_cells)]
-    mp = MultiPoint(pts)
-    envelope = outline_poly.convex_hull.buffer(extent * 0.1)
+    pts = [(rng.uniform(minx, maxx), rng.uniform(miny, maxy)) for _ in range(n_cells)]
     try:
-        diagram = voronoi_diagram(mp, envelope=envelope)
+        cells = voronoi_diagram(pts, radius=extent * 4.0)
     except (TypeError, ValueError, RuntimeError):
         return []
     result: list[list[tuple[float, float]]] = []
     shrink = gap / 2.0
-    for cell in diagram.geoms:
+    for coordinates in cells:
         cancellation_checkpoint()
+        if len(coordinates) < 3:
+            continue
+        cell = Polygon(coordinates)
         clipped = outline_poly.intersection(cell)
         if clipped.is_empty:
             continue

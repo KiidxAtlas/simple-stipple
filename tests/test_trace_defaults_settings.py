@@ -35,6 +35,21 @@ def test_new_trace_page_starts_with_the_configured_default_resolution(qapp):
     assert page._simplify.text() == "0.5"
 
 
+def test_trace_workflow_header_never_expands_into_content_area(qapp):
+    from PySide6.QtWidgets import QSizePolicy
+
+    from src.ui.pages.trace.tab import TracePage
+
+    page = TracePage(None, None)
+    page.resize(1200, 900)
+    page.show()
+    qapp.processEvents()
+
+    assert page._workflow_strip.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Fixed
+    assert page._workflow_strip.height() <= page._workflow_strip.sizeHint().height()
+    assert page._splitter.height() > page._workflow_strip.height() * 5
+
+
 def test_clearing_the_workspace_reapplies_the_configured_default(qapp):
     from src.ui.pages.trace.session import clear_trace_workspace_state
     from src.ui.pages.trace.tab import TracePage

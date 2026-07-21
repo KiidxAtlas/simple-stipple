@@ -8,6 +8,18 @@ def _page(qapp):
     return PatternPage(settings=validate_settings({}))
 
 
+def test_pattern_shutdown_ignores_late_preview_result(qapp):
+    page = _page(qapp)
+    page._preview_polys_cache = [[(1.0, 1.0)]]
+    page.shutdown()
+
+    page._handle_preview_done((page._preview_revision, [[(9.0, 9.0)]], 1))
+
+    assert page._preview_polys_cache == [[(1.0, 1.0)]]
+    page.deleteLater()
+    qapp.processEvents()
+
+
 def test_pattern_outline_roles_default_by_topology_and_drive_cutouts(qapp):
     page = _page(qapp)
     outer = [(0, 0), (20, 0), (20, 20), (0, 20), (0, 0)]
@@ -158,8 +170,18 @@ def test_selecting_outline_or_preview_geometry_selects_owning_zone(qapp):
     try:
         page.load_outline_polys([first, second], source_label="zones")
         page._zones = [
-            {"outline_ids": [page._outline_ids[0]], "pattern": "Honeycomb", "params": {}, "scale": (30, 10)},
-            {"outline_ids": [page._outline_ids[1]], "pattern": "Honeycomb", "params": {}, "scale": (30, 10)},
+            {
+                "outline_ids": [page._outline_ids[0]],
+                "pattern": "Honeycomb",
+                "params": {},
+                "scale": (30, 10),
+            },
+            {
+                "outline_ids": [page._outline_ids[1]],
+                "pattern": "Honeycomb",
+                "params": {},
+                "scale": (30, 10),
+            },
         ]
         page._refresh_zone_list()
 

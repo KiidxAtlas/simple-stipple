@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from PySide6.QtCore import QObject, Signal
 
 from src.backend.persistence import read_json_file, write_json_file_atomic
-from src.core.paths import user_data_dir
+from src.core.paths import custom_tiles_dir, user_data_dir
 
 _SETTINGS_FILE = user_data_dir() / "settings.json"
 _LOG = logging.getLogger(__name__)
@@ -167,6 +167,14 @@ DEFAULT_CONTEXT_MENU_SECTIONS: tuple[str, ...] = (
     "view",
 )
 
+# Sections placed under "More actions…". Everything else stays directly
+# visible; this replaces the old position-based cutoff that routinely buried
+# the operation relevant to the current mode.
+DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS: tuple[str, ...] = (
+    "arrange",
+    "text",
+)
+
 CONTEXT_MENU_SECTION_LABELS: tuple[tuple[str, str], ...] = (
     ("create", "Create shapes"),
     ("selected", "Selected-object actions, paths, constraints & symbols"),
@@ -192,6 +200,12 @@ def normalize_context_menu_sections(value: object) -> list[str]:
     if "view" not in result:
         result.append("view")
     return result
+
+
+def normalize_context_menu_overflow_sections(value: object) -> list[str]:
+    allowed = {key for key, _label in CONTEXT_MENU_SECTION_LABELS}
+    values = value if isinstance(value, list) else list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
+    return list(dict.fromkeys(key for key in values if isinstance(key, str) and key in allowed))
 
 
 # =============================================================================
@@ -347,12 +361,32 @@ class SettingsSchema(BaseModel):
     auto_fetch_periodic: bool = False
     auto_fetch_interval_minutes: Annotated[int, Field(ge=1, le=1440)] = 10
     ui_scale: Annotated[float, Field(ge=0.5, le=3.0)] = 1.0
+    rotation_snap_increment: Annotated[float, Field(ge=0.1, le=180.0)] = 15.0
+    custom_tiles_dir: str = Field(default_factory=lambda: str(custom_tiles_dir()))
+    grid_visible: bool = True
+    grid_snap: bool = False
+    grid_spacing: Annotated[float, Field(ge=0.001, le=100000.0)] = 10.0
+    snap_master: bool = True
+    snap_vertex: bool = True
+    snap_edge: bool = True
+    snap_tangent: bool = True
+    snap_extension: bool = True
+    snap_angle: bool = True
+    snap_equal_length: bool = True
+    snap_axis_alignment: bool = True
+    construction_mode_default: bool = False
+    aspect_ratio_locked_default: bool = False
+    geometry_health_visible: bool = False
+    curvature_visible: bool = False
     high_contrast: bool = False
     reduced_motion: bool = False
     persistent_notifications: bool = False
     radial_menu_tools: list[str] = Field(default_factory=lambda: list(DEFAULT_RADIAL_MENU_TOOLS))
     context_menu_sections: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_MENU_SECTIONS)
+    )
+    context_menu_overflow_sections: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
     )
     draw_sidebar_sections: list[str] = Field(
         default_factory=lambda: list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
@@ -384,6 +418,9 @@ def validate_settings(data: dict) -> dict:
             validated[key] = defaults[key]
     validated["context_menu_sections"] = normalize_context_menu_sections(
         validated.get("context_menu_sections")
+    )
+    validated["context_menu_overflow_sections"] = normalize_context_menu_overflow_sections(
+        validated.get("context_menu_overflow_sections")
     )
     return validated
 

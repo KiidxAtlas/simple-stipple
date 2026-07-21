@@ -37,6 +37,77 @@ _DXF_CLOSURE_EPS = 1e-4
 _DXF_DEDUP_EPS = 1e-9
 MAX_DXF_FILE_BYTES = 64 * 1024 * 1024
 MAX_DXF_ENTITIES = 500_000
+_PLANAR_Z_TOLERANCE = 1e-9
+
+
+def _require_finite_unit_scale(unit_code: int) -> float:
+    """Return the source-to-mm scale, rejecting unusable DXF unit metadata."""
+    if not unit_code:
+        return 1.0
+    try:
+        source_units = cast(units.InsertUnits, unit_code)
+        mm_units = cast(units.InsertUnits, 4)
+        scale = float(units.conversion_factor(source_units, mm_units))
+    except (TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError(f"DXF unit code {unit_code} cannot be converted to millimeters.") from exc
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError(
+            f"DXF unit code {unit_code} produced an invalid millimeter scale ({scale!r})."
+        )
+    return scale
+
+
+def _z_is_planar(value: Any) -> bool:
+    """Return whether a DXF vector/point lies on the supported XY plane."""
+    try:
+        if hasattr(value, "z"):
+            z = float(value.z)
+        elif isinstance(value, (int, float)):
+            z = float(value)
+        elif not isinstance(value, (str, bytes)) and len(value) >= 3:
+            z = float(value[2])
+        else:
+            z = float(value)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+    return math.isfinite(z) and abs(z) <= _PLANAR_Z_TOLERANCE
+
+
+def _entity_is_planar(entity: _DxfEntity, dxftype: str) -> bool:
+    """Reject geometry that the 2D importer would otherwise silently project."""
+    dxf = entity.dxf
+    try:
+        if dxftype == "LINE":
+            return _z_is_planar(dxf.start) and _z_is_planar(dxf.end)
+        if dxftype == "LWPOLYLINE":
+            elevation = dxf.get("elevation", 0.0)
+            if hasattr(elevation, "z"):
+                elevation = elevation.z
+            return _z_is_planar(elevation)
+        if dxftype in {"ARC", "CIRCLE", "ELLIPSE"}:
+            if not _z_is_planar(dxf.center):
+                return False
+        if dxftype == "SPLINE":
+            spline = cast(Any, entity)
+            for point in (*tuple(spline.control_points), *tuple(spline.fit_points)):
+                if not _z_is_planar(point):
+                    return False
+            if dxftype == "ELLIPSE" and not _z_is_planar(dxf.major_axis):
+                return False
+        extrusion = dxf.get("extrusion", None)
+        if extrusion is not None:
+            ex = float(getattr(extrusion, "x", 0.0))
+            ey = float(getattr(extrusion, "y", 0.0))
+            ez = float(getattr(extrusion, "z", 1.0))
+            if not all(math.isfinite(v) for v in (ex, ey, ez)):
+                return False
+            if abs(ex) > _PLANAR_Z_TOLERANCE or abs(ey) > _PLANAR_Z_TOLERANCE:
+                return False
+            if abs(abs(ez) - 1.0) > _PLANAR_Z_TOLERANCE:
+                return False
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _normalize_polyline_for_dxf(
@@ -258,16 +329,7 @@ def _load_dxf_polylines_by_layer_with_report(
         doc = _ezdxf_readfile(path)
     except (OSError, FileNotFoundError, ValueError) as exc:
         _LOG.error("Failed to open DXF file %s: %s", path, exc)
-        return (
-            {},
-            DxfImportReport(
-                supported_polylines=0,
-                flattened_entities={},
-                unsupported_entities={},
-                invalid_polylines=0,
-                layer_counts={},
-            ),
-        )
+        raise ValueError(f"Could not open {source.name} as a DXF: {exc}") from exc
     msp = doc.modelspace()
     if len(msp) > MAX_DXF_ENTITIES:
         raise ValueError(
@@ -283,12 +345,7 @@ def _load_dxf_polylines_by_layer_with_report(
         5: "Centimeters",
         6: "Meters",
     }.get(unit_code, f"DXF unit code {unit_code}")
-    try:
-        source_units = cast(units.InsertUnits, unit_code)
-        mm_units = cast(units.InsertUnits, 4)
-        mm_per_unit = float(units.conversion_factor(source_units, mm_units)) if unit_code else 1.0
-    except (TypeError, ValueError):
-        mm_per_unit = 1.0
+    mm_per_unit = _require_finite_unit_scale(unit_code)
     flattening_distance = 0.02 / mm_per_unit
     by_layer: dict[str, list[list[tuple[float, float]]]] = {}
     flattened_entities: Counter[str] = Counter()
@@ -296,13 +353,20 @@ def _load_dxf_polylines_by_layer_with_report(
     layer_counts: Counter[str] = Counter()
     invalid_polylines = 0
     total_supported = 0
+    unit_range_violation: str | None = None
 
     def _append(layer: str, pts: list[tuple[float, float]], closed: bool) -> None:
-        nonlocal total_supported
+        nonlocal total_supported, unit_range_violation
         if len(pts) < 2:
             return
-        bucket = by_layer.setdefault(layer, [])
         scaled = [(x * mm_per_unit, y * mm_per_unit) for x, y in pts]
+        if any(not math.isfinite(value) for point in scaled for value in point):
+            unit_range_violation = (
+                "DXF coordinates exceed the finite numerical range after conversion "
+                f"from {unit_name} to millimeters."
+            )
+            return
+        bucket = by_layer.setdefault(layer, [])
         bucket.append(_polyline_points_closed(scaled, closed=closed))
         total_supported += 1
 
@@ -327,6 +391,10 @@ def _load_dxf_polylines_by_layer_with_report(
         except (AttributeError, ValueError, TypeError):
             layer_name = "0"
         layer_counts[layer_name] += 1
+        if dxftype in {"LWPOLYLINE", "LINE", "ARC", "CIRCLE", "ELLIPSE", "SPLINE"}:
+            if not _entity_is_planar(entity, dxftype):
+                unsupported_entities[f"{dxftype} (non-planar)"] += 1
+                continue
         if dxftype == "LWPOLYLINE":
             try:
                 lw = entity
@@ -448,6 +516,9 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
         else:
             unsupported_entities[dxftype] += 1
+
+    if unit_range_violation is not None:
+        raise ValueError(unit_range_violation)
 
     return (
         by_layer,
@@ -635,6 +706,30 @@ def write_polylines_dxf(
                 try:
                     p1 = tuple(meta.get("p1", c[0]))
                     p2 = tuple(meta.get("p2", c[1]))
+                    precision = max(0, min(8, int(meta.get("precision", 2))))
+                    dim_override = {"dimdec": precision}
+                    if meta.get("type") == "angle" and "p3" in meta:
+                        p3 = tuple(meta["p3"])
+                        override = msp.add_angular_dim_3p(
+                            base=p3,
+                            center=p2,
+                            p1=p1,
+                            p2=p3,
+                            override=dim_override,
+                            dxfattribs=entity_attrs or None,
+                        )
+                        override.render()
+                        continue
+                    if meta.get("type") == "diameter":
+                        center = ((p1[0] + p2[0]) / 2.0, (p1[1] + p2[1]) / 2.0)
+                        override = msp.add_diameter_dim(
+                            center=center,
+                            mpoint=p2,
+                            override=dim_override,
+                            dxfattribs=entity_attrs or None,
+                        )
+                        override.render()
+                        continue
                     offset = float(meta.get("offset", 5.0))
                     dx, dy = p2[0] - p1[0], p2[1] - p1[1]
                     length = math.hypot(dx, dy)
@@ -645,6 +740,7 @@ def write_polylines_dxf(
                             p1=p1,
                             p2=p2,
                             dimstyle="EZDXF",
+                            override=dim_override,
                             dxfattribs=entity_attrs or None,
                         )
                         override.render()

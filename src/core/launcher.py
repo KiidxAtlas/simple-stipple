@@ -14,6 +14,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -302,6 +303,12 @@ def main(argv: list[str] | None = None) -> int:
         app.setWindowIcon(QIcon(str(icon_path)))
 
     window = App()
+
+    # Compile numeric kernels after the first paint opportunity, keeping the
+    # visible startup path responsive while avoiding a pause on first use.
+    from src.backend.jit import prewarm
+
+    QTimer.singleShot(0, lambda: threading.Thread(target=prewarm, daemon=True).start())
 
     if guard is not None:
 

@@ -78,11 +78,28 @@ class SettingSync:
 
 SETTINGS_SYNC_TABLE: tuple[SettingSync, ...] = (
     SettingSync("unit_system", "set_unit_system"),
+    SettingSync("grid_visible", "set_grid_visible"),
+    SettingSync("grid_snap", "set_grid_snap"),
+    SettingSync("grid_spacing", "set_grid_spacing"),
+    SettingSync("snap_master", "set_snap_master"),
+    SettingSync("snap_vertex", "set_snap_vertex"),
+    SettingSync("snap_edge", "set_snap_edge"),
+    SettingSync("snap_tangent", "set_snap_tangent"),
+    SettingSync("snap_extension", "set_snap_extension"),
+    SettingSync("snap_angle", "set_snap_angle"),
+    SettingSync("snap_equal_length", "set_snap_equal_length"),
+    SettingSync("snap_axis_alignment", "set_snap_axis_alignment"),
+    SettingSync("construction_mode_default", "set_construction_mode"),
+    SettingSync("aspect_ratio_locked_default", "set_aspect_ratio_locked"),
+    SettingSync("geometry_health_visible", "set_geometry_health_visible"),
+    SettingSync("curvature_visible", "set_curvature_visible"),
+    SettingSync("rotation_snap_increment", "set_rotation_snap_increment"),
     SettingSync("smoothing_method", "set_smoothing_method", "smoothingMethodChanged"),
     SettingSync("smooth_iterations", "set_smooth_iterations", "smoothIterationsChanged"),
     SettingSync("simplify_tolerance", "set_simplify_tolerance", "simplifyToleranceChanged"),
     SettingSync("radial_menu_tools", "set_radial_menu_tools"),
     SettingSync("context_menu_sections", "set_context_menu_sections"),
+    SettingSync("context_menu_overflow_sections", "set_context_menu_overflow_sections"),
     SettingSync("draw_sidebar_width", "set_draw_sidebar_width", "drawSidebarWidthChanged"),
     SettingSync("draw_sidebar_height", "set_draw_sidebar_height", "drawSidebarHeightChanged"),
     SettingSync("draw_sidebar_sections", "set_draw_sidebar_sections"),
@@ -188,6 +205,9 @@ class PageRuntime:
             page = self.get(spec.page_id)
             if page is None:
                 continue
+            page_has_content = getattr(page, "has_workspace_content", None)
+            if callable(page_has_content) and bool(page_has_content()):
+                return True
             for canvas_attr in spec.content_canvas_attrs:
                 canvas = getattr(page, canvas_attr, None)
                 if canvas is not None and bool(getattr(canvas, "poly_count", 0)):
@@ -198,7 +218,11 @@ class PageRuntime:
         self._settings = settings
         for page in self._page_by_id.values():
             page_any = cast(Any, page)
-            page_any._settings = settings
+            apply_page_settings = getattr(page, "apply_settings", None)
+            if callable(apply_page_settings):
+                apply_page_settings(settings)
+            else:
+                page_any._settings = settings
 
     def _canvases(self):
         for spec in self._specs:
