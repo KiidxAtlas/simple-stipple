@@ -396,21 +396,9 @@ class SelectionService:
         split_closed = 0
         split_open = 0
         carved_regions = 0
-        can_cut_split = getattr(self._host, "_draw_split_enabled", True) and primitive in {
-            "line",
-            "polyline",
-            "arc",
-            "spline",
-        }
-        if can_cut_split and not close and len(poly) >= 2:
-            split_happened, split_closed, split_open = self._host._split_geometry_with_line(poly)
-        elif getattr(self._host, "_draw_split_enabled", True) and close and len(poly) >= 4:
-            split_happened, carved_regions = self._host._carve_geometry_with_shape(poly)
-
-        consume_cutter = bool(split_closed or carved_regions)
-
         kind = "polyline"
         meta: dict[str, Any] | None = None
+        cutter_poly = list(poly)
         if primitive == "line" and len(poly) >= 2:
             kind = "line"
             meta = {"start": tuple(poly[0]), "end": tuple(poly[-1])}
@@ -419,6 +407,7 @@ class SelectionService:
                 arc_spec_from_center_start_end,
                 arc_spec_from_three_points,
             )
+            from src.backend.cad.shapes import ShapeFactory
 
             if getattr(self._host, "_draw_arc_mode", "center-start-end") == "center-start-end":
                 spec = arc_spec_from_center_start_end(poly[0], poly[1], poly[2])
@@ -431,14 +420,50 @@ class SelectionService:
                     "start_angle": spec.start_angle,
                     "end_angle": spec.end_angle,
                 }
+                # Cutting with the three construction points produced two
+                # straight chords.  Use the actual displayed arc instead.
+                cutter_poly = list(
+                    ShapeFactory.arc(
+                        spec.center,
+                        spec.radius,
+                        spec.start_angle,
+                        spec.end_angle,
+                        segments=128,
+                    ).points
+                )
         elif primitive == "spline" and len(poly) >= 2:
+            from src.backend.cad.geometry import build_spline_poly
+
             kind = "spline"
             meta = {
-                "segments": 24,
+                "segments": 64,
                 "closed": close,
                 "control_points": [tuple(pt) for pt in poly],
                 "degree": 3,
             }
+            cutter_poly = build_spline_poly(poly, segments=64, closed=close)
+
+        can_cut_split = getattr(self._host, "_draw_split_enabled", True) and primitive in {
+            "line",
+            "polyline",
+            "arc",
+            "spline",
+        }
+        if can_cut_split and not close and len(cutter_poly) >= 2:
+            split_happened, split_closed, split_open = self._host._split_geometry_with_line(
+                cutter_poly
+            )
+        elif (
+            getattr(self._host, "_draw_split_enabled", True)
+            and close
+            and len(cutter_poly) >= 4
+        ):
+            split_happened, carved_regions = self._host._carve_geometry_with_shape(cutter_poly)
+
+        # Closed profiles are persistent CAD geometry: carving subtracts their
+        # area but does not consume the profile.  Only an open line/path that
+        # fully splits a closed region acts as a disposable cutting stroke.
+        consume_cutter = bool(split_closed and not close)
 
         new_idx: int | None = None
         if not consume_cutter:
@@ -505,6 +530,8 @@ class SelectionService:
         if len(self._host._pen_pts) < 2:
             self._cancel_pen()
             return False
+        from src.backend.cad.geometry import build_bezier_poly
+
         entity = EntityRecord(
             # Keep one anchor per tangent.  ``build_bezier_poly`` closes the
             # final-to-first segment from this flag; duplicating anchor zero
@@ -520,17 +547,54 @@ class SelectionService:
                     "smooth" if math.hypot(x, y) > 1e-9 else "corner"
                     for x, y in self._host._pen_tangents
                 ],
-                "segments": 16,
+                "segments": 64,
                 "closed": close,
             },
             layer=self._host._active_layer,
+            construction=getattr(self._host, "_draw_construction_mode", False),
         )
-        self._host._canvas_service.create_entities([entity])
+        preview = build_bezier_poly(
+            entity.points,
+            list(self._host._pen_tangents),
+            segments=64,
+            closed=close,
+        )
+        changed = False
+        closed_splits = open_splits = carved_count = 0
+        if (
+            self._host._draw_split_enabled
+            and not entity.construction
+            and len(preview) >= 2
+        ):
+            before = self._host._canvas_service.begin_preview()
+            if close:
+                changed, carved_count = self._host._carve_geometry_with_shape(preview)
+            else:
+                changed, closed_splits, open_splits = self._host._split_geometry_with_line(preview)
+            if changed:
+                # Closed profiles remain editable after carving.  Only an
+                # open curve that fully crosses a region is consumed.
+                consume = not close and closed_splits > 0
+                if not consume:
+                    self._host._entities.append(entity)
+                    self._host._document.selection = {len(self._host._entities) - 1}
+                else:
+                    self._host._document.selection = set(self._host._last_split_result_indices)
+                self._host._canvas_service.commit_preview(before)
+        if not changed:
+            self._host._canvas_service.create_entities([entity])
         self._host._pen_pts.clear()
         self._host._pen_tangents.clear()
         self._host._pen_dragging = False
         self._host._pen_press_screen = None
-        self._host._show_flash("Curve created", 800)
+        if carved_count:
+            self._host._show_flash(f"Carved {carved_count} region(s)", 1000)
+        elif closed_splits:
+            self._host._show_flash("Regions cut", 900)
+        elif open_splits:
+            self._host._show_flash("Segments split · curve kept", 1000)
+        else:
+            self._host._show_flash("Curve created", 800)
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()

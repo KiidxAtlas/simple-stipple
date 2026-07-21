@@ -13,7 +13,7 @@ from typing import Any
 from PySide6.QtCore import (
     QRectF,
 )
-from shapely.geometry import Polygon
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 
 from src.backend.cad.editor_geometry import (
     transform_entity_metadata,
@@ -92,23 +92,67 @@ class EditingService:
 
     def _carve_geometry_with_shape(self, cutter: list[tuple[float, float]]) -> tuple[bool, int]:
         """Subtract a closed drawn profile from every overlapping closed region."""
-        if len(cutter) < 4 or not self._is_poly_closed(cutter):
+        return self._carve_geometry_with_shapes([cutter])
+
+    def _carve_geometry_with_shapes(
+        self, cutters: list[list[tuple[float, float]]]
+    ) -> tuple[bool, int]:
+        """Subtract one even-odd compound profile from overlapping regions.
+
+        Nested contours are combined with symmetric difference, so a ring cuts
+        an annulus rather than incorrectly treating its inner contour as more
+        material.  This is also the common commit path for procedural tools.
+        """
+        usable = [c for c in cutters if len(c) >= 4 and self._is_poly_closed(c)]
+        if not usable:
             return False, 0
-        cutter_shape = Polygon(cutter).buffer(0)
-        if cutter_shape.is_empty:
+        cutter_shape = None
+        for cutter in usable:
+            shape = Polygon(cutter).buffer(0)
+            if shape.is_empty:
+                continue
+            cutter_shape = shape if cutter_shape is None else cutter_shape.symmetric_difference(shape)
+        if cutter_shape is None or cutter_shape.is_empty:
             return False, 0
+
+        def _rings(geometry) -> list[list[tuple[float, float]]]:
+            polygons = (
+                [geometry]
+                if isinstance(geometry, Polygon)
+                else list(geometry.geoms)
+                if isinstance(geometry, (MultiPolygon, GeometryCollection))
+                else []
+            )
+            result: list[list[tuple[float, float]]] = []
+            for polygon in polygons:
+                if not isinstance(polygon, Polygon) or polygon.is_empty:
+                    continue
+                result.append([(float(x), float(y)) for x, y in polygon.exterior.coords])
+                result.extend(
+                    [[(float(x), float(y)) for x, y in ring.coords] for ring in polygon.interiors]
+                )
+            return result
+
         entities: list[EntityRecord] = []
         changed_indices: set[int] = set()
         carved = 0
         for source in self._host._entities:
-            if not self._is_poly_closed(source.points) or source.locked:
+            if not self._is_poly_closed(source.points) or source.locked or source.construction:
                 entities.append(source)
                 continue
             source_shape = Polygon(source.points).buffer(0)
             if source_shape.is_empty or source_shape.intersection(cutter_shape).area <= 1e-9:
                 entities.append(source)
                 continue
-            rings = boolean_polylines([source.points, cutter], "subtract")
+            # Drawing an enclosing profile is a normal creation gesture, not
+            # an instruction to erase every region inside it.  A cutter can
+            # make a hole from inside a source or trim through its boundary,
+            # but it must never consume a source that it wholly contains.
+            remaining = source_shape.difference(cutter_shape)
+            if remaining.is_empty or remaining.area <= 1e-9:
+                entities.append(source)
+                continue
+            rings = _rings(remaining)
             carved += 1
             for ring_index, ring in enumerate(rings):
                 entities.append(
@@ -1458,9 +1502,31 @@ class EditingService:
                 meta=metadata,
                 group=group,
                 layer=self._host._active_layer,
+                construction=self._host._draw_construction_mode,
             )
             for points, kind, metadata in records
         ]
+        closed_paths = [entity.points for entity in entities if self._is_poly_closed(entity.points)]
+        if (
+            self._host._draw_split_enabled
+            and not self._host._draw_construction_mode
+            and closed_paths
+        ):
+            before = self._host._canvas_service.begin_preview()
+            carved, carved_count = self._carve_geometry_with_shapes(closed_paths)
+            if carved:
+                self._host._entities.extend(entities)
+                self._host._document.selection = set(
+                    range(len(self._host._entities) - len(entities), len(self._host._entities))
+                )
+                self._host._canvas_service.commit_preview(before)
+                self._host._redraw()
+                self._host._notify()
+                self._host._fire_poly_change()
+                self._host._show_flash(f"Carved {carved_count} region(s)", 1000)
+                if group is not None:
+                    self._host._group_labels[group] = "Ring"
+                return len(entities)
         result = self._host._canvas_service.create_entities(entities)
         if group is not None:
             self._host._group_labels[group] = "Ring"

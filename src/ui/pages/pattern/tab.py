@@ -10,6 +10,8 @@ import platform
 import tempfile
 import threading
 from pathlib import Path
+
+from PIL import Image
 from typing import Any
 
 from PySide6.QtCore import QTimer, Qt, Signal, QUrl
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -36,6 +39,8 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSlider,
+    QSpinBox,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -43,6 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.pattern.processing import PATTERNS, PatternProcessor
+from src.backend.raster_engraving import RasterEngravingSpec, export_raster_job
 from src.ui.canvas.constants import DIM
 from src.ui.pages.base import BasePage
 from src.ui.components import (
@@ -118,6 +124,7 @@ from src.core.settings import save_settings
 from src.core.paths import custom_tiles_dir
 from src.ui.util import (
     KIND_DXF,
+    KIND_IMAGE,
     pick_open_file,
     pick_save_file,
     record_recent,
@@ -203,6 +210,7 @@ class PatternPage(BasePage):
         self._loading_zone: bool = False
         # Outline IDs marked as exclusion cutouts (pattern fills around them)
         self._exclusion_ids: list[str] = []
+        self._engraving_image_path: str = ""
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -525,12 +533,13 @@ class PatternPage(BasePage):
         pattern_polys = self._preview_categories.get("pattern", [])
         indices = set(range(outline_count, outline_count + len(pattern_polys)))
         cutout_signatures = {
-            self._pattern_service._poly_signature(poly) for poly in self._pattern_cell_cutouts
+            self._pattern_service._poly_repeat_signature(poly)
+            for poly in self._pattern_cell_cutouts
         }
         cutout_indices = {
             outline_count + index
             for index, poly in enumerate(pattern_polys)
-            if self._pattern_service._poly_signature(poly) in cutout_signatures
+            if self._pattern_service._poly_repeat_signature(poly) in cutout_signatures
         }
         self._canvas.set_pattern_cell_context(indices, cutout_indices)
 
@@ -571,7 +580,9 @@ class PatternPage(BasePage):
             return
         added = self._toggle_pattern_cell_cutout_poly(list(pattern_polys[pattern_index]))
         self._canvas._show_flash(
-            "Pattern cell marked as fill cutout" if added else "Pattern cell restored to fill",
+            "This shape is now a cutout in every tile"
+            if added
+            else "This shape is restored in every tile",
             1000,
         )
         self._configure_pattern_cell_context()
@@ -579,12 +590,12 @@ class PatternPage(BasePage):
         self._schedule_preview()
 
     def _toggle_pattern_cell_cutout_poly(self, poly: list[tuple[float, float]]) -> bool:
-        signature = self._pattern_service._poly_signature(poly)
+        signature = self._pattern_service._poly_repeat_signature(poly)
         existing = next(
             (
                 index
                 for index, cutout in enumerate(self._pattern_cell_cutouts)
-                if self._pattern_service._poly_signature(cutout) == signature
+                if self._pattern_service._poly_repeat_signature(cutout) == signature
             ),
             None,
         )
@@ -932,6 +943,13 @@ class PatternPage(BasePage):
             )
 
     def _snapshot_zone_jobs(self) -> list[dict]:
+        # Pattern-cell cutouts are document-wide motif assignments. Inject the
+        # current list at snapshot time so zones created before a cutout was
+        # marked cannot retain a stale empty list and fill that cell anyway.
+        for zone in self._zones:
+            fill = zone.get("fill")
+            if isinstance(fill, dict):
+                fill["cell_cutouts"] = [list(poly) for poly in self._pattern_cell_cutouts]
         jobs, warnings = self._pattern_service.snapshot_zone_jobs(
             self._zones,
             self._outline_ids,
@@ -964,6 +982,7 @@ class PatternPage(BasePage):
         self._build_zones_section(layout)
         self._build_pattern_section(layout)
         self._build_fill_section(layout)
+        self._build_image_engraving_section(layout)
         layout.addStretch()
         self._install_pattern_shortcuts()
         self._refresh_section_subtitles()
@@ -1257,7 +1276,9 @@ class PatternPage(BasePage):
         self._zone_fill_mode = QComboBox()
         self._zone_fill_mode.addItem("None", "none")
         self._zone_fill_mode.addItem("Lines", "lines")
+        self._zone_fill_mode.addItem("Zigzag", "zigzag")
         self._zone_fill_mode.addItem("Crosshatch", "crosshatch")
+        self._zone_fill_mode.addItem("Concentric", "concentric")
         self._zone_fill_mode.currentIndexChanged.connect(self._live_update_selected_zone)
         fill_grid.addWidget(self._zone_fill_mode, 0, 1)
         self._zone_fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
@@ -1305,9 +1326,13 @@ class PatternPage(BasePage):
         self._fill_mode_combo = QComboBox()
         self._fill_mode_combo.addItem("None", "none")
         self._fill_mode_combo.addItem("Lines", "lines")
+        self._fill_mode_combo.addItem("Zigzag", "zigzag")
         self._fill_mode_combo.addItem("Crosshatch", "crosshatch")
+        self._fill_mode_combo.addItem("Concentric", "concentric")
         self._fill_mode_combo.setToolTip(
-            "Fill the shape with laser-engraving lines.\nNone = pattern strokes only.\nLines = parallel hatch.\nCrosshatch = intersecting diagonal lines."
+            "Fill the shape with laser-engraving paths.\n"
+            "Lines = separate hatch strokes. Zigzag = fewer travel moves.\n"
+            "Crosshatch = two angled passes. Concentric = inward contour passes."
         )
         self._fill_mode_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
         mode_row.addWidget(self._fill_mode_combo, stretch=1)
@@ -1403,6 +1428,246 @@ class PatternPage(BasePage):
         )
         layout.addWidget(self._fill_section)
         self._on_fill_mode_changed()
+
+    def _build_image_engraving_section(self, layout: QVBoxLayout) -> None:
+        content, form = collapsible_content_widget(spacing=8)
+        choose = QPushButton("Choose engraving image…")
+        choose.clicked.connect(self._choose_engraving_image)
+        form.addWidget(choose)
+        self._engraving_image_label = QLabel("No image selected")
+        self._engraving_image_label.setWordWrap(True)
+        form.addWidget(self._engraving_image_label)
+        material_row = QHBoxLayout()
+        material_row.addWidget(QLabel("Material starting profile"))
+        self._engrave_material = QComboBox()
+        for label, key in (
+            ("Custom", "custom"), ("Wood", "wood"),
+            ("Laser-safe polymer", "polymer"),
+            ("Anodized aluminum", "aluminum"),
+            ("Coated / marking steel", "steel"),
+        ):
+            self._engrave_material.addItem(label, key)
+        self._engrave_material.currentIndexChanged.connect(self._apply_engraving_material)
+        material_row.addWidget(self._engrave_material, stretch=1)
+        form.addLayout(material_row)
+        grid = QGridLayout()
+
+        def number(value, minimum, maximum, decimals=2, step=1.0):
+            widget = QDoubleSpinBox()
+            widget.setRange(minimum, maximum)
+            widget.setDecimals(decimals)
+            widget.setSingleStep(step)
+            widget.setValue(value)
+            widget.valueChanged.connect(self._update_engraving_overlay)
+            return widget
+
+        self._engrave_x = number(0, -100000, 100000)
+        self._engrave_y = number(0, -100000, 100000)
+        self._engrave_w = number(100, 0.01, 100000)
+        self._engrave_h = number(100, 0.01, 100000)
+        self._engrave_interval = number(0.1, 0.025, 2, 3, 0.025)
+        self._engrave_min_power = number(0, 0, 100, 1)
+        self._engrave_max_power = number(80, 0, 100, 1)
+        self._engrave_speed = number(100, 0.1, 10000, 1, 10)
+        self._engrave_gamma = number(1, 0.1, 5, 2, 0.05)
+        self._engrave_passes = QSpinBox()
+        self._engrave_passes.setRange(1, 100)
+        labels = (
+            ("X (mm)", self._engrave_x), ("Y (mm)", self._engrave_y),
+            ("Width (mm)", self._engrave_w), ("Height (mm)", self._engrave_h),
+            ("Detail / interval", self._engrave_interval),
+            ("Min power (%)", self._engrave_min_power),
+            ("Max power (%)", self._engrave_max_power),
+            ("Speed (mm/s)", self._engrave_speed),
+            ("Gamma / depth detail", self._engrave_gamma),
+        )
+        slider_scales = {
+            self._engrave_interval: 1000,
+            self._engrave_min_power: 10,
+            self._engrave_max_power: 10,
+            self._engrave_gamma: 100,
+        }
+
+        def make_slider(field: QDoubleSpinBox, scale: int) -> QSlider:
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setMinimumWidth(120)
+            slider.setRange(round(field.minimum() * scale), round(field.maximum() * scale))
+            slider.setValue(round(field.value() * scale))
+            slider.valueChanged.connect(lambda value, f=field, s=scale: f.setValue(value / s))
+            field.valueChanged.connect(lambda value, sl=slider, s=scale: sl.setValue(round(value * s)))
+            return slider
+
+        grid_row = 0
+        for label, widget in labels:
+            grid.addWidget(QLabel(label), grid_row, 0)
+            grid.addWidget(widget, grid_row, 1)
+            grid_row += 1
+            scale = slider_scales.get(widget)
+            if scale is not None:
+                # Full-width second row remains usable in the narrow sidebar.
+                grid.addWidget(make_slider(widget, scale), grid_row, 0, 1, 2)
+                grid_row += 1
+        grid.addWidget(QLabel("Passes"), grid_row, 0)
+        grid.addWidget(self._engrave_passes, grid_row, 1)
+        form.addLayout(grid)
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel("Clip to"))
+        self._engrave_target = QComboBox()
+        self._engrave_target.addItem("Entire outline", "outline")
+        self._engrave_target.addItem("Selected zone", "zone")
+        target_row.addWidget(self._engrave_target, stretch=1)
+        form.addLayout(target_row)
+        self._engrave_invert = QCheckBox("Invert light and dark")
+        form.addWidget(self._engrave_invert)
+        self._engrave_canvas_edit = QCheckBox("Select, drag, and resize image on canvas")
+        self._engrave_canvas_edit.setChecked(True)
+        self._engrave_canvas_edit.toggled.connect(
+            lambda enabled: self._canvas.set_background_image_editable(
+                enabled, self._on_engraving_canvas_transform
+            )
+        )
+        form.addWidget(self._engrave_canvas_edit)
+        export = QPushButton("Export Positioned Engraving Package…")
+        export.setProperty("role", "primary")
+        export.clicked.connect(self._export_pattern_engraving)
+        form.addWidget(export)
+        note = QLabel(
+            "Machine handoff: 1) Export the pattern DXF. 2) Export this engraving package. "
+            "3) Import the DXF and .positioned.svg into the same laser-software job without "
+            "moving either file. 4) Put the SVG raster on an engraving layer and copy speed, "
+            "power, interval, and passes from the .engrave.json sidecar. 5) Frame the job and "
+            "run a material test before production."
+        )
+        note.setWordWrap(True)
+        form.addWidget(note)
+        safety = QLabel(
+            "Profiles are conservative starting points, not universal machine settings. Only use "
+            "laser-safe polymers; never engrave PVC/vinyl. Bare aluminum and steel generally need "
+            "a fiber laser or an approved marking compound. Run a material test first."
+        )
+        safety.setWordWrap(True)
+        safety.setProperty("role", "warning")
+        form.addWidget(safety)
+        self._engraving_section = CollapsibleSection(
+            "Image Engraving", content, expanded=False, subtitle="No image"
+        )
+        layout.addWidget(self._engraving_section)
+
+    def _choose_engraving_image(self) -> None:
+        path = pick_open_file(
+            self, self._settings, "pattern_engraving_image", "Choose engraving image",
+            "Image files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)",
+            recent_kind=KIND_IMAGE,
+        )
+        if not path:
+            return
+        self._engraving_image_path = path
+        self._engraving_image_label.setText(Path(path).name)
+        # Loading an image must not silently fit it to the outline. Respect
+        # embedded DPI when present; otherwise retain the user's current width
+        # and derive only the height needed to preserve the image aspect ratio.
+        try:
+            with Image.open(path) as source:
+                dpi = source.info.get("dpi")
+                if isinstance(dpi, tuple) and len(dpi) >= 2 and dpi[0] and dpi[1]:
+                    self._engrave_w.setValue(source.width / float(dpi[0]) * 25.4)
+                    self._engrave_h.setValue(source.height / float(dpi[1]) * 25.4)
+                elif source.width > 0:
+                    self._engrave_h.setValue(
+                        self._engrave_w.value() * source.height / source.width
+                    )
+        except OSError:
+            pass
+        self._engraving_section.set_subtitle(Path(path).name)
+        self._update_engraving_overlay()
+
+    def _apply_engraving_material(self, *_args) -> None:
+        profiles = {
+            "wood": (0.10, 0.0, 60.0, 100.0, 1.05, 1),
+            "polymer": (0.10, 0.0, 50.0, 150.0, 1.0, 1),
+            "aluminum": (0.08, 0.0, 75.0, 200.0, 0.9, 1),
+            "steel": (0.08, 0.0, 80.0, 100.0, 0.9, 1),
+        }
+        profile = profiles.get(str(self._engrave_material.currentData()))
+        if profile is None:
+            return
+        interval, minimum, maximum, speed, gamma, passes = profile
+        self._engrave_interval.setValue(interval)
+        self._engrave_min_power.setValue(minimum)
+        self._engrave_max_power.setValue(maximum)
+        self._engrave_speed.setValue(speed)
+        self._engrave_gamma.setValue(gamma)
+        self._engrave_passes.setValue(passes)
+        self._set_status(
+            "Material starting profile applied — calibrate power and passes on scrap.", STATUS_WARN
+        )
+
+    def _on_engraving_canvas_transform(self, x: float, y: float, w: float, h: float) -> None:
+        for field, value in (
+            (self._engrave_x, x), (self._engrave_y, y),
+            (self._engrave_w, w), (self._engrave_h, h),
+        ):
+            field.blockSignals(True)
+            field.setValue(value)
+            field.blockSignals(False)
+        self._emit_state_changed()
+
+    def _update_engraving_overlay(self, *_args) -> None:
+        if not self._engraving_image_path:
+            return
+        try:
+            with Image.open(self._engraving_image_path) as source:
+                overlay = source.convert("RGBA")
+                overlay.putalpha(125)
+                self._canvas.set_background_image(
+                    overlay.copy(), self._engrave_w.value(), self._engrave_h.value(),
+                    self._engrave_x.value(), self._engrave_y.value(),
+                )
+                self._canvas.set_background_image_editable(
+                    self._engrave_canvas_edit.isChecked(), self._on_engraving_canvas_transform
+                )
+        except OSError:
+            self._canvas.clear_background_image()
+
+    def _engraving_mask_polys(self) -> list[list[tuple[float, float]]]:
+        if self._engrave_target.currentData() != "zone":
+            return [list(poly) for poly in self._generation_polys()]
+        row = self._zone_list.currentRow()
+        if not 0 <= row < len(self._zones):
+            raise ValueError("Select a zone before exporting a zone-clipped engraving.")
+        ids = set(self._zones[row].get("outline_ids", []))
+        return [
+            list(poly) for oid, poly in zip(self._outline_ids, self._edit_polys) if oid in ids
+        ]
+
+    def _export_pattern_engraving(self) -> None:
+        if not self._engraving_image_path:
+            self._set_status("Choose an engraving image first.", STATUS_WARN)
+            return
+        out = pick_save_file(
+            self, self._settings, "pattern_engraving_output", "Export positioned engraving",
+            f"{Path(self._engraving_image_path).stem}_pattern_engraving.png",
+            "PNG image (*.png)",
+        )
+        if not out:
+            return
+        try:
+            spec = RasterEngravingSpec(
+                x_mm=self._engrave_x.value(), y_mm=self._engrave_y.value(),
+                width_mm=self._engrave_w.value(), height_mm=self._engrave_h.value(),
+                line_interval_mm=self._engrave_interval.value(),
+                min_power_percent=self._engrave_min_power.value(),
+                max_power_percent=self._engrave_max_power.value(),
+                speed_mm_s=self._engrave_speed.value(),
+                gamma=self._engrave_gamma.value(), invert=self._engrave_invert.isChecked(),
+                passes=self._engrave_passes.value(),
+            )
+            png, _metadata, _svg = export_raster_job(
+                self._engraving_image_path, out, spec, self._engraving_mask_polys()
+            )
+            self._set_status(f"Positioned engraving package exported → {png.name}", STATUS_OK)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Engraving Export", str(exc))
 
     def _build_export_section(self, layout: QVBoxLayout) -> None:
         # Export options live in a card matching Shape/Pattern/Fill/Zones —
@@ -1839,6 +2104,7 @@ class PatternPage(BasePage):
         self._fill_params_container.setVisible(bool(active))
         self._fill_spacing.setEnabled(bool(active))
         self._fill_angle.setEnabled(bool(active))
+        self._fill_angle.setEnabled(bool(active and mode != "concentric"))
         self._fill_inset.setEnabled(bool(active))
         self._fill_keep_outline_cb.setEnabled(bool(active))
         self._fill_target_outline_cb.setEnabled(bool(active))
@@ -2386,7 +2652,7 @@ class PatternPage(BasePage):
                 "keep_pattern": True,
                 "target_outline": self._zone_fill_target_outline.isChecked(),
                 "target_pattern": self._zone_fill_target_pattern.isChecked(),
-                "cell_cutouts": [],
+                "cell_cutouts": [list(poly) for poly in self._pattern_cell_cutouts],
             }
         return pattern, params, fill
 
@@ -2696,7 +2962,10 @@ class PatternPage(BasePage):
                 if idx in self._canvas._pattern_cell_indices
                 and 0 <= idx - outline_count < len(pattern_polys)
             ]
+            unique_cells: dict[tuple, list[tuple[float, float]]] = {}
             for poly in selected_cells:
+                unique_cells.setdefault(self._pattern_service._poly_repeat_signature(poly), poly)
+            for poly in unique_cells.values():
                 self._toggle_pattern_cell_cutout_poly(poly)
             if selected_cells:
                 self._configure_pattern_cell_context()

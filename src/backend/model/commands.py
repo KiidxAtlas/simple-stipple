@@ -249,6 +249,22 @@ class TransformCommand(Command):
     x: float = 0.0
     y: float = 0.0
 
+    def __post_init__(self) -> None:
+        # TransformCommand is reversed by re-deriving geometry (see ``reverse``),
+        # not by restoring a snapshot. A non-uniform scale (x != y) turns a
+        # circle into an ellipse — a shape the parametric ``kind``/``meta`` schema
+        # cannot represent — so applying it necessarily discards that metadata,
+        # and this command has no way to put it back on undo. Forbid constructing
+        # one at all: anisotropic scaling must go through a snapshot-based path
+        # (a gizmo preview commit / ``ReplaceDocumentCommand``), which captures
+        # the pre-edit shape verbatim and is therefore losslessly reversible.
+        if self.operation == "scale" and abs(self.x - self.y) > 1e-12:
+            raise ValueError(
+                "TransformCommand cannot reversibly represent a non-uniform scale "
+                f"(x={self.x!r}, y={self.y!r}); route anisotropic scaling through a "
+                "snapshot-based command instead."
+            )
+
     def reverse(self) -> TransformCommand:
         if self.operation == "translate":
             return TransformCommand(

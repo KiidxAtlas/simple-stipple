@@ -162,8 +162,10 @@ class CanvasRenderer:
 
         # Always render background into the exact world bounds rectangle so image
         # stays locked to geometry even when cache is downsampled for performance.
-        x0, y0 = self._host._w2c(0.0, self._host._bg_h_mm)
-        x1, y1 = self._host._w2c(self._host._bg_w_mm, 0.0)
+        bx = getattr(self._host, "_bg_x_mm", 0.0)
+        by = getattr(self._host, "_bg_y_mm", 0.0)
+        x0, y0 = self._host._w2c(bx, by + self._host._bg_h_mm)
+        x1, y1 = self._host._w2c(bx + self._host._bg_w_mm, by)
         target_rect = QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized()
         source_rect = QRectF(self._host._bg_pixmap.rect())
         painter.drawPixmap(target_rect, self._host._bg_pixmap, source_rect)
@@ -871,7 +873,7 @@ class CanvasRenderer:
                 pts.append((self._host._cursor_wx, self._host._cursor_wy))
             if len(pts) < 2:
                 return
-            poly = build_spline_poly(pts, segments=24, closed=False)
+            poly = build_spline_poly(pts, segments=64, closed=False)
         else:
             return
 
@@ -1012,7 +1014,7 @@ class CanvasRenderer:
         if self._host._cursor_wx is not None and self._host._cursor_wy is not None:
             pts.append((self._host._cursor_wx, self._host._cursor_wy))
 
-        spline_poly = build_spline_poly(pts, segments=24, closed=False)
+        spline_poly = build_spline_poly(pts, segments=64, closed=False)
         if len(spline_poly) < 2:
             return
 
@@ -1900,6 +1902,21 @@ class CanvasRenderer:
         # Background image overlay
         if self._host._bg_pil and self._host._bg_w_mm > 0 and self._host._bg_h_mm > 0:
             self._paint_bg_image(painter)
+            if getattr(self._host, "_bg_editable", False):
+                bx = self._host._bg_x_mm
+                by = self._host._bg_y_mm
+                corners = [
+                    self._host._w2c(bx, by),
+                    self._host._w2c(bx + self._host._bg_w_mm, by),
+                    self._host._w2c(bx + self._host._bg_w_mm, by + self._host._bg_h_mm),
+                    self._host._w2c(bx, by + self._host._bg_h_mm),
+                ]
+                painter.setPen(QPen(QColor("#58a6ff"), 1.5, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in corners]))
+                painter.setBrush(QColor("#f0f6fc"))
+                for x, y in corners:
+                    painter.drawRect(QRectF(x - 4, y - 4, 8, 8))
 
         # Image bounds reference rectangle
         if self._host._img_bounds:

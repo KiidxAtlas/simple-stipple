@@ -305,6 +305,31 @@ def test_zone_editor_live_updates_pattern_and_fill_without_mutating_left_default
         qapp.processEvents()
 
 
+def test_zone_fill_inherits_pattern_cell_cutouts_marked_after_zone_creation(qapp):
+    page = _page(qapp)
+    outline = [(0, 0), (20, 0), (20, 20), (0, 20), (0, 0)]
+    cutout = [(2, 2), (5, 2), (5, 5), (2, 5), (2, 2)]
+    try:
+        page.load_outline_polys([outline], source_label="zone cutout")
+        page._zones = [{
+            "outline_ids": [page._outline_ids[0]],
+            "pattern": "Brick", "params": {"brick_w": 4, "brick_h": 4, "gap": 0},
+            "scale": (20.0, 20.0),
+            "fill": {"mode": "lines", "spacing": 1, "target_pattern": True,
+                     "cell_cutouts": []},
+            "output_mode": "pattern_fill",
+        }]
+        page._pattern_cell_cutouts = [cutout]
+
+        jobs = page._snapshot_zone_jobs()
+        assert jobs[0]["fill"]["cell_cutouts"] == [cutout]
+        assert page._zones[0]["fill"]["cell_cutouts"] == [cutout]
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
 def test_zone_editor_rejects_nan_without_replacing_last_valid_parameters(qapp):
     page = _page(qapp)
     outline = [(0, 0), (20, 0), (20, 20), (0, 20), (0, 0)]

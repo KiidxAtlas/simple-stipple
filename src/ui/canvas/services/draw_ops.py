@@ -274,11 +274,23 @@ class DrawOpsService:
         self._host._draw_shape_cursor_w = None
 
         if len(poly) >= 2:
-            if self._host._draw_split_enabled and self._host._is_poly_closed(poly):
+            if (
+                self._host._draw_split_enabled
+                and not self._host._draw_construction_mode
+                and self._host._is_poly_closed(poly)
+            ):
                 before = self._host._canvas_service.begin_preview()
                 carved, count = self._host._carve_geometry_with_shape(poly)
                 if carved:
-                    self._host._document.selection = set(self._host._last_split_result_indices)
+                    self._host._entities.append(
+                        EntityRecord(
+                            points=list(poly),
+                            kind=kind,
+                            meta=meta,
+                            layer=self._host._active_layer,
+                        )
+                    )
+                    self._host._document.selection = {len(self._host._entities) - 1}
                     self._host._canvas_service.commit_preview(before)
                     self._host._notify()
                     self._host._fire_poly_change()

@@ -24,8 +24,10 @@ from typing import Any, Literal
 # Reuses the existing UI label so we don't have to migrate state.
 NULL_PATTERN = "— None —"
 
-FillMode = Literal["none", "lines", "crosshatch"]
-_VALID_MODES: frozenset[str] = frozenset({"none", "lines", "crosshatch"})
+FillMode = Literal["none", "lines", "zigzag", "crosshatch", "concentric"]
+_VALID_MODES: frozenset[str] = frozenset(
+    {"none", "lines", "zigzag", "crosshatch", "concentric"}
+)
 
 
 @dataclass(frozen=True)
@@ -73,10 +75,8 @@ class FillSpec:
         if not data:
             return cls.disabled()
         mode = str(data.get("mode", "none") or "none")
-        # Legacy modes we no longer support → fall back to lines so the user
-        # still gets *some* fill, with a deprecation in the project log.
-        if mode in {"racecar", "concentric"}:
-            mode = "lines"
+        if mode == "racecar":
+            mode = "zigzag"
         if mode not in _VALID_MODES:
             mode = "none"
         spacing = float(data.get("spacing", 1.0) or 1.0)
@@ -166,6 +166,10 @@ def apply_fill(
         return _fill_lines(region_geom, spec.spacing, spec.angle_deg)
     if spec.mode == "crosshatch":
         return _fill_crosshatch(region_geom, spec.spacing, spec.angle_deg)
+    if spec.mode == "zigzag":
+        return _fill_zigzag(region_geom, spec.spacing, spec.angle_deg)
+    if spec.mode == "concentric":
+        return _fill_concentric(region_geom, spec.spacing)
     return []
 
 
@@ -275,3 +279,58 @@ def _fill_crosshatch(
     lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0)
     lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0)
     return lines_1 + lines_2
+
+
+def _fill_zigzag(region_geom: Any, spacing: float, angle_deg: float):
+    """Continuous bidirectional hatch where safe, split around holes/gaps."""
+    from shapely.geometry import LineString
+
+    rows = _fill_lines(region_geom, spacing, angle_deg)
+    if not rows:
+        return []
+    ordered = sorted(rows, key=lambda line: (line[0][1], line[0][0]))
+    paths: list[list[tuple[float, float]]] = []
+    current: list[tuple[float, float]] = []
+    for row_index, row in enumerate(ordered):
+        segment = list(reversed(row)) if row_index & 1 else list(row)
+        if not current:
+            current = segment
+            continue
+        connector = LineString([current[-1], segment[0]])
+        # Never rapid/engrave across a hole or outside the target just to make
+        # the output continuous.
+        if region_geom.buffer(1e-8).covers(connector):
+            current.extend(segment)
+        else:
+            paths.append(current)
+            current = segment
+    if current:
+        paths.append(current)
+    return paths
+
+
+def _fill_concentric(region_geom: Any, spacing: float):
+    """Successive inward contours, useful for pocket-like engraving."""
+    paths: list[list[tuple[float, float]]] = []
+
+    def append_rings(geometry) -> None:
+        if hasattr(geometry, "exterior"):
+            paths.append([(float(x), float(y)) for x, y in geometry.exterior.coords])
+            paths.extend(
+                [[(float(x), float(y)) for x, y in ring.coords] for ring in geometry.interiors]
+            )
+        elif hasattr(geometry, "geoms"):
+            for part in geometry.geoms:
+                append_rings(part)
+
+    current = region_geom
+    # Area must decrease each pass; the cap is a corrupt-geometry safeguard.
+    for _ in range(10000):
+        if current is None or current.is_empty:
+            break
+        append_rings(current)
+        next_region = current.buffer(-spacing)
+        if next_region.is_empty or next_region.area >= current.area - 1e-9:
+            break
+        current = next_region
+    return paths

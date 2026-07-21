@@ -12,6 +12,10 @@ from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -21,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSlider,
+    QSpinBox,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -28,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from src.backend.dxf.io import write_polylines_dxf
 from src.backend.trace import TraceCancelled, image_to_outlines
+from src.backend.raster_engraving import RasterEngravingSpec, export_raster_job
 from src.core.settings import save_settings
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
@@ -338,6 +344,7 @@ class TracePage(BasePage):
             "Export Selected as DXF…", self._export_selected
         )
         self._export_sel_action.setEnabled(False)
+        _overflow_menu.addAction("Export Raster Engraving…", self._export_raster_engraving)
         _overflow_menu.addSeparator()
         self._reveal_action = _overflow_menu.addAction("Show in Finder", self._reveal_in_finder)
         self._reveal_action.setEnabled(False)
@@ -1362,6 +1369,94 @@ class TracePage(BasePage):
             self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _export_raster_engraving(self) -> None:
+        if not self._img_path or not Path(self._img_path).exists():
+            QMessageBox.information(self, "Raster Engraving", "Choose an image first.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Raster Engraving")
+        dialog.setMinimumWidth(420)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            "Preserves grayscale detail as variable laser power. Position and size are stored "
+            "in millimetres beside the exported PNG."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QFormLayout()
+
+        def number(value, minimum, maximum, decimals=2, step=1.0):
+            field = QDoubleSpinBox()
+            field.setRange(minimum, maximum)
+            field.setDecimals(decimals)
+            field.setSingleStep(step)
+            field.setValue(value)
+            return field
+
+        x = number(0, -100000, 100000)
+        y = number(0, -100000, 100000)
+        width = number(max(self._last_width_mm, 100.0), 0.01, 100000)
+        height = number(max(self._last_height_mm, 100.0), 0.01, 100000)
+        interval = number(0.10, 0.025, 2.0, 3, 0.025)
+        min_power = number(0, 0, 100, 1)
+        max_power = number(80, 0, 100, 1)
+        speed = number(100, 0.1, 10000, 1, 10)
+        gamma = number(1, 0.1, 5, 2, 0.05)
+        contrast = number(1, 0.1, 5, 2, 0.05)
+        brightness = number(1, 0.1, 5, 2, 0.05)
+        passes = QSpinBox()
+        passes.setRange(1, 100)
+        invert = QCheckBox("Invert light and dark")
+        for label, field in (
+            ("X position (mm)", x), ("Y position (mm)", y),
+            ("Width (mm)", width), ("Height (mm)", height),
+            ("Line interval (mm)", interval), ("Minimum power (%)", min_power),
+            ("Maximum power (%)", max_power), ("Gamma / shadow detail", gamma),
+            ("Speed (mm/s)", speed),
+            ("Contrast", contrast), ("Brightness", brightness), ("Passes", passes),
+        ):
+            form.addRow(label, field)
+        form.addRow("Tone", invert)
+        layout.addLayout(form)
+        warning = QLabel(
+            "Depth cannot be predicted from an image alone. Test power, speed, interval, and "
+            "passes on scrap material before engraving the final workpiece."
+        )
+        warning.setWordWrap(True)
+        warning.setProperty("role", "warning")
+        layout.addWidget(warning)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        out = pick_save_file(
+            self, self._settings, "raster_output", "Export raster engraving",
+            f"{Path(self._img_path).stem}_engraving.png", "PNG image (*.png)",
+        )
+        if not out:
+            return
+        try:
+            spec = RasterEngravingSpec(
+                x_mm=x.value(), y_mm=y.value(), width_mm=width.value(), height_mm=height.value(),
+                line_interval_mm=interval.value(), min_power_percent=min_power.value(),
+                max_power_percent=max_power.value(), gamma=gamma.value(), contrast=contrast.value(),
+                speed_mm_s=speed.value(),
+                brightness=brightness.value(), passes=passes.value(), invert=invert.isChecked(),
+            )
+            png, metadata, positioned = export_raster_job(self._img_path, out, spec)
+            self._last_out = str(png)
+            self._reveal_action.setEnabled(True)
+            self._set_status(
+                f"Raster engraving exported → {png.name} + positioned SVG + settings",
+                STATUS_OK,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Raster Export Error", str(exc))
 
     def _reveal_in_finder(self) -> None:
         if self._last_out:

@@ -18,6 +18,7 @@ from src.backend.cad.geometry import (
     shape_rect,
     shape_slot,
 )
+from src.backend.model.document import EntityRecord
 from src.core.settings import DEFAULT_RADIAL_MENU_TOOLS
 from src.ui.canvas.interaction import commands as canvas_commands
 from src.ui.canvas.interaction import tools as canvas_tools
@@ -1094,15 +1095,37 @@ class DxfCanvas(CanvasView):
                     "ry": h / 2.0,
                     "rotation": 0.0,
                 }
-            self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
-            self._sel = {len(self._entities) - 1}
+            carved = False
+            if (
+                self._draw_split_enabled
+                and not self._draw_construction_mode
+                and self._is_poly_closed(poly)
+            ):
+                before = self._canvas_service.begin_preview()
+                carved, carved_count = self._carve_geometry_with_shape(poly)
+                if carved:
+                    self._entities.append(
+                        EntityRecord(
+                            points=list(poly),
+                            kind=kind,
+                            meta=meta,
+                            layer=self._active_layer,
+                        )
+                    )
+                    self._document.selection = {len(self._entities) - 1}
+                    self._canvas_service.commit_preview(before)
+                    self._show_flash(f"Carved {carved_count} region(s)", 1000)
+            if not carved:
+                self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
+                self._sel = {len(self._entities) - 1}
             if was_empty:
                 self._fit()
             else:
                 self._redraw()
             self._notify()
             self._fire_poly_change()
-            self._show_flash(f"{self._shape_drag_mode.title()} created", 800)
+            if not carved:
+                self._show_flash(f"{self._shape_drag_mode.title()} created", 800)
         self._clear_shape_drag()
 
     def _clear_shape_drag(self) -> None:

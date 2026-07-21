@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, cast
 
+from src.backend.spatial import VertexIndex, build_vertex_index, query_within_radius
 from src.ui.canvas.constants import EDGE_HIT, SNAP_DIST, VERT_HIT
 
 Point = tuple[float, float]
@@ -13,6 +14,14 @@ Point = tuple[float, float]
 class HitTestService:
     def __init__(self, host) -> None:
         self._host = host
+        # Cached KD-tree over all vertices, plus the identity of the entity
+        # list it was built from. ``_document`` is replaced with a fresh object
+        # on every committed edit (see CanvasService._document_changed), so an
+        # identity mismatch is a sufficient and cheap invalidation signal;
+        # in-place point mutations only occur mid-drag, when hover hit-testing
+        # is not running.
+        self._vertex_index: VertexIndex | None = None
+        self._vertex_index_key: tuple[int, int] | None = None
 
     @staticmethod
     def segment_intersection(a1: Point, a2: Point, b1: Point, b2: Point) -> Point | None:
@@ -69,7 +78,46 @@ class HitTestService:
                     best_distance, best = distance, point
         return best
 
+    def _current_vertex_index(self) -> VertexIndex | None:
+        """Return a KD-tree over all vertices, rebuilt only when entities change."""
+        entities = self._host._entities
+        key = (id(entities), len(entities))
+        if key != self._vertex_index_key or self._vertex_index is None:
+            self._vertex_index = build_vertex_index([entity.points for entity in entities])
+            self._vertex_index_key = key
+        return self._vertex_index
+
     def nearest_vertex(self, cx: float, cy: float) -> tuple[int, int] | None:
+        host = self._host
+        # Fast path: a spatial query prunes to the handful of vertices near the
+        # cursor instead of scanning every vertex of every entity on each mouse
+        # move. It is exact, not approximate — the same strict canvas-space
+        # distance test and lowest-index tie-break as the linear scan run on the
+        # candidate set, so the returned vertex is identical. Requires the
+        # canvas transform's uniform scale to convert the pixel radius to world
+        # space; anything unexpected falls back to the linear scan below.
+        scale = getattr(host, "_scale", None)
+        if isinstance(scale, (int, float)) and scale > 0:
+            index = self._current_vertex_index()
+            if index is not None and index.tree is not None:
+                wx, wy = host._c2w(cx, cy)
+                candidates = query_within_radius(index, (wx, wy), VERT_HIT / scale)
+                best_distance: float = VERT_HIT
+                best: tuple[int, int] | None = None
+                for i in candidates:
+                    path_index, vertex_index = index.owners[i]
+                    if not host._entity_selectable(path_index):
+                        continue
+                    distance = math.dist((cx, cy), host._w2c(*index.coords[i]))
+                    key = (path_index, vertex_index)
+                    if distance < best_distance or (
+                        distance == best_distance and best is not None and key < best
+                    ):
+                        best_distance, best = distance, key
+                return best
+        return self._nearest_vertex_linear(cx, cy)
+
+    def _nearest_vertex_linear(self, cx: float, cy: float) -> tuple[int, int] | None:
         host = self._host
         best_distance: float = VERT_HIT
         best: tuple[int, int] | None = None

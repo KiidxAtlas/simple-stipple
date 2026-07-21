@@ -280,6 +280,70 @@ class PatternProcessor:
         return tuple((round(x, 6), round(y, 6)) for x, y in poly)
 
     @staticmethod
+    def _poly_repeat_signature(poly: list[tuple[float, float]]) -> tuple:
+        """Identify the same closed motif component across tile instances.
+
+        The descriptor ignores translation, rotation, mirrored placement and
+        starting vertex, while retaining edge lengths and corner geometry.
+        Clipped edge fragments intentionally do not match a complete cell.
+        """
+        points = list(poly)
+        if len(points) >= 2 and math.hypot(
+            points[0][0] - points[-1][0], points[0][1] - points[-1][1]
+        ) <= 1e-6:
+            points.pop()
+        if len(points) < 3:
+            return ("open", PatternProcessor._poly_signature(poly))
+        edges = [
+            (
+                points[(i + 1) % len(points)][0] - points[i][0],
+                points[(i + 1) % len(points)][1] - points[i][1],
+            )
+            for i in range(len(points))
+        ]
+        descriptor = []
+        for index, (ax, ay) in enumerate(edges):
+            bx, by = edges[(index + 1) % len(edges)]
+            la = math.hypot(ax, ay)
+            lb = math.hypot(bx, by)
+            denominator = max(la * lb, 1e-12)
+            descriptor.append(
+                (
+                    round(la, 5),
+                    round((ax * bx + ay * by) / denominator, 6),
+                    round(abs(ax * by - ay * bx) / denominator, 6),
+                )
+            )
+
+        def rotations(values):
+            return [tuple(values[i:] + values[:i]) for i in range(len(values))]
+
+        # Reversing a polygon changes which edge owns each corner descriptor;
+        # recompute rather than merely reversing the existing tuples.
+        reversed_points = list(reversed(points))
+        reversed_edges = [
+            (
+                reversed_points[(i + 1) % len(points)][0] - reversed_points[i][0],
+                reversed_points[(i + 1) % len(points)][1] - reversed_points[i][1],
+            )
+            for i in range(len(points))
+        ]
+        reversed_descriptor = []
+        for index, (ax, ay) in enumerate(reversed_edges):
+            bx, by = reversed_edges[(index + 1) % len(reversed_edges)]
+            la = math.hypot(ax, ay)
+            lb = math.hypot(bx, by)
+            denominator = max(la * lb, 1e-12)
+            reversed_descriptor.append(
+                (
+                    round(la, 5),
+                    round((ax * bx + ay * by) / denominator, 6),
+                    round(abs(ax * by - ay * bx) / denominator, 6),
+                )
+            )
+        return min(rotations(descriptor) + rotations(reversed_descriptor))
+
+    @staticmethod
     def sync_outline_ids(
         new_polys: list[list[tuple[float, float]]],
         old_polys: list[list[tuple[float, float]]],
@@ -694,14 +758,14 @@ class PatternProcessor:
         if spec.enabled:
             fill_strokes: list[list[tuple[float, float]]] = []
             raw_cell_cutouts = list(fill_options.get("cell_cutouts", [])) if fill_options else []
-            generated_signatures = {self._poly_signature(poly) for poly in polys}
+            generated_signatures = {self._poly_repeat_signature(poly) for poly in polys}
             raw_cell_cutouts = [
                 poly
                 for poly in raw_cell_cutouts
-                if self._poly_signature(poly) in generated_signatures
+                if self._poly_repeat_signature(poly) in generated_signatures
             ]
             cell_cutout_signatures = {
-                self._poly_signature(poly) for poly in raw_cell_cutouts if len(poly) >= 3
+                self._poly_repeat_signature(poly) for poly in raw_cell_cutouts if len(poly) >= 3
             }
             # Build the cell geometry once. Outline fill uses its complement;
             # pattern fill uses the cells themselves. This makes the two
@@ -713,7 +777,7 @@ class PatternProcessor:
                 for poly in polys:
                     shp = _polygon_from_polyline_shared(poly, force_close=False)
                     if shp is not None:
-                        cell_shapes.append((shp, self._poly_signature(poly)))
+                        cell_shapes.append((shp, self._poly_repeat_signature(poly)))
                     elif len(poly) >= 2:
                         pending_lines.append(poly)
 

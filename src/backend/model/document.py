@@ -66,6 +66,11 @@ class Document:
     group_labels: dict[int, str] = field(default_factory=dict)
     next_group_id: int = 0
     constraints: list[GeometricConstraint] = field(default_factory=list)
+    # Canvas annotations. These live on the document (not as loose view state)
+    # so they share the one undo stack and snapshot machinery as geometry:
+    # a guide/orientation pair, and a dimension dict (see the dimension tool).
+    guides: list[tuple[str, float]] = field(default_factory=list)
+    dimensions: list[dict[str, Any]] = field(default_factory=list)
 
     def replace(self, entities: Iterable[EntityRecord]) -> None:
         self.entities = list(entities)
@@ -259,6 +264,8 @@ class PatternTabState(TabStateBase):
     zones: list[dict[str, Any]] = Field(default_factory=list)
     exclusion_ids: list[str] = Field(default_factory=list)
     custom_tile_polys: list[list[tuple[float, float]]] = Field(default_factory=list)
+    engraving_image_path: str = ""
+    engraving_options: dict[str, Any] = Field(default_factory=dict)
 
 
 class ShapeTabState(TabStateBase):

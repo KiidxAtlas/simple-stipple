@@ -27,6 +27,24 @@ def test_apply_fill_lines_skip_hole():
         assert not inside_hole, f"fill line crosses hole: {seg}"
 
 
+def test_zigzag_fill_reduces_paths_without_crossing_hole():
+    from shapely.geometry import LineString
+
+    region = build_fill_region([OUTER, INNER])
+    lines = apply_fill(region, FillSpec(mode="lines", spacing=10))
+    zigzag = apply_fill(region, FillSpec(mode="zigzag", spacing=10))
+    assert zigzag
+    assert len(zigzag) <= len(lines)
+    assert all(region.buffer(1e-8).covers(LineString(path)) for path in zigzag)
+
+
+def test_concentric_fill_produces_successive_closed_insets():
+    region = build_fill_region([OUTER])
+    paths = apply_fill(region, FillSpec(mode="concentric", spacing=10))
+    assert len(paths) >= 4
+    assert all(path[0] == pytest.approx(path[-1]) for path in paths)
+
+
 def test_fillspec_rejects_unknown_mode():
     with pytest.raises(ValueError):
         FillSpec(mode="nonsense")  # type: ignore[arg-type]  # deliberately invalid
@@ -181,6 +199,19 @@ def test_pattern_cell_fill_ignores_open_strokes_instead_of_failing():
 
     assert result
     assert fill == []
+
+
+def test_pattern_cutout_signature_follows_translated_rotated_and_mirrored_tiles():
+    service = PatternProcessor()
+    source = [(0.0, 0.0), (3.0, 0.0), (2.0, 2.0), (0.0, 1.0), (0.0, 0.0)]
+    translated = [(x + 20.0, y - 7.0) for x, y in source]
+    rotated = [(-y + 5.0, x + 8.0) for x, y in source]
+    mirrored = [(-x + 12.0, y + 4.0) for x, y in source]
+
+    signature = service._poly_repeat_signature(source)
+    assert service._poly_repeat_signature(translated) == signature
+    assert service._poly_repeat_signature(rotated) == signature
+    assert service._poly_repeat_signature(mirrored) == signature
 
 
 def test_topographic_generator_rejects_non_finite_spacing_without_crashing():

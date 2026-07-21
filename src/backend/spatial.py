@@ -47,4 +47,50 @@ def find_nearest(tree: SnapTree, query_point: Point, max_dist: float) -> Point |
     return tree.points[index] if index is not None else None
 
 
-__all__ = ["Point", "SnapTree", "build_snap_tree", "find_nearest", "find_nearest_index"]
+@dataclass(frozen=True)
+class VertexIndex:
+    """KD-tree over every vertex of a set of paths, keyed back to its owner.
+
+    ``owners[i]`` is the ``(path_index, vertex_index)`` that produced
+    ``coords[i]``, so a spatial query can be decoded to the entity/vertex the
+    caller actually reasons about.
+    """
+
+    coords: tuple[Point, ...]
+    owners: tuple[tuple[int, int], ...]
+    tree: KDTree | None
+
+
+def build_vertex_index(paths: Sequence[Sequence[Point]]) -> VertexIndex:
+    """Flatten every vertex of ``paths`` into one KD-tree with owner mapping."""
+    coords: list[Point] = []
+    owners: list[tuple[int, int]] = []
+    for path_index, points in enumerate(paths):
+        for vertex_index, point in enumerate(points):
+            coords.append((float(point[0]), float(point[1])))
+            owners.append((path_index, vertex_index))
+    tree = KDTree(np.asarray(coords, dtype=np.float64)) if coords else None
+    return VertexIndex(tuple(coords), tuple(owners), tree)
+
+
+def query_within_radius(index: VertexIndex, query_point: Point, radius: float) -> list[int]:
+    """Return indices of every vertex within ``radius`` of ``query_point``.
+
+    ``radius`` is an inclusive upper bound; callers that need a strict bound
+    re-check the exact distance on the (typically tiny) returned candidate set.
+    """
+    if index.tree is None or radius < 0:
+        return []
+    return [int(i) for i in index.tree.query_ball_point(query_point, radius)]
+
+
+__all__ = [
+    "Point",
+    "SnapTree",
+    "VertexIndex",
+    "build_snap_tree",
+    "build_vertex_index",
+    "find_nearest",
+    "find_nearest_index",
+    "query_within_radius",
+]

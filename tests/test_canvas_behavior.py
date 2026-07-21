@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEvent, QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -759,10 +759,119 @@ def test_closed_shape_tool_carves_existing_region(qapp):
     v._draw_shape_cursor_w = (7.0, 7.0)
 
     assert v._draw_ops._commit_shape_preview()
-    # Outer boundary plus the carved inner boundary; no third duplicate
-    # rectangle entity is appended.
-    assert v.poly_count == 2
+    # Outer boundary, carved inner boundary, and the retained editable cutter.
+    assert v.poly_count == 3
     assert all(v._is_poly_closed(entity.points) for entity in v._entities)
+    assert v._entities[next(iter(v._sel))].kind == "rectangle"
+
+
+def test_circle_tool_carves_existing_region(qapp):
+    v = make_view(qapp, [square(0.0, 0.0, 20.0)])
+    v._draw_split_enabled = True
+    v._draw_primitive = "circle"
+    v._draw_shape_preview_active = True
+    v._draw_shape_anchor_w = (10.0, 10.0)
+    v._draw_shape_cursor_w = (14.0, 10.0)
+
+    assert v._draw_ops._commit_shape_preview()
+    assert v.poly_count == 3
+    assert all(v._is_poly_closed(entity.points) for entity in v._entities)
+    assert v._entities[next(iter(v._sel))].kind == "circle"
+
+
+def test_quick_drag_circle_also_carves_existing_region(qapp):
+    v = make_canvas(qapp, [square(0.0, 0.0, 20.0)])
+    start = v._w2c(6.0, 6.0)
+    end = v._w2c(14.0, 14.0)
+    v._draw_split_enabled = True
+    v._shape_drag_active = True
+    v._shape_drag_mode = "circle"
+    v._shape_start_w = (6.0, 6.0)
+    v._shape_start_c = QPoint(round(start[0]), round(start[1]))
+
+    v._finish_shape_drag(QPoint(round(end[0]), round(end[1])))
+
+    assert v.poly_count == 3
+    assert all(v._is_poly_closed(entity.points) for entity in v._entities)
+    assert v._entities[next(iter(v._sel))].kind == "circle"
+
+
+def test_closed_bezier_carves_existing_region(qapp):
+    v = make_view(qapp, [square(0.0, 0.0, 20.0)])
+    v._draw_split_enabled = True
+    v._pen_pts = [(6.0, 6.0), (14.0, 6.0), (14.0, 14.0), (6.0, 14.0)]
+    v._pen_tangents = [(0.0, 0.0)] * 4
+
+    assert v._selection_service._finish_pen(close=True)
+    assert v.poly_count == 3
+    assert v._entities[next(iter(v._sel))].kind == "bezier"
+
+
+def test_construction_bezier_never_cuts(qapp):
+    v = make_view(qapp, [square(0.0, 0.0, 20.0)])
+    v._draw_split_enabled = True
+    v._draw_construction_mode = True
+    v._pen_pts = [(6.0, 6.0), (14.0, 6.0), (14.0, 14.0), (6.0, 14.0)]
+    v._pen_tangents = [(0.0, 0.0)] * 4
+
+    assert v._selection_service._finish_pen(close=True)
+    assert v.poly_count == 2
+    assert v._entities[0].points == square(0.0, 0.0, 20.0)
+    assert v._entities[1].construction
+
+
+def test_compound_ring_cutter_preserves_center_island(qapp):
+    from src.backend.cad.geometry import build_circle_poly
+
+    v = make_view(qapp, [square(-20.0, -20.0, 40.0)])
+    outer = build_circle_poly(0.0, 0.0, 10.0)
+    inner = build_circle_poly(0.0, 0.0, 5.0)
+
+    changed, count = v._editing._carve_geometry_with_shapes([outer, inner])
+    assert changed and count == 1
+    # Remaining material is represented by the outside boundary, the annular
+    # cut boundary, and the preserved center island boundary.
+    assert v.poly_count == 3
+
+
+def test_enclosing_shape_does_not_erase_contained_regions(qapp):
+    inner_a = square(2.0, 2.0, 3.0)
+    inner_b = square(10.0, 10.0, 4.0)
+    v = make_view(qapp, [inner_a, inner_b])
+    v._draw_split_enabled = True
+    enclosing = square(0.0, 0.0, 20.0)
+
+    assert v._selection_service._commit_drawn_polyline(
+        enclosing, primitive="polyline", close=True
+    )
+    assert v.poly_count == 3
+    assert v._entities[0].points == inner_a
+    assert v._entities[1].points == inner_b
+    assert v._entities[2].points == enclosing
+    assert v._sel == {2}
+
+
+@pytest.mark.parametrize(
+    ("primitive", "points", "minimum_samples"),
+    [
+        ("arc", [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0)], 100),
+        ("spline", [(0.0, 0.0), (5.0, 8.0), (10.0, 0.0)], 100),
+    ],
+)
+def test_curved_cutters_use_rendered_curve_not_control_polygon(
+    qapp, monkeypatch, primitive, points, minimum_samples
+):
+    v = make_view(qapp, [])
+    v._draw_split_enabled = True
+    captured = []
+
+    def capture(cutter):
+        captured.extend(cutter)
+        return False, 0, 0
+
+    monkeypatch.setattr(v, "_split_geometry_with_line", capture)
+    assert v._selection_service._commit_drawn_polyline(points, primitive=primitive)
+    assert len(captured) >= minimum_samples
 
 
 # ── draw mode ────────────────────────────────────────────────────────────────

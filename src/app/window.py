@@ -43,6 +43,35 @@ from src.ui.style.theme import accessibility_palette, apply_dark_theme, load_app
 
 LOGGER = logging.getLogger(__name__)
 
+_FALLBACK_POINT_SIZE = 12.0
+
+
+def resolve_scaled_point_size(
+    current_point_size: float, stored_base: object, ui_scale: float
+) -> tuple[float, float]:
+    """Return ``(base, scaled)`` point sizes for the global UI font.
+
+    Qt silently accepts a non-positive point size and then renders text as
+    unusably small, so both ways this can go non-positive are closed here:
+
+    * ``QFont.pointSizeF()`` returns ``-1`` when the font was defined in pixels
+      (some platform default fonts are), and
+    * ``ui_scale`` may be missing, ``0``, or otherwise corrupt in settings.
+
+    ``base`` is always the genuine unscaled size — a previously stored base wins
+    over the (possibly already-scaled) live font, so repeated calls never
+    compound. By construction the returned sizes are strictly positive, making a
+    negative/zero global font size unreachable.
+    """
+    if isinstance(stored_base, (int, float)) and float(stored_base) > 0:
+        base = float(stored_base)
+    elif current_point_size > 0:
+        base = float(current_point_size)
+    else:
+        base = _FALLBACK_POINT_SIZE
+    scale = ui_scale if ui_scale and ui_scale > 0 else 1.0
+    return base, base * scale
+
 
 class App(QMainWindow):
     """Top-level main window coordinating workspace state and cross-tab actions."""
@@ -416,9 +445,13 @@ class App(QMainWindow):
             return
         app = cast(QApplication, instance)
         font = app.font()
-        base_size = float(app.property("basePointSize") or font.pointSizeF() or 12.0)
+        base_size, scaled_size = resolve_scaled_point_size(
+            font.pointSizeF(),
+            app.property("basePointSize"),
+            float(self._settings.get("ui_scale", 1.0) or 1.0),
+        )
         app.setProperty("basePointSize", base_size)
-        font.setPointSizeF(base_size * float(self._settings.get("ui_scale", 1.0) or 1.0))
+        font.setPointSizeF(scaled_size)
         app.setFont(font)
         high_contrast = bool(self._settings.get("high_contrast", False))
         appearance = str(self._settings.get("appearance", "system"))

@@ -924,6 +924,11 @@ class CanvasView(
         self._bg_h_mm: float = 0.0
         self._bg_pixmap: QPixmap | None = None
         self._bg_cached_scale: float = 0.0
+        self._bg_x_mm: float = 0.0
+        self._bg_y_mm: float = 0.0
+        self._bg_editable: bool = False
+        self._bg_edit_callback = None
+        self._bg_drag: tuple[str, float, float, float, float, float, float] | None = None
 
         # Scale / Dimension button rects
         self._mbtn_rect: tuple[float, float, float, float] = (0, 0, 0, 0)
@@ -2095,10 +2100,14 @@ class CanvasView(
         self._img_bounds = (w_mm, h_mm)
         self._redraw()
 
-    def set_background_image(self, pil_img: PILImage.Image, w_mm: float, h_mm: float) -> None:
+    def set_background_image(
+        self, pil_img: PILImage.Image, w_mm: float, h_mm: float, x_mm: float = 0.0, y_mm: float = 0.0
+    ) -> None:
         self._bg_pil = pil_img
         self._bg_w_mm = w_mm
         self._bg_h_mm = h_mm
+        self._bg_x_mm = x_mm
+        self._bg_y_mm = y_mm
         self._bg_pixmap = None
         self._bg_cached_scale = 0.0
         self._redraw()
@@ -2107,6 +2116,32 @@ class CanvasView(
         self._bg_pil = None
         self._bg_pixmap = None
         self._redraw()
+
+    def set_background_image_editable(self, enabled: bool, callback=None) -> None:
+        self._bg_editable = bool(enabled)
+        self._bg_edit_callback = callback
+        self._bg_drag = None
+        self._redraw()
+
+    def _background_edit_hit(self, cx: float, cy: float) -> str | None:
+        if not self._bg_editable or self._bg_pil is None:
+            return None
+        corners = {
+            "nw": self._w2c(self._bg_x_mm, self._bg_y_mm + self._bg_h_mm),
+            "ne": self._w2c(self._bg_x_mm + self._bg_w_mm, self._bg_y_mm + self._bg_h_mm),
+            "se": self._w2c(self._bg_x_mm + self._bg_w_mm, self._bg_y_mm),
+            "sw": self._w2c(self._bg_x_mm, self._bg_y_mm),
+        }
+        for name, (hx, hy) in corners.items():
+            if math.hypot(cx - hx, cy - hy) <= 10:
+                return name
+        wx, wy = self._c2w(cx, cy)
+        if (
+            self._bg_x_mm <= wx <= self._bg_x_mm + self._bg_w_mm
+            and self._bg_y_mm <= wy <= self._bg_y_mm + self._bg_h_mm
+        ):
+            return "move"
+        return None
 
     def set_mode(self, mode: str) -> None:
         if mode == self._mode:
@@ -3359,6 +3394,16 @@ class CanvasView(
         pos = event.position()
         btn = event.button()
 
+        if btn == Qt.MouseButton.LeftButton:
+            bg_hit = self._background_edit_hit(pos.x(), pos.y())
+            if bg_hit is not None:
+                wx, wy = self._c2w(pos.x(), pos.y())
+                self._bg_drag = (
+                    bg_hit, wx, wy, self._bg_x_mm, self._bg_y_mm,
+                    self._bg_w_mm, self._bg_h_mm,
+                )
+                return
+
         if btn == Qt.MouseButton.MiddleButton:
             self._mmb_prev = pos
             return
@@ -3483,6 +3528,26 @@ class CanvasView(
         self._hover_snap_type = None
         self._hover_snap_multi = []
 
+        if self._bg_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            mode, sx, sy, ox, oy, ow, oh = self._bg_drag
+            if mode == "move":
+                self._bg_x_mm, self._bg_y_mm = ox + wx - sx, oy + wy - sy
+            else:
+                left, right, bottom, top = ox, ox + ow, oy, oy + oh
+                if "w" in mode: left = min(wx, right - 0.01)
+                if "e" in mode: right = max(wx, left + 0.01)
+                if "s" in mode: bottom = min(wy, top - 0.01)
+                if "n" in mode: top = max(wy, bottom + 0.01)
+                self._bg_x_mm, self._bg_y_mm = left, bottom
+                self._bg_w_mm, self._bg_h_mm = right - left, top - bottom
+            if callable(self._bg_edit_callback):
+                self._bg_edit_callback(
+                    self._bg_x_mm, self._bg_y_mm, self._bg_w_mm, self._bg_h_mm
+                )
+            self._bg_pixmap = None
+            self._redraw()
+            return
+
         if self._mmb_prev is not None and event.buttons() & Qt.MouseButton.MiddleButton:
             self._ox += pos.x() - self._mmb_prev.x()
             self._oy += pos.y() - self._mmb_prev.y()
@@ -3542,6 +3607,10 @@ class CanvasView(
             return
 
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        if self._bg_drag is not None:
+            self._bg_drag = None
             return
 
         if self._space_pan_active or self._mode == "pan":

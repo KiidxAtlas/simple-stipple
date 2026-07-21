@@ -8,6 +8,8 @@ but validate and coerce those dicts through ``PatternTabState`` internally.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import logging
 from typing import Any, cast
 
@@ -57,6 +59,20 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "zones": list(page._zones),
         "exclusion_ids": list(page._exclusion_ids),
         "custom_tile_polys": page._custom_tile_polys,
+        "engraving_image_path": page._engraving_image_path,
+        "engraving_options": {
+            "x": page._engrave_x.value(), "y": page._engrave_y.value(),
+            "width": page._engrave_w.value(), "height": page._engrave_h.value(),
+            "interval": page._engrave_interval.value(),
+            "min_power": page._engrave_min_power.value(),
+            "max_power": page._engrave_max_power.value(),
+            "speed": page._engrave_speed.value(),
+            "gamma": page._engrave_gamma.value(),
+            "passes": page._engrave_passes.value(),
+            "invert": page._engrave_invert.isChecked(),
+            "target": page._engrave_target.currentData(),
+            "material": page._engrave_material.currentData(),
+        },
     }
     return state_dict
 
@@ -122,6 +138,32 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     for outline_id in page._exclusion_ids:
         page._outline_roles[outline_id] = "cutout"
     page._custom_tile_polys = [list(poly) for poly in pattern_state.custom_tile_polys]
+    page._engraving_image_path = pattern_state.engraving_image_path
+    engraving = pattern_state.engraving_options
+    if engraving:
+        page._engrave_x.setValue(float(engraving.get("x", 0)))
+        page._engrave_y.setValue(float(engraving.get("y", 0)))
+        page._engrave_w.setValue(float(engraving.get("width", 100)))
+        page._engrave_h.setValue(float(engraving.get("height", 100)))
+        page._engrave_interval.setValue(float(engraving.get("interval", 0.1)))
+        page._engrave_min_power.setValue(float(engraving.get("min_power", 0)))
+        page._engrave_max_power.setValue(float(engraving.get("max_power", 80)))
+        page._engrave_speed.setValue(float(engraving.get("speed", 100)))
+        page._engrave_gamma.setValue(float(engraving.get("gamma", 1)))
+        page._engrave_passes.setValue(int(engraving.get("passes", 1)))
+        page._engrave_invert.setChecked(bool(engraving.get("invert", False)))
+        target_index = page._engrave_target.findData(str(engraving.get("target", "outline")))
+        page._engrave_target.setCurrentIndex(max(0, target_index))
+        material_index = page._engrave_material.findData(
+            str(engraving.get("material", "custom"))
+        )
+        page._engrave_material.blockSignals(True)
+        page._engrave_material.setCurrentIndex(max(0, material_index))
+        page._engrave_material.blockSignals(False)
+    if page._engraving_image_path and Path(page._engraving_image_path).exists():
+        page._engraving_image_label.setText(Path(page._engraving_image_path).name)
+        page._engraving_section.set_subtitle(Path(page._engraving_image_path).name)
+        page._update_engraving_overlay()
     page._sync_canvas_cutout_highlight()
     page._refresh_cutout_status()
 

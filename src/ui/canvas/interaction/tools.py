@@ -1443,7 +1443,7 @@ class DrawTool(CanvasTool):
         pen_color = QColor("#2f81f7")
         painter.setPen(QPen(pen_color, 1.6))
         if len(pts) >= 2:
-            preview = build_bezier_poly(pts, v._pen_tangents, segments=16)
+            preview = build_bezier_poly(pts, v._pen_tangents, segments=64)
             path_pts = [v._w2c(*p) for p in preview]
             for a, b in zip(path_pts, path_pts[1:]):
                 painter.drawLine(QPointF(*a), QPointF(*b))
