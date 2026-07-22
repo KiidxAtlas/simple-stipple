@@ -767,17 +767,25 @@ class PatternProcessor:
             cell_cutout_signatures = {
                 self._poly_repeat_signature(poly) for poly in raw_cell_cutouts if len(poly) >= 3
             }
+            raw_instance_cutouts = (
+                list(fill_options.get("cell_instance_cutouts", [])) if fill_options else []
+            )
+            instance_cutout_signatures = {
+                self._poly_signature(poly) for poly in raw_instance_cutouts if len(poly) >= 3
+            }
             # Build the cell geometry once. Outline fill uses its complement;
             # pattern fill uses the cells themselves. This makes the two
             # independent toggles partition the outline instead of engraving
             # overlapping hatch passes over the same area.
-            cell_shapes: list[tuple[Any, Any]] = []
+            cell_shapes: list[tuple[Any, Any, Any]] = []
             pending_lines: list[list[tuple[float, float]]] = []
             try:
                 for poly in polys:
                     shp = _polygon_from_polyline_shared(poly, force_close=False)
                     if shp is not None:
-                        cell_shapes.append((shp, self._poly_repeat_signature(poly)))
+                        cell_shapes.append(
+                            (shp, self._poly_repeat_signature(poly), self._poly_signature(poly))
+                        )
                     elif len(poly) >= 2:
                         pending_lines.append(poly)
 
@@ -794,7 +802,7 @@ class PatternProcessor:
                     for polygonized_shape in polygonize(unary_union(lines)):
                         clipped_shape = polygonized_shape.intersection(fill_outline)
                         if not clipped_shape.is_empty:
-                            cell_shapes.append((clipped_shape, None))
+                            cell_shapes.append((clipped_shape, None, None))
             except (ValueError, TypeError) as exc:
                 raise ValueError(
                     "Pattern-cell fill failed because one or more generated cells are invalid."
@@ -809,7 +817,7 @@ class PatternProcessor:
                         outline_paths: list[list[tuple[float, float]]] = []
                         _extract_all_rings_shared(fill_outline, outline_paths)
                         cell_paths: list[list[tuple[float, float]]] = []
-                        for shape, _signature in cell_shapes:
+                        for shape, _repeat_signature, _instance_signature in cell_shapes:
                             _extract_all_rings_shared(shape, cell_paths)
                         clipped_paths = clipper_difference(outline_paths, cell_paths)
                         outline_fill_region = build_fill_region(clipped_paths)
@@ -822,8 +830,11 @@ class PatternProcessor:
 
             if spec.target_pattern:
                 try:
-                    for shape, signature in cell_shapes:
-                        if signature is not None and signature in cell_cutout_signatures:
+                    for shape, repeat_signature, instance_signature in cell_shapes:
+                        if repeat_signature is not None and (
+                            repeat_signature in cell_cutout_signatures
+                            or instance_signature in instance_cutout_signatures
+                        ):
                             continue
                         fill_strokes.extend(apply_fill(shape, spec))
                 except (ValueError, TypeError) as exc:

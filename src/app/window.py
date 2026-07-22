@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar, cast
 from uuid import uuid4
@@ -116,7 +117,7 @@ class App(QMainWindow):
         self._command_controller = CommandController(self)
         self.setWindowTitle("Simple Stipple")
         self.resize(1280, 820)
-        self.setMinimumSize(1100, 700)
+        self.setMinimumSize(900, 600)
 
         self._settings = load_settings()
         self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
@@ -136,6 +137,7 @@ class App(QMainWindow):
         self._restored_recovery_path: Path | None = None
         self._workspace_dirty: bool = False
         self._last_saved_document: dict | None = None
+        self._last_autosave_at: datetime | None = None
         self._has_unsaved_changes: bool = False
         self._workspace_timer = QTimer(self)
         self._workspace_timer.setSingleShot(True)
@@ -216,6 +218,9 @@ class App(QMainWindow):
         retry = QPushButton("Retry")
         retry.clicked.connect(self._autosave_controller._autosave)
         layout.addWidget(retry)
+        manage_storage = QPushButton("Manage storage")
+        manage_storage.clicked.connect(self._open_saved_workspaces)
+        layout.addWidget(manage_storage)
         save_as = QPushButton("Save As…")
         save_as.setProperty("role", "primary")
         save_as.clicked.connect(self._save_workspace_as)
@@ -278,8 +283,8 @@ class App(QMainWindow):
     def _open_workspace(self) -> None:
         self._workspace_controller._open_workspace()
 
-    def _open_saved_workspaces(self) -> None:
-        self._workspace_controller._open_saved_workspaces()
+    def _open_saved_workspaces(self, *, initial_source: str = "saved") -> None:
+        self._workspace_controller._open_saved_workspaces(initial_source=initial_source)
 
     def _save_workspace(self) -> bool:
         return self._workspace_controller._save_workspace()
@@ -349,12 +354,19 @@ class App(QMainWindow):
         self._page_runtime.connect_signal_if_present(
             page_id="draft",
             signal_name="sendSelectedToPatternRequested",
-            slot=self._send_shape_selection_to_pattern,
+            slot=lambda polys: self._send_shape_selection_to_pattern(
+                polys, source_label="Draft"
+            ),
         )
         self._page_runtime.connect_signal_if_present(
             page_id="pattern",
             signal_name="sendSelectedToDraftRequested",
             slot=self._send_pattern_selection_to_draft,
+        )
+        self._page_runtime.connect_signal_if_present(
+            page_id="pattern",
+            signal_name="repairTileRequested",
+            slot=self._repair_pattern_tile,
         )
         self._page_runtime.connect_signal_if_present(
             page_id="trace",
@@ -364,7 +376,21 @@ class App(QMainWindow):
         self._page_runtime.connect_signal_if_present(
             page_id="trace",
             signal_name="sendSelectedToPatternRequested",
-            slot=self._send_shape_selection_to_pattern,
+            slot=lambda polys: self._send_shape_selection_to_pattern(
+                polys, source_label="Trace"
+            ),
+        )
+        self._page_runtime.connect_signal_if_present(
+            page_id="convert",
+            signal_name="openInDraftRequested",
+            slot=self._send_pattern_selection_to_draft,
+        )
+        self._page_runtime.connect_signal_if_present(
+            page_id="convert",
+            signal_name="openInPatternRequested",
+            slot=lambda polys: self._send_shape_selection_to_pattern(
+                polys, source_label="Convert"
+            ),
         )
         for page_id in ("draft", "trace"):
             self._page_runtime.connect_signal_if_present(
@@ -375,6 +401,12 @@ class App(QMainWindow):
 
     def _switch_to_page(self, page_id: str) -> None:
         self._page_runtime.switch_to(page_id)
+
+    def _repair_pattern_tile(self, path: str) -> None:
+        convert_page = self._page_runtime.get("convert")
+        if convert_page is not None and hasattr(convert_page, "open_repair_input"):
+            convert_page.open_repair_input(path)  # type: ignore[attr-defined]
+        self._page_runtime.switch_to("convert")
 
     def _open_repo_dialog(self) -> None:
         """Show the repository sync window (modeless; reused across opens)."""
@@ -398,10 +430,16 @@ class App(QMainWindow):
     def _send_shape_selection_to_pattern(
         self,
         polys: list[list[tuple[float, float]]],
+        *,
+        source_label: str = "Draft",
     ) -> None:
         if not polys:
             return
-        self._pattern_page.load_outline_polys(polys, source_label="Draft selection")
+        self._pattern_page.load_outline_polys(
+            polys,
+            source_label=f"{source_label} selection",
+            offer_undo=True,
+        )
         self._tabs.setCurrentWidget(self._pattern_page)
         self._schedule_workspace_dirty_check()
 
@@ -432,6 +470,7 @@ class App(QMainWindow):
         self._page_runtime.apply(key, value)
         if key in {
             "appearance",
+            "interface_density",
             "ui_scale",
             "high_contrast",
             "reduced_motion",
@@ -463,12 +502,16 @@ class App(QMainWindow):
             )
         app.setProperty("highContrast", high_contrast)
         app.setProperty("appearance", appearance)
+        app.setProperty("reducedMotion", bool(self._settings.get("reduced_motion", False)))
+        density = str(self._settings.get("interface_density", "compact"))
+        app.setProperty("interfaceDensity", density)
         app.setPalette(accessibility_palette(high_contrast, appearance))
         app.setStyleSheet(
             load_app_qss(
                 scale=float(self._settings.get("ui_scale", 1.0) or 1.0),
                 high_contrast=high_contrast,
                 appearance=appearance,
+                density=density,
             )
         )
 

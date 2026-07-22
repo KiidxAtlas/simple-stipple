@@ -14,13 +14,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
-    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +30,7 @@ from src.backend.pattern.presets import (
     merge_presets,
     reset_to_builtins,
 )
+from src.ui.components import install_dialog_focus_lifecycle
 from src.ui.util import pick_open_file, pick_save_file
 
 
@@ -57,18 +57,20 @@ class PresetManagerDialog(QDialog):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        body = QHBoxLayout()
-        body.setSpacing(10)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setChildrenCollapsible(False)
 
         self._list = QListWidget()
+        self._list.setMinimumWidth(160)
         self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self._list.itemSelectionChanged.connect(self._update_buttons)
-        body.addWidget(self._list, stretch=1)
+        self._list.itemChanged.connect(self._on_item_renamed)
+        self._splitter.addWidget(self._list)
 
         sidebar = QVBoxLayout()
         sidebar.setSpacing(6)
 
-        self._rename_btn = self._make_button("Rename…", self._rename, "Rename the selected preset")
+        self._rename_btn = self._make_button("Rename", self._rename, "Rename the selected preset inline")
         self._duplicate_btn = self._make_button(
             "Duplicate", self._duplicate, "Copy the selected preset under a new name"
         )
@@ -107,13 +109,22 @@ class PresetManagerDialog(QDialog):
 
         sidebar_widget = QWidget()
         sidebar_widget.setLayout(sidebar)
-        sidebar_widget.setFixedWidth(170)
-        body.addWidget(sidebar_widget)
-
-        root.addLayout(body)
+        sidebar_widget.setMinimumWidth(220)
+        self._splitter.addWidget(sidebar_widget)
+        stored_sizes = self._settings.get("pattern_preset_manager_splitter", [240, 280])
+        if (
+            isinstance(stored_sizes, list)
+            and len(stored_sizes) == 2
+            and all(isinstance(value, int) and value > 0 for value in stored_sizes)
+        ):
+            self._splitter.setSizes(stored_sizes)
+        else:
+            self._splitter.setSizes([240, 280])
+        self._splitter.splitterMoved.connect(self._remember_splitter)
+        root.addWidget(self._splitter, stretch=1)
 
         self._status = QLabel("")
-        self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
+        self._status.setProperty("role", "status-neutral")
         root.addWidget(self._status)
 
         buttons = QDialogButtonBox(
@@ -128,6 +139,7 @@ class PresetManagerDialog(QDialog):
         root.addWidget(buttons)
 
         self._refresh_list(select=current_preset)
+        install_dialog_focus_lifecycle(self, self._list)
 
     # ------------------------------------------------------------------
     # Public results
@@ -158,9 +170,15 @@ class PresetManagerDialog(QDialog):
         for name in sorted(self._presets, key=str.lower):
             payload = self._presets[name]
             pattern = payload.get("pattern", "?")
-            item = QListWidgetItem(f"{name}    —  {pattern}")
+            item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, name)
-            tooltip = "\n".join(f"{k}: {v}" for k, v in sorted(payload.items()) if k != "pattern")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+            details = "\n".join(
+                f"{k}: {v}" for k, v in sorted(payload.items()) if k != "pattern"
+            )
+            tooltip = f"{name}\nPattern: {pattern}"
+            if details:
+                tooltip += f"\n{details}"
             item.setToolTip(tooltip)
             self._list.addItem(item)
         self._list.blockSignals(False)
@@ -197,22 +215,38 @@ class PresetManagerDialog(QDialog):
     def _mark_dirty(self) -> None:
         self._dirty = True
 
+    def _remember_splitter(self, *_args) -> None:
+        self._settings["pattern_preset_manager_splitter"] = self._splitter.sizes()
+
     # ------------------------------------------------------------------
     # Actions: edit
     # ------------------------------------------------------------------
 
     def _rename(self) -> None:
-        name = self._selected_name()
-        if name is None:
+        item = self._list.currentItem()
+        if item is None:
             return
-        new_name, ok = QInputDialog.getText(self, "Rename Preset", "New name:", text=name)
-        new_name = new_name.strip()
-        if not ok or not new_name or new_name == name:
+        self._list.editItem(item)
+
+    def _on_item_renamed(self, item: QListWidgetItem) -> None:
+        name = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        new_name = item.text().strip()
+        if not name or new_name == name:
+            item.setText(name)
+            return
+        if not new_name:
+            self._list.blockSignals(True)
+            item.setText(name)
+            self._list.blockSignals(False)
+            self._set_status("Preset names cannot be empty.")
+            self._list.editItem(item)
             return
         if new_name in self._presets:
-            QMessageBox.warning(
-                self, "Rename Preset", f"A preset called {new_name!r} already exists."
-            )
+            self._list.blockSignals(True)
+            item.setText(name)
+            self._list.blockSignals(False)
+            self._set_status(f"A preset called {new_name!r} already exists.")
+            self._list.editItem(item)
             return
         self._presets[new_name] = self._presets.pop(name)
         self._mark_dirty()

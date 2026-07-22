@@ -57,6 +57,60 @@ def test_load_without_fit_preserves_viewport(qapp):
     assert (canvas._scale, canvas._ox, canvas._oy) == (7.5, 123.0, 234.0)
 
 
+def test_background_image_requires_explicit_selection_and_escape_deselects(qapp):
+    from PIL import Image
+
+    canvas = make_canvas(qapp)
+    canvas.set_background_image(Image.new("RGBA", (20, 20)), 10.0, 10.0, 0.0, 0.0)
+    canvas.set_background_image_editable(True)
+    cx, cy = canvas._w2c(5.0, 5.0)
+
+    assert canvas._background_edit_hit(cx, cy) is None
+    click_world(canvas, 5.0, 5.0)
+    assert canvas.is_background_image_selected()
+    assert canvas._background_edit_hit(cx, cy) is not None
+
+    key(canvas, Qt.Key.Key_Escape)
+    assert not canvas.is_background_image_selected()
+
+
+def test_geometry_has_priority_over_unselected_background_image(qapp):
+    from PIL import Image
+
+    canvas = make_canvas(qapp, [square(0.0, 0.0)])
+    canvas.set_background_image(Image.new("RGBA", (20, 20)), 10.0, 10.0, 0.0, 0.0)
+    canvas.set_background_image_editable(True)
+
+    click_world(canvas, 0.0, 5.0)
+
+    assert not canvas.is_background_image_selected()
+    assert canvas._sel == {0}
+
+
+def test_background_image_exposes_rotation_handle_and_selection_signal(qapp):
+    from PIL import Image
+
+    canvas = make_canvas(qapp)
+    changes = []
+    canvas.backgroundSelectionChanged.connect(changes.append)
+    canvas.set_background_image(Image.new("RGBA", (20, 10)), 20.0, 10.0, 0.0, 0.0)
+    canvas.set_background_image_editable(True)
+    canvas.select_background_image(True)
+
+    corners = canvas._background_canvas_corners()
+    top_x = (corners["nw"][0] + corners["ne"][0]) / 2.0
+    top_y = (corners["nw"][1] + corners["ne"][1]) / 2.0
+    center = canvas._w2c(10.0, 5.0)
+    length = ((top_x - center[0]) ** 2 + (top_y - center[1]) ** 2) ** 0.5
+    handle_x = top_x + (top_x - center[0]) / length * 24.0
+    handle_y = top_y + (top_y - center[1]) / length * 24.0
+
+    assert canvas._background_edit_hit(handle_x, handle_y) == "rotate"
+    assert changes == [True]
+    canvas.select_background_image(False)
+    assert changes == [True, False]
+
+
 def test_precision_state_exposes_all_user_snap_controls(qapp):
     canvas = make_canvas(qapp)
     canvas.set_snap_master(False)
@@ -2374,7 +2428,27 @@ def test_context_menu_builds_for_mixed_editor_states(qapp, monkeypatch):
     if more is not None:
         bezier_labels.extend(action.text() for action in more.actions())
     assert "Bézier node" in bezier_labels
-    assert "Symbols" in bezier_labels
+    removed = {
+        "Next View",
+        "Previous View",
+        "Geometry Preflight…",
+        "Show Geometry Health",
+        "Select by geometry",
+        "Symbols",
+        "Construct",
+        "Path Direction & Sampling",
+        "Recognize Parametric Shapes",
+        "Fit to Curve…",
+    }
+    assert removed.isdisjoint(bezier_labels)
+    visible_actions = list(captured[-1].actions())
+    if more is not None:
+        visible_actions.extend(more.actions())
+    array = next(action.menu() for action in visible_actions if action.text() == "Array")
+    array_labels = [action.text() for action in array.actions()]
+    assert len(array_labels) == 2
+    assert any("grid" in label.lower() for label in array_labels)
+    assert any("radial" in label.lower() for label in array_labels)
 
 
 def test_edit_mode_context_menu_exposes_corner_operations(qapp, monkeypatch):

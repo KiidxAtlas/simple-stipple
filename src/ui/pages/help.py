@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.components import tool_icon
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -1020,7 +1022,9 @@ class HelpDialog(QDialog):
 
         header_layout.addStretch()
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton()
+        close_btn.setIcon(tool_icon("cancel", size=16))
+        close_btn.setAccessibleName("Close user manual")
         close_btn.setObjectName("helpCloseButton")
         close_btn.setFixedSize(32, 32)
         # A QPushButton inside a QDialog defaults to autoDefault=True, so as

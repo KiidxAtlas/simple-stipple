@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
+from src.ui.components import CollapsibleSection
 from src.ui.util import parse_numeric_expression, to_display
 from src.ui.util import suffix as unit_suffix
 
@@ -44,8 +46,7 @@ _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
 def _num_edit(on_commit) -> QLineEdit:
     edit = QLineEdit()
     edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-    edit.setMinimumWidth(88)
-    edit.setMaximumWidth(160)
+    edit.setMinimumWidth(72)
     edit.editingFinished.connect(on_commit)
     return edit
 
@@ -66,21 +67,31 @@ class CanvasPropertiesPanel(QWidget):
         title.setProperty("role", "panel-title")
         root.addWidget(title)
 
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        root.addWidget(self._scroll, 1)
+        scroll_body = QWidget()
+        body_root = QVBoxLayout(scroll_body)
+        body_root.setContentsMargins(0, 0, 0, 0)
+        body_root.setSpacing(6)
+        self._scroll.setWidget(scroll_body)
+
         self._summary = QLabel("No selection")
-        self._summary.setStyleSheet("color: #8b949e;")
-        root.addWidget(self._summary)
+        self._summary.setProperty("role", "hint")
+        body_root.addWidget(self._summary)
 
         self._metrics = QLabel()
         self._metrics.setProperty("role", "hint-sm")
         self._metrics.setWordWrap(True)
-        root.addWidget(self._metrics)
+        body_root.addWidget(self._metrics)
 
         self._empty_hint = QLabel(
             "Select a shape to edit its position, size, or\nshape-specific properties."
         )
-        self._empty_hint.setStyleSheet("color: #484f58; font-size: 11px;")
+        self._empty_hint.setProperty("role", "hint-sm")
         self._empty_hint.setWordWrap(True)
-        root.addWidget(self._empty_hint)
+        body_root.addWidget(self._empty_hint)
 
         self._dimension_container = QWidget()
         dimension_layout = QGridLayout(self._dimension_container)
@@ -94,14 +105,22 @@ class CanvasPropertiesPanel(QWidget):
         self._dimension_delete = QPushButton("Delete Dimension")
         self._dimension_delete.clicked.connect(canvas._delete_selected_dimension)
         dimension_layout.addWidget(self._dimension_delete, 1, 0, 1, 2)
-        root.addWidget(self._dimension_container)
+        self._constraints_dimension_section = CollapsibleSection(
+            "Constraints / Dimensions", self._dimension_container, expanded=True
+        )
+        body_root.addWidget(self._constraints_dimension_section)
 
         self._fields_container = QWidget()
         fields_root = QVBoxLayout(self._fields_container)
         fields_root.setContentsMargins(0, 0, 0, 0)
         fields_root.setSpacing(4)
-        root.addWidget(self._fields_container)
+        body_root.addWidget(self._fields_container)
+        body_root.addStretch()
 
+        geometry_content = QWidget()
+        geometry_layout = QVBoxLayout(geometry_content)
+        geometry_layout.setContentsMargins(0, 0, 0, 0)
+        geometry_layout.setSpacing(4)
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(6)
@@ -119,7 +138,7 @@ class CanvasPropertiesPanel(QWidget):
             (("X", self._x), ("Y", self._y), ("W", self._w), ("H", self._h))
         ):
             lbl = QLabel(axis)
-            lbl.setStyleSheet("color: #8b949e;")
+            lbl.setProperty("role", "field-label")
             self._axis_labels[axis] = lbl
             grid.addWidget(lbl, row, 0)
             grid.addWidget(edit, row, 1)
@@ -132,32 +151,37 @@ class CanvasPropertiesPanel(QWidget):
             "Lock aspect ratio\nKeeps width/height proportional for both "
             "typed W/H edits and gizmo-handle drags"
         )
-        self._aspect_lock_btn.setStyleSheet(
-            "QPushButton:checked { background: #1f3a6e; border: 1px solid #2f81f7; }"
-        )
+        self._aspect_lock_btn.setProperty("role", "secondary")
         self._aspect_lock_btn.toggled.connect(self._on_aspect_lock_toggled)
         grid.addWidget(self._aspect_lock_btn, 2, 2, 2, 1)
-        fields_root.addLayout(grid)
+        geometry_layout.addLayout(grid)
+        self._geometry_section = CollapsibleSection("Geometry", geometry_content, expanded=True)
+        fields_root.addWidget(self._geometry_section)
 
-        actions = QGridLayout()
-        actions.setHorizontalSpacing(6)
-        actions.setVerticalSpacing(6)
+        transform_content = QWidget()
+        transform_layout = QVBoxLayout(transform_content)
+        transform_layout.setContentsMargins(0, 0, 0, 0)
+        transform_layout.setSpacing(6)
+        transform_actions = QGridLayout()
+        transform_actions.setHorizontalSpacing(6)
+        transform_actions.setVerticalSpacing(6)
+        self._transform_layout = transform_actions
+        self._transform_buttons: list[QPushButton] = []
         for index, (text, tip, cb) in enumerate(
             (
                 ("R +90", "Rotate 90° CCW", lambda: self._rotate(90.0)),
                 ("R -90", "Rotate 90° CW", lambda: self._rotate(-90.0)),
                 ("Flip H", "Mirror horizontally", lambda: self._mirror("horizontal")),
                 ("Flip V", "Mirror vertically", lambda: self._mirror("vertical")),
-                ("Smooth", "Smooth jagged corners (Chaikin)", self._smooth),
-                ("Simplify", "Simplify — reduce vertex count", self._simplify),
             )
         ):
             btn = QPushButton(text)
             btn.setToolTip(tip)
             btn.setMinimumHeight(28)
             btn.clicked.connect(cb)
-            actions.addWidget(btn, index // 2, index % 2)
-        fields_root.addLayout(actions)
+            transform_actions.addWidget(btn, index // 2, index % 2)
+            self._transform_buttons.append(btn)
+        transform_layout.addLayout(transform_actions)
 
         rotation_row = QHBoxLayout()
         rotation_row.setSpacing(6)
@@ -171,42 +195,75 @@ class CanvasPropertiesPanel(QWidget):
         self._rot.setPlaceholderText("Angle")
         self._rot.setToolTip("Absolute angle of the selected shape in degrees")
         rotation_row.addWidget(self._rot, stretch=1)
-        fields_root.addLayout(rotation_row)
+        transform_layout.addLayout(rotation_row)
+        self._transform_section = CollapsibleSection(
+            "Transform", transform_content, expanded=True
+        )
+        fields_root.addWidget(self._transform_section)
 
-        context = QGridLayout()
-        context.setHorizontalSpacing(6)
-        context.setVerticalSpacing(6)
+        constraints_content = QWidget()
+        constraints_layout = QGridLayout(constraints_content)
+        constraints_layout.setContentsMargins(0, 0, 0, 0)
+        constraints_layout.setHorizontalSpacing(6)
+        constraints_layout.setVerticalSpacing(6)
+        actions_content = QWidget()
+        actions_layout = QGridLayout(actions_content)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setHorizontalSpacing(6)
+        actions_layout.setVerticalSpacing(6)
+        self._actions_layout = actions_layout
+        self._action_buttons: list[QPushButton] = []
         self._context_buttons: dict[str, QPushButton] = {}
-        for index, (key, text, tip, callback) in enumerate(
+        for key, text, tip, callback in (
             (
-                (
-                    "duplicate",
-                    "Duplicate",
-                    "Duplicate the current selection",
-                    canvas.duplicate_selected,
-                ),
-                (
-                    "constraints",
-                    "Remove Constraints",
-                    "Remove geometric constraints attached to the selection",
-                    canvas.remove_constraints_for_selection,
-                ),
-                (
-                    "close",
-                    "Close path",
-                    "Close selected open paths",
-                    canvas.close_selected_polylines,
-                ),
-                ("delete", "Delete", "Delete selected geometry", canvas.delete_selected),
+                "duplicate",
+                "Duplicate",
+                "Duplicate the current selection",
+                canvas.duplicate_selected,
+            ),
+            (
+                "constraints",
+                "Remove Constraints",
+                "Remove geometric constraints attached to the selection",
+                canvas.remove_constraints_for_selection,
+            ),
+            (
+                "close",
+                "Close path",
+                "Close selected open paths",
+                canvas.close_selected_polylines,
+            ),
+            (
+                "delete",
+                "Delete",
+                "Delete selected geometry",
+                canvas.delete_selected,
+            ),
+        ):
+            button = QPushButton(text)
+            button.setMinimumHeight(28)
+            button.setToolTip(tip)
+            button.clicked.connect(callback)
+            self._context_buttons[key] = button
+        constraints_layout.addWidget(self._context_buttons["constraints"], 0, 0)
+        constraints_layout.addWidget(self._context_buttons["close"], 0, 1)
+        actions_layout.addWidget(self._context_buttons["duplicate"], 0, 0)
+        actions_layout.addWidget(self._context_buttons["delete"], 0, 1)
+        self._action_buttons.extend(
+            (self._context_buttons["duplicate"], self._context_buttons["delete"])
+        )
+        for column, (text, tip, callback) in enumerate(
+            (
+                ("Smooth", "Smooth jagged corners (Chaikin)", self._smooth),
+                ("Simplify", "Simplify — reduce vertex count", self._simplify),
             )
         ):
             button = QPushButton(text)
             button.setMinimumHeight(28)
             button.setToolTip(tip)
             button.clicked.connect(callback)
-            context.addWidget(button, index // 2, index % 2)
-            self._context_buttons[key] = button
-        fields_root.addLayout(context)
+            actions_layout.addWidget(button, 1, column)
+            self._action_buttons.append(button)
 
         # Shape-parameter rows (built per selection kind)
         self._param_grid = QGridLayout()
@@ -214,7 +271,20 @@ class CanvasPropertiesPanel(QWidget):
         self._param_grid.setHorizontalSpacing(6)
         self._param_grid.setVerticalSpacing(3)
         self._param_grid.setColumnStretch(2, 1)
-        fields_root.addLayout(self._param_grid)
+        shape_content = QWidget()
+        shape_layout = QVBoxLayout(shape_content)
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+        shape_layout.addLayout(self._param_grid)
+        self._shape_section = CollapsibleSection(
+            "Shape Parameters", shape_content, expanded=True
+        )
+        fields_root.addWidget(self._shape_section)
+        self._selection_constraints_section = CollapsibleSection(
+            "Constraints / Dimensions", constraints_content, expanded=False
+        )
+        fields_root.addWidget(self._selection_constraints_section)
+        self._actions_section = CollapsibleSection("Actions", actions_content, expanded=False)
+        fields_root.addWidget(self._actions_section)
         self._param_edits: dict[str, QLineEdit] = {}
         self._param_index: int | None = None
         self._param_kind: str | None = None
@@ -244,6 +314,7 @@ class CanvasPropertiesPanel(QWidget):
                 else None
             )
             self._dimension_container.setVisible(dimension is not None)
+            self._constraints_dimension_section.setVisible(dimension is not None)
             if dimension is not None:
                 angular = dimension.get("type") == "angle"
                 driving = isinstance(dimension.get("driving"), dict)
@@ -323,6 +394,7 @@ class CanvasPropertiesPanel(QWidget):
             self._set_param_rows(info.get("index"), kind, info.get("meta") or {})
             self._context_buttons["duplicate"].setVisible(count > 0)
             self._context_buttons["delete"].setVisible(count > 0)
+            self._actions_section.setVisible(count > 0)
             selected = [
                 self._canvas._entities[i]
                 for i in getattr(self._canvas, "_sel", set())
@@ -352,9 +424,13 @@ class CanvasPropertiesPanel(QWidget):
                     f"{'s' if constraint_count != 1 else ''}"
                     f"{' · ' + str(conflict_count) + ' conflicting' if conflict_count else ''}"
                 )
+            has_open = any(
+                len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected
+            )
             self._context_buttons["constraints"].setVisible(constraint_count > 0)
-            self._context_buttons["close"].setVisible(
-                any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
+            self._context_buttons["close"].setVisible(has_open)
+            self._selection_constraints_section.setVisible(
+                constraint_count > 0 or has_open
             )
         finally:
             self._updating = False
@@ -363,6 +439,7 @@ class CanvasPropertiesPanel(QWidget):
         wanted = _PARAM_FIELDS.get(kind or "", [])
         if kind == "line":
             wanted = [("length", "Length"), ("angle", "Angle °")]
+        self._shape_section.setVisible(bool(wanted))
         if kind != self._param_kind:
             while self._param_grid.count():
                 item = self._param_grid.takeAt(0)
@@ -374,7 +451,7 @@ class CanvasPropertiesPanel(QWidget):
             self._param_edits = {}
             for row, (key, label) in enumerate(wanted):
                 lbl = QLabel(label)
-                lbl.setStyleSheet("color: #8b949e;")
+                lbl.setProperty("role", "field-label")
                 edit = _num_edit(lambda k=key: self._commit_param(k))
                 edit.setProperty("geometry-key", key)
                 edit.installEventFilter(self)
@@ -404,6 +481,14 @@ class CanvasPropertiesPanel(QWidget):
             value = meta.get(key)
             if value is not None:
                 edit.setText(f"{float(value):g}")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        columns = 1 if event.size().width() < 260 else 2
+        for index, button in enumerate(self._transform_buttons):
+            self._transform_layout.addWidget(button, index // columns, index % columns)
+        for index, button in enumerate(self._action_buttons):
+            self._actions_layout.addWidget(button, index // columns, index % columns)
 
     # ── Commits ───────────────────────────────────────────────────────────
 

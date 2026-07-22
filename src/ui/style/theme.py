@@ -78,7 +78,11 @@ def accessibility_palette(high_contrast: bool = False, appearance: str = "dark")
 
 
 def load_app_qss(
-    *, scale: float = 1.0, high_contrast: bool = False, appearance: str = "dark"
+    *,
+    scale: float = 1.0,
+    high_contrast: bool = False,
+    appearance: str = "dark",
+    density: str = "compact",
 ) -> str:
     bundled_root = getattr(sys, "_MEIPASS", None)
     candidates = [Path(__file__).with_name("theme.qss")]
@@ -113,11 +117,22 @@ def load_app_qss(
                     qss = qss.replace(source, target)
             elif appearance == "light":
                 for source, target in {
+                    "rgba(17, 23, 32, 0.92)": "rgba(255, 255, 255, 0.96)",
+                    "rgba(17, 23, 32, 0.95)": "rgba(255, 255, 255, 0.98)",
+                    "rgba(23, 30, 40, 0.94)": "rgba(246, 248, 250, 0.98)",
+                    "rgba(31, 42, 56, 0.72)": "rgba(246, 248, 250, 0.96)",
+                    "rgba(31, 42, 56, 0.9)": "rgba(246, 248, 250, 0.98)",
                     "#0d1117": "#f6f8fa",
+                    "#0c1117": "#ffffff",
+                    "#0f141b": "#ffffff",
+                    "#111720": "#f6f8fa",
+                    "#121922": "#eaeef2",
                     "#161b22": "#ffffff",
                     "#1a222d": "#f0f2f4",
                     "#1c2128": "#ffffff",
                     "#21262d": "#eaeef2",
+                    "#212b37": "#e1e6eb",
+                    "#26303b": "#d0d7de",
                     "#2b3440": "#d0d7de",
                     "#30363d": "#d0d7de",
                     "#303a47": "#b6bec8",
@@ -129,6 +144,43 @@ def load_app_qss(
                     "#f0f6fc": "#1f2328",
                 }.items():
                     qss = qss.replace(source, target)
+                qss += """
+
+/* Light chrome around the deliberately dark CAD canvas. */
+QWidget#canvas-toolbar {
+    background: #f6f8fa;
+    border-color: #d0d7de;
+}
+QWidget#canvas-toolbar QLabel[role="toolbar-guidance"],
+QWidget#canvas-toolbar QLabel[role="toolbar-selection"],
+QWidget#canvas-toolbar QToolButton {
+    color: #57606a;
+}
+QToolButton[role="drawer-toggle"] {
+    background: rgba(13, 17, 23, 0.92);
+    border: 1px solid #58a6ff;
+    color: #f0f6fc;
+}
+QToolButton[role="workflow-step"][state="current"] {
+    color: #0969da;
+}
+QFrame#conversion-preview QLabel[role="empty-title"] { color: #f0f6fc; }
+QFrame#conversion-preview QLabel[role="empty-hint"] { color: #b7c3d0; }
+"""
+            if density == "comfortable":
+                qss += """
+
+/* Comfortable density: larger pointer targets without changing canvas scale. */
+QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+    min-height: 36px;
+}
+QPushButton[role="primary"] { min-height: 44px; }
+QCheckBox, QSlider { min-height: 44px; }
+QListView::item, QTreeView::item, QListWidget::item, QTreeWidget::item {
+    min-height: 36px;
+}
+QFrame[role="collapsible"] { padding-top: 4px; padding-bottom: 4px; }
+"""
             return qss
 
     logging.warning(

@@ -5,10 +5,79 @@ from __future__ import annotations
 import platform as _platform
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSizePolicy, QWidget
+from PySide6.QtGui import QAction, QResizeEvent
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QHBoxLayout,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QSizePolicy,
+    QToolButton,
+    QWidget,
+)
 
 # Platform modifier for human-readable shortcut hints
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
+
+
+class ResponsiveCanvasToolbar(QWidget):
+    """Keeps modes visible and moves registered secondary buttons to overflow."""
+
+    COMPACT_WIDTH = 1000
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._responsive_widgets: list[QWidget] = []
+        self._responsive_buttons: list[QAbstractButton] = []
+        self._overflow_actions: dict[QAbstractButton, QAction] = {}
+        self._overflow = QToolButton()
+        self._overflow.setText("More")
+        self._overflow.setAccessibleName("More canvas actions")
+        self._overflow.setToolTip("Secondary canvas actions")
+        self._overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._overflow_menu = QMenu(self._overflow)
+        self._overflow_menu.aboutToShow.connect(self._sync_overflow_actions)
+        self._overflow.setMenu(self._overflow_menu)
+        self._overflow.hide()
+
+    def register_secondary(self, button: QAbstractButton) -> None:
+        if button in self._responsive_buttons:
+            return
+        self._responsive_buttons.append(button)
+        self._responsive_widgets.append(button)
+        action = self._overflow_menu.addAction(button.text())
+        action.setToolTip(button.toolTip())
+        action.setCheckable(button.isCheckable())
+        action.setChecked(button.isChecked())
+        action.triggered.connect(lambda _checked=False, source=button: source.click())
+        if button.isCheckable():
+            button.toggled.connect(action.setChecked)
+        self._overflow_actions[button] = action
+        self._update_responsive_state()
+
+    def register_secondary_widget(self, widget: QWidget) -> None:
+        if widget not in self._responsive_widgets:
+            self._responsive_widgets.append(widget)
+            self._update_responsive_state()
+
+    def _sync_overflow_actions(self) -> None:
+        for button, action in self._overflow_actions.items():
+            action.setText(button.text())
+            action.setEnabled(button.isEnabled())
+            action.setVisible(not button.isHidden() or self.width() < self.COMPACT_WIDTH)
+            if button.isCheckable():
+                action.setChecked(button.isChecked())
+
+    def _update_responsive_state(self) -> None:
+        compact = self.width() < self.COMPACT_WIDTH
+        for widget in self._responsive_widgets:
+            widget.setVisible(not compact)
+        self._overflow.setVisible(compact and bool(self._responsive_buttons))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_responsive_state()
 
 
 def canvas_toolbar(
@@ -24,7 +93,7 @@ def canvas_toolbar(
     Redesigned: larger buttons, clearer visual hierarchy, subtle styling
     that matches GitHub's dark theme while being more polished.
     """
-    shell = QWidget()
+    shell = ResponsiveCanvasToolbar()
     shell.setObjectName("canvas-toolbar")
     shell_layout = QHBoxLayout(shell)
     shell_layout.setContentsMargins(6, 3, 6, 3)
@@ -56,6 +125,7 @@ def canvas_toolbar(
         fit_btn.setToolTip("Fit view to content (Shortcut: F)")
         fit_btn.clicked.connect(on_fit)
         shell_layout.addWidget(fit_btn)
+        shell.register_secondary(fit_btn)
 
     if secondary_actions:
         shell_layout.addSpacing(6)
@@ -76,6 +146,7 @@ def canvas_toolbar(
                 btn.setToolTip(secondary_hints[label])
             btn.clicked.connect(slot)
             shell_layout.addWidget(btn)
+            shell.register_secondary(btn)
 
     guidance_label = QLabel("Select geometry · Esc clears selection")
     guidance_label.setProperty("role", "toolbar-guidance")
@@ -84,6 +155,8 @@ def canvas_toolbar(
     guidance_label.setMinimumWidth(0)
     guidance_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     shell_layout.addWidget(guidance_label, stretch=1)
+
+    shell_layout.addWidget(shell._overflow)
 
     selection_label = QLabel("")
     selection_label.setProperty("role", "toolbar-selection")
@@ -95,4 +168,4 @@ def canvas_toolbar(
     return shell, mode_buttons, selection_label, guidance_label
 
 
-__all__ = ["canvas_toolbar"]
+__all__ = ["ResponsiveCanvasToolbar", "canvas_toolbar"]

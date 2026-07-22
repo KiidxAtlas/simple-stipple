@@ -36,7 +36,7 @@ from src.core.settings import (
     DRAW_SIDEBAR_SHAPE_TOOL_LABELS,
 )
 from src.ui.canvas.interaction import commands as canvas_commands
-from src.ui.components import sep
+from src.ui.components import SPACE_LG, SPACE_MD, sep
 
 # ══════════════════════════════════════════════════════════════════════════
 # Radial menu ("Q" quick menu)
@@ -71,8 +71,8 @@ class RadialMenuDialog(QDialog):
         self._result: list[str] = list(current)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
 
         title = QLabel("Customize Radial Menu")
         title.setProperty("role", "page-title")
@@ -244,8 +244,8 @@ class DrawSidebarCustomizeDialog(QDialog):
         ] or list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
 
         title = QLabel("Customize Draw Sidebar")
         title.setProperty("role", "page-title")
@@ -359,8 +359,8 @@ class ContextMenuCustomizeDialog(QDialog):
         self._overflow_result = overflow
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
         title = QLabel("Canvas Context Menu")
         title.setProperty("role", "page-title")
         layout.addWidget(title)

@@ -34,6 +34,37 @@ def test_panel_omits_vertex_edit_and_open_path_actions(qapp):
     assert set(panel._context_buttons) == {"duplicate", "constraints", "close", "delete"}
 
 
+def test_panel_uses_contextual_scrollable_property_groups(qapp):
+    canvas, panel = make_panel(qapp, [square(0, 0)])
+    assert panel._scroll.widgetResizable()
+    assert panel._geometry_section._title == "Geometry"
+    assert panel._transform_section._title == "Transform"
+    assert panel._shape_section._title == "Shape Parameters"
+    assert panel._selection_constraints_section._title == "Constraints / Dimensions"
+    assert panel._actions_section._title == "Actions"
+
+    canvas.set_selection([0])
+    panel.refresh()
+    assert not panel._shape_section.isVisibleTo(panel)
+    assert not panel._selection_constraints_section.isVisibleTo(panel)
+    assert panel._actions_section.isVisibleTo(panel)
+
+
+def test_panel_stacks_action_grids_below_260_pixels(qapp):
+    _canvas, panel = make_panel(qapp, [square(0, 0)])
+    panel.resize(240, 500)
+    panel.show()
+    qapp.processEvents()
+
+    positions = [
+        panel._actions_layout.getItemPosition(
+            panel._actions_layout.indexOf(button)
+        )[:2]
+        for button in panel._action_buttons
+    ]
+    assert positions == [(0, 0), (1, 0), (2, 0), (3, 0)]
+
+
 def test_panel_moves_selection(qapp):
     canvas, panel = make_panel(qapp, [square(0, 0)])
     canvas.set_selection([0])

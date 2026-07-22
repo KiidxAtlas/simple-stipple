@@ -135,6 +135,27 @@ class CanvasView(
             else:
                 service.replace_document(document)
 
+    # Guides and dimensions are document state (see CanvasDocument), so they
+    # ride the same undo stack and snapshots as geometry. Exposing them as
+    # document-backed properties keeps every existing call site working while
+    # making the document the single source of truth — there is no separate
+    # view-owned copy to drift out of sync on undo/redo or document replacement.
+    @property
+    def _guides(self) -> list[tuple[str, float]]:
+        return self._document.guides
+
+    @_guides.setter
+    def _guides(self, guides: list[tuple[str, float]]) -> None:
+        self._document.guides = list(guides)
+
+    @property
+    def _dimensions(self) -> list[dict]:
+        return self._document.dimensions
+
+    @_dimensions.setter
+    def _dimensions(self, dimensions: list[dict]) -> None:
+        self._document.dimensions = list(dimensions)
+
     @property
     def _sel(self) -> set[int]:
         return self._document.selection
@@ -210,6 +231,7 @@ class CanvasView(
     smoothingMethodChanged = Signal(str)
     smoothIterationsChanged = Signal(int)
     simplifyToleranceChanged = Signal(float)
+    backgroundSelectionChanged = Signal(bool)
 
     def _flagged(self, attr: str) -> set[int]:
         """Indices of entities whose boolean ``attr`` is set."""
@@ -771,9 +793,14 @@ class CanvasView(
         # Unified snap engine (src/ui/canvas/snap.py) and guide lines
         # (("h", y_world) or ("v", x_world)); guides participate in snapping.
         self._snap_engine = SnapEngine(self)
-        self._guides: list[tuple[str, float]] = []
+        # _guides / _dimensions are document-backed properties (defined above);
+        # the document already starts with empty lists, so no init assignment.
         self._guide_drag: int | None = None
         self._guide_drag_moved: bool = False
+        # Snapshot captured at the start of a guide gesture (drag out a new
+        # guide, move one, or drag one back onto a ruler to delete it); the
+        # whole gesture commits as one undoable command on release.
+        self._guide_preview: DocumentSnapshot | None = None
         self._selected_guide: int | None = None
         # mm rulers along the top/left edges; drag out of a ruler to create
         # a guide, drop a guide back onto a ruler to delete it.
@@ -823,7 +850,7 @@ class CanvasView(
         # state and emitted as real DXF dimension entities during export.
         self._dimension_mode: bool = False
         self._dimension_kind: str = "linear"
-        self._dimensions: list[dict] = []
+        # _dimensions is a document-backed property (see above); starts empty.
         self._dim_pending_p1: tuple[float, float] | None = None
         self._dim_pending_p2: tuple[float, float] | None = None
         self._dim_pending_offset: float = 5.0
@@ -926,9 +953,11 @@ class CanvasView(
         self._bg_cached_scale: float = 0.0
         self._bg_x_mm: float = 0.0
         self._bg_y_mm: float = 0.0
+        self._bg_rotation_deg: float = 0.0
         self._bg_editable: bool = False
+        self._bg_selected: bool = False
         self._bg_edit_callback = None
-        self._bg_drag: tuple[str, float, float, float, float, float, float] | None = None
+        self._bg_drag: tuple[str, float, float, float, float, float, float, float] | None = None
 
         # Scale / Dimension button rects
         self._mbtn_rect: tuple[float, float, float, float] = (0, 0, 0, 0)
@@ -2078,10 +2107,9 @@ class CanvasView(
 
     def _delete_selected_dimension(self) -> None:
         if self._all_dimensions_selected:
-            self._dimensions.clear()
+            self._clear_dimensions()
             self._selected_dimension = None
             self._all_dimensions_selected = False
-            self._redraw()
             self._notify()
             self._fire_poly_change()
             return
@@ -2089,11 +2117,10 @@ class CanvasView(
         if di is None or not (0 <= di < len(self._dimensions)):
             self._selected_dimension = None
             return
-        del self._dimensions[di]
+        self._remove_dimension(di)
         self._selected_dimension = None
         self._all_dimensions_selected = False
         self._dimension_drag = None
-        self._redraw()
         self._notify()
 
     def set_image_bounds(self, w_mm: float, h_mm: float) -> None:
@@ -2101,13 +2128,15 @@ class CanvasView(
         self._redraw()
 
     def set_background_image(
-        self, pil_img: PILImage.Image, w_mm: float, h_mm: float, x_mm: float = 0.0, y_mm: float = 0.0
+        self, pil_img: PILImage.Image, w_mm: float, h_mm: float, x_mm: float = 0.0,
+        y_mm: float = 0.0, rotation_deg: float = 0.0,
     ) -> None:
         self._bg_pil = pil_img
         self._bg_w_mm = w_mm
         self._bg_h_mm = h_mm
         self._bg_x_mm = x_mm
         self._bg_y_mm = y_mm
+        self._bg_rotation_deg = rotation_deg
         self._bg_pixmap = None
         self._bg_cached_scale = 0.0
         self._redraw()
@@ -2115,27 +2144,91 @@ class CanvasView(
     def clear_background_image(self) -> None:
         self._bg_pil = None
         self._bg_pixmap = None
+        if self._bg_selected:
+            self._bg_selected = False
+            self.backgroundSelectionChanged.emit(False)
         self._redraw()
 
     def set_background_image_editable(self, enabled: bool, callback=None) -> None:
         self._bg_editable = bool(enabled)
+        if not self._bg_editable:
+            self.select_background_image(False)
         self._bg_edit_callback = callback
         self._bg_drag = None
         self._redraw()
 
-    def _background_edit_hit(self, cx: float, cy: float) -> str | None:
+    def select_background_image(self, selected: bool = True) -> None:
+        was_selected = self._bg_selected
+        self._bg_selected = bool(selected and self._bg_editable and self._bg_pil is not None)
+        if not self._bg_selected:
+            self._bg_drag = None
+        self._redraw()
+        if self._bg_selected != was_selected:
+            self.backgroundSelectionChanged.emit(self._bg_selected)
+
+    def is_background_image_selected(self) -> bool:
+        return self._bg_selected
+
+    def _background_contains(self, cx: float, cy: float) -> bool:
         if not self._bg_editable or self._bg_pil is None:
+            return False
+        wx, wy = self._background_unrotate(*self._c2w(cx, cy))
+        return (
+            self._bg_x_mm <= wx <= self._bg_x_mm + self._bg_w_mm
+            and self._bg_y_mm <= wy <= self._bg_y_mm + self._bg_h_mm
+        )
+
+    def _background_unrotate(self, wx: float, wy: float) -> tuple[float, float]:
+        """Map a world point into the image's unrotated placement coordinates."""
+        angle = math.radians(-self._bg_rotation_deg)
+        center_x = self._bg_x_mm + self._bg_w_mm / 2.0
+        center_y = self._bg_y_mm + self._bg_h_mm / 2.0
+        dx, dy = wx - center_x, wy - center_y
+        return (
+            center_x + dx * math.cos(angle) - dy * math.sin(angle),
+            center_y + dx * math.sin(angle) + dy * math.cos(angle),
+        )
+
+    def _background_canvas_corners(self) -> dict[str, tuple[float, float]]:
+        center_x = self._bg_x_mm + self._bg_w_mm / 2.0
+        center_y = self._bg_y_mm + self._bg_h_mm / 2.0
+        angle = math.radians(self._bg_rotation_deg)
+        result = {}
+        for name, (wx, wy) in {
+            "nw": (self._bg_x_mm, self._bg_y_mm + self._bg_h_mm),
+            "ne": (self._bg_x_mm + self._bg_w_mm, self._bg_y_mm + self._bg_h_mm),
+            "se": (self._bg_x_mm + self._bg_w_mm, self._bg_y_mm),
+            "sw": (self._bg_x_mm, self._bg_y_mm),
+        }.items():
+            dx, dy = wx - center_x, wy - center_y
+            rotated = (
+                center_x + dx * math.cos(angle) - dy * math.sin(angle),
+                center_y + dx * math.sin(angle) + dy * math.cos(angle),
+            )
+            result[name] = self._w2c(*rotated)
+        return result
+
+    def _background_edit_hit(self, cx: float, cy: float) -> str | None:
+        if not self._bg_selected or not self._bg_editable or self._bg_pil is None:
             return None
-        corners = {
-            "nw": self._w2c(self._bg_x_mm, self._bg_y_mm + self._bg_h_mm),
-            "ne": self._w2c(self._bg_x_mm + self._bg_w_mm, self._bg_y_mm + self._bg_h_mm),
-            "se": self._w2c(self._bg_x_mm + self._bg_w_mm, self._bg_y_mm),
-            "sw": self._w2c(self._bg_x_mm, self._bg_y_mm),
-        }
+        corners = self._background_canvas_corners()
+        top_x = (corners["nw"][0] + corners["ne"][0]) / 2.0
+        top_y = (corners["nw"][1] + corners["ne"][1]) / 2.0
+        center = self._w2c(
+            self._bg_x_mm + self._bg_w_mm / 2.0,
+            self._bg_y_mm + self._bg_h_mm / 2.0,
+        )
+        length = max(1.0, math.hypot(top_x - center[0], top_y - center[1]))
+        rotate_handle = (
+            top_x + (top_x - center[0]) / length * 24.0,
+            top_y + (top_y - center[1]) / length * 24.0,
+        )
+        if math.hypot(cx - rotate_handle[0], cy - rotate_handle[1]) <= 10:
+            return "rotate"
         for name, (hx, hy) in corners.items():
             if math.hypot(cx - hx, cy - hy) <= 10:
                 return name
-        wx, wy = self._c2w(cx, cy)
+        wx, wy = self._background_unrotate(*self._c2w(cx, cy))
         if (
             self._bg_x_mm <= wx <= self._bg_x_mm + self._bg_w_mm
             and self._bg_y_mm <= wy <= self._bg_y_mm + self._bg_h_mm
@@ -2735,17 +2828,19 @@ class CanvasView(
         self._layout_draw_sidebar()
         self._redraw()
 
-    def set_geometry_health_visible(self, visible: bool) -> None:
+    def set_geometry_health_visible(self, visible: bool, *, announce: bool = False) -> None:
         self._geometry_health_visible = bool(visible)
-        self._show_flash(
-            "Geometry health overlay: ON" if visible else "Geometry health overlay: OFF",
-            900,
-        )
+        if announce:
+            self._show_flash(
+                "Geometry health overlay: ON" if visible else "Geometry health overlay: OFF",
+                900,
+            )
         self._redraw()
 
-    def set_curvature_visible(self, visible: bool) -> None:
+    def set_curvature_visible(self, visible: bool, *, announce: bool = False) -> None:
         self._curvature_visible = bool(visible)
-        self._show_flash("Curvature view: ON" if visible else "Curvature view: OFF", 900)
+        if announce:
+            self._show_flash("Curvature view: ON" if visible else "Curvature view: OFF", 900)
         self._redraw()
 
     def show_coordinate_entry(self, initial: str = "") -> None:
@@ -3125,6 +3220,9 @@ class CanvasView(
             # under it, freezing the shape at its half-dragged position.
             if self._cancel_active_drag():
                 return
+            if self._bg_selected:
+                self.select_background_image(False)
+                return
             # In select mode, Escape clears selection
             if self._mode == "select" and self._sel:
                 self.deselect_all()
@@ -3400,8 +3498,18 @@ class CanvasView(
                 wx, wy = self._c2w(pos.x(), pos.y())
                 self._bg_drag = (
                     bg_hit, wx, wy, self._bg_x_mm, self._bg_y_mm,
-                    self._bg_w_mm, self._bg_h_mm,
+                    self._bg_w_mm, self._bg_h_mm, self._bg_rotation_deg,
                 )
+                return
+            if self._bg_selected:
+                self.select_background_image(False)
+            elif (
+                self._background_contains(pos.x(), pos.y())
+                and self._find_poly_at(pos.x(), pos.y()) is None
+            ):
+                self.select_background_image(True)
+                self._sel.clear()
+                self._notify()
                 return
 
         if btn == Qt.MouseButton.MiddleButton:
@@ -3447,6 +3555,7 @@ class CanvasView(
             if pos.x() <= r and pos.y() <= r:
                 return  # corner box
             if pos.y() <= r:
+                self._guide_preview = self._canvas_service.begin_preview()
                 self._guides.append(("h", wy0))
                 self._guide_drag = len(self._guides) - 1
                 self._selected_guide = self._guide_drag
@@ -3454,6 +3563,7 @@ class CanvasView(
                 self._redraw()
                 return
             if pos.x() <= r:
+                self._guide_preview = self._canvas_service.begin_preview()
                 self._guides.append(("v", wx0))
                 self._guide_drag = len(self._guides) - 1
                 self._selected_guide = self._guide_drag
@@ -3470,6 +3580,7 @@ class CanvasView(
         ):
             gi = self._find_guide_at(pos.x(), pos.y())
             if gi is not None:
+                self._guide_preview = self._canvas_service.begin_preview()
                 self._guide_drag = gi
                 self._selected_guide = gi
                 self._guide_drag_moved = False
@@ -3529,20 +3640,34 @@ class CanvasView(
         self._hover_snap_multi = []
 
         if self._bg_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            mode, sx, sy, ox, oy, ow, oh = self._bg_drag
+            mode, sx, sy, ox, oy, ow, oh, rotation = self._bg_drag
             if mode == "move":
                 self._bg_x_mm, self._bg_y_mm = ox + wx - sx, oy + wy - sy
+            elif mode == "rotate":
+                center_x, center_y = ox + ow / 2.0, oy + oh / 2.0
+                start_angle = math.degrees(math.atan2(sy - center_y, sx - center_x))
+                current_angle = math.degrees(math.atan2(wy - center_y, wx - center_x))
+                self._bg_rotation_deg = rotation + current_angle - start_angle
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                    increment = self._rotation_snap_increment
+                    self._bg_rotation_deg = round(self._bg_rotation_deg / increment) * increment
             else:
+                wx, wy = self._background_unrotate(wx, wy)
                 left, right, bottom, top = ox, ox + ow, oy, oy + oh
-                if "w" in mode: left = min(wx, right - 0.01)
-                if "e" in mode: right = max(wx, left + 0.01)
-                if "s" in mode: bottom = min(wy, top - 0.01)
-                if "n" in mode: top = max(wy, bottom + 0.01)
+                if "w" in mode:
+                    left = min(wx, right - 0.01)
+                if "e" in mode:
+                    right = max(wx, left + 0.01)
+                if "s" in mode:
+                    bottom = min(wy, top - 0.01)
+                if "n" in mode:
+                    top = max(wy, bottom + 0.01)
                 self._bg_x_mm, self._bg_y_mm = left, bottom
                 self._bg_w_mm, self._bg_h_mm = right - left, top - bottom
             if callable(self._bg_edit_callback):
                 self._bg_edit_callback(
-                    self._bg_x_mm, self._bg_y_mm, self._bg_w_mm, self._bg_h_mm
+                    self._bg_x_mm, self._bg_y_mm, self._bg_w_mm, self._bg_h_mm,
+                    self._bg_rotation_deg,
                 )
             self._bg_pixmap = None
             self._redraw()
@@ -3633,6 +3758,10 @@ class CanvasView(
                 self._selected_guide = None
             self._guide_drag = None
             self._guide_drag_moved = False
+            # Commit the whole gesture (add / move / delete) as one undoable
+            # command; a click that changed nothing commits as a no-op.
+            self._canvas_service.commit_preview(self._guide_preview)
+            self._guide_preview = None
             self._redraw()
             return
 
@@ -3713,9 +3842,8 @@ class CanvasView(
                 return
 
             def set_precision(value: float) -> None:
-                self._dimensions[dimension]["precision"] = max(0, min(6, int(round(value))))
+                self._set_dimension_precision_value(dimension, int(round(value)))
                 self._notify()
-                self._redraw()
 
             self._show_hud_prompt(
                 "Dimension decimals",
@@ -3732,6 +3860,54 @@ class CanvasView(
     def _refresh_driving_dimensions(self) -> None:
         for dimension in self._dimensions:
             self._dimension_tool.refresh_driving_dimension(dimension)
+
+    # ── Undoable annotation edits ──────────────────────────────────────────
+    # Every guide/dimension mutation funnels through these so it becomes one
+    # entry on the same undo stack as geometry. They apply the change to a copy
+    # via the document command boundary (update_document → ReplaceDocumentCommand),
+    # which records a concrete inverse; there is no path that mutates annotations
+    # without producing a reversible command.
+
+    def _commit_annotation_edit(self, mutate) -> bool:
+        result = self._canvas_service.update_document(mutate)
+        if result.changed:
+            self._refresh_driving_dimensions()
+            self._redraw()
+        return result.changed
+
+    def _append_dimension(self, dimension: dict) -> int:
+        payload = deepcopy(dimension)
+        self._commit_annotation_edit(lambda document: document.dimensions.append(deepcopy(payload)))
+        return len(self._dimensions) - 1
+
+    def _remove_dimension(self, index: int) -> bool:
+        if not (0 <= index < len(self._dimensions)):
+            return False
+        return self._commit_annotation_edit(lambda document: document.dimensions.pop(index))
+
+    def _clear_dimensions(self) -> bool:
+        if not self._dimensions:
+            return False
+        return self._commit_annotation_edit(lambda document: document.dimensions.clear())
+
+    def _set_dimension_precision_value(self, index: int, precision: int) -> bool:
+        if not (0 <= index < len(self._dimensions)):
+            return False
+        value = max(0, min(6, int(precision)))
+
+        def mutate(document) -> None:
+            document.dimensions[index]["precision"] = value
+
+        return self._commit_annotation_edit(mutate)
+
+    # Adding a guide is not a discrete command: it is the start of a drag-out
+    # gesture (see the ruler press handler), committed as one preview
+    # transaction on mouse release so add-then-adjust is a single undo step.
+
+    def _remove_guide(self, index: int) -> bool:
+        if not (0 <= index < len(self._guides)):
+            return False
+        return self._commit_annotation_edit(lambda document: document.guides.pop(index))
 
     def _edit_driving_dimension(self, index: int) -> None:
         if not (0 <= index < len(self._dimensions)):
@@ -3847,11 +4023,8 @@ class CanvasView(
             return
 
     def _set_dimension_precision(self, index: int, precision: int) -> None:
-        if not (0 <= index < len(self._dimensions)):
-            return
-        self._dimensions[index]["precision"] = max(0, min(6, int(precision)))
-        self._notify()
-        self._redraw()
+        if self._set_dimension_precision_value(index, precision):
+            self._notify()
 
     def _delete_poly(self, pi: int) -> None:
         self._compact_entities({pi})

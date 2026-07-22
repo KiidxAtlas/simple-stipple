@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -32,8 +31,8 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.dxf.io import write_polylines_dxf
-from src.backend.trace import TraceCancelled, image_to_outlines
 from src.backend.raster_engraving import RasterEngravingSpec, export_raster_job
+from src.backend.trace import TraceCancelled, image_to_outlines
 from src.core.settings import save_settings
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
@@ -56,6 +55,7 @@ from src.ui.components import (
 from src.ui.pages.base import BasePage
 from src.ui.pages.trace.form import (
     PathField,
+    SliderField,
     TextField,
     TraceFieldBindings,
     build_lazy_section,
@@ -129,6 +129,7 @@ class TracePage(BasePage):
         # re-frame the view — every later retrace while tweaking sliders
         # must leave the user's current zoom/pan alone.
         self._needs_view_fit: bool = True
+        self._trace_result_stale: bool = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -148,12 +149,17 @@ class TracePage(BasePage):
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(6)
 
-        self._left_panel = sidebar_panel(left_w, min_width=320, max_width=360)
+        sidebar_width = max(300, min(420, int(self._settings.get("trace_sidebar_width", 320))))
+        self._left_panel = sidebar_panel(left_w, min_width=300, max_width=420)
         self._splitter = content_splitter(
             self._left_panel,
             right_w,
-            sizes=(320, 950),
+            sizes=(sidebar_width, 950),
         )
+        self._splitter.setCollapsible(0, False)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.splitterMoved.connect(self._remember_sidebar_width)
         root.addWidget(self._splitter, stretch=1)
 
         self._build_left(left)
@@ -161,6 +167,13 @@ class TracePage(BasePage):
         self._update_trace_action_states()
 
         self.setAcceptDrops(True)
+
+    def _remember_sidebar_width(self, position: int, _index: int) -> None:
+        width = max(300, min(420, position))
+        if self._settings.get("trace_sidebar_width") == width:
+            return
+        self._settings["trace_sidebar_width"] = width
+        save_settings(self._settings)
 
     _IMAGE_EXTENSIONS = (
         ".png",
@@ -240,7 +253,8 @@ class TracePage(BasePage):
         self._bg_visible_cb.setToolTip("Display the source image behind the traced outlines")
         self._bg_visible_cb.stateChanged.connect(self._on_bg_visible_changed)
         source_layout.addWidget(self._bg_visible_cb)
-        layout.addWidget(CollapsibleSection("Source", source_content, expanded=True))
+        self._source_section = CollapsibleSection("Source", source_content, expanded=True)
+        layout.addWidget(self._source_section)
 
         # ── Trace Settings section ────────────────────────────────────────────
         self._trace_settings_section = build_lazy_section(
@@ -299,11 +313,18 @@ class TracePage(BasePage):
         self._apply_recipe_btn.setEnabled(bool(self._settings.get("trace_recipes")))
         self._apply_recipe_btn.clicked.connect(self._apply_trace_recipe)
         recipe_row.addWidget(self._apply_recipe_btn)
-        save_recipe = QPushButton("Save…")
+        recipes_layout.addLayout(recipe_row)
+        save_row = QHBoxLayout()
+        self._recipe_name_edit = QLineEdit()
+        self._recipe_name_edit.setPlaceholderText("New recipe name")
+        self._recipe_name_edit.setAccessibleName("Trace recipe name")
+        self._recipe_name_edit.returnPressed.connect(self._save_trace_recipe)
+        save_row.addWidget(self._recipe_name_edit, stretch=1)
+        save_recipe = QPushButton("Save recipe")
         save_recipe.setToolTip("Save the current controls as a reusable recipe")
         save_recipe.clicked.connect(self._save_trace_recipe)
-        recipe_row.addWidget(save_recipe)
-        recipes_layout.addLayout(recipe_row)
+        save_row.addWidget(save_recipe)
+        recipes_layout.addLayout(save_row)
         layout.addWidget(
             CollapsibleSection(
                 "Recipes",
@@ -332,9 +353,9 @@ class TracePage(BasePage):
         self._export_all_btn.setEnabled(False)
         self._export_all_btn.clicked.connect(self._export_all)
         _export_overflow_btn = QToolButton()
-        _export_overflow_btn.setText("⋯")
+        _export_overflow_btn.setText("Options")
         _export_overflow_btn.setProperty("role", "overflow")
-        _export_overflow_btn.setFixedWidth(32)
+        _export_overflow_btn.setFixedWidth(72)
         _export_overflow_btn.setFixedHeight(36)
         _export_overflow_btn.setToolTip("More export options")
         _export_overflow_btn.setAccessibleName("More export options")
@@ -355,6 +376,38 @@ class TracePage(BasePage):
         export_row.addWidget(self._export_all_btn, stretch=1)
         export_row.addWidget(_export_overflow_btn)
         export_layout.addLayout(export_row)
+        self._next_btn = QPushButton("Next — Edit in Draft")
+        self._next_btn.setProperty("role", "primary")
+        self._next_btn.setEnabled(False)
+        self._next_btn.clicked.connect(self._run_remembered_next)
+        self._next_more = QToolButton()
+        self._next_more.setText("Options")
+        self._next_more.setAccessibleName("Choose trace next action")
+        self._next_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        next_menu = QMenu(self._next_more)
+        for key, label in (
+            ("draft", "Edit in Draft"),
+            ("pattern", "Use in Pattern"),
+            ("export", "Export DXF"),
+        ):
+            action = next_menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, choice=key: self._select_next_action(choice)
+            )
+        self._next_more.setMenu(next_menu)
+        next_row = QHBoxLayout()
+        next_row.setSpacing(4)
+        next_row.addWidget(self._next_btn, 1)
+        next_row.addWidget(self._next_more)
+        export_layout.addLayout(next_row)
+        remembered_next = str(self._settings.get("trace_next_action", "draft"))
+        self._next_btn.setText(
+            {
+                "draft": "Next — Edit in Draft",
+                "pattern": "Next — Use in Pattern",
+                "export": "Next — Export DXF",
+            }.get(remembered_next, "Next — Edit in Draft")
+        )
         # _build_right reparents this into the bottom of the right inspector.
         self._export_footer = export_content
 
@@ -575,26 +628,40 @@ class TracePage(BasePage):
 
     def _build_advanced_fields(self, layout: QVBoxLayout) -> None:
         layout.addWidget(
-            TextField("Simplify (px)", entry=self._simplify, tooltip=self._simplify.toolTip())
+            SliderField(
+                "Simplify (px)", entry=self._simplify, minimum=0, maximum=10, step=0.1,
+                tooltip=self._simplify.toolTip(),
+            )
         )
         layout.addWidget(
-            TextField("Min area (px²)", entry=self._min_area, tooltip=self._min_area.toolTip())
+            SliderField(
+                "Min area (px²)", entry=self._min_area, minimum=0, maximum=1000,
+                tooltip=self._min_area.toolTip(),
+            )
         )
         layout.addWidget(
-            TextField(
+            SliderField(
                 "Max area (px²)",
                 entry=self._max_area,
-                required=False,
-                placeholder="none",
+                minimum=0,
+                maximum=1_000_000,
+                step=100,
+                empty_at_minimum=True,
                 tooltip=self._max_area.toolTip(),
             )
         )
         layout.addWidget(
-            TextField("Closing radius", entry=self._close_r, tooltip=self._close_r.toolTip())
+            SliderField(
+                "Closing radius", entry=self._close_r, minimum=0, maximum=20,
+                tooltip=self._close_r.toolTip(),
+            )
         )
         layout.addWidget(self._outer_only_cb)
         layout.addWidget(
-            TextField("Max resolution", entry=self._max_res, tooltip=self._max_res.toolTip())
+            SliderField(
+                "Max resolution", entry=self._max_res, minimum=64, maximum=8000, step=16,
+                tooltip=self._max_res.toolTip(),
+            )
         )
 
     # ── Right panel ───────────────────────────────────────────────────────────
@@ -672,6 +739,8 @@ class TracePage(BasePage):
         )
 
         splitter = content_splitter(canvas_shell, side_panel, sizes=(860, 260))
+        splitter.set_responsive_secondary(1, "Layers")
+        self._canvas_splitter = splitter
         layout.addWidget(splitter, stretch=1)
         layout.addWidget(self._canvas_status)
 
@@ -719,9 +788,10 @@ class TracePage(BasePage):
         return {key: state[key] for key in keys}
 
     def _save_trace_recipe(self) -> None:
-        name, ok = QInputDialog.getText(self, "Save Trace Recipe", "Recipe name:")
-        name = name.strip()
-        if not ok or not name:
+        name = self._recipe_name_edit.text().strip()
+        if not name:
+            self._set_status("Enter a recipe name beside Save recipe.", STATUS_WARN)
+            self._recipe_name_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
         recipes = dict(self._settings.get("trace_recipes") or {})
         recipes[name] = self._trace_recipe_payload()
@@ -729,6 +799,7 @@ class TracePage(BasePage):
         save_settings(self._settings)
         self._refresh_trace_recipes()
         self._recipe_combo.setCurrentText(name)
+        self._recipe_name_edit.clear()
         self._set_status(f"Saved trace recipe ‘{name}’.", STATUS_OK)
 
     def _apply_trace_recipe(self) -> None:
@@ -798,6 +869,8 @@ class TracePage(BasePage):
         self._reveal_action.setEnabled(bool(self._last_out))
         self._reload_btn.setEnabled(has_image)
         self._smooth_btn.setEnabled(has_polys)
+        self._next_btn.setEnabled(has_polys)
+        self._next_more.setEnabled(has_polys)
         if has_polys:
             self._workflow_strip.set_current_step(2)
         elif has_image:
@@ -946,6 +1019,9 @@ class TracePage(BasePage):
         if not self._img_path:
             return
         self._trace_revision += 1
+        self._trace_result_stale = bool(self._canvas.poly_count)
+        if self._trace_result_stale:
+            self._canvas.setToolTip("Updating trace — the last completed result remains visible")
         if self._running:
             self._trace_pending = True
             self._cancel_event.set()
@@ -989,24 +1065,22 @@ class TracePage(BasePage):
         if not self._canvas.get_polylines_state():
             self._set_status("Nothing to smooth yet — trace an image first.", STATUS_ERR)
             return
-        tolerance, ok = QInputDialog.getDouble(
-            self,
-            "Smooth Traced Curves",
-            "Smoothing tolerance (mm) — higher smooths more but can round off fine detail:",
+        def apply_smoothing(tolerance: float) -> None:
+            self._canvas.select_all()
+            count = self._canvas.fit_selected_to_curve(tolerance)
+            self._canvas.deselect_all()
+            if count:
+                self._set_status(f"Smoothed {count} shape(s).", STATUS_OK)
+            else:
+                self._set_status("Nothing could be smoothed.", STATUS_ERR)
+
+        self._canvas._show_hud_prompt(
+            "Smooth tolerance (mm) · Enter applies · Esc cancels",
             0.3,
-            0.01,
-            10.0,
-            2,
+            apply_smoothing,
+            minimum=0.01,
+            maximum=10.0,
         )
-        if not ok:
-            return
-        self._canvas.select_all()
-        count = self._canvas.fit_selected_to_curve(tolerance)
-        self._canvas.deselect_all()
-        if count:
-            self._set_status(f"Smoothed {count} shape(s).", STATUS_OK)
-        else:
-            self._set_status("Nothing could be smoothed.", STATUS_ERR)
 
     def _start_trace_thread(self) -> None:
         if self._shutting_down:
@@ -1078,9 +1152,17 @@ class TracePage(BasePage):
         trace_token: int,
         cancel_event: threading.Event | None = None,
     ) -> None:
+        def emit(signal, payload) -> bool:
+            """Ignore a late worker result after Qt has destroyed the page."""
+            try:
+                signal.emit(payload)
+            except RuntimeError:
+                return False
+            return True
+
         try:
             if cancel_event and cancel_event.is_set():
-                self._trace_cancelled.emit(trace_token)
+                emit(self._trace_cancelled, trace_token)
                 return
             if not img_path:
                 raise RuntimeError("No image selected.")
@@ -1090,17 +1172,17 @@ class TracePage(BasePage):
                 **kwargs,
             )
             if cancel_event and cancel_event.is_set():
-                self._trace_cancelled.emit(trace_token)
+                emit(self._trace_cancelled, trace_token)
                 return
-            self._trace_done.emit((trace_token, *result, kwargs["width_mm"]))
+            emit(self._trace_done, (trace_token, *result, kwargs["width_mm"]))
         except TraceCancelled:
-            self._trace_cancelled.emit(trace_token)
+            emit(self._trace_cancelled, trace_token)
         except Exception as exc:  # noqa: BLE001 - worker boundary must always complete
             LOGGER.exception("Trace worker failed")
             if cancel_event and cancel_event.is_set():
-                self._trace_cancelled.emit(trace_token)
+                emit(self._trace_cancelled, trace_token)
                 return
-            self._trace_error.emit((trace_token, str(exc)))
+            emit(self._trace_error, (trace_token, str(exc)))
 
     def _handle_trace_done(self, payload: tuple) -> None:
         if self._shutting_down:
@@ -1141,7 +1223,11 @@ class TracePage(BasePage):
                 LOGGER.debug("Failed to apply traced background image: %s", exc)
         if polys:
             self._canvas.set_polylines_state(polys, fit=self._needs_view_fit)
+            self._trace_result_stale = False
+            self._canvas.setToolTip("")
             self._needs_view_fit = False
+            self._source_section.set_expanded(False)
+            self._thumb_lbl.setMaximumHeight(64)
             self._set_status(
                 f"{count} contour(s) extracted  ·  "
                 f"{img_w_px}×{img_h_px} px → "
@@ -1152,9 +1238,9 @@ class TracePage(BasePage):
                 STATUS_OK,
             )
         else:
-            self._canvas.set_polylines_state([], fit=False)
             self._set_status(
-                "No contours found. Try adjusting threshold or inverting.",
+                "No foreground contours found; the previous result is retained. "
+                "Try Invert or disable Auto threshold, then retry.",
                 STATUS_ERR,
             )
         self._update_trace_action_states()
@@ -1173,11 +1259,58 @@ class TracePage(BasePage):
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
-        self._set_status(f"Error: {msg}", STATUS_ERR)
+        self._set_status(self._trace_failure_guidance(msg), STATUS_ERR)
         self._update_trace_action_states()
         if self._trace_pending and self._img_path:
             self._trace_pending = False
             self._preview_timer.start(0)
+
+    @staticmethod
+    def _trace_failure_guidance(message: str) -> str:
+        text = message.casefold()
+        if "memory" in text or "alloc" in text:
+            remedy = "Reduce Max resolution and retry."
+        elif "foreground" in text or "contour" in text:
+            remedy = "Try Invert or adjust Threshold, then retry."
+        elif "unsupported" in text or "decode" in text or "image" in text:
+            remedy = "Convert the source to PNG or JPEG and choose it again."
+        elif "detail" in text or "complex" in text:
+            remedy = "Increase Simplify or reduce Max resolution and retry."
+        elif "geometry" in text or "invalid" in text:
+            remedy = "Increase Min area or Simplify and retry."
+        else:
+            remedy = "Review Trace Settings and choose Refresh Preview to retry."
+        return f"Trace failed; the previous result is retained. {remedy} Details: {message}"
+
+    def _select_next_action(self, choice: str) -> None:
+        self._settings["trace_next_action"] = choice
+        labels = {
+            "draft": "Next — Edit in Draft",
+            "pattern": "Next — Use in Pattern",
+            "export": "Next — Export DXF",
+        }
+        self._next_btn.setText(labels.get(choice, labels["draft"]))
+        self._run_remembered_next()
+
+    def _run_remembered_next(self) -> None:
+        choice = str(self._settings.get("trace_next_action", "draft"))
+        if choice == "export":
+            self._export_all()
+            return
+        polys = self._canvas.get_selected() or self._canvas.get_polylines_state()
+        if not polys:
+            self._set_status("Trace an image before continuing.", STATUS_WARN)
+            return
+        if choice == "pattern":
+            closed = [poly for poly in polys if len(poly) >= 4 and poly[0] == poly[-1]]
+            if not closed:
+                self._set_status(
+                    "Pattern needs one or more closed trace outlines.", STATUS_WARN
+                )
+                return
+            self.sendSelectedToPatternRequested.emit(closed)
+        else:
+            self.sendSelectedToDraftRequested.emit(polys)
 
     def _handle_trace_cancelled(self, _trace_token: int) -> None:
         if self._shutting_down:

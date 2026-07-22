@@ -418,7 +418,7 @@ class DimensionTool(CanvasTool):
         v = self.v
         first = v._dim_selected_segments[0]
         if first["key"] == second["key"]:
-            v._dimensions.append(
+            v._append_dimension(
                 {
                     "type": "linear",
                     "p1": first["p1"],
@@ -437,7 +437,7 @@ class DimensionTool(CanvasTool):
             second_dy = second["p2"][1] - second["p1"][1]
             cross = first_dx * second_dy - first_dy * second_dx
             if intersection is not None and abs(cross) > 1e-9:
-                v._dimensions.append(
+                v._append_dimension(
                     {
                         "type": "angle",
                         "points": [
@@ -467,7 +467,7 @@ class DimensionTool(CanvasTool):
                 if math.dist(p1, p2) < 1e-9:
                     v._show_flash("These segments meet; choose a different pair", 1500)
                     return
-                v._dimensions.append(
+                v._append_dimension(
                     {
                         "type": "spacing" if abs(cross) <= 1e-9 else "distance",
                         "p1": p1,
@@ -713,7 +713,7 @@ class DimensionTool(CanvasTool):
             if first_ray < 1e-6 or second_ray < 1e-6:
                 v._show_flash("Angular dimension rays must have a visible length", 1700)
                 return True
-            v._dimensions.append(
+            v._append_dimension(
                 {
                     "type": "angle",
                     "points": [v._dim_pending_p1, v._dim_pending_p2, (wx, wy)],
@@ -764,7 +764,7 @@ class DimensionTool(CanvasTool):
                         if radial_length < 1e-9:
                             radial_x, radial_y, radial_length = 1.0, 0.0, 1.0
                         ux, uy = radial_x / radial_length, radial_y / radial_length
-                        v._dimensions.append(
+                        v._append_dimension(
                             {
                                 "type": "diameter",
                                 "p1": (float(cx) - ux * radius, float(cy) - uy * radius),
@@ -801,7 +801,7 @@ class DimensionTool(CanvasTool):
                 "p2": v._dim_pending_p2,
                 "offset": v._dim_pending_offset,
             }
-            v._dimensions.append(
+            v._append_dimension(
                 {
                     "p1": v._dim_pending_p1,
                     "p2": v._dim_pending_p2,
@@ -1764,6 +1764,7 @@ class SelectTool(CanvasTool):
                                 dx=step_dx,
                                 dy=step_dy,
                             )
+                        v._refresh_driving_dimensions()
                         v._move_applied_w = (raw_dx, raw_dy)
                     v._cursor_wx, v._cursor_wy = new_wx, new_wy
                     v._hover_snap_multi = snap_indicators

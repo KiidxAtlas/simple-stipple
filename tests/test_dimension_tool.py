@@ -514,7 +514,9 @@ def test_angular_dimension_uses_three_points_and_round_trips(qapp):
     assert restored._dimensions[0]["p3"] == pytest.approx((10.0, 10.0))
 
 
-def test_dimension_is_not_undo_tracked(qapp):
+def test_dimension_placement_is_undoable(qapp):
+    # Dimensions share the one undo stack with geometry: placing one is a
+    # reversible command, and undo reverts the most recent action first.
     v = make_view(qapp, [square(0, 0)])
     v.set_selection([0])
     v._duplicate_selected()  # a real, undo-tracked mutation
@@ -523,9 +525,20 @@ def test_dimension_is_not_undo_tracked(qapp):
     _place_dimension(v, (0.0, 0.0), (30.0, 0.0), (15.0, 8.0))
     assert len(v._dimensions) == 1
 
-    assert v.undo()  # undoes the duplicate, not the dimension
+    # First undo reverts the dimension (the latest edit), leaving geometry.
+    assert v.undo()
+    assert len(v._dimensions) == 0
+    assert v.poly_count == 2
+
+    # The next undo reaches the geometry edit beneath it.
+    assert v.undo()
     assert v.poly_count == 1
-    assert len(v._dimensions) == 1  # untouched
+
+    # Redo replays both in order: duplicate first, then the dimension.
+    assert v.redo()
+    assert v.poly_count == 2
+    assert v.redo()
+    assert len(v._dimensions) == 1
 
 
 def test_escape_cancels_in_progress_dimension(qapp):
@@ -624,6 +637,21 @@ def test_gizmo_resize_refreshes_driving_dimension_anchors(qapp):
     assert v._start_gizmo_drag("scale-e", 10.0, 0.0)
     v._apply_gizmo_drag(20.0, 0.0, Qt.KeyboardModifier.NoModifier)
     assert v._dimensions[0]["p2"] == pytest.approx((20.0, 0.0))
+
+
+def test_nudging_shape_moves_its_attached_dimension(qapp):
+    v = make_view(qapp, [[(0.0, 0.0), (30.0, 0.0)]])
+    v.toggle_dimension_mode()
+    click_world(v, 0.0, 0.0)
+    click_world(v, 30.0, 0.0)
+    click_world(v, 15.0, 8.0)
+    assert v._dimensions[0].get("driving")
+
+    v.set_selection([0])
+    v._nudge_selected(5.0, 7.0)
+
+    assert v._dimensions[0]["p1"] == pytest.approx((5.0, 7.0))
+    assert v._dimensions[0]["p2"] == pytest.approx((35.0, 7.0))
 
 
 def test_dxf_writer_never_references_dimensions():

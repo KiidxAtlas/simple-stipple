@@ -291,6 +291,7 @@ class ClipboardService:
         self._changed()
 
     def _changed(self) -> None:
+        self._host._refresh_driving_dimensions()
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()

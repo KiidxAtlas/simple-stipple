@@ -9,6 +9,7 @@ import logging
 import platform
 import tempfile
 import threading
+from datetime import date
 from pathlib import Path
 
 from PIL import Image
@@ -18,11 +19,13 @@ from PySide6.QtCore import QTimer, Qt, Signal, QUrl
 from PySide6.QtGui import (
     QDesktopServices,
     QDoubleValidator,
+    QIcon,
     QIntValidator,
     QKeySequence,
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -35,7 +38,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMenu,
     QMessageBox,
-    QInputDialog,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -49,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from src.backend.pattern.processing import PATTERNS, PatternProcessor
 from src.backend.raster_engraving import RasterEngravingSpec, export_raster_job
+from src.backend.laserstar_package import export_laserstar_package
 from src.ui.canvas.constants import DIM
 from src.ui.pages.base import BasePage
 from src.ui.components import (
@@ -82,6 +85,7 @@ from src.ui.pages.pattern.session import (
     get_pattern_workspace_state,
 )
 from src.ui.widgets.canvas.status_strip import CanvasStatusStrip
+from src.ui.widgets.dialogs.laserstar_export_dialog import LaserStarExportDialog
 from src.ui.pages.pattern.form import build_param_widget
 from src.ui.pages.pattern.form_spec import PARAM_SPECS
 from src.ui.pages.pattern.params import (
@@ -139,6 +143,7 @@ class PatternPage(BasePage):
     _preview_done = Signal(object)  # (display_polys, count)
     _preview_error = Signal(object)
     sendSelectedToDraftRequested = Signal(object)
+    repairTileRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)  # BasePage sets _settings and _suspend_state
@@ -155,6 +160,9 @@ class PatternPage(BasePage):
         self._generate_thread: threading.Thread | None = None
         self._shutting_down = False
         self._last_out_path: str | None = None
+        self._export_is_current: bool = False
+        self._preview_is_stale: bool = False
+        self._pending_export_after_preview: Any | None = None
         self._zones_section: CollapsibleSection
         self._zone_output_combo: QComboBox
         self._presets: dict[str, dict] = dict(self._settings.get("pattern_presets", {}))
@@ -172,6 +180,27 @@ class PatternPage(BasePage):
         self._base_patterns: list[str] = list(PATTERNS)
         self._custom_tile_polys: list[list[tuple[float, float]]] = []
         self._tile_motifs: dict[str, list[list[tuple[float, float]]]] = {}
+        raw_tile_settings = self._settings.get("custom_tile_settings", {})
+        self._tile_settings: dict[str, dict] = (
+            {
+                str(name): dict(payload)
+                for name, payload in raw_tile_settings.items()
+                if isinstance(name, str) and isinstance(payload, dict)
+            }
+            if isinstance(raw_tile_settings, dict)
+            else {}
+        )
+        self._applying_tile_settings = False
+        raw_assets = self._settings.get("custom_tile_assets", {})
+        self._tile_assets: dict[str, dict[str, str]] = (
+            {
+                str(name): {str(key): str(value) for key, value in payload.items()}
+                for name, payload in raw_assets.items()
+                if isinstance(name, str) and isinstance(payload, dict)
+            }
+            if isinstance(raw_assets, dict)
+            else {}
+        )
         raw_motifs = self._settings.get("custom_tile_motifs", {})
         if isinstance(raw_motifs, dict):
             for name, polys in raw_motifs.items():
@@ -201,6 +230,7 @@ class PatternPage(BasePage):
         self._outline_ids: list[str] = []
         self._outline_roles: dict[str, str] = {}
         self._pattern_cell_cutouts: list[list[tuple[float, float]]] = []
+        self._pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = []
         self._preview_revision: int = 0
         self._generation_revision: int = 0
         self._pattern_service = PatternProcessor()
@@ -285,7 +315,7 @@ class PatternPage(BasePage):
         self._preview_btn.setToolTip("Toggle between outline editing and pattern preview")
         self._preview_btn.clicked.connect(self._on_preview_clicked)
         self._cancel_preview_btn = QToolButton()
-        self._cancel_preview_btn.setText("✕")
+        self._cancel_preview_btn.setText("Cancel")
         self._cancel_preview_btn.setToolTip("Cancel the preview currently computing")
         self._cancel_preview_btn.setAccessibleName("Cancel preview")
         self._cancel_preview_btn.setVisible(False)
@@ -325,6 +355,9 @@ class PatternPage(BasePage):
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
         self._canvas.set_selection_follows_geometry(True)
+        self._canvas.backgroundSelectionChanged.connect(
+            self._on_engraving_selection_changed
+        )
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
@@ -360,6 +393,7 @@ class PatternPage(BasePage):
         canvas_shell_layout.addWidget(self._canvas, stretch=1)
 
         side_panel = QWidget()
+        side_panel.setProperty("role", "pattern-side-panel")
         side_layout = QVBoxLayout(side_panel)
         # Keep sticky footer controls clear of the splitter and window edge.
         side_layout.setContentsMargins(6, 0, 6, 6)
@@ -411,6 +445,12 @@ class PatternPage(BasePage):
         )
 
         splitter = content_splitter(canvas_shell, side_panel, sizes=(780, 340))
+        # Layers, zones, and the only persistent Export surface share this
+        # sidebar. Keep it visible at every supported window width.
+        splitter.setCollapsible(1, False)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        self._canvas_splitter = splitter
         layout.addWidget(splitter, stretch=1)
         layout.addWidget(self._canvas_status)
         self._refresh_canvas_panels()
@@ -536,10 +576,15 @@ class PatternPage(BasePage):
             self._pattern_service._poly_repeat_signature(poly)
             for poly in self._pattern_cell_cutouts
         }
+        instance_signatures = {
+            self._pattern_service._poly_signature(poly)
+            for poly in self._pattern_cell_instance_cutouts
+        }
         cutout_indices = {
             outline_count + index
             for index, poly in enumerate(pattern_polys)
             if self._pattern_service._poly_repeat_signature(poly) in cutout_signatures
+            or self._pattern_service._poly_signature(poly) in instance_signatures
         }
         self._canvas.set_pattern_cell_context(indices, cutout_indices)
 
@@ -570,7 +615,7 @@ class PatternPage(BasePage):
             ]
         self._canvas.set_accent_polys({index: "#f5a623" for index in indices})
 
-    def _on_pattern_cell_cutout_toggle(self, canvas_index: int) -> None:
+    def _on_pattern_cell_cutout_toggle(self, canvas_index: int, scope: str = "repeat") -> None:
         if not self._showing_preview:
             return
         outline_count = len(self._preview_categories.get("outline", []))
@@ -578,11 +623,19 @@ class PatternPage(BasePage):
         pattern_polys = self._preview_categories.get("pattern", [])
         if not 0 <= pattern_index < len(pattern_polys):
             return
-        added = self._toggle_pattern_cell_cutout_poly(list(pattern_polys[pattern_index]))
+        poly = list(pattern_polys[pattern_index])
+        if scope == "instance":
+            added = self._toggle_pattern_cell_instance_cutout_poly(poly)
+        else:
+            added = self._toggle_pattern_cell_cutout_poly(poly)
         self._canvas._show_flash(
-            "This shape is now a cutout in every tile"
-            if added
-            else "This shape is restored in every tile",
+            ("Only this cell is now a cutout" if added else "This cell is restored")
+            if scope == "instance"
+            else (
+                "This shape is now a cutout in every tile"
+                if added
+                else "This shape is restored in every tile"
+            ),
             1000,
         )
         self._configure_pattern_cell_context()
@@ -603,6 +656,24 @@ class PatternPage(BasePage):
             self._pattern_cell_cutouts.append(poly)
             return True
         del self._pattern_cell_cutouts[existing]
+        return False
+
+    def _toggle_pattern_cell_instance_cutout_poly(
+        self, poly: list[tuple[float, float]]
+    ) -> bool:
+        signature = self._pattern_service._poly_signature(poly)
+        existing = next(
+            (
+                index
+                for index, cutout in enumerate(self._pattern_cell_instance_cutouts)
+                if self._pattern_service._poly_signature(cutout) == signature
+            ),
+            None,
+        )
+        if existing is None:
+            self._pattern_cell_instance_cutouts.append(poly)
+            return True
+        del self._pattern_cell_instance_cutouts[existing]
         return False
 
     def _on_sel_change(self, count: int) -> None:
@@ -668,8 +739,9 @@ class PatternPage(BasePage):
             previous_sigs = [self._pattern_service._poly_signature(poly) for poly in previous]
             current_sigs = [self._pattern_service._poly_signature(poly) for poly in current]
 
-            # Generated pattern cells deleted in preview become persistent
-            # cell cutouts, rather than reappearing on the next rebuild.
+            # Deleting a generated preview cell affects that instance only.
+            # The context menu is the explicit route for repeating the cutout
+            # across every matching tile.
             missing_sigs = set(previous_sigs) - set(current_sigs)
             removed_cells = [
                 poly
@@ -679,9 +751,9 @@ class PatternPage(BasePage):
             for poly in removed_cells:
                 if self._pattern_service._poly_signature(poly) not in {
                     self._pattern_service._poly_signature(item)
-                    for item in self._pattern_cell_cutouts
+                    for item in self._pattern_cell_instance_cutouts
                 }:
-                    self._pattern_cell_cutouts.append(list(poly))
+                    self._pattern_cell_instance_cutouts.append(list(poly))
 
             # Preview outlines are normally the same source coordinates. When
             # one is deleted, remove the matching durable outline and its zone
@@ -950,6 +1022,9 @@ class PatternPage(BasePage):
             fill = zone.get("fill")
             if isinstance(fill, dict):
                 fill["cell_cutouts"] = [list(poly) for poly in self._pattern_cell_cutouts]
+                fill["cell_instance_cutouts"] = [
+                    list(poly) for poly in self._pattern_cell_instance_cutouts
+                ]
         jobs, warnings = self._pattern_service.snapshot_zone_jobs(
             self._zones,
             self._outline_ids,
@@ -962,6 +1037,8 @@ class PatternPage(BasePage):
     # ── Preview / reset ───────────────────────────────────────────────────────
 
     def _reset_preview(self) -> None:
+        self._export_is_current = False
+        self._preview_is_stale = False
         self._preview_polys_cache = []
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._preview_zone_owners = []
@@ -1009,7 +1086,10 @@ class PatternPage(BasePage):
         browse_btn.clicked.connect(self._browse_dxf)
         file_row.addWidget(browse_btn)
         _reload_btn = QToolButton()
-        _reload_btn.setText("↺")
+        _reload_btn.setIcon(
+            QIcon(str(Path(__file__).parents[2] / "style" / "icons" / "reload.svg"))
+        )
+        _reload_btn.setAccessibleName("Reload outline file")
         _reload_btn.setFixedWidth(28)
         _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
         _reload_btn.clicked.connect(self._reload_dxf)
@@ -1034,7 +1114,10 @@ class PatternPage(BasePage):
         self._scale_w.textChanged.connect(self._schedule_preview)
         dims_row.addWidget(self._scale_w)
         self._ar_lock_btn = QToolButton()
-        self._ar_lock_btn.setText("⛓")
+        self._ar_lock_btn.setIcon(
+            QIcon(str(Path(__file__).parents[2] / "style" / "icons" / "lock.svg"))
+        )
+        self._ar_lock_btn.setAccessibleName("Lock outline aspect ratio")
         self._ar_lock_btn.setFixedWidth(28)
         self._ar_lock_btn.setCheckable(True)
         self._ar_lock_btn.setChecked(True)
@@ -1090,9 +1173,9 @@ class PatternPage(BasePage):
         save_preset_btn.clicked.connect(self._save_preset)
         preset_actions.addWidget(save_preset_btn)
         overflow_btn = QToolButton()
-        overflow_btn.setText("⋯")
+        overflow_btn.setText("Options")
         overflow_btn.setProperty("role", "overflow")
-        overflow_btn.setFixedWidth(32)
+        overflow_btn.setFixedWidth(72)
         overflow_btn.setToolTip("More preset actions")
         overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         overflow_menu = QMenu(overflow_btn)
@@ -1123,12 +1206,17 @@ class PatternPage(BasePage):
             pattern_layout.addWidget(w)
             w.hide()
         tile_actions = QHBoxLayout()
-        self._save_tile_btn = QPushButton("Save current as custom…")
+        self._tile_name_edit = QLineEdit()
+        self._tile_name_edit.setPlaceholderText("Custom tile name")
+        self._tile_name_edit.setToolTip("Name the tile before saving it to the library")
+        self._tile_name_edit.returnPressed.connect(self._save_tile_motif)
+        tile_actions.addWidget(self._tile_name_edit, stretch=1)
+        self._save_tile_btn = QPushButton("Save custom tile")
         self._save_tile_btn.setToolTip(
             "Save the current Custom Tile geometry into the Pattern list"
         )
         self._save_tile_btn.clicked.connect(self._save_tile_motif)
-        tile_actions.addWidget(self._save_tile_btn, stretch=1)
+        tile_actions.addWidget(self._save_tile_btn)
         self._delete_tile_btn = QPushButton("Delete custom")
         self._delete_tile_btn.setToolTip("Delete the selected custom pattern")
         self._delete_tile_btn.clicked.connect(self._delete_tile_motif)
@@ -1138,8 +1226,24 @@ class PatternPage(BasePage):
         open_tiles_btn.clicked.connect(self._open_custom_tiles_folder)
         tile_actions.addWidget(open_tiles_btn)
         self._save_tile_btn.hide()
+        self._tile_name_edit.hide()
         self._delete_tile_btn.hide()
         pattern_layout.addLayout(tile_actions)
+        tile_asset_actions = QHBoxLayout()
+        self._tile_asset_status = QLabel("")
+        self._tile_asset_status.setWordWrap(True)
+        self._tile_asset_status.setProperty("role", "status-neutral")
+        tile_asset_actions.addWidget(self._tile_asset_status, stretch=1)
+        self._locate_tile_btn = QPushButton("Locate…")
+        self._locate_tile_btn.clicked.connect(self._locate_tile_asset)
+        tile_asset_actions.addWidget(self._locate_tile_btn)
+        self._repair_tile_btn = QPushButton("Repair / Convert")
+        self._repair_tile_btn.clicked.connect(self._repair_tile_asset)
+        tile_asset_actions.addWidget(self._repair_tile_btn)
+        self._tile_asset_status.hide()
+        self._locate_tile_btn.hide()
+        self._repair_tile_btn.hide()
+        pattern_layout.addLayout(tile_asset_actions)
         self._modifiers_label = section_label(pattern_layout, "Modifiers")
         self._modifiers_widget = QWidget()
         rot_row = QGridLayout(self._modifiers_widget)
@@ -1400,8 +1504,13 @@ class PatternPage(BasePage):
         cutout_callout_layout = QHBoxLayout(self._cutout_callout)
         cutout_callout_layout.setContentsMargins(8, 6, 8, 6)
         cutout_callout_layout.setSpacing(6)
-        self._cutout_icon = QLabel("ℹ")
-        self._cutout_icon.setFixedWidth(14)
+        self._cutout_icon = QLabel()
+        self._cutout_icon.setFixedWidth(18)
+        self._cutout_icon.setPixmap(
+            QIcon(
+                str(Path(__file__).parents[2] / "style" / "icons" / "info.svg")
+            ).pixmap(16, 16)
+        )
         self._cutout_icon.setProperty("role", "cutout-icon")
         cutout_callout_layout.addWidget(self._cutout_icon)
         self._cutout_status_label = QLabel("Right-click a shape on canvas to mark as cutout")
@@ -1437,20 +1546,9 @@ class PatternPage(BasePage):
         self._engraving_image_label = QLabel("No image selected")
         self._engraving_image_label.setWordWrap(True)
         form.addWidget(self._engraving_image_label)
-        material_row = QHBoxLayout()
-        material_row.addWidget(QLabel("Material starting profile"))
-        self._engrave_material = QComboBox()
-        for label, key in (
-            ("Custom", "custom"), ("Wood", "wood"),
-            ("Laser-safe polymer", "polymer"),
-            ("Anodized aluminum", "aluminum"),
-            ("Coated / marking steel", "steel"),
-        ):
-            self._engrave_material.addItem(label, key)
-        self._engrave_material.currentIndexChanged.connect(self._apply_engraving_material)
-        material_row.addWidget(self._engrave_material, stretch=1)
-        form.addLayout(material_row)
-        grid = QGridLayout()
+
+        placement_content, placement = collapsible_content_widget(spacing=8)
+        placement_grid = QGridLayout()
 
         def number(value, minimum, maximum, decimals=2, step=1.0):
             widget = QDoubleSpinBox()
@@ -1465,21 +1563,80 @@ class PatternPage(BasePage):
         self._engrave_y = number(0, -100000, 100000)
         self._engrave_w = number(100, 0.01, 100000)
         self._engrave_h = number(100, 0.01, 100000)
+        self._engrave_rotation = number(0, -360, 360, 1, 1)
+        for row, (label, widget) in enumerate((
+            ("X (mm)", self._engrave_x),
+            ("Y (mm)", self._engrave_y),
+            ("Width (mm)", self._engrave_w),
+            ("Height (mm)", self._engrave_h),
+            ("Rotation (°)", self._engrave_rotation),
+        )):
+            placement_grid.addWidget(QLabel(label), row, 0)
+            placement_grid.addWidget(widget, row, 1)
+        placement.addLayout(placement_grid)
+        self._engrave_canvas_edit = QCheckBox("Select, drag, and resize image on canvas")
+        self._engrave_canvas_edit.setChecked(True)
+        self._engrave_canvas_edit.toggled.connect(
+            lambda enabled: self._canvas.set_background_image_editable(
+                enabled, self._on_engraving_canvas_transform
+            )
+        )
+        placement.addWidget(self._engrave_canvas_edit)
+        self._engraving_placement_section = CollapsibleSection(
+            "Placement", placement_content, expanded=True, subtitle="100 × 100 mm"
+        )
+        form.addWidget(self._engraving_placement_section)
+
+        appearance_content, appearance = collapsible_content_widget(spacing=8)
+        self._engrave_gamma = number(1, 0.1, 5, 2, 0.05)
+        appearance_grid = QGridLayout()
+        appearance_grid.addWidget(QLabel("Gamma / depth detail"), 0, 0)
+        appearance_grid.addWidget(self._engrave_gamma, 0, 1)
+        self._engrave_invert = QCheckBox("Invert light and dark")
+        appearance_grid.addWidget(self._engrave_invert, 1, 0, 1, 2)
+        appearance.addLayout(appearance_grid)
+        self._engraving_appearance_section = CollapsibleSection(
+            "Appearance", appearance_content, expanded=False, subtitle="Gamma 1.00 · Normal"
+        )
+        form.addWidget(self._engraving_appearance_section)
+
+        process_content, process = collapsible_content_widget(spacing=8)
+        material_row = QHBoxLayout()
+        material_row.addWidget(QLabel("Material starting profile"))
+        self._engrave_material = QComboBox()
+        for label, key in (
+            ("Custom", "custom"), ("Wood", "wood"),
+            ("Laser-safe polymer", "polymer"),
+            ("Anodized aluminum", "aluminum"),
+            ("Coated / marking steel", "steel"),
+        ):
+            self._engrave_material.addItem(label, key)
+        material_row.addWidget(self._engrave_material, stretch=1)
+        self._apply_material_btn = QPushButton("Apply values")
+        self._apply_material_btn.setEnabled(False)
+        self._apply_material_btn.setToolTip(
+            "Explicitly replace the current process values with conservative starting values"
+        )
+        self._apply_material_btn.clicked.connect(self._apply_engraving_material)
+        self._engrave_material.currentIndexChanged.connect(
+            lambda: self._apply_material_btn.setEnabled(
+                self._engrave_material.currentData() != "custom"
+            )
+        )
+        material_row.addWidget(self._apply_material_btn)
+        process.addLayout(material_row)
+        process_grid = QGridLayout()
         self._engrave_interval = number(0.1, 0.025, 2, 3, 0.025)
         self._engrave_min_power = number(0, 0, 100, 1)
         self._engrave_max_power = number(80, 0, 100, 1)
         self._engrave_speed = number(100, 0.1, 10000, 1, 10)
-        self._engrave_gamma = number(1, 0.1, 5, 2, 0.05)
         self._engrave_passes = QSpinBox()
         self._engrave_passes.setRange(1, 100)
         labels = (
-            ("X (mm)", self._engrave_x), ("Y (mm)", self._engrave_y),
-            ("Width (mm)", self._engrave_w), ("Height (mm)", self._engrave_h),
             ("Detail / interval", self._engrave_interval),
             ("Min power (%)", self._engrave_min_power),
             ("Max power (%)", self._engrave_max_power),
             ("Speed (mm/s)", self._engrave_speed),
-            ("Gamma / depth detail", self._engrave_gamma),
         )
         slider_scales = {
             self._engrave_interval: 1000,
@@ -1499,38 +1656,56 @@ class PatternPage(BasePage):
 
         grid_row = 0
         for label, widget in labels:
-            grid.addWidget(QLabel(label), grid_row, 0)
-            grid.addWidget(widget, grid_row, 1)
+            process_grid.addWidget(QLabel(label), grid_row, 0)
+            process_grid.addWidget(widget, grid_row, 1)
             grid_row += 1
             scale = slider_scales.get(widget)
             if scale is not None:
                 # Full-width second row remains usable in the narrow sidebar.
-                grid.addWidget(make_slider(widget, scale), grid_row, 0, 1, 2)
+                process_grid.addWidget(make_slider(widget, scale), grid_row, 0, 1, 2)
                 grid_row += 1
-        grid.addWidget(QLabel("Passes"), grid_row, 0)
-        grid.addWidget(self._engrave_passes, grid_row, 1)
-        form.addLayout(grid)
+        process_grid.addWidget(QLabel("Passes"), grid_row, 0)
+        process_grid.addWidget(self._engrave_passes, grid_row, 1)
+        process.addLayout(process_grid)
+        self._engraving_process_error = QLabel()
+        self._engraving_process_error.setWordWrap(True)
+        self._engraving_process_error.setProperty("role", "status-err")
+        self._engraving_process_error.setVisible(False)
+        process.addWidget(self._engraving_process_error)
+        safety_callout = QLabel(
+            "Machine and material settings are starting points only. Review settings before output."
+        )
+        safety_callout.setWordWrap(True)
+        safety_callout.setProperty("role", "warning")
+        process.addWidget(safety_callout)
+        safety_detail_content, safety_detail = collapsible_content_widget(spacing=8)
+        safety = QLabel(
+            "Use only laser-safe materials; never engrave PVC or vinyl. Bare aluminum and steel "
+            "usually require a fiber laser or approved marking compound. Frame the job and run a "
+            "material test on scrap before production."
+        )
+        safety.setWordWrap(True)
+        safety_detail.addWidget(safety)
+        process.addWidget(CollapsibleSection(
+            "Review settings", safety_detail_content, expanded=False, subtitle="Material safety"
+        ))
+        self._engraving_process_section = CollapsibleSection(
+            "Laser Process", process_content, expanded=False, subtitle="Custom · 80% · 100 mm/s"
+        )
+        form.addWidget(self._engraving_process_section)
+
+        output_content, output = collapsible_content_widget(spacing=8)
         target_row = QHBoxLayout()
         target_row.addWidget(QLabel("Clip to"))
         self._engrave_target = QComboBox()
         self._engrave_target.addItem("Entire outline", "outline")
         self._engrave_target.addItem("Selected zone", "zone")
         target_row.addWidget(self._engrave_target, stretch=1)
-        form.addLayout(target_row)
-        self._engrave_invert = QCheckBox("Invert light and dark")
-        form.addWidget(self._engrave_invert)
-        self._engrave_canvas_edit = QCheckBox("Select, drag, and resize image on canvas")
-        self._engrave_canvas_edit.setChecked(True)
-        self._engrave_canvas_edit.toggled.connect(
-            lambda enabled: self._canvas.set_background_image_editable(
-                enabled, self._on_engraving_canvas_transform
-            )
-        )
-        form.addWidget(self._engrave_canvas_edit)
+        output.addLayout(target_row)
         export = QPushButton("Export Positioned Engraving Package…")
         export.setProperty("role", "primary")
         export.clicked.connect(self._export_pattern_engraving)
-        form.addWidget(export)
+        output.addWidget(export)
         note = QLabel(
             "Machine handoff: 1) Export the pattern DXF. 2) Export this engraving package. "
             "3) Import the DXF and .positioned.svg into the same laser-software job without "
@@ -1539,19 +1714,50 @@ class PatternPage(BasePage):
             "run a material test before production."
         )
         note.setWordWrap(True)
-        form.addWidget(note)
-        safety = QLabel(
-            "Profiles are conservative starting points, not universal machine settings. Only use "
-            "laser-safe polymers; never engrave PVC/vinyl. Bare aluminum and steel generally need "
-            "a fiber laser or an approved marking compound. Run a material test first."
+        output.addWidget(note)
+        self._engraving_output_section = CollapsibleSection(
+            "Output", output_content, expanded=False, subtitle="Entire outline · positioned assets"
         )
-        safety.setWordWrap(True)
-        safety.setProperty("role", "warning")
-        form.addWidget(safety)
+        form.addWidget(self._engraving_output_section)
+
+        for field in (
+            self._engrave_x, self._engrave_y, self._engrave_w, self._engrave_h,
+            self._engrave_rotation,
+            self._engrave_interval, self._engrave_min_power, self._engrave_max_power,
+            self._engrave_speed, self._engrave_gamma,
+        ):
+            field.valueChanged.connect(self._update_engraving_section_summaries)
+        self._engrave_passes.valueChanged.connect(self._update_engraving_section_summaries)
+        self._engrave_invert.toggled.connect(self._update_engraving_section_summaries)
+        self._engrave_material.currentIndexChanged.connect(self._update_engraving_section_summaries)
+        self._engrave_target.currentIndexChanged.connect(self._update_engraving_section_summaries)
         self._engraving_section = CollapsibleSection(
             "Image Engraving", content, expanded=False, subtitle="No image"
         )
         layout.addWidget(self._engraving_section)
+
+    def _update_engraving_section_summaries(self, *_args) -> None:
+        self._engraving_placement_section.set_subtitle(
+            f"{self._engrave_w.value():.2f} × {self._engrave_h.value():.2f} mm · "
+            f"{self._engrave_rotation.value():.0f}°"
+        )
+        appearance = "Inverted" if self._engrave_invert.isChecked() else "Normal"
+        self._engraving_appearance_section.set_subtitle(
+            f"Gamma {self._engrave_gamma.value():.2f} · {appearance}"
+        )
+        self._engraving_process_section.set_subtitle(
+            f"{self._engrave_material.currentText()} · "
+            f"{self._engrave_max_power.value():.0f}% · {self._engrave_speed.value():.0f} mm/s"
+        )
+        self._engraving_output_section.set_subtitle(
+            f"{self._engrave_target.currentText()} · positioned assets"
+        )
+        valid = self._engrave_min_power.value() <= self._engrave_max_power.value()
+        self._engraving_process_error.setText(
+            "Minimum power cannot exceed maximum power. Lower Min power or raise Max power."
+            if not valid else ""
+        )
+        self._engraving_process_error.setVisible(not valid)
 
     def _choose_engraving_image(self) -> None:
         path = pick_open_file(
@@ -1578,8 +1784,19 @@ class PatternPage(BasePage):
                     )
         except OSError:
             pass
+        center_x, center_y = self._canvas._c2w(
+            self._canvas.width() / 2.0, self._canvas.height() / 2.0
+        )
+        self._engrave_x.setValue(center_x - self._engrave_w.value() / 2.0)
+        self._engrave_y.setValue(center_y - self._engrave_h.value() / 2.0)
         self._engraving_section.set_subtitle(Path(path).name)
         self._update_engraving_overlay()
+        self._canvas.select_background_image(True)
+        self._engraving_section.set_expanded(True)
+        self._set_status(
+            "Engraving image selected — drag inside it or use the corner handles.",
+            STATUS_OK,
+        )
 
     def _apply_engraving_material(self, *_args) -> None:
         profiles = {
@@ -1602,15 +1819,32 @@ class PatternPage(BasePage):
             "Material starting profile applied — calibrate power and passes on scrap.", STATUS_WARN
         )
 
-    def _on_engraving_canvas_transform(self, x: float, y: float, w: float, h: float) -> None:
+    def _on_engraving_canvas_transform(
+        self, x: float, y: float, w: float, h: float, rotation: float = 0.0
+    ) -> None:
         for field, value in (
             (self._engrave_x, x), (self._engrave_y, y),
             (self._engrave_w, w), (self._engrave_h, h),
+            (self._engrave_rotation, rotation),
         ):
             field.blockSignals(True)
             field.setValue(value)
             field.blockSignals(False)
         self._emit_state_changed()
+
+    def _on_engraving_selection_changed(self, selected: bool) -> None:
+        if selected and hasattr(self, "_engraving_placement_section"):
+            self._engraving_section.set_expanded(True)
+            self._engraving_placement_section.set_expanded(True)
+            self._set_status(
+                "Active target: engraving image — drag, resize, or rotate it on canvas.",
+                STATUS_OK,
+            )
+        elif self._engraving_image_path:
+            self._set_status(
+                "Active target: geometry — click the engraving image to edit its placement.",
+                STATUS_OK,
+            )
 
     def _update_engraving_overlay(self, *_args) -> None:
         if not self._engraving_image_path:
@@ -1622,6 +1856,7 @@ class PatternPage(BasePage):
                 self._canvas.set_background_image(
                     overlay.copy(), self._engrave_w.value(), self._engrave_h.value(),
                     self._engrave_x.value(), self._engrave_y.value(),
+                    self._engrave_rotation.value(),
                 )
                 self._canvas.set_background_image_editable(
                     self._engrave_canvas_edit.isChecked(), self._on_engraving_canvas_transform
@@ -1644,6 +1879,12 @@ class PatternPage(BasePage):
         if not self._engraving_image_path:
             self._set_status("Choose an engraving image first.", STATUS_WARN)
             return
+        if self._engrave_min_power.value() > self._engrave_max_power.value():
+            self._engraving_process_section.set_expanded(True)
+            self._set_status(
+                "Engraving output blocked: minimum power exceeds maximum power.", STATUS_ERR
+            )
+            return
         out = pick_save_file(
             self, self._settings, "pattern_engraving_output", "Export positioned engraving",
             f"{Path(self._engraving_image_path).stem}_pattern_engraving.png",
@@ -1660,7 +1901,7 @@ class PatternPage(BasePage):
                 max_power_percent=self._engrave_max_power.value(),
                 speed_mm_s=self._engrave_speed.value(),
                 gamma=self._engrave_gamma.value(), invert=self._engrave_invert.isChecked(),
-                passes=self._engrave_passes.value(),
+                passes=self._engrave_passes.value(), rotation_deg=self._engrave_rotation.value(),
             )
             png, _metadata, _svg = export_raster_job(
                 self._engraving_image_path, out, spec, self._engraving_mask_polys()
@@ -1733,16 +1974,44 @@ class PatternPage(BasePage):
         self._summary_chip.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         card_layout.addWidget(self._summary_chip)
         layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
+        export_default = str(self._settings.get("pattern_export_default", "vector"))
+        if export_default not in {"vector", "engraving", "laserstar"}:
+            export_default = "vector"
+        self._export_default = export_default
         self._gen_btn = primary_button(
-            "Export DXF",
+            "Export",
             height=38,
-            tooltip="Generate the pattern fill and save as a DXF  (⌘E)",
+            tooltip="Run the remembered export format  (⌘E)",
         )
-        self._gen_btn.clicked.connect(self._generate)
+        self._gen_btn.clicked.connect(self._run_remembered_export)
         export_action_row = QHBoxLayout()
         export_action_row.addWidget(self._gen_btn, stretch=1)
+        self._export_more = QToolButton()
+        self._export_more.setText("Options")
+        self._export_more.setMinimumSize(72, 38)
+        self._export_more.setToolTip("Choose an export by operator purpose")
+        self._export_more.setAccessibleName("Choose export format")
+        self._export_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._export_menu = QMenu(self._export_more)
+        self._export_actions = {
+            "vector": self._export_menu.addAction(
+                "Vector-only — Pattern and fill DXF"
+            ),
+            "engraving": self._export_menu.addAction(
+                "Engraving-only — Positioned image assets"
+            ),
+            "laserstar": self._export_menu.addAction(
+                "Combined job — LaserStar operator package"
+            ),
+        }
+        for kind, action in self._export_actions.items():
+            action.triggered.connect(
+                lambda _checked=False, export_kind=kind: self._select_export_kind(export_kind)
+            )
+        self._export_more.setMenu(self._export_menu)
+        export_action_row.addWidget(self._export_more)
         self._cancel_generate_btn = QToolButton()
-        self._cancel_generate_btn.setText("✕")
+        self._cancel_generate_btn.setText("Cancel")
         self._cancel_generate_btn.setToolTip("Cancel the current export")
         self._cancel_generate_btn.setAccessibleName("Cancel pattern export")
         self._cancel_generate_btn.setVisible(False)
@@ -1757,6 +2026,11 @@ class PatternPage(BasePage):
         self._status = QLabel("")
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
+        self._undo_transfer_btn = QPushButton("Undo transfer")
+        self._undo_transfer_btn.setToolTip("Restore the Pattern outline from before this transfer")
+        self._undo_transfer_btn.setVisible(False)
+        self._undo_transfer_btn.clicked.connect(self._undo_outline_transfer)
+        layout.addWidget(self._undo_transfer_btn)
         self._reveal_btn = QPushButton("Show in Finder")
         self._reveal_btn.setMinimumHeight(26)
         self._reveal_btn.setToolTip("Open the exported file location in Finder")
@@ -1765,6 +2039,134 @@ class PatternPage(BasePage):
         self._reveal_btn.setVisible(False)
         self._reveal_btn.clicked.connect(self._reveal_in_finder)
         layout.addWidget(self._reveal_btn)
+        self._operator_notes_btn = QPushButton("Copy Operator Notes")
+        self._operator_notes_btn.setVisible(False)
+        self._operator_notes_btn.clicked.connect(self._copy_operator_notes)
+        layout.addWidget(self._operator_notes_btn)
+        self._refresh_export_default_label()
+
+    def _refresh_export_default_label(self) -> None:
+        labels = {
+            "vector": "Export — Vector DXF",
+            "engraving": "Export — Engraving Assets",
+            "laserstar": "Export — LaserStar Package",
+        }
+        self._gen_btn.setText(labels[self._export_default])
+
+    def _select_export_kind(self, kind: str) -> None:
+        self._export_default = kind
+        self._settings["pattern_export_default"] = kind
+        self._refresh_export_default_label()
+        self._emit_state_changed()
+        self._run_remembered_export()
+
+    def _run_remembered_export(self) -> None:
+        if self._export_default == "engraving":
+            self._export_pattern_engraving()
+        elif self._export_default == "laserstar":
+            self._export_laserstar_package()
+        else:
+            self._generate()
+
+    def _with_current_preview(self, continuation) -> None:
+        """Run a preview-dependent export after automatic validation."""
+        if self._preview_polys_cache and not self._preview_is_stale:
+            continuation()
+            return
+        has_treatment = bool(self._zones) or (
+            bool(self._edit_polys) and self._current_pattern_key() != "— None —"
+        )
+        if not has_treatment:
+            self._set_status(
+                "Export needs an outline and treatment before preview validation.", STATUS_WARN
+            )
+            return
+        self._pending_export_after_preview = continuation
+        self._set_status("Validating current preview before export…", STATUS_WARN)
+        self._schedule_preview()
+
+    def _export_laserstar_package(self) -> None:
+        if (
+            self._engraving_image_path
+            and self._engrave_min_power.value() > self._engrave_max_power.value()
+        ):
+            self._engraving_section.set_expanded(True)
+            self._engraving_process_section.set_expanded(True)
+            self._set_status(
+                "LaserStar output blocked: minimum power exceeds maximum power.", STATUS_ERR
+            )
+            return
+        self._with_current_preview(self._perform_laserstar_export)
+
+    def _perform_laserstar_export(self) -> None:
+        source_name = (
+            Path(self._dxf_edit.text()).stem if self._dxf_edit.text().strip() else "stipple-job"
+        )
+        default_name = str(
+            self._settings.get(
+                "laserstar_job_name", f"{source_name}-{date.today().isoformat()}"
+            )
+        )
+        dialog = LaserStarExportDialog(
+            job_name=default_name,
+            destination=str(
+                self._settings.get("laserstar_output_dir")
+                or self._settings.get("pattern_output_dir", "")
+                or Path.home()
+            ),
+            has_engraving=bool(self._engraving_image_path),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        name = values["job_name"]
+        destination = values["destination"]
+        self._settings["laserstar_job_name"] = name
+        self._settings["laserstar_output_dir"] = destination
+        raster_spec = None
+        raster_source = None
+        raster_mask = None
+        if self._engraving_image_path:
+            raster_source = self._engraving_image_path
+            raster_spec = RasterEngravingSpec(
+                x_mm=self._engrave_x.value(), y_mm=self._engrave_y.value(),
+                width_mm=self._engrave_w.value(), height_mm=self._engrave_h.value(),
+                line_interval_mm=self._engrave_interval.value(),
+                min_power_percent=self._engrave_min_power.value(),
+                max_power_percent=self._engrave_max_power.value(),
+                speed_mm_s=self._engrave_speed.value(), gamma=self._engrave_gamma.value(),
+                passes=self._engrave_passes.value(), invert=self._engrave_invert.isChecked(),
+                rotation_deg=self._engrave_rotation.value(),
+            )
+            try:
+                raster_mask = self._engraving_mask_polys()
+            except ValueError as exc:
+                QMessageBox.warning(self, "LaserStar Export", str(exc))
+                return
+        try:
+            folder = export_laserstar_package(
+                destination, name, list(self._preview_polys_cache),
+                raster_source=raster_source, raster_spec=raster_spec, raster_mask=raster_mask,
+            )
+            self._last_out_path = str(folder / "LaserStar-Setup.txt")
+            self._reveal_btn.setVisible(True)
+            self._operator_notes_btn.setVisible(True)
+            self._set_status(f"LaserStar operator package ready → {folder.name}", STATUS_OK)
+        except (FileExistsError, OSError, ValueError) as exc:
+            QMessageBox.critical(self, "LaserStar Export Failed", str(exc))
+
+    def _copy_operator_notes(self) -> None:
+        instance = QApplication.instance()
+        if instance is None:
+            return
+        QApplication.clipboard().setText(
+            "1. Open LaserStar-Setup.txt.\n"
+            "2. Import the FVI into StarFX using millimeters and the preserved origin.\n"
+            "3. Add the positioned engraving image if included.\n"
+            "4. Verify material settings, run red trace, and make a material test."
+        )
+        self._set_status("Operator notes copied", STATUS_OK)
 
     # ── Subtitles, shortcuts, palette, scale callbacks ────────────────────────
 
@@ -1773,6 +2175,20 @@ class PatternPage(BasePage):
         custom_name = self._custom_pattern_name(value)
         if custom_name and custom_name in self._tile_motifs:
             self._custom_tile_polys = [list(poly) for poly in self._tile_motifs[custom_name]]
+            saved_state = self._tile_settings.get(custom_name)
+            if saved_state and not self._applying_tile_settings:
+                self._applying_tile_settings = True
+                try:
+                    restore_form_state(
+                        self,
+                        {
+                            **saved_state,
+                            "pattern": value,
+                            "custom_tile_polys": self._custom_tile_polys,
+                        },
+                    )
+                finally:
+                    self._applying_tile_settings = False
         pattern_key = self._pattern_key(value)
         self._update_custom_pattern_actions(value)
         for w in self._pattern_widgets.values():
@@ -1788,8 +2204,35 @@ class PatternPage(BasePage):
     def _update_custom_pattern_actions(self, value: str) -> None:
         if not hasattr(self, "_save_tile_btn"):
             return
-        self._save_tile_btn.setVisible(value == "Custom Tile")
-        self._delete_tile_btn.setVisible(self._custom_pattern_name(value) is not None)
+        name = self._custom_pattern_name(value)
+        self._save_tile_btn.setVisible(value == "Custom Tile" or name is not None)
+        self._save_tile_btn.setText("Update custom tile" if name else "Save custom tile")
+        self._save_tile_btn.setToolTip(
+            "Overwrite this custom tile's saved settings"
+            if name
+            else "Save the current Custom Tile geometry and settings into the Pattern list"
+        )
+        self._tile_name_edit.setVisible(value == "Custom Tile")
+        self._delete_tile_btn.setVisible(name is not None)
+        asset = self._tile_assets.get(name or "", {})
+        status = asset.get("status", "embedded" if name else "")
+        self._tile_asset_status.setVisible(bool(name))
+        self._locate_tile_btn.setVisible(bool(name) and status in {"missing", "invalid"})
+        self._repair_tile_btn.setVisible(bool(name) and status == "invalid")
+        if not name:
+            self._tile_asset_status.clear()
+        elif status == "valid":
+            self._tile_asset_status.setText(f"Valid · {Path(asset.get('path', '')).name}")
+        elif status == "missing":
+            self._tile_asset_status.setText(
+                "Missing source · embedded fallback remains available"
+            )
+        elif status == "invalid":
+            self._tile_asset_status.setText(
+                f"Invalid source · {asset.get('error', 'could not read geometry')}"
+            )
+        else:
+            self._tile_asset_status.setText("Embedded custom tile")
 
     def use_custom_tile(self, polys: list[list[tuple[float, float]]]) -> None:
         """Use selected canvas geometry as the repeated pattern source."""
@@ -1807,19 +2250,54 @@ class PatternPage(BasePage):
         self._refresh_pattern_choices(current=selected or self._pattern_combo.currentText())
 
     def _load_custom_tiles_from_disk(self) -> None:
-        """Discover user-managed DXF tiles without requiring an app restart."""
+        """Discover supported user-managed vector tiles without an app restart."""
         folder = custom_tiles_dir(self._settings.get("custom_tiles_dir"))
-        for path in sorted(folder.glob("*.dxf"), key=lambda item: item.name.lower()):
+        for asset in self._tile_assets.values():
+            path_text = asset.get("path", "")
+            if path_text and not Path(path_text).exists():
+                asset["status"] = "missing"
+        paths = (
+            [
+                path
+                for path in folder.iterdir()
+                if path.is_file() and path.suffix.lower() in {".dxf", ".svg", ".fvi"}
+            ]
+            if folder.exists()
+            else []
+        )
+        for path in sorted(paths, key=lambda item: item.name.lower()):
             try:
-                polys, _report = load_dxf_polylines_with_report(str(path))
-            except (OSError, ValueError, RuntimeError):
+                if path.suffix.lower() == ".dxf":
+                    polys, _report = load_dxf_polylines_with_report(str(path))
+                elif path.suffix.lower() == ".fvi":
+                    polys = [list(poly) for poly in read_fvi(path).paths]
+                else:
+                    with tempfile.TemporaryDirectory(
+                        prefix="simple-stipple-tile-svg-"
+                    ) as temp_folder:
+                        converted = Path(temp_folder) / "tile.dxf"
+                        svg_to_dxf(path, converted)
+                        polys, _report = load_dxf_polylines_with_report(str(converted))
+            except (OSError, ValueError, RuntimeError) as exc:
                 LOGGER.warning("Skipping unreadable custom tile: %s", path)
+                self._tile_assets[path.stem] = {
+                    "path": str(path), "status": "invalid", "error": str(exc)
+                }
                 continue
             if polys:
                 self._tile_motifs[path.stem] = [list(poly) for poly in polys]
+                self._tile_assets[path.stem] = {
+                    "path": str(path), "status": "valid", "format": path.suffix.lower()
+                }
+            else:
+                self._tile_assets[path.stem] = {
+                    "path": str(path), "status": "invalid", "error": "No drawable geometry"
+                }
 
     def _persist_tile_motifs(self) -> None:
         self._settings["custom_tile_motifs"] = self._tile_motifs
+        self._settings["custom_tile_assets"] = self._tile_assets
+        self._settings["custom_tile_settings"] = self._tile_settings
         save_settings(self._settings)
 
     def _open_custom_tiles_folder(self) -> None:
@@ -1828,16 +2306,27 @@ class PatternPage(BasePage):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _save_tile_motif(self) -> None:
-        if self._pattern_combo.currentText() != "Custom Tile":
+        current = self._pattern_combo.currentText()
+        existing_name = self._custom_pattern_name(current)
+        if current != "Custom Tile" and existing_name is None:
             return
         if not self._custom_tile_polys:
             self._set_status("Send geometry to Custom Tile before saving a motif.", STATUS_WARN)
             return
-        name, accepted = QInputDialog.getText(self, "Save motif", "Motif name")
-        name = name.strip()
-        if not accepted or not name:
+        name = existing_name or self._tile_name_edit.text().strip()
+        if not name:
+            self._set_status("Enter a custom tile name beside Save.", STATUS_WARN)
+            self._tile_name_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
         self._tile_motifs[name] = [list(poly) for poly in self._custom_tile_polys]
+        saved_state = collect_form_state(self)
+        saved_state.pop("custom_tile_polys", None)
+        saved_state["pattern"] = "Custom Tile"
+        self._tile_settings[name] = saved_state
+        if existing_name is not None:
+            self._persist_tile_motifs()
+            self._set_status(f"Updated custom tile settings: {name}", STATUS_OK)
+            return
         safe_name = "".join(
             character for character in name if character not in '<>:"/\\|?*'
         ).strip()
@@ -1847,9 +2336,13 @@ class PatternPage(BasePage):
         tile_path = custom_tiles_dir(self._settings.get("custom_tiles_dir")) / f"{safe_name}.dxf"
         tile_path.parent.mkdir(parents=True, exist_ok=True)
         write_polylines_dxf(self._custom_tile_polys, str(tile_path), close=False)
+        self._tile_assets[name] = {
+            "path": str(tile_path), "status": "valid", "format": ".dxf"
+        }
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo(name)
         self._pattern_combo.setCurrentText(f"Custom · {name}")
+        self._tile_name_edit.clear()
         self._set_status(f"Saved custom tile: {tile_path.name} · Custom Tiles", STATUS_OK)
 
     def _load_tile_motif(self) -> None:
@@ -1876,16 +2369,74 @@ class PatternPage(BasePage):
         if answer != QMessageBox.StandardButton.Yes:
             return
         del self._tile_motifs[name]
+        self._tile_settings.pop(name, None)
+        asset = self._tile_assets.pop(name, {})
         safe_name = "".join(
             character for character in name if character not in '<>:"/\\|?*'
         ).strip()
-        (custom_tiles_dir(self._settings.get("custom_tiles_dir")) / f"{safe_name}.dxf").unlink(
-            missing_ok=True
-        )
+        tile_folder = custom_tiles_dir(self._settings.get("custom_tiles_dir"))
+        asset_path = Path(asset.get("path", "")) if asset.get("path") else None
+        if asset_path is not None and asset_path.parent == tile_folder:
+            asset_path.unlink(missing_ok=True)
+        else:
+            (tile_folder / f"{safe_name}.dxf").unlink(missing_ok=True)
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo()
         self._pattern_combo.setCurrentText("— None —")
         self._set_status(f"Deleted custom pattern: {name}")
+
+    def _locate_tile_asset(self) -> None:
+        name = self._custom_pattern_name(self._pattern_combo.currentText()) or ""
+        if not name:
+            return
+        path = pick_open_file(
+            self,
+            self._settings,
+            "custom_tile_locate",
+            "Locate custom tile",
+            "Vector tiles (*.dxf *.DXF *.svg *.SVG *.fvi *.FVI);;All files (*)",
+            fallback_dir=str(custom_tiles_dir(self._settings.get("custom_tiles_dir"))),
+        )
+        if not path:
+            return
+        source = Path(path)
+        self._tile_assets[name] = {"path": str(source), "status": "missing"}
+        try:
+            if source.suffix.lower() == ".dxf":
+                polys, _report = load_dxf_polylines_with_report(str(source))
+            elif source.suffix.lower() == ".fvi":
+                polys = [list(poly) for poly in read_fvi(source).paths]
+            elif source.suffix.lower() == ".svg":
+                with tempfile.TemporaryDirectory(
+                    prefix="simple-stipple-locate-tile-"
+                ) as temp_folder:
+                    converted = Path(temp_folder) / "tile.dxf"
+                    svg_to_dxf(source, converted)
+                    polys, _report = load_dxf_polylines_with_report(str(converted))
+            else:
+                raise ValueError("Choose a DXF, SVG, or FVI tile.")
+            if not polys:
+                raise ValueError("No drawable geometry was found.")
+            self._tile_motifs[name] = [list(poly) for poly in polys]
+            self._tile_assets[name] = {
+                "path": str(source), "status": "valid", "format": source.suffix.lower()
+            }
+            self._persist_tile_motifs()
+            self._refresh_pattern_choices(current=f"Custom · {name}")
+            self._set_status(f"Located custom tile: {source.name}", STATUS_OK)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._tile_assets[name] = {
+                "path": str(source), "status": "invalid", "error": str(exc)
+            }
+            self._persist_tile_motifs()
+            self._update_custom_pattern_actions(f"Custom · {name}")
+
+    def _repair_tile_asset(self) -> None:
+        name = self._custom_pattern_name(self._pattern_combo.currentText()) or ""
+        path = self._tile_assets.get(name, {}).get("path", "")
+        if path:
+            self.repairTileRequested.emit(path)
+            self._set_status("Opened the invalid tile in Convert for repair.", STATUS_WARN)
 
     def apply_settings(self, settings: dict) -> None:
         """Apply folder changes immediately without rebuilding the page."""
@@ -2143,6 +2694,9 @@ class PatternPage(BasePage):
             "target_pattern": target_pattern,
             "inset": inset,
             "cell_cutouts": [list(poly) for poly in self._pattern_cell_cutouts],
+            "cell_instance_cutouts": [
+                list(poly) for poly in self._pattern_cell_instance_cutouts
+            ],
         }
 
     def _collect_fabrication_options(self) -> dict:
@@ -2303,9 +2857,11 @@ class PatternPage(BasePage):
         polys: list[list[tuple[float, float]]],
         *,
         source_label: str = "Draft selection",
+        offer_undo: bool = False,
     ) -> None:
         if not polys:
             return
+        self._pre_transfer_state = self.get_workspace_state() if offer_undo else None
         incoming = [[(x, y) for x, y in poly] for poly in polys]
         self._suspend_state = True
         self._preview_user_opt_out = False
@@ -2318,6 +2874,8 @@ class PatternPage(BasePage):
         self._edit_polys = [list(poly) for poly in incoming]
         self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
         self._exclusion_ids.clear()
+        self._export_is_current = False
+        self._preview_is_stale = False
         self._preview_polys_cache = []
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._zones.clear()
@@ -2332,11 +2890,22 @@ class PatternPage(BasePage):
         self._set_status(
             f"Loaded {len(self._edit_polys)} outline(s) from {source_label}", STATUS_OK
         )
+        self._undo_transfer_btn.setVisible(bool(offer_undo))
         self._suspend_state = False
         self._update_preview_controls()
         self._update_zone_actions()
         self._refresh_canvas_panels()
         self._schedule_preview()
+        self._emit_state_changed()
+
+    def _undo_outline_transfer(self) -> None:
+        previous = getattr(self, "_pre_transfer_state", None)
+        if not isinstance(previous, dict):
+            return
+        self.apply_workspace_state(previous)
+        self._pre_transfer_state = None
+        self._undo_transfer_btn.hide()
+        self._set_status("Transfer undone; previous Pattern outline restored", STATUS_OK)
         self._emit_state_changed()
 
     def _update_dims_from_polys(self, polys: list[list[tuple[float, float]]]) -> None:
@@ -2653,6 +3222,9 @@ class PatternPage(BasePage):
                 "target_outline": self._zone_fill_target_outline.isChecked(),
                 "target_pattern": self._zone_fill_target_pattern.isChecked(),
                 "cell_cutouts": [list(poly) for poly in self._pattern_cell_cutouts],
+                "cell_instance_cutouts": [
+                    list(poly) for poly in self._pattern_cell_instance_cutouts
+                ],
             }
         return pattern, params, fill
 
@@ -2976,7 +3548,11 @@ class PatternPage(BasePage):
             self._on_canvas_cutout_toggle(idx)
 
     def _clear_exclusions(self) -> None:
-        if not self._exclusion_ids and not self._pattern_cell_cutouts:
+        if (
+            not self._exclusion_ids
+            and not self._pattern_cell_cutouts
+            and not self._pattern_cell_instance_cutouts
+        ):
             return
         for outline_id in self._exclusion_ids:
             index = self._outline_ids.index(outline_id) if outline_id in self._outline_ids else -1
@@ -2988,6 +3564,7 @@ class PatternPage(BasePage):
                 )
         self._exclusion_ids.clear()
         self._pattern_cell_cutouts.clear()
+        self._pattern_cell_instance_cutouts.clear()
         self._sync_canvas_cutout_highlight()
         self._refresh_cutout_status()
         self._schedule_preview()
@@ -3021,15 +3598,25 @@ class PatternPage(BasePage):
         if not hasattr(self, "_cutout_status_label"):
             return
         outline_count = len(self._exclusion_ids)
-        cell_count = len(self._pattern_cell_cutouts)
+        cell_count = len(self._pattern_cell_cutouts) + len(
+            self._pattern_cell_instance_cutouts
+        )
         n = outline_count + cell_count
         if n == 0:
-            self._cutout_icon.setText("ℹ")
+            self._cutout_icon.setPixmap(
+                QIcon(
+                    str(Path(__file__).parents[2] / "style" / "icons" / "info.svg")
+                ).pixmap(16, 16)
+            )
             self._cutout_status_label.setText("Right-click a shape on canvas to mark as cutout")
             self._cutout_clear_btn.setVisible(False)
             self._apply_cutout_callout_style(active=False)
         else:
-            self._cutout_icon.setText("✓")
+            self._cutout_icon.setPixmap(
+                QIcon(
+                    str(Path(__file__).parents[2] / "style" / "icons" / "check.svg")
+                ).pixmap(16, 16)
+            )
             parts = []
             if outline_count:
                 parts.append(f"{outline_count} outline")
@@ -3075,6 +3662,7 @@ class PatternPage(BasePage):
             or self._current_pattern_key() != "— None —"
             or self._custom_tile_polys
             or self._pattern_cell_cutouts
+            or self._pattern_cell_instance_cutouts
         )
 
     def _start_preview_thread(self) -> None:
@@ -3190,6 +3778,7 @@ class PatternPage(BasePage):
                 self._preview_timer.start(0)
             return
         self._preview_polys_cache = list(display_polys)
+        self._preview_is_stale = False
         self._preview_categories = categories or {
             "outline": [],
             "pattern": list(display_polys),
@@ -3208,6 +3797,11 @@ class PatternPage(BasePage):
         self._pattern_cell_cutouts = [
             poly
             for poly in self._pattern_cell_cutouts
+            if self._pattern_service._poly_signature(poly) in generated_signatures
+        ]
+        self._pattern_cell_instance_cutouts = [
+            poly
+            for poly in self._pattern_cell_instance_cutouts
             if self._pattern_service._poly_signature(poly) in generated_signatures
         ]
         from src.backend.pattern.output import diagnose_output
@@ -3244,6 +3838,11 @@ class PatternPage(BasePage):
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
             self._preview_timer.start(0)
+        else:
+            pending_export = self._pending_export_after_preview
+            self._pending_export_after_preview = None
+            if pending_export is not None:
+                QTimer.singleShot(0, pending_export)
 
     def _should_auto_preview(self) -> bool:
         if not self._auto_preview_cb.isChecked():
@@ -3271,11 +3870,17 @@ class PatternPage(BasePage):
                 self._preview_timer.start(0)
             return
         if msg == CANCELLED_MESSAGE:
+            self._pending_export_after_preview = None
             self._update_preview_controls()
             if restart and (self._edit_polys or self._zones):
                 self._preview_timer.start(0)
             return
         self._set_preview_status(f"Preview error: {msg}", "error")
+        if self._pending_export_after_preview is not None:
+            self._pending_export_after_preview = None
+            self._set_status(
+                f"Export blocked — preview validation failed: {msg}", STATUS_ERR
+            )
         if self._showing_preview:
             self._canvas.setToolTip("Preview refresh failed; showing the last completed result.")
         self._update_preview_controls()
@@ -3298,8 +3903,10 @@ class PatternPage(BasePage):
         self._preview_status.style().polish(self._preview_status)
 
     def _invalidate_preview_cache(self) -> None:
+        self._export_is_current = False
         had_cache = bool(self._preview_polys_cache)
         was_showing = self._showing_preview
+        self._preview_is_stale = had_cache or was_showing
         self._preview_polys_cache = []
         # Keep the last-good preview metadata while it remains on canvas so
         # generated geometry can still select its owning zone during a live
@@ -3345,12 +3952,27 @@ class PatternPage(BasePage):
     def _update_preview_controls(self) -> None:
         has_preview = bool(self._preview_polys_cache)
         is_computing = self._preview_task.running
-        if has_preview:
-            self._workflow_strip.set_current_step(2)
-        elif self._edit_polys or self._zones:
-            self._workflow_strip.set_current_step(1)
+        has_outline = bool(self._edit_polys or self._zones)
+        has_treatment = bool(self._zones) or (
+            has_outline and self._current_pattern_key() != "— None —"
+        )
+        if self._export_is_current:
+            workflow_states = ["complete", "complete", "complete", "complete", "current"]
+        elif self._preview_is_stale and has_treatment:
+            workflow_states = ["complete", "complete", "complete", "stale", "pending"]
+        elif has_preview:
+            workflow_states = ["complete", "complete", "complete", "current", "pending"]
+        elif has_treatment:
+            workflow_states = ["complete", "complete", "current", "pending", "pending"]
+        elif has_outline:
+            workflow_states = ["complete", "current", "pending", "pending", "pending"]
         else:
-            self._workflow_strip.set_current_step(0)
+            workflow_states = ["current", "pending", "pending", "pending", "pending"]
+        reasons = {}
+        if self._preview_is_stale:
+            reasons[3] = "Preview is stale because an outline or treatment input changed"
+            reasons[4] = "Export is unavailable until preview validation completes"
+        self._workflow_strip.set_step_states(workflow_states, reasons)
         if self._showing_preview:
             self._preview_btn.setText("Edit Outline")
             self._preview_btn.setEnabled(True)
@@ -3387,6 +4009,8 @@ class PatternPage(BasePage):
             else:
                 export_tip = "Load an outline and choose a pattern before exporting"
             self._gen_btn.setToolTip(export_tip)
+            if hasattr(self, "_export_actions"):
+                self._export_actions["engraving"].setEnabled(bool(self._engraving_image_path))
             open_outlines = sum(
                 1 for poly in self._edit_polys if len(poly) > 1 and poly[0] != poly[-1]
             )
@@ -3575,10 +4199,11 @@ class PatternPage(BasePage):
         self._update_preview_controls()
         self._cancel_generate_btn.setVisible(False)
         self._set_status(f"Done — {count} shapes → {name}", STATUS_OK)
-        self._workflow_strip.set_current_step(3)
         self._last_out_path = out_path
+        self._export_is_current = True
         self._reveal_btn.setVisible(True)
         self._preview_polys_cache = list(polys)
+        self._preview_is_stale = False
         if self._showing_preview:
             self._canvas.load(polys)
         self._set_preview_status(f"{count} shapes exported", "success")

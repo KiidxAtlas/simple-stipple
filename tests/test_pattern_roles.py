@@ -59,10 +59,12 @@ def test_pattern_roles_persist_and_migrate_legacy_exclusions(qapp):
         page.load_outline_polys([outer, inner], source_label="roles")
         page._on_canvas_outline_role_change(1, "cutout")
         page._pattern_cell_cutouts = [inner]
+        page._pattern_cell_instance_cutouts = [outer]
         payload = get_pattern_workspace_state(page)
         apply_pattern_workspace_state(restored, payload)
         assert restored._outline_roles == page._outline_roles
         assert restored._pattern_cell_cutouts == [inner]
+        assert restored._pattern_cell_instance_cutouts == [outer]
 
         legacy = dict(payload)
         legacy.pop("outline_roles")
@@ -101,6 +103,30 @@ def test_fill_targets_are_independent_and_preview_cells_can_be_cutouts(qapp):
         qapp.processEvents()
 
 
+def test_preview_cutout_can_target_only_the_clicked_cell(qapp):
+    page = _page(qapp)
+    first = [(2, 2), (8, 2), (8, 8), (2, 8), (2, 2)]
+    second = [(12, 2), (18, 2), (18, 8), (12, 8), (12, 2)]
+    try:
+        page._preview_categories = {"outline": [], "pattern": [first, second], "fill": []}
+        page._preview_polys_cache = [first, second]
+        page._showing_preview = True
+        page._canvas.load([first, second])
+        page._configure_pattern_cell_context()
+        page._suspend_state = True
+
+        page._on_pattern_cell_cutout_toggle(0, "instance")
+
+        assert page._pattern_cell_cutouts == []
+        assert page._pattern_cell_instance_cutouts == [first]
+        assert page._canvas._pattern_cell_cutout_indices == {0}
+    finally:
+        page._suspend_state = False
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
 def test_pattern_property_defaults_are_editable_before_a_zone_exists(qapp):
     page = _page(qapp)
     try:
@@ -132,7 +158,8 @@ def test_custom_pattern_actions_only_appear_for_their_valid_pattern(qapp):
         page._tile_motifs["Saved"] = [[(0, 0), (1, 0), (0, 0)]]
         page._refresh_pattern_choices(current="Custom · Saved")
         page._pattern_combo.setCurrentText("Custom · Saved")
-        assert page._save_tile_btn.isHidden()
+        assert not page._save_tile_btn.isHidden()
+        assert page._save_tile_btn.text() == "Update custom tile"
         assert not page._delete_tile_btn.isHidden()
     finally:
         page.shutdown()

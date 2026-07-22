@@ -12,11 +12,23 @@ from __future__ import annotations
 
 import math
 import platform as _platform
+import weakref
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -40,6 +52,49 @@ from src.ui.util import clear_recent, list_recent
 # Platform modifier for human-readable shortcut hints
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
+# Spacing scale (px) — the single source of truth for layout rhythm. Every gap
+# and margin should come from this ladder so the whole UI shares one rhythm
+# instead of ad-hoc 6/10/14 values. XS tight groupings, SM inside a card, MD
+# between sections, LG dialog/page margins, XL major separations.
+SPACE_XS = 4
+SPACE_SM = 8
+SPACE_MD = 12
+SPACE_LG = 16
+SPACE_XL = 24
+MOTION_DURATION_MS = 150
+
+
+def install_dialog_focus_lifecycle(
+    dialog: QWidget,
+    initial_focus: QWidget | None = None,
+    invoker: QWidget | None = None,
+) -> None:
+    """Set logical initial focus and restore focus after a native modal closes.
+
+    Qt already traps focus and maps Escape to ``reject`` for modal QDialogs;
+    this helper supplies the two lifecycle pieces Qt cannot infer. Weak
+    references avoid extending QWidget wrapper lifetimes during shutdown.
+    """
+    initial_ref = weakref.ref(initial_focus) if initial_focus is not None else None
+    focused = invoker or QApplication.focusWidget()
+    invoker_ref = weakref.ref(focused) if focused is not None else None
+
+    def focus_initial() -> None:
+        target = initial_ref() if initial_ref is not None else None
+        if target is not None and target.isEnabled() and not target.isHidden():
+            target.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    def restore_invoker(*_args) -> None:
+        target = invoker_ref() if invoker_ref is not None else None
+        if target is not None and target.isEnabled() and not target.isHidden():
+            target.window().activateWindow()
+            target.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    QTimer.singleShot(0, focus_initial)
+    finished = getattr(dialog, "finished", None)
+    if finished is not None:
+        finished.connect(lambda *_args: QTimer.singleShot(0, restore_invoker))
+
 
 class RecentFilesButton(QPushButton):
     """Drop-down button exposing the recent-files MRU for one file kind."""
@@ -54,7 +109,8 @@ class RecentFilesButton(QPushButton):
         empty_message: str = "No recent files.",
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__("Recent ▾", parent)
+        super().__init__("Recent", parent)
+        self.setIcon(QIcon(str(Path(__file__).parent / "style" / "icons" / "chevron_down.svg")))
         self._settings = settings
         self._kind = kind
         self._empty_message = empty_message
@@ -198,6 +254,86 @@ def sidebar_panel(content: QWidget, *, min_width: int = 340, max_width: int = 43
     return frame
 
 
+class ResponsiveContentSplitter(QSplitter):
+    """Horizontal splitter that exposes a compact toggleable secondary drawer."""
+
+    COMPACT_WIDTH = 1050
+
+    def __init__(self) -> None:
+        super().__init__(Qt.Orientation.Horizontal)
+        self._responsive_secondary: int | None = None
+        self._drawer_label = "Inspector"
+        self._drawer_size = 280
+        self._compact = False
+        # A QWidget parented directly to QSplitter is automatically inserted as
+        # a pane. The old overlay button therefore became pane 0, shifting the
+        # canvas/inspector indices and collapsing the canvas itself.
+        self._drawer_toggle = QToolButton()
+        self._drawer_toggle.setProperty("role", "drawer-toggle")
+        self._drawer_toggle.setAccessibleName("Toggle secondary inspector")
+        self._drawer_toggle.clicked.connect(self._toggle_drawer)
+        self._drawer_toggle.hide()
+
+    def set_responsive_secondary(self, index: int, label: str = "Inspector") -> None:
+        self._responsive_secondary = index
+        self._drawer_label = label
+        primary_index = 0 if index != 0 else 1
+        if 0 <= primary_index < self.count():
+            self._drawer_toggle.setParent(self.widget(primary_index))
+        sizes = self.sizes()
+        if 0 <= index < len(sizes) and sizes[index] > 0:
+            self._drawer_size = sizes[index]
+        self._update_responsive_state()
+
+    def _set_drawer_open(self, opened: bool) -> None:
+        index = self._responsive_secondary
+        if index is None or self.count() < 2:
+            return
+        sizes = self.sizes()
+        total = max(sum(sizes), self.width())
+        if opened:
+            drawer = min(max(220, self._drawer_size), max(220, total // 2))
+            sizes[index] = drawer
+            sizes[1 - index] = max(1, total - drawer)
+        else:
+            if sizes[index] > 0:
+                self._drawer_size = sizes[index]
+            sizes[1 - index] = max(1, total)
+            sizes[index] = 0
+        self.setSizes(sizes)
+        self._drawer_toggle.setText(
+            f"Hide {self._drawer_label}" if opened else f"Show {self._drawer_label}"
+        )
+        self._drawer_toggle.setAccessibleDescription(self._drawer_toggle.text())
+
+    def _toggle_drawer(self) -> None:
+        index = self._responsive_secondary
+        if index is not None:
+            self._set_drawer_open(self.sizes()[index] == 0)
+
+    def _update_responsive_state(self) -> None:
+        if self._responsive_secondary is None:
+            return
+        compact = self.width() < self.COMPACT_WIDTH
+        if compact != self._compact:
+            self._compact = compact
+            self._set_drawer_open(not compact)
+        self._drawer_toggle.setVisible(compact)
+        self._position_drawer_toggle()
+
+    def _position_drawer_toggle(self) -> None:
+        hint = self._drawer_toggle.sizeHint()
+        width = max(112, hint.width() + 12)
+        parent = self._drawer_toggle.parentWidget()
+        parent_width = parent.width() if parent is not None else self.width()
+        self._drawer_toggle.setGeometry(max(4, parent_width - width - 6), 76, width, 30)
+        self._drawer_toggle.raise_()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_responsive_state()
+
+
 def content_splitter(left: QWidget, right: QWidget, *, sizes: tuple[int, int]) -> QSplitter:
     """Create a collapsible horizontal splitter with sensible defaults.
 
@@ -205,7 +341,7 @@ def content_splitter(left: QWidget, right: QWidget, *, sizes: tuple[int, int]) -
     the right pane (sidebar) keeps its configured width instead of growing
     to fill the window.
     """
-    splitter = QSplitter(Qt.Orientation.Horizontal)
+    splitter = ResponsiveContentSplitter()
     splitter.setChildrenCollapsible(True)
     splitter.addWidget(left)
     splitter.addWidget(right)
@@ -397,7 +533,7 @@ class WorkflowStepper(QFrame):
             button = QToolButton()
             button.setText(f"{index + 1}  {step}")
             button.setProperty("role", "workflow-step")
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             button.setAccessibleName(f"Step {index + 1}: {step}")
             button.clicked.connect(
                 lambda _checked=False, value=index: self.stepRequested.emit(value)
@@ -405,7 +541,12 @@ class WorkflowStepper(QFrame):
             layout.addWidget(button)
             self._labels.append(button)
             if index < len(steps) - 1:
-                arrow = QLabel("→")
+                arrow = QLabel()
+                arrow.setPixmap(
+                    QIcon(str(Path(__file__).parent / "style" / "icons" / "chevron_right.svg"))
+                    .pixmap(16, 16)
+                )
+                arrow.setAccessibleName("Next step")
                 arrow.setProperty("role", "workflow-arrow")
                 layout.addWidget(arrow)
         layout.addStretch()
@@ -414,18 +555,52 @@ class WorkflowStepper(QFrame):
 
     def set_current_step(self, index: int) -> None:
         current = max(0, min(index, len(self._labels) - 1)) if self._labels else 0
-        for item_index, label in enumerate(self._labels):
-            state = (
+        self.set_step_states(
+            [
                 "current"
                 if item_index == current
                 else "complete"
                 if item_index < current
                 else "pending"
+                for item_index in range(len(self._labels))
+            ]
+        )
+
+    def set_step_states(
+        self, states: list[str] | tuple[str, ...], reasons: dict[int, str] | None = None
+    ) -> None:
+        """Render independently reduced workflow states.
+
+        Unlike a single chronological index, this can retain completed setup
+        while identifying a stale or failed downstream result.
+        """
+        allowed = {"complete", "current", "pending", "stale", "error"}
+        if len(states) != len(self._labels) or any(state not in allowed for state in states):
+            raise ValueError("Workflow states must provide one valid state per step")
+        reasons = reasons or {}
+        for item_index, (label, state) in enumerate(zip(self._labels, states, strict=True)):
+            label.setText(
+                self._steps[item_index]
+                if state in {"complete", "stale", "error"}
+                else f"{item_index + 1}  {self._steps[item_index]}"
             )
-            prefix = "✓" if state == "complete" else str(item_index + 1)
-            label.setText(f"{prefix}  {self._steps[item_index]}")
+            icon_name = (
+                "check.svg"
+                if state == "complete"
+                else "warning.svg"
+                if state in {"stale", "error"}
+                else ""
+            )
+            label.setIcon(
+                QIcon(str(Path(__file__).parent / "style" / "icons" / icon_name))
+                if icon_name
+                else QIcon()
+            )
             label.setProperty("state", state)
-            label.setEnabled(item_index <= current)
+            label.setEnabled(state != "pending")
+            reason = reasons.get(item_index, "")
+            label.setToolTip(reason)
+            label.setAccessibleDescription(reason or f"{self._steps[item_index]} is {state}")
             label.style().unpolish(label)
             label.style().polish(label)
 
@@ -443,7 +618,8 @@ class StatusRegion(QFrame):
         self.setProperty("role", "status-region")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
-        self._icon = QLabel("•")
+        self._icon = QLabel()
+        self._icon.setFixedSize(18, 18)
         self._message = QLabel("Ready")
         self._message.setWordWrap(True)
         layout.addWidget(self._icon)
@@ -451,8 +627,17 @@ class StatusRegion(QFrame):
         self.setMinimumHeight(30)
 
     def set_status(self, message: str, tone: str = "neutral") -> None:
-        icons = {"success": "✓", "warn": "!", "danger": "!", "info": "i", "neutral": "•"}
-        self._icon.setText(icons.get(tone, "•"))
+        icon_name = {
+            "success": "check.svg",
+            "warn": "warning.svg",
+            "danger": "warning.svg",
+            "info": "info.svg",
+            "neutral": "info.svg",
+        }.get(tone, "info.svg")
+        self._icon.setPixmap(
+            QIcon(str(Path(__file__).parent / "style" / "icons" / icon_name)).pixmap(16, 16)
+        )
+        self._icon.setAccessibleName(f"{tone.title()} status")
         self._message.setText(message or "Ready")
         self.setProperty("tone", tone)
         self.setAccessibleDescription(self._message.text())
@@ -580,7 +765,17 @@ class CollapsibleSection(QFrame):
             self._toggle.setAccessibleName(f"{title} section")
             self._toggle.setAccessibleDescription("Expand or collapse this group of controls")
             self._toggle.setProperty("role", "collapsible-toggle")
-            self._toggle.setText(f"{'▾' if expanded else '▸'}  {title}")
+            self._toggle.setText(title)
+            self._toggle.setIcon(
+                QIcon(
+                    str(
+                        Path(__file__).parent
+                        / "style"
+                        / "icons"
+                        / ("chevron_down.svg" if expanded else "chevron_right.svg")
+                    )
+                )
+            )
             self._toggle.setCheckable(True)
             self._toggle.setChecked(expanded)
             self._toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -599,11 +794,55 @@ class CollapsibleSection(QFrame):
         self._content = content
         self._content.setVisible(expanded or not collapsible)
         layout.addWidget(self._content)
+        self._motion: QPropertyAnimation | None = None
 
     def _on_toggled(self, checked: bool) -> None:
-        self._toggle.setText(f"{'▾' if checked else '▸'}  {self._title}")
-        self._content.setVisible(checked)
-        self.adjustSize()
+        if not isinstance(self._toggle, QToolButton):
+            return
+        self._toggle.setText(self._title)
+        self._toggle.setIcon(
+            QIcon(
+                str(
+                    Path(__file__).parent
+                    / "style"
+                    / "icons"
+                    / ("chevron_down.svg" if checked else "chevron_right.svg")
+                )
+            )
+        )
+        app = QApplication.instance()
+        reduced_motion = bool(app and app.property("reducedMotion"))
+        if reduced_motion or not self.isVisible():
+            self._content.setMaximumHeight(16777215)
+            self._content.setVisible(checked)
+            self.adjustSize()
+            return
+        if self._motion is not None:
+            self._motion.stop()
+        target = max(1, self._content.sizeHint().height())
+        self._content.setVisible(True)
+        self._motion = QPropertyAnimation(self._content, b"maximumHeight", self)
+        self._motion.setDuration(MOTION_DURATION_MS)
+        self._motion.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._motion.setStartValue(0 if checked else max(1, self._content.height()))
+        self._motion.setEndValue(target if checked else 0)
+
+        def finish() -> None:
+            self._content.setVisible(checked)
+            self._content.setMaximumHeight(16777215 if checked else 0)
+            self.adjustSize()
+
+        self._motion.finished.connect(finish)
+        self._motion.start()
+
+    def set_expanded(self, expanded: bool) -> None:
+        """Set disclosure state without reaching into the header widget."""
+        if isinstance(self._toggle, QToolButton):
+            self._toggle.setChecked(expanded)
+            self._on_toggled(expanded)
+
+    def is_expanded(self) -> bool:
+        return not isinstance(self._toggle, QToolButton) or self._toggle.isChecked()
 
     def set_subtitle(self, text: str, *, dim: bool = False) -> None:
         """Update the one-line state summary shown under the title.
@@ -645,6 +884,7 @@ __all__ = [
     "EscapeBlurFilter",
     "OperationProgress",
     "RecentFilesButton",
+    "ResponsiveContentSplitter",
     "StatusRegion",
     "WorkflowStepper",
     "blur_focused_line_edit",
@@ -653,6 +893,7 @@ __all__ = [
     "collapsible_content_widget",
     "content_splitter",
     "info_chip",
+    "install_dialog_focus_lifecycle",
     "icon_from_painter",
     "make_resettable_line_edit",
     "parse_float_field",
@@ -1271,4 +1512,3 @@ def tool_icon(name: str, *, size: int = 20, color: str = "#c9d1d9") -> QIcon:
     """Look up one of the draw-sidebar icons by name (see `_ICON_FACTORIES`)."""
     draw_fn = _ICON_FACTORIES[name]
     return icon_from_painter(draw_fn, size=size, color=color)
-

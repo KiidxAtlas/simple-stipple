@@ -391,9 +391,16 @@ class DxfCanvas(CanvasView):
             if idx in self._pattern_cell_indices and callable(self._on_pattern_cell_cutout_toggle):
                 is_cutout = idx in self._pattern_cell_cutout_indices
                 toggle_pattern_cutout = self._on_pattern_cell_cutout_toggle
-                menu.addAction(
-                    "Restore Pattern Cell Fill" if is_cutout else "Mark Pattern Cell as Cutout",
-                    lambda _checked=False, target=idx: toggle_pattern_cutout(target),
+                cutout_menu = menu.addMenu(
+                    "Restore Pattern Cell Fill" if is_cutout else "Mark Pattern Cell as Cutout"
+                )
+                cutout_menu.addAction(
+                    "This cell only",
+                    lambda _checked=False, target=idx: toggle_pattern_cutout(target, "instance"),
+                )
+                cutout_menu.addAction(
+                    "Every matching tile",
+                    lambda _checked=False, target=idx: toggle_pattern_cutout(target, "repeat"),
                 )
             elif callable(self._on_outline_role_change):
                 change_outline_role = self._on_outline_role_change
@@ -478,13 +485,12 @@ class DxfCanvas(CanvasView):
             menu.addAction(f"Delete selected ({len(self._sel)})", self.delete_selected)
             menu.addAction("Move to Coordinate…", self.show_coordinate_entry)
             menu.addAction(canvas_commands.menu_text("edit.duplicate"), self.duplicate_selected)
-            menu.addAction(
-                canvas_commands.menu_text("edit.array_grid"),
-                self.array_duplicate_grid,
+            array_menu = menu.addMenu("Array")
+            array_menu.addAction(
+                canvas_commands.menu_text("edit.array_grid"), self.array_duplicate_grid
             )
-            menu.addAction(
-                canvas_commands.menu_text("edit.array_radial"),
-                self.array_duplicate_radial,
+            array_menu.addAction(
+                canvas_commands.menu_text("edit.array_radial"), self.array_duplicate_radial
             )
             if len(self._sel) >= 2:
                 menu.addAction(
@@ -515,37 +521,6 @@ class DxfCanvas(CanvasView):
                     )
                 ),
             )
-            menu.addAction(
-                "Fit to Curve…",
-                lambda: _run_transform(
-                    lambda: _run_prompted_transform(
-                        "Fit to Curve",
-                        "Tolerance (mm):",
-                        0.3,
-                        0.001,
-                        self.fit_selected_to_curve,
-                    )
-                ),
-            )
-            menu.addAction(
-                canvas_commands.menu_text("path.recognize_shapes"),
-                lambda: _run_transform(self.recognize_selected_shapes),
-            )
-            path_menu = menu.addMenu("Path Direction & Sampling")
-            for command_id in (
-                "path.reverse",
-                "path.set_start",
-                "path.resample_spacing",
-                "path.resample_count",
-                "path.fit_line",
-                "path.fit_circle",
-                "path.fit_arc",
-            ):
-                action = path_menu.addAction(canvas_commands.menu_text(command_id))
-                action.setEnabled(canvas_commands.can_run(self, command_id))
-                action.triggered.connect(
-                    lambda _checked=False, value=command_id: canvas_commands.run(self, value)
-                )
             vertex_hit = self._find_nearest_vertex(cx, cy)
             if vertex_hit is not None and vertex_hit[0] in self._sel:
                 entity_index, vertex_index = vertex_hit
@@ -613,70 +588,15 @@ class DxfCanvas(CanvasView):
                 canvas_commands.menu_text("constraint.remove"),
                 self.remove_constraints_for_selection,
             )
-            construct_menu = menu.addMenu("Construct")
-            for command_id in (
-                "construct.xline",
-                "construct.ray",
-                "construct.bisector",
-                "construct.centerline",
-                "construct.circle_3point",
-                "construct.point_tangents",
-                "construct.common_tangents",
-            ):
-                action = construct_menu.addAction(canvas_commands.menu_text(command_id))
-                action.setEnabled(canvas_commands.can_run(self, command_id))
-                action.triggered.connect(
-                    lambda _checked=False, value=command_id: canvas_commands.run(self, value)
-                )
         _finish_section("selected", selected_start)
         section_start = len(menu.actions())
         if not self._sel:
             menu.addAction("Select all", self.select_all)
-        symbols_menu = menu.addMenu("Symbols")
-        if self._sel:
-            symbols_menu.addAction("Create from selection…", self.create_symbol_from_selection)
-            if self._symbol_library:
-                symbols_menu.addSeparator()
-        if self._symbol_library:
-            insert_menu = symbols_menu.addMenu("Insert")
-            manage_menu = symbols_menu.addMenu("Manage")
-            for symbol_name in sorted(self._symbol_library, key=str.casefold):
-                insert_menu.addAction(
-                    symbol_name,
-                    lambda _checked=False, name=symbol_name: self.insert_symbol_named(name),
-                )
-                item_menu = manage_menu.addMenu(symbol_name)
-                item_menu.addAction(
-                    "Rename…",
-                    lambda _checked=False, name=symbol_name: self.prompt_rename_symbol(name),
-                )
-                item_menu.addAction(
-                    "Delete",
-                    lambda _checked=False, name=symbol_name: self.delete_symbol(name),
-                )
-        else:
-            empty_action = symbols_menu.addAction("No saved symbols")
-            empty_action.setEnabled(False)
-
         menu.addAction(
             canvas_commands.menu_text("select.lasso", "Lasso selection"),
             self.arm_lasso_selection,
         )
 
-        select_menu = menu.addMenu("Select by geometry")
-        select_menu.addAction("Open paths", self.select_open_paths)
-        select_menu.addAction("Closed paths", self.select_closed_paths)
-        select_menu.addSeparator()
-        for label, category in (
-            ("Parametric shapes", "parametric"),
-            ("Generic paths", "generic_paths"),
-            ("Text", "text"),
-            ("Construction geometry", "construction"),
-        ):
-            select_menu.addAction(
-                label, lambda _checked=False, value=category: self.select_geometry_category(value)
-            )
-        select_menu.addAction("Invert selection", self._invert_selection)
         _finish_section("selection", section_start)
 
         section_start = len(menu.actions())
@@ -692,13 +612,6 @@ class DxfCanvas(CanvasView):
                 "Send to Draft",
                 lambda: _run_transform(self._send_selected_to_draft),
             )
-        health_action = menu.addAction(
-            "Hide Geometry Health" if self._geometry_health_visible else "Show Geometry Health"
-        )
-        health_action.triggered.connect(
-            lambda: self.set_geometry_health_visible(not self._geometry_health_visible)
-        )
-        menu.addAction("Geometry Preflight…", self._show_geometry_preflight)
         _finish_section("share_diagnostics", section_start)
 
         section_start = len(menu.actions())
@@ -857,14 +770,6 @@ class DxfCanvas(CanvasView):
 
         section_start = len(menu.actions())
         menu.addSeparator()
-        menu.addAction(
-            canvas_commands.menu_text("view.previous"),
-            lambda: canvas_commands.run(self, "view.previous"),
-        )
-        menu.addAction(
-            canvas_commands.menu_text("view.next"),
-            lambda: canvas_commands.run(self, "view.next"),
-        )
         menu.addAction(canvas_commands.menu_text("view.fit", "Fit view"), self.fit)
         grid_action = menu.addAction("Show grid")
         grid_action.setCheckable(True)

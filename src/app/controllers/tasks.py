@@ -3,11 +3,9 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from src.backend.persistence import (
     MAX_WORKSPACE_FILE_BYTES,
@@ -33,6 +31,8 @@ class AutosaveController(QObject):
 
     _regular_saved = Signal(object)
     _regular_failed = Signal(str)
+    _recovery_saved = Signal()
+    _recovery_failed = Signal(str)
 
     _MAX_SNAPSHOTS_PER_WINDOW = 10
 
@@ -45,6 +45,9 @@ class AutosaveController(QObject):
         self._regular_write_thread: threading.Thread | None = None
         self._regular_saved.connect(self._on_regular_saved)
         self._regular_failed.connect(self._on_regular_failed)
+        self._recovery_saved.connect(self._on_recovery_saved)
+        self._recovery_failed.connect(self._on_recovery_failed)
+        self._last_failure_message = ""
 
         # Crash recovery: periodically snapshot unsaved work to the app data
         # dir; a clean exit or successful save removes the snapshot.
@@ -110,8 +113,10 @@ class AutosaveController(QObject):
                 )
                 for stale in snapshots[self._MAX_SNAPSHOTS_PER_WINDOW :]:
                     stale.unlink(missing_ok=True)
+                self._recovery_saved.emit()
             except Exception as exc:  # noqa: BLE001 — worker boundary
                 LOGGER.warning("Workspace autosave failed: %s", exc)
+                self._recovery_failed.emit(str(exc))
 
         self._recovery_write_thread = threading.Thread(target=write_recovery, daemon=True)
         self._recovery_write_thread.start()
@@ -141,35 +146,58 @@ class AutosaveController(QObject):
         if self._shutting_down or not isinstance(document, dict):
             return
         self._app._last_saved_document = document
+        self._record_durable_write_success()
         # Only mark clean if no newer GUI state arrived during the write.
         current = self._app._collect_workspace_document()
         if current == document:
             self._app._workspace_dirty = False
             self._app._has_unsaved_changes = False
             self._app._update_title()
-            self._app.clear_system_failure()
+
+    def _on_recovery_saved(self) -> None:
+        if not self._shutting_down:
+            self._record_durable_write_success()
+
+    def _record_durable_write_success(self) -> None:
+        self._last_failure_message = ""
+        self._app._last_autosave_at = datetime.now().astimezone()
+        self._app.clear_system_failure()
+        self._app._refresh_workspace_header()
+
+    def _on_recovery_failed(self, message: str) -> None:
+        if not self._shutting_down:
+            self._show_autosave_failure(message, recovery=True)
 
     def _on_regular_failed(self, message: str) -> None:
         if self._shutting_down:
             return
+        self._show_autosave_failure(message, recovery=False)
+
+    def _show_autosave_failure(self, message: str, *, recovery: bool) -> None:
         LOGGER.warning("Auto-save failed: %s", message)
+        failure_key = f"{'recovery' if recovery else 'workspace'}:{message}"
+        duplicate = failure_key == self._last_failure_message
+        self._last_failure_message = failure_key
+        kind = "Recovery snapshot" if recovery else "Auto-save"
         self._app.show_system_failure(
-            f"Auto-save failed: {message}. Your current work remains open but is not saved."
+            f"{kind} failed: {message}. Your current work remains open, but durable "
+            "protection is unavailable until a write succeeds."
         )
-        self._app._workspace_state_chip.setText("Error: Auto-save failed")
+        self._app._workspace_state_chip.setText(f"Error: {kind} failed")
         self._app._workspace_state_chip.setProperty("tone", "danger")
         self._app._workspace_state_chip.setToolTip(
-            f"Auto-save could not write the workspace: {message}\n"
-            "Use Save As to choose another location, then retry."
+            f"{kind} could not write: {message}\n"
+            "Manage storage or choose another location, then retry."
         )
         self._app._workspace_state_chip.setAccessibleDescription(
-            f"Auto-save failed. {message}. Use Save As to choose another location."
+            f"{kind} failed. {message}. Manage storage or choose another location."
         )
         from src.ui.util import record_notification
 
-        record_notification(
-            f"Auto-save failed: {message}. Use Save As to choose another location."
-        )
+        if not duplicate:
+            record_notification(
+                f"{kind} failed: {message}. Manage storage or choose another location."
+            )
         self._app._workspace_state_chip.style().unpolish(self._app._workspace_state_chip)
         self._app._workspace_state_chip.style().polish(self._app._workspace_state_chip)
 
@@ -208,170 +236,18 @@ class AutosaveController(QObject):
             paths.append(legacy)
         if not paths:
             return
-        labels: list[str] = []
-        payloads: dict[str, tuple[Path, dict]] = {}
-        for path in paths:
-            try:
-                raw = read_json_file(path, max_bytes=MAX_WORKSPACE_FILE_BYTES)
-                metadata = raw.get("recovery", {}) if isinstance(raw, dict) else {}
-                document = raw.get("document", raw) if isinstance(raw, dict) else {}
-                timestamp = str(metadata.get("timestamp", ""))
-                try:
-                    recovered_at = datetime.fromisoformat(timestamp).astimezone()
-                    age_seconds = max(
-                        0, int((datetime.now().astimezone() - recovered_at).total_seconds())
-                    )
-                    age = (
-                        f"{age_seconds // 60} min ago"
-                        if age_seconds < 3600
-                        else f"{age_seconds // 3600} hr ago"
-                    )
-                    timestamp = recovered_at.strftime("%b %d, %I:%M:%S %p") + f" ({age})"
-                except (TypeError, ValueError):
-                    timestamp = "Unknown time"
-                workspace = (
-                    Path(str(metadata.get("workspace_path", ""))).name or "Unsaved workspace"
-                )
-                label = f"{workspace} — {timestamp}"
-                if label in payloads:
-                    label = f"{label} — {path.stem[-12:]}"
-                labels.append(label)
-                payloads[label] = (path, document)
-            except (OSError, ValueError, TypeError):
-                continue
-        if not labels:
-            return
-        label, accepted = QInputDialog.getItem(
-            self._app, "Recover Unsaved Work", "Choose a recovery snapshot:", labels, 0, False
-        )
-        if not accepted:
-            return
-        path, document = payloads[label]
-        try:
-            self._app._apply_workspace_document(document)
-            # Recovery is a new, unsaved working copy.  In particular, a
-            # manually recovered snapshot must not inherit the workspace that
-            # happened to be open and then silently auto-save over it.
-            self._app._workspace_path = None
-            self._app._last_saved_document = None
-            self._app._workspace_dirty = True
-            self._app._has_unsaved_changes = True
-            self._app._update_title()
-            # Keep the known-good snapshot until the restored work is actually
-            # saved. A second crash before the next timer tick must not erase it.
-            self._app._restored_recovery_path = path
-        except (OSError, ValueError, KeyError) as exc:
-            QMessageBox.warning(self._app, "Recovery Failed", f"Could not restore snapshot:\n{exc}")
+        # Startup and manual recovery must use the same browsable surface.  The
+        # old QInputDialog made snapshots with similar workspace names appear
+        # indistinguishable and offered no direct management actions.
+        self._app._open_saved_workspaces(initial_source="recovery")
 
     def open_recovery_manager(self) -> None:
-        """Open the recovery dialog to manually recover unsaved work."""
-        self._open_recovery_manager()
+        """Open the shared workspace library directly on Recovery."""
+        self._app._open_saved_workspaces(initial_source="recovery")
 
     def _open_recovery_manager(self) -> None:
-        """Open (or refresh) the recovery picker after management actions."""
-        recovery_dir = user_data_dir() / "recovery"
-        paths = sorted(
-            recovery_dir.glob("*.workspace.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        legacy = user_data_dir() / "autosave.workspace.json"
-        if legacy.exists():
-            paths.append(legacy)
-        if not paths:
-            QMessageBox.information(
-                self._app, "No Recovery Snapshots", "No recovery snapshots found."
-            )
-            return
-        labels: list[str] = []
-        payloads: dict[str, tuple[Path, dict]] = {}
-        for path in paths:
-            try:
-                raw = read_json_file(path, max_bytes=MAX_WORKSPACE_FILE_BYTES)
-                metadata = raw.get("recovery", {}) if isinstance(raw, dict) else {}
-                document = raw.get("document", raw) if isinstance(raw, dict) else {}
-                timestamp = str(metadata.get("timestamp", ""))
-                try:
-                    recovered_at = datetime.fromisoformat(timestamp).astimezone()
-                    age_seconds = max(
-                        0, int((datetime.now().astimezone() - recovered_at).total_seconds())
-                    )
-                    age = (
-                        f"{age_seconds // 60} min ago"
-                        if age_seconds < 3600
-                        else f"{age_seconds // 3600} hr ago"
-                    )
-                    timestamp = recovered_at.strftime("%b %d, %I:%M:%S %p") + f" ({age})"
-                except (TypeError, ValueError):
-                    timestamp = "Unknown time"
-                workspace = (
-                    Path(str(metadata.get("workspace_path", ""))).name or "Unsaved workspace"
-                )
-                label = f"{workspace} — {timestamp}"
-                if label in payloads:
-                    label = f"{label} — {path.stem[-12:]}"
-                labels.append(label)
-                payloads[label] = (path, document)
-            except (OSError, ValueError, TypeError):
-                continue
-        if not labels:
-            QMessageBox.information(
-                self._app, "No Recovery Snapshots", "No valid recovery snapshots found."
-            )
-            return
-        delete_action = "Delete a recovery snapshot…"
-        label, accepted = QInputDialog.getItem(
-            self._app,
-            "Recover Unsaved Work",
-            "Choose a snapshot to recover, or delete one:",
-            labels + [delete_action],
-            0,
-            False,
-        )
-        if not accepted:
-            return
-        if label == delete_action:
-            delete_label, accepted = QInputDialog.getItem(
-                self._app,
-                "Delete Recovery Snapshot",
-                "Choose a snapshot to permanently delete:",
-                labels,
-                0,
-                False,
-            )
-            if not accepted:
-                return
-            delete_path, _document = payloads[delete_label]
-            answer = QMessageBox.question(
-                self._app,
-                "Delete Recovery Snapshot",
-                f"Permanently delete this recovery snapshot?\n\n{delete_label}",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if answer == QMessageBox.StandardButton.Yes:
-                try:
-                    delete_path.unlink(missing_ok=True)
-                except OSError as exc:
-                    QMessageBox.warning(
-                        self._app, "Delete Failed", f"Could not delete snapshot:\n{exc}"
-                    )
-                self._open_recovery_manager()
-            return
-        path, document = payloads[label]
-        try:
-            self._app._apply_workspace_document(document)
-            # Treat recovered content as an untitled working copy rather than
-            # allowing the regular auto-save timer to overwrite the workspace
-            # that was open before the recovery manager was invoked.
-            self._app._workspace_path = None
-            self._app._last_saved_document = None
-            self._app._workspace_dirty = True
-            self._app._has_unsaved_changes = True
-            self._app._update_title()
-            self._app._restored_recovery_path = path
-        except (OSError, ValueError, KeyError) as exc:
-            QMessageBox.warning(self._app, "Recovery Failed", f"Could not restore snapshot:\n{exc}")
+        """Compatibility alias retained for callers from older integrations."""
+        self.open_recovery_manager()
 
     def shutdown(self) -> None:
         """Stops all timers and cleans up the autosave file."""

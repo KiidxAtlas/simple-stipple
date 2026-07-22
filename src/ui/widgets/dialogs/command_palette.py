@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.error_reporting import report_error
+from src.ui.components import SPACE_LG, SPACE_MD
 
 
 class CommandPaletteDialog(QDialog):
@@ -33,15 +34,15 @@ class CommandPaletteDialog(QDialog):
         self._commands = commands
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
 
         title = QLabel("Command Palette")
-        title.setStyleSheet("font-size: 15px; font-weight: 700; color: #f0f6fc;")
+        title.setProperty("role", "callout-title")
         layout.addWidget(title)
 
         subtitle = QLabel("Search by command, page, or shortcut")
-        subtitle.setStyleSheet("color: #8b949e; font-size: 11px;")
+        subtitle.setProperty("role", "page-subtitle")
         layout.addWidget(subtitle)
 
         self._query = QLineEdit()
@@ -57,7 +58,7 @@ class CommandPaletteDialog(QDialog):
         layout.addWidget(self._list, stretch=1)
 
         hint = QLabel("Enter = run · Esc = close")
-        hint.setStyleSheet("color: #8b949e; font-size: 11px;")
+        hint.setProperty("role", "hint-sm")
         layout.addWidget(hint)
 
         self._refresh_list()
@@ -96,6 +97,8 @@ class CommandPaletteDialog(QDialog):
                     str(cmd.get("title", "")),
                     str(cmd.get("shortcut", "")),
                     str(cmd.get("keywords", "")),
+                    str(cmd.get("description", "")),
+                    str(cmd.get("disabled_reason", "")),
                 ]
             ).lower()
             score = self._match_score(text, hay)
@@ -111,8 +114,15 @@ class CommandPaletteDialog(QDialog):
             title = str(cmd.get("title", ""))
             shortcut = str(cmd.get("shortcut", "")).strip()
             label = f"{title}    [{shortcut}]" if shortcut else title
+            enabled = bool(cmd.get("enabled", True))
+            reason = str(cmd.get("disabled_reason", "")).strip()
+            if not enabled and reason:
+                label += f"    — {reason}"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, idx)
+            item.setToolTip(reason or str(cmd.get("description", "")))
+            if not enabled:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
             self._list.addItem(item)
             if prev_idx == idx:
                 first_row_for_prev = self._list.count() - 1
@@ -157,6 +167,8 @@ class CommandPaletteDialog(QDialog):
         idx = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(idx, int):
             self.reject()
+            return
+        if not bool(self._commands[idx].get("enabled", True)):
             return
         callback = self._commands[idx].get("run")
         if idx in self._recent_command_indices:

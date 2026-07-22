@@ -30,6 +30,24 @@ def test_raster_job_preserves_physical_placement_and_power_metadata(tmp_path):
     assert 'x="12.5" y="7.0" width="40" height="20"' in svg
 
 
+def test_raster_job_records_rotation_and_expands_svg_bounds(tmp_path):
+    source = tmp_path / "photo.png"
+    Image.new("L", (20, 10), 128).save(source)
+    spec = RasterEngravingSpec(
+        x_mm=10, y_mm=10, width_mm=20, height_mm=10, rotation_deg=90
+    )
+
+    _png, sidecar, positioned = export_raster_job(
+        source, tmp_path / "rotated.png", spec
+    )
+
+    payload = json.loads(sidecar.read_text())
+    assert payload["settings"]["rotation_deg"] == 90
+    svg = positioned.read_text()
+    assert 'transform="rotate(90 20.0 15.0)"' in svg
+    assert 'viewBox="0.0 0.0 25.0 25.0"' in svg
+
+
 def test_raster_tone_controls_change_power_map():
     image = Image.new("L", (2, 1))
     image.putdata([0, 255])

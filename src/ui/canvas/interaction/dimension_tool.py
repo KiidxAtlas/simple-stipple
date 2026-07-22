@@ -359,8 +359,7 @@ class DimensionTool(DimensionBackend):
                 driving = dict(driving)
                 driving["target"] = self.value(placed)
                 placed["driving"] = driving
-            v._dimensions.append(placed)
-            v._selected_dimension = len(v._dimensions) - 1
+            v._selected_dimension = v._append_dimension(placed)
             v._notify()
             self.reset()
             # Dimension placement is one-shot. Leaving the overlay armed here

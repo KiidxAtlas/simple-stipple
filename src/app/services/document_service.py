@@ -87,6 +87,10 @@ def _document(snapshot: DocumentSnapshot) -> CanvasDocument:
         group_labels=dict(snapshot.group_labels),
         next_group_id=snapshot.next_group_id,
         constraints=constraints,
+        guides=[
+            (str(orientation), float(coordinate)) for orientation, coordinate in snapshot.guides
+        ],
+        dimensions=[deepcopy(item) for item in snapshot.dimension_dicts()],
     )
     document.select_ids(snapshot.selection_ids)
     document.ensure_unique_ids()
@@ -259,6 +263,9 @@ class DocumentService:
                         points=segment,
                         kind="line",
                         construction=entity.construction,
+                        hidden=entity.hidden,
+                        locked=entity.locked,
+                        layer=entity.layer,
                     )
                 )
                 for entity in sources

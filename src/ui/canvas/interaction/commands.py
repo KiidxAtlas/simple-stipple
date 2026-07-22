@@ -45,6 +45,7 @@ class Command:
     # — the two must share one settings slot so a rebind applies to both and
     # they can never silently collide. Empty means "use id".
     settings_key: str = ""
+    description: str = ""
 
     @property
     def keybinding_id(self) -> str:
@@ -1119,6 +1120,18 @@ def can_run(view: Any, cmd_id_or_cmd: str | Command) -> bool:
     if cmd.when is not None and not cmd.when(view):
         return False
     return True
+
+
+def unavailable_reason(view: Any, cmd_id_or_cmd: str | Command) -> str:
+    """Explain registry enablement using the same predicates as dispatch."""
+    cmd = _BY_ID[cmd_id_or_cmd] if isinstance(cmd_id_or_cmd, str) else cmd_id_or_cmd
+    if cmd.requires_selectable and not getattr(view, "_selectable", False):
+        return "This preview canvas is read-only"
+    if cmd.when is not None and not cmd.when(view):
+        if not getattr(view, "_sel", set()):
+            return "Select geometry that supports this command"
+        return "Not available in the current mode or selection"
+    return ""
 
 
 def run(view: Any, cmd_id_or_cmd: str | Command) -> bool:

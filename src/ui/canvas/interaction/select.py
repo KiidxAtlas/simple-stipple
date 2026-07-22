@@ -128,10 +128,9 @@ class SelectionService:
         if gi is None or not (0 <= gi < len(self._host._guides)):
             self._host._selected_guide = None
             return
-        del self._host._guides[gi]
+        self._host._remove_guide(gi)
         self._host._selected_guide = None
         self._host._guide_drag = None
-        self._host._redraw()
         self._host._notify()
 
     def _key_backspace(self) -> None:

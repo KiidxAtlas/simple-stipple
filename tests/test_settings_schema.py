@@ -23,6 +23,7 @@ def test_settings_schema_backfills_defaults():
     assert settings["snap_equal_length"] is True
     assert settings["snap_axis_alignment"] is True
     assert settings["grid_snap"] is False
+    assert settings["interface_density"] == "compact"
 
 
 def test_invalid_known_setting_resets_without_losing_other_values():
@@ -40,6 +41,10 @@ def test_schema_rejects_out_of_range_values_at_validation_boundary():
     settings = validate_settings({"ui_scale": 99.0, "auto_fetch_interval_minutes": 0})
     assert settings["ui_scale"] == SettingsSchema().ui_scale
     assert settings["auto_fetch_interval_minutes"] == 10
+
+
+def test_schema_rejects_unknown_interface_density():
+    assert validate_settings({"interface_density": "tiny"})["interface_density"] == "compact"
 
 
 def test_legacy_default_shape_toolbar_receives_new_tools():

@@ -181,6 +181,40 @@ def test_outline_and_pattern_fills_partition_cells_without_overlap():
         for line in cell_fill
     )
 
+    other_cell = next(
+        poly
+        for poly in pattern
+        if poly != cell
+        and len(poly) >= 4
+        and Polygon(poly).area == pytest.approx(Polygon(cell).area)
+        and Polygon(poly).bounds[0] > 0
+        and Polygon(poly).bounds[2] < 100
+    )
+    instance_fill: list[list[tuple[float, float]]] = []
+    service.build_pattern_polys(
+        [OUTER],
+        pattern="Brick",
+        params=params,
+        scale=(100.0, 100.0),
+        orig_w=100.0,
+        orig_h=100.0,
+        fill_options={
+            "mode": "lines",
+            "spacing": 5.0,
+            "target_pattern": True,
+            "cell_instance_cutouts": [cell],
+        },
+        fill_polys_out=instance_fill,
+    )
+    assert all(
+        LineString(line).intersection(cell_interior).length == pytest.approx(0.0)
+        for line in instance_fill
+    )
+    other_interior = Polygon(other_cell).buffer(-0.01)
+    assert any(
+        LineString(line).intersection(other_interior).length > 0 for line in instance_fill
+    )
+
 
 def test_pattern_cell_fill_ignores_open_strokes_instead_of_failing():
     service = PatternProcessor()

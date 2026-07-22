@@ -130,15 +130,17 @@ class DraftPage(BasePage):
         self._recent_btn.setToolTip("Pick from recently imported DXF, FVI, or SVG files")
         self._recent_btn.fileSelected.connect(self._load_vector)
 
-        explode_btn = QPushButton("Explode")
-        explode_btn.setMinimumHeight(30)
-        explode_btn.setToolTip("Explode selected shapes into segments")
-        explode_btn.clicked.connect(self._explode_selected)
+        self._explode_btn = QPushButton("Explode")
+        self._explode_btn.setMinimumHeight(30)
+        self._explode_btn.setToolTip("Explode selected shapes into segments")
+        self._explode_btn.setEnabled(False)
+        self._explode_btn.clicked.connect(self._explode_selected)
 
-        merge_btn = QPushButton("Merge")
-        merge_btn.setMinimumHeight(30)
-        merge_btn.setToolTip("Merge selected segments into connected objects")
-        merge_btn.clicked.connect(self._merge_selected)
+        self._merge_btn = QPushButton("Merge")
+        self._merge_btn.setMinimumHeight(30)
+        self._merge_btn.setToolTip("Merge selected segments into connected objects (select 2+)")
+        self._merge_btn.setEnabled(False)
+        self._merge_btn.clicked.connect(self._merge_selected)
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
@@ -147,8 +149,8 @@ class DraftPage(BasePage):
             show_fit=False,
             extra_widgets=[
                 _toolbar_sep(),
-                explode_btn,
-                merge_btn,
+                self._explode_btn,
+                self._merge_btn,
                 _toolbar_sep(),
                 open_btn,
                 self._recent_btn,
@@ -253,6 +255,8 @@ class DraftPage(BasePage):
         side_layout.addWidget(self._build_export_controls())
 
         splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
+        splitter.set_responsive_secondary(1, "Inspector")
+        self._content_splitter = splitter
         layout.addWidget(splitter, stretch=1)
         return w
 
@@ -270,9 +274,9 @@ class DraftPage(BasePage):
         self._export_btn.clicked.connect(self._export)
         row.addWidget(self._export_btn, stretch=1)
         overflow = QToolButton()
-        overflow.setText("⋯")
+        overflow.setText("Options")
         overflow.setProperty("role", "overflow")
-        overflow.setFixedSize(32, 38)
+        overflow.setFixedSize(72, 38)
         overflow.setToolTip("More export formats")
         overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(overflow)
@@ -307,6 +311,9 @@ class DraftPage(BasePage):
         # Update only the selection count in the status strip — do NOT call
         # _refresh_status() here because that rebuilds the layer tree and
         # immediately erases the visual selection the user just made.
+        # But DO update button states so Explode/Merge/Export reflect the
+        # current selection without triggering a tree rebuild.
+        self._update_action_buttons()
         if hasattr(self, "_canvas_status"):
             self._canvas_status.set_selection_count(count)
 
@@ -647,8 +654,30 @@ class DraftPage(BasePage):
         if hasattr(self, "_precision_bar"):
             self._precision_bar.refresh()
 
+        # Keep selection-dependent actions disabled rather than letting a
+        # click on an unmet precondition (nothing selected, one shape when
+        # two are needed) silently do nothing — the previous no-op gave no
+        # feedback at all that anything was wrong.
+        self._update_action_buttons()
+
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
+
+    def _update_action_buttons(self) -> None:
+        """Update Explode, Merge, and Export button enabled states.
+
+        Separated from ``_refresh_status`` so selection changes can update
+        button states without rebuilding the layer tree (which would erase
+        the visual selection highlight the user just made).
+        """
+        selected = self._canvas.sel_count
+        n = self._canvas.poly_count
+        if hasattr(self, "_explode_btn"):
+            self._explode_btn.setEnabled(selected > 0)
+        if hasattr(self, "_merge_btn"):
+            self._merge_btn.setEnabled(selected > 1)
+        if hasattr(self, "_export_btn"):
+            self._export_btn.setEnabled(n > 0 or bool(self._canvas._dimensions))
 
     def _refresh_command_guidance(self) -> None:
         if hasattr(self, "_canvas_status") and hasattr(self._canvas, "get_command_guidance"):

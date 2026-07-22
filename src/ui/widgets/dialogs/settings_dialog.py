@@ -5,12 +5,15 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtGui import QDoubleValidator, QIntValidator
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QDoubleValidator, QIntValidator, QValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
+    QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,9 +36,19 @@ from src.core.settings import (
     DEFAULT_SMOOTH_ITERATIONS,
     DEFAULT_SMOOTHING_METHOD,
     SMOOTHING_METHODS,
+    SettingsSchema,
     save_settings,
 )
-from src.ui.components import section_label, sep, surface_frame
+from src.ui.components import (
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    install_dialog_focus_lifecycle,
+    section_label,
+    sep,
+    surface_frame,
+    tool_icon,
+)
 from src.ui.pages.trace.form import TRACE_DEFAULT_FIELDS, trace_default
 from src.ui.util import DEFAULT_UNIT_SYSTEM
 from src.ui.widgets.dialogs.customize_dialogs import (
@@ -63,14 +76,66 @@ class SettingsDialog(QDialog):
         ("repo_dir", "Repository folder"),
     ]
 
-    _TOGGLE_FIELDS = [
+    _UPDATE_TOGGLES = [
         ("check_updates_on_startup", "Check for app updates on startup", False),
         ("auto_fetch_on_startup", "Fetch repository updates on startup", False),
         ("auto_fetch_periodic", "Periodically fetch repository updates", False),
+    ]
+
+    _ACCESSIBILITY_TOGGLES = [
         ("high_contrast", "High-contrast status and focus indicators", False),
         ("reduced_motion", "Reduce transient UI animation", False),
         ("persistent_notifications", "Keep canvas notifications visible longer", False),
     ]
+
+    _SNAP_TOGGLES = [
+        ("grid_visible", "Show grid by default", True),
+        ("grid_snap", "Snap to grid by default", False),
+        ("snap_master", "Enable object snapping", True),
+        ("snap_vertex", "Snap to vertices and shape control points", True),
+        ("snap_edge", "Snap to edges and curves", True),
+        ("snap_tangent", "Infer tangent points", True),
+        ("snap_extension", "Infer extended edges", True),
+        ("snap_angle", "Enable angle, parallel, and perpendicular inference", True),
+        ("snap_equal_length", "Snap new lines to existing line lengths", True),
+        (
+            "snap_axis_alignment",
+            "Align new endpoints on the same X or Y axis as existing endpoints",
+            True,
+        ),
+        ("construction_mode_default", "Start drawing as construction geometry", False),
+        ("aspect_ratio_locked_default", "Lock aspect ratio while resizing", False),
+        ("geometry_health_visible", "Show geometry-health warnings on canvas", False),
+        ("curvature_visible", "Show curvature analysis while editing curves", False),
+    ]
+
+    _MARGIN = SPACE_LG
+    _GAP = SPACE_MD
+    _SPACE = SPACE_SM
+    _CATEGORIES = (
+        "General",
+        "Files & Folders",
+        "Canvas & Snapping",
+        "Drawing",
+        "Pattern",
+        "Trace",
+        "Export & Machines",
+        "Interface",
+        "Shortcuts & Menus",
+        "Updates",
+    )
+    _CATEGORY_CARDS = {
+        "General": ("Appearance & Units",),
+        "Files & Folders": ("Workspace & Source", "Outputs & Conversion", "Repository"),
+        "Canvas & Snapping": ("Canvas & Snapping",),
+        "Drawing": ("Canvas & Snapping",),
+        "Pattern": ("Outputs & Conversion",),
+        "Trace": ("Trace Defaults",),
+        "Export & Machines": ("Outputs & Conversion",),
+        "Interface": ("Appearance & Units", "Accessibility"),
+        "Shortcuts & Menus": ("Customization",),
+        "Updates": ("Updates & Sync",),
+    }
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
@@ -94,13 +159,15 @@ class SettingsDialog(QDialog):
         self._simplify_tolerance_edit: QLineEdit | None = None
         self._ui_scale_combo: QComboBox | None = None
         self._appearance_combo: QComboBox | None = None
+        self._density_combo: QComboBox | None = None
         self._rotation_snap_edit: QLineEdit | None = None
         self._grid_spacing_edit: QLineEdit | None = None
         self._fetch_interval_edit: QLineEdit | None = None
+        self._settings_cards: dict[str, QWidget] = {}
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(self._MARGIN, self._MARGIN, self._MARGIN, self._MARGIN)
+        layout.setSpacing(self._SPACE)
 
         title = QLabel("Settings")
         title.setProperty("role", "page-title")
@@ -111,250 +178,166 @@ class SettingsDialog(QDialog):
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        layout.addWidget(scroll, stretch=1)
+        find_row = QHBoxLayout()
+        find_row.setSpacing(self._SPACE)
+        self._category_combo = QComboBox()
+        self._category_combo.setAccessibleName("Settings category")
+        self._category_combo.setMinimumWidth(190)
+        self._category_combo.addItems(self._CATEGORIES)
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search settings…")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.setAccessibleName("Search settings")
+        find_row.addWidget(self._category_combo)
+        find_row.addWidget(self._search_edit, 1)
+        layout.addLayout(find_row)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        layout.addWidget(self._scroll, stretch=1)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(10)
-        scroll.setWidget(content)
+        content_layout.setSpacing(self._GAP)
+        self._scroll.setWidget(content)
 
-        # ── Workspace & Source ────────────────────────────────────
-        workspace_card = surface_frame("panel")
-        workspace_layout = QVBoxLayout(workspace_card)
-        workspace_layout.setContentsMargins(12, 12, 12, 12)
-        workspace_layout.setSpacing(6)
-        section_label(workspace_layout, "Workspace & Source")
+        _, form = self._form_card(content_layout, "Workspace & Source")
         for key, label in self._FOLDER_FIELDS[:2]:
-            self._add_row(workspace_layout, key, label, browse=True)
-        content_layout.addWidget(workspace_card)
+            self._add_folder_field(form, key, label)
 
-        # ── Outputs & Conversion ──────────────────────────────────
-        output_card = surface_frame("panel")
-        output_layout = QVBoxLayout(output_card)
-        output_layout.setContentsMargins(12, 12, 12, 12)
-        output_layout.setSpacing(6)
-        section_label(output_layout, "Outputs & Conversion")
+        _, form = self._form_card(content_layout, "Outputs & Conversion")
         for key, label in self._FOLDER_FIELDS[2:]:
-            self._add_row(output_layout, key, label, browse=True)
-        content_layout.addWidget(output_card)
+            self._add_folder_field(form, key, label)
 
-        # ── Repository ────────────────────────────────────────────
-        repo_card = surface_frame("panel")
-        repo_layout = QVBoxLayout(repo_card)
-        repo_layout.setContentsMargins(12, 12, 12, 12)
-        repo_layout.setSpacing(6)
-        section_label(repo_layout, "Repository")
+        _, form = self._form_card(content_layout, "Repository")
         for key, label in self._REPO_FIELDS:
-            self._add_row(repo_layout, key, label, browse=True)
-        content_layout.addWidget(repo_card)
+            self._add_folder_field(form, key, label)
 
-        # ── Behavior ──────────────────────────────────────────────
-        behavior_card = surface_frame("panel")
-        behavior_layout = QVBoxLayout(behavior_card)
-        behavior_layout.setContentsMargins(12, 12, 12, 12)
-        behavior_layout.setSpacing(8)
-        section_label(behavior_layout, "Application Behavior")
-        for key, label, default in self._TOGGLE_FIELDS:
-            self._add_toggle(behavior_layout, key, label, default)
-
-        fetch_row = QHBoxLayout()
-        fetch_label = QLabel("Repository fetch interval")
-        self._fetch_interval_edit = QLineEdit(
-            str(self._settings.get("auto_fetch_interval_minutes", 10))
+        _, form = self._form_card(content_layout, "Appearance & Units")
+        self._appearance_combo = self._add_combo(
+            form,
+            "Appearance",
+            [("System", "system"), ("Light", "light"), ("Dark", "dark")],
+            str(self._settings.get("appearance", "system")),
         )
-        self._fetch_interval_edit.setValidator(QIntValidator(1, 1440, self))
-        self._fetch_interval_edit.setMaximumWidth(72)
-        fetch_label.setBuddy(self._fetch_interval_edit)
-        fetch_row.addWidget(fetch_label)
-        fetch_row.addWidget(self._fetch_interval_edit)
-        fetch_row.addWidget(QLabel("minutes"))
-        fetch_row.addStretch()
-        behavior_layout.addLayout(fetch_row)
-
-        appearance_row = QHBoxLayout()
-        appearance_label = QLabel("Appearance")
-        self._appearance_combo = QComboBox()
-        self._appearance_combo.addItem("System", "system")
-        self._appearance_combo.addItem("Light", "light")
-        self._appearance_combo.addItem("Dark", "dark")
-        appearance = str(self._settings.get("appearance", "system"))
-        self._appearance_combo.setCurrentIndex(max(0, self._appearance_combo.findData(appearance)))
-        appearance_label.setBuddy(self._appearance_combo)
-        appearance_row.addWidget(appearance_label)
-        appearance_row.addWidget(self._appearance_combo)
-        appearance_row.addStretch()
-        behavior_layout.addLayout(appearance_row)
-
-        unit_row = QHBoxLayout()
-        unit_row.addWidget(QLabel("Display units"))
-        self._unit_combo = QComboBox()
-        self._unit_combo.addItem("Millimeters (mm)", "mm")
-        self._unit_combo.addItem("Inches (in)", "in")
-        current_unit = self._settings.get("unit_system", DEFAULT_UNIT_SYSTEM)
-        idx = self._unit_combo.findData(current_unit)
-        self._unit_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        unit_row.addWidget(self._unit_combo)
-        unit_row.addStretch()
-        behavior_layout.addLayout(unit_row)
-
-        scale_row = QHBoxLayout()
-        scale_row.addWidget(QLabel("Interface scale"))
-        self._ui_scale_combo = QComboBox()
-        for label, value in (
-            ("90%", 0.9),
-            ("100%", 1.0),
-            ("110%", 1.1),
-            ("125%", 1.25),
-            ("150%", 1.5),
-        ):
-            self._ui_scale_combo.addItem(label, value)
-        current_scale = float(self._settings.get("ui_scale", 1.0) or 1.0)
-        scale_combo = self._ui_scale_combo
-        self._ui_scale_combo.setCurrentIndex(
-            min(
-                range(scale_combo.count()),
-                key=lambda i: abs(float(scale_combo.itemData(i)) - current_scale),
-            )
+        self._unit_combo = self._add_combo(
+            form,
+            "Display units",
+            [("Millimeters (mm)", "mm"), ("Inches (in)", "in")],
+            self._settings.get("unit_system", DEFAULT_UNIT_SYSTEM),
         )
-        scale_row.addWidget(self._ui_scale_combo)
-        scale_row.addStretch()
-        behavior_layout.addLayout(scale_row)
-
-        rotation_snap_row = QHBoxLayout()
-        rotation_snap_label = QLabel("Rotation snap increment")
-        self._rotation_snap_edit = QLineEdit(
-            str(self._settings.get("rotation_snap_increment", 15.0))
+        self._ui_scale_combo = self._add_scale_combo(form)
+        self._density_combo = self._add_combo(
+            form,
+            "Control density",
+            [("Compact", "compact"), ("Comfortable", "comfortable")],
+            str(self._settings.get("interface_density", "compact")),
         )
-        self._rotation_snap_edit.setValidator(QDoubleValidator(0.1, 180.0, 2, self))
-        self._rotation_snap_edit.setAccessibleName("Rotation snap increment in degrees")
+
+        _, form = self._form_card(content_layout, "Updates & Sync")
+        for key, label, default in self._UPDATE_TOGGLES:
+            self._add_toggle(form, key, label, default)
+        self._fetch_interval_edit = self._add_suffix_field(
+            form,
+            "Repository fetch interval",
+            str(self._settings.get("auto_fetch_interval_minutes", 10)),
+            "minutes",
+            QIntValidator(1, 1440, self),
+            width=72,
+        )
+
+        _, form = self._form_card(content_layout, "Canvas & Snapping")
+        for key, label, default in self._SNAP_TOGGLES:
+            self._add_toggle(form, key, label, default)
+        self._grid_spacing_edit = self._add_suffix_field(
+            form,
+            "Default grid spacing",
+            str(self._settings.get("grid_spacing", 10.0)),
+            "mm",
+            QDoubleValidator(0.001, 100000.0, 2, self),
+            width=90,
+        )
+        self._rotation_snap_edit = self._add_suffix_field(
+            form,
+            "Rotation snap increment",
+            str(self._settings.get("rotation_snap_increment", 15.0)),
+            "°",
+            QDoubleValidator(0.1, 180.0, 2, self),
+            width=72,
+        )
         self._rotation_snap_edit.setToolTip(
             "Angle used by drawing and rotation snapping while Shift is held"
         )
-        rotation_snap_label.setBuddy(self._rotation_snap_edit)
-        rotation_snap_row.addWidget(rotation_snap_label)
-        rotation_snap_row.addWidget(self._rotation_snap_edit)
-        rotation_snap_row.addWidget(QLabel("°"))
-        rotation_snap_row.addStretch()
-        behavior_layout.addLayout(rotation_snap_row)
-
-        grid_spacing_row = QHBoxLayout()
-        grid_spacing_label = QLabel("Default grid spacing")
-        self._grid_spacing_edit = QLineEdit(str(self._settings.get("grid_spacing", 10.0)))
-        self._grid_spacing_edit.setValidator(QDoubleValidator(0.001, 100000.0, 2, self))
-        self._grid_spacing_edit.setMaximumWidth(90)
-        grid_spacing_label.setBuddy(self._grid_spacing_edit)
-        grid_spacing_row.addWidget(grid_spacing_label)
-        grid_spacing_row.addWidget(self._grid_spacing_edit)
-        grid_spacing_row.addWidget(QLabel("mm"))
-        grid_spacing_row.addStretch()
-        behavior_layout.addLayout(grid_spacing_row)
-
-        section_label(behavior_layout, "Canvas & Snapping")
-        for key, label, default in (
-            ("grid_visible", "Show grid by default", True),
-            ("grid_snap", "Snap to grid by default", False),
-            ("snap_master", "Enable object snapping", True),
-            ("snap_vertex", "Snap to vertices and shape control points", True),
-            ("snap_edge", "Snap to edges and curves", True),
-            ("snap_tangent", "Infer tangent points", True),
-            ("snap_extension", "Infer extended edges", True),
-            ("snap_angle", "Enable angle, parallel, and perpendicular inference", True),
-            ("snap_equal_length", "Snap new lines to existing line lengths", True),
-            (
-                "snap_axis_alignment",
-                "Align new endpoints on the same X or Y axis as existing endpoints",
-                True,
-            ),
-            ("construction_mode_default", "Start drawing as construction geometry", False),
-            ("aspect_ratio_locked_default", "Lock aspect ratio while resizing", False),
-            ("geometry_health_visible", "Show geometry-health warnings on canvas", False),
-            ("curvature_visible", "Show curvature analysis while editing curves", False),
-        ):
-            self._add_toggle(behavior_layout, key, label, default)
-
-        smoothing_row = QHBoxLayout()
-        smoothing_row.addWidget(QLabel("Smoothing method"))
-        self._smoothing_combo = QComboBox()
-        for smoothing_value, smoothing_label in SMOOTHING_METHODS:
-            self._smoothing_combo.addItem(smoothing_label, smoothing_value)
-        current_smoothing = self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD)
-        idx = self._smoothing_combo.findData(current_smoothing)
-        self._smoothing_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self._smoothing_combo.setToolTip(
-            "Algorithm used by the Smooth path command (right-click a "
-            "selected path, or the 'path.smooth' shortcut)"
+        self._smoothing_combo = self._add_smoothing_combo(form)
+        self._smooth_iterations_edit = self._add_suffix_field(
+            form,
+            "Smooth iterations",
+            str(self._settings.get("smooth_iterations", DEFAULT_SMOOTH_ITERATIONS)),
+            "",
+            QIntValidator(1, 50),
+            width=60,
         )
-        smoothing_row.addWidget(self._smoothing_combo)
-        smoothing_row.addStretch()
-        behavior_layout.addLayout(smoothing_row)
-
-        defaults_row = QHBoxLayout()
-        defaults_row.addWidget(QLabel("Smooth iterations"))
-        self._smooth_iterations_edit = QLineEdit(
-            str(self._settings.get("smooth_iterations", DEFAULT_SMOOTH_ITERATIONS))
-        )
-        self._smooth_iterations_edit.setValidator(QIntValidator(1, 50))
-        self._smooth_iterations_edit.setMaximumWidth(60)
         self._smooth_iterations_edit.setToolTip(
             "Default seeded into the Smooth command's HUD prompt"
         )
-        defaults_row.addWidget(self._smooth_iterations_edit)
-        defaults_row.addSpacing(16)
-        defaults_row.addWidget(QLabel("Simplify tolerance (mm)"))
-        self._simplify_tolerance_edit = QLineEdit(
-            str(self._settings.get("simplify_tolerance", DEFAULT_SIMPLIFY_TOLERANCE))
+        self._simplify_tolerance_edit = self._add_suffix_field(
+            form,
+            "Simplify tolerance",
+            str(self._settings.get("simplify_tolerance", DEFAULT_SIMPLIFY_TOLERANCE)),
+            "mm",
+            QDoubleValidator(0.001, 1000.0, 3),
+            width=70,
         )
-        self._simplify_tolerance_edit.setValidator(QDoubleValidator(0.001, 1000.0, 3))
-        self._simplify_tolerance_edit.setMaximumWidth(70)
         self._simplify_tolerance_edit.setToolTip(
             "Default seeded into the Simplify command's HUD prompt"
         )
-        defaults_row.addWidget(self._simplify_tolerance_edit)
-        defaults_row.addStretch()
-        behavior_layout.addLayout(defaults_row)
-
         self._add_toggle(
-            behavior_layout,
+            form,
             "draw_sidebar_always_visible",
             "Keep draw sidebar always visible",
             DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
         )
 
-        kb_row = QHBoxLayout()
-        kb_row.addStretch()
-        radial_btn = QPushButton("Customize radial menu\u2026")
-        radial_btn.setToolTip('Choose which tools appear in the "Q" quick menu')
-        radial_btn.clicked.connect(self._open_radial_menu)
-        kb_row.addWidget(radial_btn)
-        sidebar_btn = QPushButton("Customize draw sidebar\u2026")
-        sidebar_btn.setToolTip("Choose which sections show in the Draw sidebar")
-        sidebar_btn.clicked.connect(self._open_draw_sidebar_customize)
-        kb_row.addWidget(sidebar_btn)
-        behavior_layout.addLayout(kb_row)
+        _, form = self._form_card(content_layout, "Accessibility")
+        for key, label, default in self._ACCESSIBILITY_TOGGLES:
+            self._add_toggle(form, key, label, default)
 
-        command_row = QHBoxLayout()
-        command_row.addStretch()
-        context_btn = QPushButton("Customize context menu…")
-        context_btn.setToolTip("Choose which sections appear when right-clicking a canvas")
-        context_btn.clicked.connect(self._open_context_menu_customize)
-        command_row.addWidget(context_btn)
-        kb_btn = QPushButton("Edit shortcuts\u2026")
-        kb_btn.setToolTip("Customize keyboard shortcuts")
-        kb_btn.clicked.connect(self._open_keybindings)
-        command_row.addWidget(kb_btn)
-        behavior_layout.addLayout(command_row)
-        content_layout.addWidget(behavior_card)
+        _, body = self._card(content_layout, "Customization")
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(self._SPACE)
+        grid.setVerticalSpacing(self._SPACE)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        customize_buttons = (
+            (
+                "Customize radial menu…",
+                'Choose which tools appear in the "Q" quick menu',
+                self._open_radial_menu,
+            ),
+            (
+                "Customize draw sidebar…",
+                "Choose which sections show in the Draw sidebar",
+                self._open_draw_sidebar_customize,
+            ),
+            (
+                "Customize context menu…",
+                "Choose which sections appear when right-clicking a canvas",
+                self._open_context_menu_customize,
+            ),
+            ("Edit shortcuts…", "Customize keyboard shortcuts", self._open_keybindings),
+        )
+        for index, (text, tip, slot) in enumerate(customize_buttons):
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setAutoDefault(False)
+            button.clicked.connect(slot)
+            grid.addWidget(button, index // 2, index % 2)
+        body.addLayout(grid)
 
-        # ── Trace Defaults ────────────────────────────────────────
-        trace_card = surface_frame("panel")
-        trace_layout = QVBoxLayout(trace_card)
-        trace_layout.setContentsMargins(12, 12, 12, 12)
-        trace_layout.setSpacing(6)
-        section_label(trace_layout, "Trace Defaults")
+        _, form = self._form_card(content_layout, "Trace Defaults")
         trace_hint = QLabel(
             "Values a newly opened image or a cleared workspace starts "
             "with on the Trace page. Leave a field blank to use the "
@@ -362,31 +345,218 @@ class SettingsDialog(QDialog):
         )
         trace_hint.setProperty("role", "hint")
         trace_hint.setWordWrap(True)
-        trace_layout.addWidget(trace_hint)
+        form.addRow(trace_hint)
         for key, label, tooltip in TRACE_DEFAULT_FIELDS:
-            _row, entry = self._add_text_row(
-                trace_layout, label, trace_default(self._settings, key)
-            )
+            entry = self._add_text_field(form, label, trace_default(self._settings, key))
             entry.setToolTip(tooltip)
             self._trace_default_entries[key] = entry
-        content_layout.addWidget(trace_card)
 
         content_layout.addStretch()
+        self._category_combo.currentTextChanged.connect(self._jump_to_category)
+        self._search_edit.textChanged.connect(self._filter_settings)
         sep(layout)
 
-        # ── Save / Cancel ─────────────────────────────────────────
         btn_row = QHBoxLayout()
+        reset_btn = QPushButton("Reset")
+        reset_btn.setToolTip("Reset all settings fields to application defaults")
+        reset_btn.clicked.connect(self._reset_fields)
+        btn_row.addWidget(reset_btn)
         btn_row.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setMinimumWidth(90)
+        cancel_btn.setAutoDefault(False)
+        cancel_btn.clicked.connect(self.reject)
+        apply_btn = QPushButton("Apply")
+        apply_btn.setMinimumWidth(90)
+        apply_btn.clicked.connect(lambda: self._save(close=False))
         save_btn = QPushButton("Save")
         save_btn.setMinimumWidth(110)
         save_btn.setProperty("role", "primary")
+        save_btn.setDefault(True)
+        save_btn.setAutoDefault(True)
         save_btn.clicked.connect(self._save)
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setMinimumWidth(90)
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(save_btn)
         btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(apply_btn)
+        btn_row.addWidget(save_btn)
         layout.addLayout(btn_row)
+        self._jump_to_category(self._category_combo.currentText())
+        install_dialog_focus_lifecycle(self, self._search_edit)
+
+    # ── Layout helpers ────────────────────────────────────────────────────
+
+    def _card(self, parent_layout: QVBoxLayout, title: str) -> tuple[QWidget, QVBoxLayout]:
+        card = surface_frame("panel")
+        card.setAccessibleName(title)
+        body = QVBoxLayout(card)
+        body.setContentsMargins(self._GAP, self._GAP, self._GAP, self._GAP)
+        body.setSpacing(self._SPACE)
+        section_label(body, title)
+        parent_layout.addWidget(card)
+        self._settings_cards[title] = card
+        return card, body
+
+    def _jump_to_category(self, title: str) -> None:
+        if self._search_edit.text():
+            self._search_edit.clear()
+        visible_titles = set(self._CATEGORY_CARDS.get(title, ()))
+        first_card: QWidget | None = None
+        for card_title, card in self._settings_cards.items():
+            visible = card_title in visible_titles
+            card.setVisible(visible)
+            if visible and first_card is None:
+                first_card = card
+        if first_card is not None:
+            self._scroll.ensureWidgetVisible(first_card, 0, self._SPACE)
+
+    def _filter_settings(self, query: str) -> None:
+        needle = query.strip().casefold()
+        first_match: QWidget | None = None
+        for title, card in self._settings_cards.items():
+            searchable = [title]
+            searchable.extend(label.text() for label in card.findChildren(QLabel))
+            searchable.extend(button.text() for button in card.findChildren(QPushButton))
+            searchable.extend(check.text() for check in card.findChildren(QCheckBox))
+            category_cards = set(
+                self._CATEGORY_CARDS.get(self._category_combo.currentText(), ())
+            )
+            matches = (
+                needle in " ".join(searchable).casefold()
+                if needle
+                else title in category_cards
+            )
+            card.setVisible(matches)
+            if matches and first_match is None:
+                first_match = card
+        if needle and first_match is not None:
+            self._scroll.ensureWidgetVisible(first_match, 0, self._SPACE)
+
+    def _form_card(self, parent_layout: QVBoxLayout, title: str) -> tuple[QWidget, QFormLayout]:
+        card, body = self._card(parent_layout, title)
+        form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(self._GAP)
+        form.setVerticalSpacing(self._SPACE)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        body.addLayout(form)
+        return card, form
+
+    def _add_folder_field(self, form: QFormLayout, key: str, label: str) -> None:
+        fallback = str(custom_tiles_dir()) if key == "custom_tiles_dir" else ""
+        entry = QLineEdit()
+        entry.setText(self._settings.get(key, fallback))
+        self._entries[key] = entry
+
+        field = QHBoxLayout()
+        field.setContentsMargins(0, 0, 0, 0)
+        field.setSpacing(self._SPACE)
+        field.addWidget(entry, 1)
+        browse = QPushButton("Browse")
+        browse.setFixedSize(64, 28)
+        browse.setProperty("role", "browse-btn")
+        browse.setToolTip("Choose a folder")
+        browse.setAutoDefault(False)
+        browse.clicked.connect(lambda _checked, k=key: self._browse_dir(k))
+        field.addWidget(browse)
+        clear_btn = QPushButton()
+        clear_btn.setIcon(tool_icon("cancel", size=16))
+        clear_btn.setAccessibleName("Clear saved folder path")
+        clear_btn.setFixedSize(28, 28)
+        clear_btn.setProperty("role", "browse-btn")
+        clear_btn.setToolTip("Clear this saved folder path")
+        clear_btn.setAutoDefault(False)
+        clear_btn.clicked.connect(entry.clear)
+        field.addWidget(clear_btn)
+        form.addRow(label, field)
+
+    def _add_text_field(
+        self, form: QFormLayout, label: str, text: str, *, placeholder: str = ""
+    ) -> QLineEdit:
+        entry = QLineEdit()
+        if placeholder:
+            entry.setPlaceholderText(placeholder)
+        entry.setText(text)
+        form.addRow(label, entry)
+        return entry
+
+    def _add_toggle(self, form: QFormLayout, key: str, label: str, default: bool = False) -> None:
+        cb = QCheckBox(label)
+        cb.setChecked(self._settings.get(key, default))
+        self._toggles[key] = cb
+        form.addRow(cb)
+
+    def _add_combo(
+        self, form: QFormLayout, label: str, items: list[tuple[str, str]], current: str
+    ) -> QComboBox:
+        combo = QComboBox()
+        for text, data in items:
+            combo.addItem(text, data)
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        form.addRow(label, self._compact(combo))
+        return combo
+
+    def _add_scale_combo(self, form: QFormLayout) -> QComboBox:
+        combo = QComboBox()
+        for label, value in (
+            ("90%", 0.9),
+            ("100%", 1.0),
+            ("110%", 1.1),
+            ("125%", 1.25),
+            ("150%", 1.5),
+        ):
+            combo.addItem(label, value)
+        current = float(self._settings.get("ui_scale", 1.0) or 1.0)
+        combo.setCurrentIndex(
+            min(range(combo.count()), key=lambda i: abs(float(combo.itemData(i)) - current))
+        )
+        form.addRow("Interface scale", self._compact(combo))
+        return combo
+
+    def _add_smoothing_combo(self, form: QFormLayout) -> QComboBox:
+        combo = QComboBox()
+        for value, label in SMOOTHING_METHODS:
+            combo.addItem(label, value)
+        idx = combo.findData(self._settings.get("smoothing_method", DEFAULT_SMOOTHING_METHOD))
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+        combo.setToolTip(
+            "Algorithm used by the Smooth path command (right-click a "
+            "selected path, or the 'path.smooth' shortcut)"
+        )
+        form.addRow("Smoothing method", self._compact(combo))
+        return combo
+
+    def _add_suffix_field(
+        self,
+        form: QFormLayout,
+        label: str,
+        text: str,
+        suffix: str,
+        validator: QValidator,
+        *,
+        width: int,
+    ) -> QLineEdit:
+        edit = QLineEdit(text)
+        edit.setValidator(validator)
+        edit.setMaximumWidth(width)
+        field = QHBoxLayout()
+        field.setContentsMargins(0, 0, 0, 0)
+        field.setSpacing(self._SPACE)
+        field.addWidget(edit)
+        if suffix:
+            field.addWidget(QLabel(suffix))
+        field.addStretch()
+        form.addRow(label, field)
+        return edit
+
+    def _compact(self, widget: QWidget) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(self._SPACE)
+        row.addWidget(widget)
+        row.addStretch()
+        return row
 
     def _open_keybindings(self) -> None:
         dlg = KeybindingsDialog(self, keybindings=self._settings.get("keybindings", {}))
@@ -433,54 +603,6 @@ class SettingsDialog(QDialog):
             self._settings["context_menu_sections"] = dlg.get_sections()
             self._settings["context_menu_overflow_sections"] = dlg.get_overflow_sections()
 
-    def _add_row(self, layout: QVBoxLayout, key: str, label: str, browse: bool = False) -> None:
-        """Add a folder path input row with optional browse button."""
-        fallback = str(custom_tiles_dir()) if key == "custom_tiles_dir" else ""
-        row, e = self._add_text_row(layout, label, self._settings.get(key, fallback))
-        self._entries[key] = e
-        if browse:
-            btn = QPushButton("Browse")
-            btn.setFixedSize(64, 28)
-            btn.setProperty("role", "browse-btn")
-            btn.setToolTip("Choose a folder")
-            btn.clicked.connect(lambda checked, k=key: self._browse_dir(k))
-            row.addWidget(btn)
-            clear_btn = QPushButton("\u2715")
-            clear_btn.setFixedSize(28, 28)
-            clear_btn.setProperty("role", "browse-btn")
-            clear_btn.setToolTip("Clear this saved folder path")
-            clear_btn.clicked.connect(e.clear)
-            row.addWidget(clear_btn)
-
-    def _add_toggle(self, layout: QVBoxLayout, key: str, label: str, default: bool = False) -> None:
-        """Add a checkbox toggle for a boolean setting."""
-        row = QHBoxLayout()
-        cb = QCheckBox(label)
-        cb.setChecked(self._settings.get(key, default))
-        row.addWidget(cb)
-        row.addStretch()
-        self._toggles[key] = cb
-        layout.addLayout(row)
-
-    def _add_text_row(
-        self,
-        layout: QVBoxLayout,
-        label: str,
-        text: str,
-        *,
-        placeholder: str = "",
-    ) -> tuple[QHBoxLayout, QLineEdit]:
-        row = QHBoxLayout()
-        lbl = QLabel(label)
-        row.addWidget(lbl)
-        entry = QLineEdit()
-        if placeholder:
-            entry.setPlaceholderText(placeholder)
-        entry.setText(text)
-        row.addWidget(entry, stretch=1)
-        layout.addLayout(row)
-        return row, entry
-
     def _browse_dir(self, key: str) -> None:
         """Open file browser to select a directory."""
         current = self._entries[key].text().strip()
@@ -492,7 +614,7 @@ class SettingsDialog(QDialog):
         if d:
             self._entries[key].setText(d)
 
-    def _save(self) -> None:
+    def _save(self, _checked: bool = False, *, close: bool = True) -> None:
         """Save all settings to disk."""
         for key, entry in self._entries.items():
             v = entry.text().strip()
@@ -522,6 +644,8 @@ class SettingsDialog(QDialog):
             self._settings["ui_scale"] = self._ui_scale_combo.currentData()
         if self._appearance_combo is not None:
             self._settings["appearance"] = self._appearance_combo.currentData()
+        if self._density_combo is not None:
+            self._settings["interface_density"] = self._density_combo.currentData()
         if self._rotation_snap_edit is not None:
             try:
                 self._settings["rotation_snap_increment"] = float(self._rotation_snap_edit.text())
@@ -556,4 +680,30 @@ class SettingsDialog(QDialog):
                 pass
 
         save_settings(self._settings)
-        self.accept()
+        if close:
+            self.accept()
+
+    def _reset_fields(self) -> None:
+        defaults = SettingsSchema().model_dump()
+        for key, entry in self._entries.items():
+            entry.setText(str(defaults.get(key, "")))
+        for key, toggle in self._toggles.items():
+            toggle.setChecked(bool(defaults.get(key, False)))
+        for entry in self._trace_default_entries.values():
+            entry.clear()
+        if self._unit_combo is not None:
+            self._unit_combo.setCurrentIndex(
+                max(0, self._unit_combo.findData(defaults["unit_system"]))
+            )
+        if self._appearance_combo is not None:
+            self._appearance_combo.setCurrentIndex(
+                max(0, self._appearance_combo.findData("system"))
+            )
+        if self._density_combo is not None:
+            self._density_combo.setCurrentIndex(
+                max(0, self._density_combo.findData(defaults["interface_density"]))
+            )
+        if self._ui_scale_combo is not None:
+            self._ui_scale_combo.setCurrentIndex(
+                max(0, self._ui_scale_combo.findData(defaults["ui_scale"]))
+            )

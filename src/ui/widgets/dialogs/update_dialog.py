@@ -26,7 +26,15 @@ from src.core.updates import (
     get_current_version,
     get_releases_page_url,
 )
-from src.ui.components import section_label, sep, set_status_label, surface_frame
+from src.ui.components import (
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    section_label,
+    sep,
+    set_status_label,
+    surface_frame,
+)
 from src.ui.style.theme import STATUS_ERR
 
 _LOG = logging.getLogger(__name__)
@@ -87,16 +95,16 @@ class UpdateDialog(QDialog):
         self._download_btn: QPushButton | None = None
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
 
         title = QLabel("Check for Updates")
-        title.setStyleSheet("color: #f0f6fc; font-size: 16px; font-weight: 700;")
+        title.setProperty("role", "dialog-title")
         layout.addWidget(title)
 
         current_version = get_current_version()
         subtitle = QLabel(f"You are currently running version {current_version}")
-        subtitle.setStyleSheet("color: #8b949e; font-size: 12px;")
+        subtitle.setProperty("role", "dialog-subtitle")
         layout.addWidget(subtitle)
 
         sep(layout)
@@ -123,7 +131,7 @@ class UpdateDialog(QDialog):
     def _build_checking_ui(self, layout: QVBoxLayout) -> None:
         """Show checking state."""
         status = QLabel("Checking for updates…")
-        status.setStyleSheet("color: #8b949e; font-size: 13px;")
+        status.setProperty("role", "status-neutral")
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(status, stretch=1)
 
@@ -166,13 +174,13 @@ class UpdateDialog(QDialog):
         """Show up-to-date message."""
         card = surface_frame("panel")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 12, 12, 12)
-        card_layout.setSpacing(8)
+        card_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        card_layout.setSpacing(SPACE_SM)
 
         section_label(card_layout, "✓ You're Up to Date")
 
         msg = QLabel(f"Version {info.version} is the latest available.")
-        msg.setStyleSheet("color: #8b949e; font-size: 13px;")
+        msg.setProperty("role", "dialog-message")
         msg.setWordWrap(True)
         card_layout.addWidget(msg)
 
@@ -182,37 +190,27 @@ class UpdateDialog(QDialog):
         """Show update available message with download option."""
         card = surface_frame("panel")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 12, 12, 12)
-        card_layout.setSpacing(8)
+        card_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        card_layout.setSpacing(SPACE_SM)
 
         section_label(card_layout, f"↓ Update Available: v{info.version}")
 
         msg = QLabel("A new version is available for download.")
-        msg.setStyleSheet("color: #8b949e; font-size: 13px;")
+        msg.setProperty("role", "dialog-message")
         msg.setWordWrap(True)
         card_layout.addWidget(msg)
 
         # Release notes
         if info.release_notes:
             notes_label = QLabel("Release Notes:")
-            notes_label.setStyleSheet("color: #e6edf3; font-size: 12px; font-weight: 600;")
+            notes_label.setProperty("role", "section-title")
             card_layout.addWidget(notes_label)
 
             notes = QTextEdit()
             notes.setReadOnly(True)
             notes.setText(info.release_notes)
             notes.setMaximumHeight(150)
-            notes.setStyleSheet(
-                """
-                QTextEdit {
-                    background: #0f141b;
-                    border: 1px solid #2b3440;
-                    border-radius: 4px;
-                    color: #c9d1d9;
-                    font-size: 11px;
-                }
-            """
-            )
+            notes.setProperty("role", "release-notes")
             card_layout.addWidget(notes)
 
         card_layout.addStretch()

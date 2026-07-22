@@ -18,7 +18,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.dxf.io import DxfImportReport, summarize_dxf_import_report
-from src.ui.components import section_label, surface_frame
+from src.ui.components import (
+    SPACE_MD,
+    install_dialog_focus_lifecycle,
+    section_label,
+    surface_frame,
+)
 
 
 class DxfImportPreviewDialog(QDialog):
@@ -36,9 +41,10 @@ class DxfImportPreviewDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Import DXF")
-        self.setMinimumWidth(460)
+        self.setMinimumSize(640, 520)
+        self.resize(720, 600)
         root = QVBoxLayout(self)
-        root.setSpacing(10)
+        root.setSpacing(SPACE_MD)
 
         section_label(root, Path(path).name)
         points = [point for polys in by_layer.values() for poly in polys for point in poly]
@@ -100,6 +106,7 @@ class DxfImportPreviewDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+        install_dialog_focus_lifecycle(self, self._layers)
 
     def selected_layers(self) -> list[str]:
         return [

@@ -17,15 +17,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QCheckBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtCore import Qt
 
 from src.ui.components import CollapsibleSection
 
@@ -45,22 +48,87 @@ class TextField(QWidget):
         tooltip: str = "",
     ) -> None:
         super().__init__()
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        marker = QLabel(label)
-        marker.setProperty("role", "hint")
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        self._marker = QLabel(label)
+        self._marker.setProperty("role", "hint")
+        self._marker.setWordWrap(True)
         self.entry = entry or QLineEdit(default)
         if entry is None:
             self.entry.setText(default)
         self.entry.setFixedWidth(width)
         self.entry.setPlaceholderText(placeholder)
         self.entry.setAccessibleName(label)
-        marker.setBuddy(self.entry)
+        self._marker.setBuddy(self.entry)
         if tooltip:
             self.entry.setToolTip(tooltip)
-        lay.addWidget(marker, stretch=1)
-        lay.addWidget(self.entry)
+        self._layout.addWidget(self._marker, stretch=1)
+        self._layout.addWidget(self.entry)
+
+    def resizeEvent(self, event) -> None:
+        """Stack labels when the containing Trace inspector is below 340 px."""
+        super().resizeEvent(event)
+        stacked = event.size().width() < 310  # 340 px sidebar minus card margins
+        self._layout.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if stacked
+            else QBoxLayout.Direction.LeftToRight
+        )
+
+
+class SliderField(QWidget):
+    """Labeled slider paired with the existing editable numeric field."""
+
+    def __init__(
+        self,
+        label: str,
+        *,
+        entry: QLineEdit,
+        minimum: float,
+        maximum: float,
+        step: float = 1.0,
+        empty_at_minimum: bool = False,
+        tooltip: str = "",
+    ) -> None:
+        super().__init__()
+        self.entry = entry
+        self._minimum = minimum
+        self._step = step
+        self._empty_at_minimum = empty_at_minimum
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        layout.addWidget(TextField(label, entry=entry, required=not empty_at_minimum, tooltip=tooltip))
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setAccessibleName(label)
+        self.slider.setRange(0, round((maximum - minimum) / step))
+        self.slider.setToolTip(tooltip)
+        layout.addWidget(self.slider)
+        self.slider.valueChanged.connect(self._slider_changed)
+        entry.textChanged.connect(self._entry_changed)
+        self._entry_changed(entry.text())
+
+    def _slider_changed(self, position: int) -> None:
+        if self._empty_at_minimum and position == 0:
+            text = ""
+        else:
+            value = self._minimum + position * self._step
+            text = str(int(round(value))) if self._step >= 1 else f"{value:.1f}"
+        if self.entry.text() != text:
+            self.entry.setText(text)
+
+    def _entry_changed(self, text: str) -> None:
+        try:
+            value = float(text)
+            position = round((value - self._minimum) / self._step)
+        except ValueError:
+            if not (self._empty_at_minimum and not text.strip()):
+                return
+            position = 0
+        self.slider.blockSignals(True)
+        self.slider.setValue(max(self.slider.minimum(), min(position, self.slider.maximum())))
+        self.slider.blockSignals(False)
 
 
 class PathField(QWidget):

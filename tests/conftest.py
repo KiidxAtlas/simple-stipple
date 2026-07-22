@@ -73,23 +73,20 @@ def _drain_qt_widgets():
     test body but is defensive about partially constructed state.
     """
     yield
-    import gc
-
     from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance()
     if app is None:
         return
-    # Force Python to collect now — while the QApplication is valid — instead of
-    # at an arbitrary point during a later test's pytest-qt setup, where a
-    # DeferredDelete posted for a just-collected wrapper lands against C++ state
-    # that has moved on and segfaults. Do NOT close() widgets: that runs their
-    # close handlers (App.closeEvent → discard-confirm) against half-torn-down
-    # state, which is its own crash. Just drain the deletion queue deterministically.
-    gc.collect()
+    # Destroy C++ widgets through Qt before their Python wrappers become cyclic
+    # GC candidates. Explicit gc.collect() here crashes Shiboken under Python
+    # 3.14/PySide 6.11; deleteLater keeps ownership teardown on Qt's side.
+    # Do not call close(): App.closeEvent can display discard confirmation.
+    for widget in list(app.topLevelWidgets()):
+        widget.hide()
+        widget.deleteLater()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
-    gc.collect()
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 

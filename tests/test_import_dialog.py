@@ -26,6 +26,8 @@ def test_import_preview_defaults_and_layer_filter(qapp):
         default_append=True,
     )
 
+    assert dialog.minimumWidth() >= 640
+    assert dialog.minimumHeight() >= 520
     assert dialog.append_mode()
     assert dialog.selected_layers() == ["CUT", "GUIDES"]
     dialog._layers.item(1).setCheckState(Qt.CheckState.Unchecked)

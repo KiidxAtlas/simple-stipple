@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import base64
+import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class RasterEngravingSpec:
     brightness: float = 1.0
     passes: int = 1
     invert: bool = False
+    rotation_deg: float = 0.0
 
     def validated(self) -> RasterEngravingSpec:
         if self.width_mm <= 0 or self.height_mm <= 0:
@@ -41,6 +43,8 @@ class RasterEngravingSpec:
             raise ValueError("Brightness and contrast must be between 0.1 and 5.")
         if not 1 <= self.passes <= 100:
             raise ValueError("Passes must be between 1 and 100.")
+        if not math.isfinite(self.rotation_deg):
+            raise ValueError("Rotation must be a finite angle.")
         return self
 
 
@@ -74,12 +78,20 @@ def prepare_engraving_image(
     )
     if mask_polys:
         mask = Image.new("1", result.size, 0)
-        draw = ImageDraw.Draw(mask)
         for poly in mask_polys:
+            angle = math.radians(-spec.rotation_deg)
+            center_x = spec.x_mm + spec.width_mm / 2.0
+            center_y = spec.y_mm + spec.height_mm / 2.0
             pixels = [
                 (
-                    (x - spec.x_mm) / spec.width_mm * columns,
-                    (y - spec.y_mm) / spec.height_mm * rows,
+                    (
+                        center_x + (x - center_x) * math.cos(angle)
+                        - (y - center_y) * math.sin(angle) - spec.x_mm
+                    ) / spec.width_mm * columns,
+                    (
+                        center_y + (x - center_x) * math.sin(angle)
+                        + (y - center_y) * math.cos(angle) - spec.y_mm
+                    ) / spec.height_mm * rows,
                 )
                 for x, y in poly
             ]
@@ -125,10 +137,25 @@ def export_raster_job(
     }
     metadata.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     encoded = base64.b64encode(output.read_bytes()).decode("ascii")
-    page_x = min(0.0, spec.x_mm)
-    page_y = min(0.0, spec.y_mm)
-    page_w = max(spec.x_mm + spec.width_mm, 0.0) - page_x
-    page_h = max(spec.y_mm + spec.height_mm, 0.0) - page_y
+    center_x = spec.x_mm + spec.width_mm / 2.0
+    center_y = spec.y_mm + spec.height_mm / 2.0
+    angle = math.radians(spec.rotation_deg)
+    rotated_corners = []
+    for x, y in (
+        (spec.x_mm, spec.y_mm),
+        (spec.x_mm + spec.width_mm, spec.y_mm),
+        (spec.x_mm + spec.width_mm, spec.y_mm + spec.height_mm),
+        (spec.x_mm, spec.y_mm + spec.height_mm),
+    ):
+        dx, dy = x - center_x, y - center_y
+        rotated_corners.append((
+            center_x + dx * math.cos(angle) - dy * math.sin(angle),
+            center_y + dx * math.sin(angle) + dy * math.cos(angle),
+        ))
+    page_x = min(0.0, *(point[0] for point in rotated_corners))
+    page_y = min(0.0, *(point[1] for point in rotated_corners))
+    page_w = max(0.0, *(point[0] for point in rotated_corners)) - page_x
+    page_h = max(0.0, *(point[1] for point in rotated_corners)) - page_y
     positioned_svg.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
@@ -136,6 +163,7 @@ def export_raster_job(
         f'viewBox="{page_x} {page_y} {page_w} {page_h}">\n'
         f'  <image x="{spec.x_mm}" y="{spec.y_mm}" width="{spec.width_mm}" '
         f'height="{spec.height_mm}" preserveAspectRatio="none" '
+        f'transform="rotate({spec.rotation_deg} {center_x} {center_y})" '
         f'href="data:image/png;base64,{encoded}"/>\n</svg>\n',
         encoding="utf-8",
     )

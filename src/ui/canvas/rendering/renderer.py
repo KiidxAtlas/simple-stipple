@@ -168,7 +168,13 @@ class CanvasRenderer:
         x1, y1 = self._host._w2c(bx + self._host._bg_w_mm, by)
         target_rect = QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized()
         source_rect = QRectF(self._host._bg_pixmap.rect())
+        painter.save()
+        center = target_rect.center()
+        painter.translate(center)
+        painter.rotate(-getattr(self._host, "_bg_rotation_deg", 0.0))
+        painter.translate(-center)
         painter.drawPixmap(target_rect, self._host._bg_pixmap, source_rect)
+        painter.restore()
 
     def _paint_ghost_polys(self, painter: QPainter, visible: QRectF) -> None:
         if not self._host._ghost_polys or not self._host._ghost_visible:
@@ -1902,21 +1908,27 @@ class CanvasRenderer:
         # Background image overlay
         if self._host._bg_pil and self._host._bg_w_mm > 0 and self._host._bg_h_mm > 0:
             self._paint_bg_image(painter)
-            if getattr(self._host, "_bg_editable", False):
-                bx = self._host._bg_x_mm
-                by = self._host._bg_y_mm
-                corners = [
-                    self._host._w2c(bx, by),
-                    self._host._w2c(bx + self._host._bg_w_mm, by),
-                    self._host._w2c(bx + self._host._bg_w_mm, by + self._host._bg_h_mm),
-                    self._host._w2c(bx, by + self._host._bg_h_mm),
-                ]
+            if getattr(self._host, "_bg_selected", False):
+                named_corners = self._host._background_canvas_corners()
+                corners = [named_corners[name] for name in ("sw", "se", "ne", "nw")]
                 painter.setPen(QPen(QColor("#58a6ff"), 1.5, Qt.PenStyle.DashLine))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in corners]))
                 painter.setBrush(QColor("#f0f6fc"))
                 for x, y in corners:
                     painter.drawRect(QRectF(x - 4, y - 4, 8, 8))
+                top_x = (named_corners["nw"][0] + named_corners["ne"][0]) / 2.0
+                top_y = (named_corners["nw"][1] + named_corners["ne"][1]) / 2.0
+                center = self._host._w2c(
+                    self._host._bg_x_mm + self._host._bg_w_mm / 2.0,
+                    self._host._bg_y_mm + self._host._bg_h_mm / 2.0,
+                )
+                length = max(1.0, math.hypot(top_x - center[0], top_y - center[1]))
+                handle_x = top_x + (top_x - center[0]) / length * 24.0
+                handle_y = top_y + (top_y - center[1]) / length * 24.0
+                painter.drawLine(QPointF(top_x, top_y), QPointF(handle_x, handle_y))
+                painter.setBrush(QColor("#f2a65a"))
+                painter.drawEllipse(QPointF(handle_x, handle_y), 5.0, 5.0)
 
         # Image bounds reference rectangle
         if self._host._img_bounds:

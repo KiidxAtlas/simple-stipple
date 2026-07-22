@@ -13,8 +13,8 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -28,6 +28,7 @@ from src.backend.persistence import (
     read_json_file,
     write_json_file_atomic,
 )
+from src.ui.components import install_dialog_focus_lifecycle
 
 
 class WorkspaceLibraryDialog(QDialog):
@@ -66,14 +67,36 @@ class WorkspaceLibraryDialog(QDialog):
         self._category.currentIndexChanged.connect(self.refresh)
         initial_index = self._category.findData(initial_source)
         if initial_index >= 0:
+            self._category.blockSignals(True)
             self._category.setCurrentIndex(initial_index)
+            self._category.blockSignals(False)
         layout.addWidget(self._category)
 
         self._list = QListWidget()
-        self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._list.itemDoubleClicked.connect(lambda _item: self._open_selected())
         self._list.itemSelectionChanged.connect(self._sync_buttons)
         layout.addWidget(self._list, 1)
+
+        self._rename_row = QHBoxLayout()
+        self._rename_edit = QLineEdit()
+        self._rename_edit.setPlaceholderText("Workspace name")
+        self._rename_edit.setAccessibleName("New workspace name")
+        self._rename_edit.returnPressed.connect(self._commit_rename)
+        self._rename_apply_btn = QPushButton("Apply rename")
+        self._rename_apply_btn.clicked.connect(self._commit_rename)
+        self._rename_cancel_btn = QPushButton("Cancel")
+        self._rename_cancel_btn.clicked.connect(self._cancel_rename)
+        self._rename_row.addWidget(QLabel("Rename workspace"))
+        self._rename_row.addWidget(self._rename_edit, stretch=1)
+        self._rename_row.addWidget(self._rename_cancel_btn)
+        self._rename_row.addWidget(self._rename_apply_btn)
+        for index in range(self._rename_row.count()):
+            item = self._rename_row.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.hide()
+        layout.addLayout(self._rename_row)
 
         buttons = QHBoxLayout()
         self._open_btn = QPushButton("Open")
@@ -86,6 +109,9 @@ class WorkspaceLibraryDialog(QDialog):
         self._delete_btn = QPushButton("Delete")
         self._delete_btn.setProperty("role", "danger")
         self._delete_btn.clicked.connect(self._delete_selected)
+        self._delete_all_btn = QPushButton("Delete All Snapshots")
+        self._delete_all_btn.setProperty("role", "danger")
+        self._delete_all_btn.clicked.connect(self._delete_all_recovery)
         folder_btn = QPushButton("Show Folder")
         folder_btn.clicked.connect(self._show_folder)
         close_btn = QPushButton("Close")
@@ -94,6 +120,7 @@ class WorkspaceLibraryDialog(QDialog):
             self._rename_btn,
             self._duplicate_btn,
             self._delete_btn,
+            self._delete_all_btn,
             folder_btn,
         ):
             buttons.addWidget(button)
@@ -103,6 +130,7 @@ class WorkspaceLibraryDialog(QDialog):
         layout.addLayout(buttons)
 
         self.refresh()
+        install_dialog_focus_lifecycle(self, self._category)
 
     def refresh(self, select: Path | None = None) -> None:
         self.saves_dir.mkdir(parents=True, exist_ok=True)
@@ -128,19 +156,45 @@ class WorkspaceLibraryDialog(QDialog):
             )
         for path in paths:
             modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%b %d, %Y  %I:%M %p")
-            detail = f"Modified {modified} · {path.parent}"
+            size_bytes = path.stat().st_size
+            size = (
+                f"{size_bytes / (1024 * 1024):.1f} MB"
+                if size_bytes >= 1024 * 1024
+                else f"{max(1, size_bytes // 1024)} KB"
+            )
+            detail = f"Modified {modified} · {size} · {path.parent}"
+            valid = True
             if source == "recovery":
-                raw = read_json_file(
-                    path,
-                    default={},
-                    max_bytes=MAX_WORKSPACE_FILE_BYTES,
-                )
-                metadata = raw.get("recovery", {}) if isinstance(raw, dict) else {}
-                original = Path(str(metadata.get("workspace_path", ""))).name
-                detail = f"Recovery snapshot · {original or 'Unsaved workspace'} · {modified}"
-            item = QListWidgetItem(f"{path.name}\n{detail}")
+                try:
+                    raw = read_json_file(
+                        path,
+                        default={},
+                        max_bytes=MAX_WORKSPACE_FILE_BYTES,
+                    )
+                    valid = isinstance(raw, dict) and isinstance(
+                        raw.get("document", raw), dict
+                    )
+                    metadata = raw.get("recovery", {}) if isinstance(raw, dict) else {}
+                    original = Path(str(metadata.get("workspace_path", ""))).name
+                    timestamp = str(metadata.get("timestamp", ""))
+                    try:
+                        captured = datetime.fromisoformat(timestamp).astimezone()
+                        captured_text = captured.strftime("%b %d, %Y  %I:%M:%S %p")
+                    except (TypeError, ValueError):
+                        captured_text = modified
+                    snapshot_id = path.name.removesuffix(WORKSPACE_FILE_SUFFIX)[-8:]
+                    detail = (
+                        f"{original or 'Unsaved workspace'} · {captured_text} · {size} · "
+                        f"Snapshot {snapshot_id}"
+                    )
+                except (OSError, TypeError, ValueError):
+                    valid = False
+                    detail = f"Invalid recovery snapshot · {modified} · {size}"
+            title = path.name if valid else f"Invalid · {path.name}"
+            item = QListWidgetItem(f"{title}\n{detail}")
             item.setData(0x0100, str(path))
             item.setData(0x0101, source)
+            item.setData(0x0102, valid)
             item.setToolTip(str(path))
             self._list.addItem(item)
             if select is not None and path == select:
@@ -167,12 +221,27 @@ class WorkspaceLibraryDialog(QDialog):
         enabled = self._current_path() is not None
         item = self._list.currentItem()
         source = str(item.data(0x0101)) if item is not None else ""
-        self._open_btn.setEnabled(enabled)
+        valid = bool(item.data(0x0102)) if item is not None else False
+        self._open_btn.setEnabled(enabled and valid)
         self._open_btn.setText("Recover" if source == "recovery" else "Open")
         self._rename_btn.setEnabled(enabled and source == "saved")
         self._duplicate_btn.setEnabled(enabled)
         self._duplicate_btn.setText("Save a Copy" if source != "saved" else "Duplicate")
         self._delete_btn.setEnabled(enabled and source in {"saved", "recovery"})
+        self._delete_all_btn.setVisible(source == "recovery")
+        self._delete_all_btn.setEnabled(source == "recovery" and bool(self._recovery_paths()))
+
+    def _selected_paths(self) -> list[Path]:
+        return [
+            Path(str(value))
+            for item in self._list.selectedItems()
+            if (value := item.data(0x0100))
+        ]
+
+    def _recovery_paths(self) -> list[Path]:
+        if self.recovery_dir is None or not self.recovery_dir.exists():
+            return []
+        return list(self.recovery_dir.glob("*.workspace.json"))
 
     def _open_selected(self) -> None:
         path = self._current_path()
@@ -203,16 +272,37 @@ class WorkspaceLibraryDialog(QDialog):
         if path is None:
             return
         base_name = path.name.removesuffix(WORKSPACE_FILE_SUFFIX)
-        name, accepted = QInputDialog.getText(
-            self, "Rename Workspace", "Workspace name:", text=base_name
-        )
-        if not accepted or not name.strip():
+        self._rename_edit.setText(base_name)
+        for index in range(self._rename_row.count()):
+            item = self._rename_row.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.show()
+        self._rename_edit.selectAll()
+        self._rename_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def _cancel_rename(self) -> None:
+        for index in range(self._rename_row.count()):
+            item = self._rename_row.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.hide()
+
+    def _commit_rename(self) -> None:
+        path = self._current_path()
+        if path is None:
+            self._cancel_rename()
             return
-        candidate = normalize_workspace_path(self.saves_dir / name.strip())
+        name = self._rename_edit.text().strip()
+        if not name:
+            self._rename_edit.setProperty("invalid", True)
+            self._rename_edit.setToolTip("Workspace name cannot be empty")
+            return
+        self._rename_edit.setProperty("invalid", False)
+        candidate = normalize_workspace_path(self.saves_dir / name)
         if candidate.exists() and candidate != path:
-            QMessageBox.warning(
-                self, "Rename Workspace", "A workspace with that name already exists."
-            )
+            self._rename_edit.setProperty("invalid", True)
+            self._rename_edit.setToolTip("A workspace with that name already exists")
             return
         try:
             path.rename(candidate)
@@ -221,6 +311,7 @@ class WorkspaceLibraryDialog(QDialog):
             return
         original = next((old for old, new in self.renamed_paths.items() if new == path), path)
         self.renamed_paths[original] = candidate
+        self._cancel_rename()
         self.refresh(candidate)
 
     def _duplicate_selected(self) -> None:
@@ -260,24 +351,61 @@ class WorkspaceLibraryDialog(QDialog):
         self.refresh(candidate)
 
     def _delete_selected(self) -> None:
-        path = self._current_path()
-        if path is None:
+        paths = self._selected_paths()
+        if not paths:
             return
+        noun = "workspace" if len(paths) == 1 else "workspaces"
+        names = paths[0].name if len(paths) == 1 else f"{len(paths)} selected {noun}"
         answer = QMessageBox.question(
             self,
-            "Delete Workspace",
-            f"Permanently delete {path.name}?",
+            "Delete Workspace" if len(paths) == 1 else "Delete Workspaces",
+            f"Permanently delete {names}?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        try:
-            path.unlink()
-        except OSError as exc:
-            QMessageBox.warning(self, "Delete Workspace", f"Could not delete workspace:\n{exc}")
+        failures: list[str] = []
+        for path in paths:
+            try:
+                path.unlink()
+                self.deleted_paths.add(path)
+            except OSError as exc:
+                failures.append(f"{path.name}: {exc}")
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Delete Incomplete",
+                "Some files could not be deleted:\n" + "\n".join(failures),
+            )
+        self.refresh()
+
+    def _delete_all_recovery(self) -> None:
+        paths = self._recovery_paths()
+        if not paths:
             return
-        self.deleted_paths.add(path)
+        answer = QMessageBox.question(
+            self,
+            "Delete All Recovery Snapshots",
+            f"Permanently delete all {len(paths)} recovery snapshots?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        failures: list[str] = []
+        for path in paths:
+            try:
+                path.unlink()
+                self.deleted_paths.add(path)
+            except OSError as exc:
+                failures.append(f"{path.name}: {exc}")
+        if failures:
+            QMessageBox.warning(
+                self,
+                "Delete Incomplete",
+                "Some snapshots could not be deleted:\n" + "\n".join(failures),
+            )
         self.refresh()
 
     def _show_folder(self) -> None:

@@ -92,6 +92,8 @@ class DocumentSnapshot:
     group_labels: tuple[tuple[int, str], ...] = ()
     next_group_id: int = 0
     constraints: tuple[FrozenValue, ...] = ()
+    guides: tuple[tuple[str, float], ...] = ()
+    dimensions: tuple[FrozenValue, ...] = ()
 
     @classmethod
     def capture(cls, document: Any) -> DocumentSnapshot:
@@ -105,6 +107,11 @@ class DocumentSnapshot:
             group_labels=tuple(sorted(document.group_labels.items())),
             next_group_id=document.next_group_id,
             constraints=tuple(freeze_value(item.to_dict()) for item in document.constraints),
+            guides=tuple(
+                (str(orientation), float(coordinate))
+                for orientation, coordinate in getattr(document, "guides", ())
+            ),
+            dimensions=tuple(freeze_value(item) for item in getattr(document, "dimensions", ())),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -117,10 +124,15 @@ class DocumentSnapshot:
             "group_labels": [list(item) for item in self.group_labels],
             "next_group_id": self.next_group_id,
             "constraints": [_thaw(item) for item in self.constraints],
+            "guides": [list(item) for item in self.guides],
+            "dimensions": [_thaw(item) for item in self.dimensions],
         }
 
     def constraint_dicts(self) -> tuple[dict[str, Any], ...]:
         return tuple(item for value in self.constraints if isinstance((item := _thaw(value)), dict))
+
+    def dimension_dicts(self) -> tuple[dict[str, Any], ...]:
+        return tuple(item for value in self.dimensions if isinstance((item := _thaw(value)), dict))
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> DocumentSnapshot:
@@ -137,6 +149,11 @@ class DocumentSnapshot:
             ),
             next_group_id=int(value.get("next_group_id", 0)),
             constraints=tuple(freeze_value(item) for item in value.get("constraints", ())),
+            guides=tuple(
+                (str(orientation), float(coordinate))
+                for orientation, coordinate in value.get("guides", ())
+            ),
+            dimensions=tuple(freeze_value(item) for item in value.get("dimensions", ())),
         )
 
 

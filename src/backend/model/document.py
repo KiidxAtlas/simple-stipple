@@ -256,6 +256,7 @@ class PatternTabState(TabStateBase):
     outline_ids: list[str] = Field(default_factory=list)
     outline_roles: dict[str, str] = Field(default_factory=dict)
     pattern_cell_cutouts: list[list[tuple[float, float]]] = Field(default_factory=list)
+    pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = Field(default_factory=list)
     orig_w: float = 0.0
     orig_h: float = 0.0
     canvas_view: dict[str, Any] = Field(default_factory=dict)

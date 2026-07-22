@@ -24,7 +24,6 @@ from src.backend.cad.shapes import ShapeFactory
 from src.backend.cad.snapping import (
     snap_to_polyline as _snap_to_polyline_candidates,
 )
-from src.backend.editing.boolean import boolean_polylines
 from src.backend.editing.offset import offset_polyline
 from src.backend.editing.split import split_paths
 from src.backend.editing.transform import scale
@@ -810,6 +809,7 @@ class EditingService:
         )
         if not result.changed:
             return False
+        self._host._refresh_driving_dimensions()
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()

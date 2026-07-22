@@ -205,6 +205,18 @@ class MenuController:
     def _refresh_workspace_header(self) -> None:
         title = self._app._workspace_path.stem if self._app._workspace_path else "Untitled"
         self._app._workspace_title_label.setText(title)
+        last_autosave = getattr(self._app, "_last_autosave_at", None)
+        autosave_text = (
+            last_autosave.strftime("%b %d, %Y %I:%M:%S %p")
+            if last_autosave is not None
+            else "Not yet"
+        )
+        workspace_detail = (
+            "Open saved workspaces, recent files, and recovery snapshots\n"
+            f"Last durable autosave: {autosave_text}"
+        )
+        self._app._workspace_title_label.setToolTip(workspace_detail)
+        self._app._workspace_title_label.setAccessibleDescription(workspace_detail)
         if self._app._workspace_dirty:
             chip_text, chip_tone = "Unsaved changes", "warn"
         elif self._app._workspace_path is None:
@@ -582,12 +594,19 @@ class CommandController:
 
     def _build_command_palette_commands(self) -> list[dict[str, object]]:
         """Return every shell and canvas command from their live registries."""
+        active_canvas = self._active_canvas()
         entries: list[dict[str, object]] = [
             {
                 "id": spec.action_id,
                 "title": spec.title,
                 "shortcut": self._shortcut(spec.action_id),
                 "keywords": spec.keywords,
+                "enabled": not spec.action_id.startswith("canvas.") or active_canvas is not None,
+                "disabled_reason": (
+                    "Open Draft, Pattern, Trace, or a conversion preview first"
+                    if spec.action_id.startswith("canvas.") and active_canvas is None
+                    else ""
+                ),
                 "run": spec.run,
             }
             for spec in self._build_commands()
@@ -597,6 +616,14 @@ class CommandController:
             if command.hidden or command.keybinding_id in represented_bindings:
                 continue
             category = command.category or "Canvas"
+            enabled = active_canvas is not None and canvas_commands.can_run(
+                active_canvas, command
+            )
+            reason = (
+                "Open a canvas page first"
+                if active_canvas is None
+                else canvas_commands.unavailable_reason(active_canvas, command)
+            )
             entries.append(
                 {
                     "id": command.id,
@@ -605,12 +632,20 @@ class CommandController:
                     # user overrides and platform-native modifier labels.
                     "shortcut": canvas_commands.native_shortcut(command.id),
                     "keywords": f"canvas {category} {command.id.replace('.', ' ')}",
+                    "description": command.description or command.label,
+                    "enabled": enabled,
+                    "disabled_reason": reason if not enabled else "",
                     "run": lambda command_id=command.id: self._run_canvas_command(command_id),
                 }
             )
-        active_page = self._app._tabs.currentWidget()
-        page_commands = getattr(active_page, "command_palette_commands", None)
-        if callable(page_commands):
+        # Page commands belong to the global palette even while another page
+        # is active.  Restricting contributions to currentWidget() made the
+        # palette's contents change unpredictably between tabs.
+        for spec in self._app._page_specs:
+            page = self._app._page_runtime.get(spec.page_id)
+            page_commands = getattr(page, "command_palette_commands", None)
+            if not callable(page_commands):
+                continue
             contributed = page_commands()
             if not isinstance(contributed, list):
                 contributed = []
@@ -619,9 +654,29 @@ class CommandController:
                     continue
                 item = dict(entry)
                 title = str(item.get("title", "Command"))
-                item["title"] = title if ":" in title else f"Page: {title}"
+                item["title"] = title if ":" in title else f"{spec.title}: {title}"
+                item["keywords"] = " ".join(
+                    (
+                        str(item.get("keywords", "")),
+                        str(item.get("subtitle", "")),
+                        spec.page_id,
+                        spec.title,
+                    )
+                )
+                item.setdefault("enabled", True)
+                item.setdefault("disabled_reason", "")
+                callback = item["run"]
+                item["run"] = (
+                    lambda page_id=spec.page_id, run=callback: self._run_page_command(
+                        page_id, run
+                    )
+                )
                 entries.append(item)
         return entries
+
+    def _run_page_command(self, page_id: str, callback: Callable[[], Any]) -> Any:
+        self._app._switch_to_page(page_id)
+        return callback()
 
     def _open_update_check(self) -> None:
         """Open the update check dialog."""
@@ -647,7 +702,10 @@ class CommandController:
             self._run_canvas_command("clipboard.cut")
 
     def _active_canvas(self) -> Any | None:
-        current = self._app._tabs.currentWidget()
+        tabs = getattr(self._app, "_tabs", None)
+        if tabs is None:
+            return None
+        current = tabs.currentWidget()
         return getattr(current, "_canvas", None)
 
     def _menu_copy(self) -> None:

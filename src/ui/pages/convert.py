@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -39,9 +41,11 @@ from src.backend.dxf.fix import fix_dxf
 from src.backend.dxf.fvi import FviNoGeometryError, convert_fvi_to_dxf, summarize_fvi_import
 from src.backend.dxf.io import load_dxf_polylines
 from src.backend.dxf.svg_dxf import dxf_to_svg, svg_to_dxf
+from src.core.settings import save_settings
 from src.ui.canvas.canvas_runtime import CanvasGridModule
 from src.ui.canvas.dxf_canvas import DxfCanvas
 from src.ui.components import (
+    RecentFilesButton,
     browse_row,
     content_splitter,
     set_status_label,
@@ -49,6 +53,7 @@ from src.ui.components import (
 )
 from src.ui.pages.base import BasePage
 from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
+from src.ui.util import KIND_VECTOR, record_recent
 from src.ui.widgets.canvas.status_strip import CanvasStatusStrip
 
 LOGGER = logging.getLogger(__name__)
@@ -86,12 +91,56 @@ class _ConversionSubTab(QWidget):
     def _browse_src(self) -> None:
         raise NotImplementedError
 
+    def _bind_readiness(self, source_edit: QLineEdit) -> None:
+        """Keep the Convert button disabled until a source path is entered.
+
+        Without this the primary action sits fully enabled on an empty form,
+        and clicking it does nothing but flash a status message — a dead end
+        instead of a button that visibly isn't ready yet.
+        """
+        self._readiness_edit = source_edit
+        source_edit.textChanged.connect(lambda _text: self._refresh_readiness())
+        self._refresh_readiness()
+
+    def is_ready(self) -> bool:
+        if getattr(self, "_running", False):
+            return False
+        edit = getattr(self, "_readiness_edit", None)
+        return bool(edit.text().strip()) if edit is not None else True
+
+    def _refresh_readiness(self) -> None:
+        self._btn_state.emit(self.is_ready())
+
     def _start_job(self) -> threading.Event:
         self._shutting_down = False
         self.blockSignals(False)
         self._cancel_event = threading.Event()
         self._running = True
+        self._job_started_at = time.monotonic()
+        self._job_completed = 0
+        self._job_total = 0
         return self._cancel_event
+
+    def _begin_batch(self, total: int) -> None:
+        self._job_total = total
+        self._job_completed = 0
+
+    def _elapsed_text(self) -> str:
+        started_at = getattr(self, "_job_started_at", None)
+        if started_at is None:
+            started_at = time.monotonic()
+        elapsed = max(0, int(time.monotonic() - started_at))
+        minutes, seconds = divmod(elapsed, 60)
+        return f"{minutes}:{seconds:02d}"
+
+    def _report_batch_progress(self, index: int, phase: str, filename: str) -> None:
+        self._status_sig.emit(
+            f"{phase} {index}/{self._job_total} — {filename} · elapsed {self._elapsed_text()}",
+            STATUS_NEUTRAL,
+        )
+
+    def _record_batch_item(self, completed: int) -> None:
+        self._job_completed = completed
 
     def cancel(self) -> None:
         event = getattr(self, "_cancel_event", None)
@@ -102,9 +151,17 @@ class _ConversionSubTab(QWidget):
 
     def _finish_cancelled(self) -> None:
         self._running = False
-        self._btn_state.emit(True)
-        self._status_sig.emit("Cancelled", STATUS_WARN)
-        self.log_line.emit("Cancelled.")
+        self._refresh_readiness()
+        completed = getattr(self, "_job_completed", 0)
+        total = getattr(self, "_job_total", 0)
+        detail = (
+            f" — {completed}/{total} completed output(s) retained"
+            if total
+            else ""
+        )
+        message = f"Cancelled{detail} · elapsed {self._elapsed_text()}"
+        self._status_sig.emit(message, STATUS_WARN)
+        self.log_line.emit(message + ".")
 
     def shutdown(self) -> None:
         """Called by ``ConvertPage.shutdown()`` (in turn called by
@@ -247,6 +304,7 @@ class FviSubTab(_ConversionSubTab):
         self._btn_state.connect(self._btn.setEnabled)
         self._out_dir_sig.connect(self._set_output_dir)
         self._status_sig.connect(self._set_status)
+        self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -384,17 +442,19 @@ class FviSubTab(_ConversionSubTab):
         if not files:
             self.log_line.emit("No .fvi files found.")
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit("No FVI files found", STATUS_WARN)
             return
 
         self.log_line.emit(f"Found {len(files)} file(s)\n")
+        self._begin_batch(len(files))
         ok = err = warned = skipped = 0
         last_dxf: str | None = None
-        for fvi in files:
+        for index, fvi in enumerate(files, start=1):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
+            self._report_batch_progress(index, "Converting", fvi.name)
             if out_dir:
                 relative = fvi.relative_to(p) if p.is_dir() else Path(fvi.name)
                 dest = Path(out_dir) / relative.with_suffix(".dxf")
@@ -421,12 +481,14 @@ class FviSubTab(_ConversionSubTab):
                 LOGGER.exception("Could not convert FVI %s", fvi)
                 self.log_line.emit(f"  ✗  {fvi.name}: {exc}")
                 err += 1
+            finally:
+                self._record_batch_item(index)
 
         self.log_line.emit(
             f"\nDone — {ok} converted, {warned} with warning(s), {skipped} skipped, {err} error(s)."
         )
         self._running = False
-        self._btn_state.emit(True)
+        self._refresh_readiness()
         if files:
             final_dir = out_dir or str(files[0].parent)
             self._out_dir_sig.emit(final_dir)
@@ -528,6 +590,7 @@ class FixerSubTab(_ConversionSubTab):
 
         self._btn_state.connect(self._btn.setEnabled)
         self._status_sig.connect(self._set_status)
+        self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -685,7 +748,7 @@ class FixerSubTab(_ConversionSubTab):
         files = self._folder_dxf_files(src, recursive=include_subfolders)
         if not files:
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit("No DXF files found", STATUS_WARN)
             self.log_line.emit("No DXF files found in the selected folder.")
             return
@@ -702,13 +765,14 @@ class FixerSubTab(_ConversionSubTab):
         }
         failed_files: list[str] = []
         output_root = Path(out_dir) if out_dir else None
+        self._begin_batch(len(files))
         for index, source in enumerate(files, start=1):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
             relative = source.relative_to(Path(src))
             destination = output_root / relative if output_root else source
-            self._status_sig.emit(f"Fixing {index} of {len(files)} — {source.name}", STATUS_NEUTRAL)
+            self._report_batch_progress(index, "Fixing", source.name)
             try:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.resolve() == source.resolve():
@@ -737,8 +801,10 @@ class FixerSubTab(_ConversionSubTab):
                 failed += 1
                 failed_files.append(str(relative))
                 self.log_line.emit(f"{relative}: Error — {exc}")
+            finally:
+                self._record_batch_item(index)
         self._running = False
-        self._btn_state.emit(True)
+        self._refresh_readiness()
         self._reveal_state.emit(True)
         self._last_out = str(output_root or Path(src))
         tone = STATUS_OK if failed == 0 else STATUS_WARN
@@ -794,7 +860,7 @@ class FixerSubTab(_ConversionSubTab):
             msg = _append_ignored_entities_note(msg, stats)
             self.log_line.emit(msg)
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._reveal_state.emit(True)
             self._status_sig.emit(msg, STATUS_OK)
             self._last_out = out
@@ -803,7 +869,7 @@ class FixerSubTab(_ConversionSubTab):
             LOGGER.exception("Could not repair DXF %s", src)
             self.log_line.emit(f"Error: {exc}")
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit(f"Error: {exc}", STATUS_ERR)
 
     def _reveal(self) -> None:
@@ -891,6 +957,7 @@ class SvgSubTab(_ConversionSubTab):
 
         self._btn_state.connect(self._btn.setEnabled)
         self._status_sig.connect(self._set_status)
+        self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -1028,7 +1095,7 @@ class SvgSubTab(_ConversionSubTab):
             msg = _append_ignored_entities_note(msg, stats)
             self.log_line.emit(msg)
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._reveal_state.emit(True)
             self._status_sig.emit("Done", STATUS_OK)
             self._last_out = out
@@ -1037,7 +1104,7 @@ class SvgSubTab(_ConversionSubTab):
             LOGGER.exception("Could not convert DXF to SVG: %s", src)
             self.log_line.emit(f"Error: {exc}")
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit(f"Error: {exc}", STATUS_ERR)
 
     def _convert_batch(
@@ -1055,11 +1122,12 @@ class SvgSubTab(_ConversionSubTab):
         )
         if not files:
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit("No DXF files found", STATUS_WARN)
             self.log_line.emit("No DXF files found in the selected folder.")
             return
         self.log_line.emit(f"Found {len(files)} file(s)\n")
+        self._begin_batch(len(files))
         ok = err = 0
         for index, dxf in enumerate(files, start=1):
             if cancel_event.is_set():
@@ -1067,9 +1135,7 @@ class SvgSubTab(_ConversionSubTab):
                 return
             relative = dxf.relative_to(root)
             svg = Path(out_dir) / relative.with_suffix(".svg")
-            self._status_sig.emit(
-                f"Converting {index} of {len(files)} — {dxf.name}", STATUS_NEUTRAL
-            )
+            self._report_batch_progress(index, "Converting", dxf.name)
             try:
                 svg.parent.mkdir(parents=True, exist_ok=True)
                 stats = dxf_to_svg(dxf, svg)
@@ -1084,8 +1150,10 @@ class SvgSubTab(_ConversionSubTab):
                 LOGGER.exception("Could not convert %s to SVG", dxf)
                 self.log_line.emit(f"  ✗  {relative}: {exc}")
                 err += 1
+            finally:
+                self._record_batch_item(index)
         self._running = False
-        self._btn_state.emit(True)
+        self._refresh_readiness()
         self._last_out = out_dir
         self._status_sig.emit(
             f"Done — {ok} converted" + (f", {err} error(s)" if err else ""),
@@ -1175,6 +1243,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
 
         self._btn_state.connect(self._btn.setEnabled)
         self._status_sig.connect(self._set_status)
+        self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -1317,7 +1386,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 msg += " · unsupported SVG features: " + ", ".join(unsupported_features)
             self.log_line.emit(msg)
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._reveal_state.emit(True)
             self._status_sig.emit(
                 "Done"
@@ -1331,7 +1400,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
             LOGGER.exception("Could not convert SVG to DXF: %s", src)
             self.log_line.emit(f"Error: {exc}")
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit(f"Error: {exc}", STATUS_ERR)
 
     def _convert_batch(
@@ -1349,11 +1418,12 @@ class SvgToDxfSubTab(_ConversionSubTab):
         )
         if not files:
             self._running = False
-            self._btn_state.emit(True)
+            self._refresh_readiness()
             self._status_sig.emit("No SVG files found", STATUS_WARN)
             self.log_line.emit("No SVG files found in the selected folder.")
             return
         self.log_line.emit(f"Found {len(files)} file(s)\n")
+        self._begin_batch(len(files))
         ok = err = 0
         for index, svg in enumerate(files, start=1):
             if cancel_event.is_set():
@@ -1361,9 +1431,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 return
             relative = svg.relative_to(root)
             dxf = Path(out_dir) / relative.with_suffix(".dxf")
-            self._status_sig.emit(
-                f"Converting {index} of {len(files)} — {svg.name}", STATUS_NEUTRAL
-            )
+            self._report_batch_progress(index, "Converting", svg.name)
             try:
                 dxf.parent.mkdir(parents=True, exist_ok=True)
                 stats = svg_to_dxf(svg, dxf)
@@ -1384,8 +1452,10 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 LOGGER.exception("Could not convert %s to DXF", svg)
                 self.log_line.emit(f"  ✗  {relative}: {exc}")
                 err += 1
+            finally:
+                self._record_batch_item(index)
         self._running = False
-        self._btn_state.emit(True)
+        self._refresh_readiness()
         self._last_out = out_dir
         self._status_sig.emit(
             f"Done — {ok} converted" + (f", {err} error(s)" if err else ""),
@@ -1422,6 +1492,9 @@ __all__ = [
 class ConvertPage(BasePage):
     """Convert page — conversion and repair helpers for vector workflows."""
 
+    openInDraftRequested = Signal(object)
+    openInPatternRequested = Signal(object)
+
     _TOOL_DESCS = (
         "Convert FVI vector files to DXF. Supports single file or folder batch mode.",
         "Clean up malformed DXF files — close open polylines, simplify, and remove degenerate geometry.",
@@ -1433,6 +1506,7 @@ class ConvertPage(BasePage):
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self._settings: dict = settings or {}
+        self._initializing_task = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -1444,7 +1518,8 @@ class ConvertPage(BasePage):
         left.setContentsMargins(10, 10, 10, 4)
         left.setSpacing(4)
 
-        # Vertical tool selector
+        # Vertical tool selector. At the sidebar's compact edge the same
+        # choices move into a combo, leaving enough horizontal room for forms.
         tool_label = QLabel("CHOOSE A TASK")
         tool_label.setProperty("role", "section-label")
         left.addWidget(tool_label)
@@ -1462,16 +1537,25 @@ class ConvertPage(BasePage):
             "Export DXF as SVG vector graphics",
             "Import SVG files as DXF outlines",
         ]
+        self._task_buttons_widget = QWidget()
+        task_buttons_layout = QVBoxLayout(self._task_buttons_widget)
+        task_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        task_buttons_layout.setSpacing(4)
         for i, (lbl, tip) in enumerate(zip(_tool_labels, _tool_tips)):
             btn = QPushButton(lbl)
             btn.setCheckable(True)
-            btn.setChecked(i == 0)
-            btn.setProperty("active", i == 0)
+            btn.setProperty("active", False)
             btn.setProperty("role", "tool-item")
             btn.setMinimumHeight(34)
             btn.setToolTip(tip)
             self._tool_group.addButton(btn, i)
-            left.addWidget(btn)
+            task_buttons_layout.addWidget(btn)
+        left.addWidget(self._task_buttons_widget)
+        self._task_combo = QComboBox()
+        self._task_combo.setAccessibleName("Conversion task")
+        self._task_combo.addItems(_tool_labels)
+        self._task_combo.setVisible(False)
+        left.addWidget(self._task_combo)
 
         left.addSpacing(4)
 
@@ -1495,7 +1579,7 @@ class ConvertPage(BasePage):
 
         # ── Manual sidebar: scroll area + sticky footer ───────────────────────
         sidebar_frame = surface_frame("sidebar")
-        sidebar_frame.setMinimumWidth(360)
+        sidebar_frame.setMinimumWidth(300)
         sidebar_frame.setMaximumWidth(440)
         sidebar_outer = QVBoxLayout(sidebar_frame)
         sidebar_outer.setContentsMargins(0, 0, 0, 0)
@@ -1526,9 +1610,9 @@ class ConvertPage(BasePage):
         self._footer_btn.clicked.connect(self._trigger_active_subtab)
 
         self._footer_overflow = QToolButton()
-        self._footer_overflow.setText("⋯")
+        self._footer_overflow.setText("Options")
         self._footer_overflow.setProperty("role", "overflow")
-        self._footer_overflow.setFixedWidth(32)
+        self._footer_overflow.setFixedWidth(72)
         self._footer_overflow.setFixedHeight(38)
         self._footer_overflow.setToolTip("More actions")
         self._footer_overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1629,12 +1713,28 @@ class ConvertPage(BasePage):
         self._right_stack.setCurrentIndex(0)
         right.addWidget(self._footer_widget)
 
+        result_actions = QHBoxLayout()
+        self._open_draft_btn = QPushButton("Open in Draft")
+        self._open_pattern_btn = QPushButton("Use in Pattern")
+        self._open_draft_btn.setEnabled(False)
+        self._open_pattern_btn.setEnabled(False)
+        self._open_draft_btn.clicked.connect(self._open_preview_in_draft)
+        self._open_pattern_btn.clicked.connect(self._open_preview_in_pattern)
+        result_actions.addWidget(self._open_draft_btn)
+        result_actions.addWidget(self._open_pattern_btn)
+        right.addLayout(result_actions)
+
         # ── Splitter ──────────────────────────────────────────────────────────
-        self._splitter = content_splitter(self._left_panel, right_w, sizes=(380, 860))
+        input_header = self._build_shared_input_header()
+        input_header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        root.addWidget(input_header)
+        sidebar_width = max(300, min(440, int(self._settings.get("convert_sidebar_width", 380))))
+        self._splitter = content_splitter(self._left_panel, right_w, sizes=(sidebar_width, 860))
         self._splitter.setCollapsible(0, False)
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
-        root.addWidget(self._splitter)
+        self._splitter.splitterMoved.connect(self._on_sidebar_resized)
+        root.addWidget(self._splitter, stretch=1)
 
         # ── Connect signals ───────────────────────────────────────────────────
         for tab in (
@@ -1657,6 +1757,7 @@ class ConvertPage(BasePage):
         self._active_tab_idx: int | None = None
         self._tool_group.idClicked.connect(self._on_tool_changed)
         self._tool_group.idClicked.connect(lambda _index: self._emit_state_changed())
+        self._task_combo.currentIndexChanged.connect(self._select_task_from_combo)
         # Every persisted Convert control participates in workspace dirty
         # tracking. Previously all of these values round-tripped through JSON
         # while producing zero stateChanged signals, so close/autosave lost
@@ -1673,8 +1774,127 @@ class ConvertPage(BasePage):
                 check.toggled.connect(lambda _checked: self._emit_state_changed())
             for combo in subtab.findChildren(QComboBox):
                 combo.currentIndexChanged.connect(lambda _index: self._emit_state_changed())
-        self._on_tool_changed(0)
+            subtab._src_edit.textChanged.connect(self._sync_shared_input_from_task)
+        self.setAcceptDrops(True)
+        selected_task = max(0, min(3, int(self._settings.get("convert_selected_task", 0))))
+        selected_button = self._tool_group.button(selected_task)
+        if selected_button is not None:
+            selected_button.setChecked(True)
+        self._task_combo.setCurrentIndex(selected_task)
+        self._on_tool_changed(selected_task)
+        self._initializing_task = False
+        self._update_task_selector_mode(sidebar_width)
         self._refresh_preview_ui()
+
+    def _on_sidebar_resized(self, position: int, _index: int) -> None:
+        width = max(300, min(440, position))
+        self._update_task_selector_mode(width)
+        if self._settings.get("convert_sidebar_width") != width:
+            self._settings["convert_sidebar_width"] = width
+            save_settings(self._settings)
+
+    def _update_task_selector_mode(self, width: int) -> None:
+        compact = width < 340
+        self._task_buttons_widget.setVisible(not compact)
+        self._task_combo.setVisible(compact)
+
+    def _select_task_from_combo(self, index: int) -> None:
+        button = self._tool_group.button(index)
+        if button is not None:
+            button.setChecked(True)
+        self._on_tool_changed(index)
+        self._emit_state_changed()
+
+    def _build_shared_input_header(self) -> QWidget:
+        header = surface_frame("panel")
+        header.setProperty("role", "input-header")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(8)
+        label = QLabel("INPUT")
+        label.setProperty("role", "section-label")
+        layout.addWidget(label)
+        self._shared_input_edit = QLineEdit()
+        self._shared_input_edit.setPlaceholderText("Drop or choose the current conversion input…")
+        self._shared_input_edit.setAccessibleName("Current conversion input")
+        self._shared_input_edit.editingFinished.connect(self._commit_shared_input)
+        layout.addWidget(self._shared_input_edit, 1)
+        recent = RecentFilesButton(
+            self._settings, KIND_VECTOR, empty_message="No recent conversion inputs."
+        )
+        recent.fileSelected.connect(self._set_shared_source)
+        layout.addWidget(recent)
+        browse = QPushButton("Choose…")
+        browse.clicked.connect(self._browse_current_source)
+        layout.addWidget(browse)
+        self._shared_input_hint = QLabel("FVI file or folder")
+        self._shared_input_hint.setProperty("role", "hint-sm")
+        layout.addWidget(self._shared_input_hint)
+        return header
+
+    def _active_conversion_tab(self) -> _ConversionSubTab:
+        return (
+            self._fvi_subtab,
+            self._fix_subtab,
+            self._svg_subtab,
+            self._svg_dxf_subtab,
+        )[self._tool_stack.currentIndex()]
+
+    def _sync_shared_input_from_task(self, _text: str = "") -> None:
+        if not hasattr(self, "_shared_input_edit"):
+            return
+        source = self._active_conversion_tab()._src_edit.text()
+        self._shared_input_edit.blockSignals(True)
+        self._shared_input_edit.setText(source)
+        self._shared_input_edit.blockSignals(False)
+
+    def _set_shared_source(self, path: str) -> None:
+        self._active_conversion_tab()._src_edit.setText(path)
+        self._sync_shared_input_from_task()
+        if Path(path).is_file():
+            record_recent(self._settings, KIND_VECTOR, path)
+
+    def open_repair_input(self, path: str) -> None:
+        """Select the appropriate repair/conversion task for an external asset."""
+        suffix = Path(path).suffix.casefold()
+        index = {".fvi": 0, ".dxf": 1, ".svg": 3}.get(suffix, 1)
+        button = self._tool_group.button(index)
+        if button is not None:
+            button.setChecked(True)
+        self._on_tool_changed(index)
+        self._set_shared_source(path)
+
+    def _commit_shared_input(self) -> None:
+        value = self._shared_input_edit.text().strip()
+        if value:
+            self._set_shared_source(value)
+
+    def dragEnterEvent(self, event) -> None:
+        if event.mimeData().hasUrls() and any(
+            Path(url.toLocalFile()).is_dir()
+            or Path(url.toLocalFile()).suffix.casefold() in {".fvi", ".dxf", ".svg"}
+            for url in event.mimeData().urls()
+        ):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event) -> None:
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.toLocalFile()]
+        if not paths:
+            event.ignore()
+            return
+        path = paths[0]
+        expected = (".fvi", ".dxf", ".dxf", ".svg")[self._tool_stack.currentIndex()]
+        if Path(path).is_file() and Path(path).suffix.casefold() != expected:
+            self._set_footer_status(
+                f"This task expects {expected.upper()} input; choose another task or file.",
+                STATUS_WARN,
+            )
+            event.ignore()
+            return
+        self._set_shared_source(path)
+        event.acceptProposedAction()
 
     def _browse_current_source(self) -> None:
         current = self._tool_stack.currentWidget()
@@ -1682,6 +1902,15 @@ class ConvertPage(BasePage):
             current._browse_src()
 
     def _on_tool_changed(self, idx: int) -> None:
+        self._task_combo.blockSignals(True)
+        self._task_combo.setCurrentIndex(idx)
+        self._task_combo.blockSignals(False)
+        if (
+            not self._initializing_task
+            and self._settings.get("convert_selected_task") != idx
+        ):
+            self._settings["convert_selected_task"] = idx
+            save_settings(self._settings)
         self._tool_stack.setCurrentIndex(idx)
         self._subtab_desc.setText(self._TOOL_DESCS[idx])
         for btn in self._tool_group.buttons():
@@ -1690,6 +1919,11 @@ class ConvertPage(BasePage):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         self._footer_btn.setText(self._BTN_LABELS[idx])
+        if hasattr(self, "_shared_input_hint"):
+            self._shared_input_hint.setText(
+                ("FVI file or folder", "DXF file or folder", "DXF file or folder", "SVG file or folder")[idx]
+            )
+            self._sync_shared_input_from_task()
 
         _all = (
             self._fvi_subtab,
@@ -1705,12 +1939,14 @@ class ConvertPage(BasePage):
         subtab = _all[idx]
         subtab._btn_state.connect(self._footer_btn.setEnabled)
         subtab._status_sig.connect(self._set_footer_status)
-        # Reflect the INCOMING tab's own running state, not a blind "ready" —
-        # its conversion may still be in flight from before the user
-        # switched away and back (each subtab now guards its own
-        # re-entrancy, but the footer CTA should match reality too).
+        # Reflect the INCOMING tab's actual state — both whether its own
+        # conversion is still in flight from before the user switched away
+        # (each subtab guards its own re-entrancy, but the footer CTA should
+        # match reality too) and whether it has the input it needs. A blind
+        # "not running" left the footer button enabled on a tab with no
+        # source path chosen yet — a dead-end click.
         still_running = bool(getattr(subtab, "_running", False))
-        self._footer_btn.setEnabled(not still_running)
+        self._footer_btn.setEnabled(subtab.is_ready())
         if still_running:
             self._set_footer_status("Working…", STATUS_NEUTRAL)
         else:
@@ -1788,6 +2024,29 @@ class ConvertPage(BasePage):
             cursor_pos=cursor,
         )
         self._precision_bar.refresh()
+        has_preview = bool(self._preview_canvas.poly_count)
+        self._open_draft_btn.setEnabled(has_preview)
+        self._open_pattern_btn.setEnabled(
+            has_preview
+            and any(
+                len(poly) >= 4 and poly[0] == poly[-1]
+                for poly in self._preview_canvas.get_polylines_state()
+            )
+        )
+
+    def _open_preview_in_draft(self) -> None:
+        polys = self._preview_canvas.get_polylines_state()
+        if polys:
+            self.openInDraftRequested.emit(polys)
+
+    def _open_preview_in_pattern(self) -> None:
+        closed = [
+            poly
+            for poly in self._preview_canvas.get_polylines_state()
+            if len(poly) >= 4 and poly[0] == poly[-1]
+        ]
+        if closed:
+            self.openInPatternRequested.emit(closed)
 
     def shutdown(self) -> None:
         """Called by ``App.closeEvent`` before the window tears down."""

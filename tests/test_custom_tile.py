@@ -164,6 +164,146 @@ def test_saved_custom_patterns_appear_in_main_pattern_picker(qapp):
         qapp.processEvents()
 
 
+def test_custom_tile_save_uses_inline_name_and_project_library(qapp, tmp_path):
+    from src.core.settings import validate_settings
+    from src.ui.pages.pattern.tab import PatternPage
+
+    page = PatternPage(settings=validate_settings({"custom_tiles_dir": str(tmp_path)}))
+    try:
+        motif = [[(0.0, 0.0), (2.0, 0.0), (0.0, 0.0)]]
+        page._custom_tile_polys = motif
+        page._pattern_combo.setCurrentText("Custom Tile")
+        page._tile_name_edit.setText("Inline Motif")
+
+        page._save_tile_motif()
+
+        assert (tmp_path / "Inline Motif.dxf").exists()
+        assert page._tile_motifs["Inline Motif"] == motif
+        assert page._pattern_combo.currentText() == "Custom · Inline Motif"
+        assert page._tile_name_edit.text() == ""
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
+def test_saved_custom_tile_restores_its_pattern_settings(qapp, tmp_path, monkeypatch):
+    from src.core.settings import validate_settings
+    from src.ui.pages.pattern.tab import PatternPage
+
+    monkeypatch.setattr("src.ui.pages.pattern.tab.save_settings", lambda _settings: None)
+    page = PatternPage(settings=validate_settings({"custom_tiles_dir": str(tmp_path)}))
+    try:
+        page._custom_tile_polys = [[(0.0, 0.0), (2.0, 0.0), (0.0, 0.0)]]
+        page._pattern_combo.setCurrentText("Custom Tile")
+        page._custom_tile_repeat.setCurrentText("Half drop")
+        page._custom_tile_gap.setText("2.75")
+        page._tile_name_edit.setText("Dropped Tile")
+        page._save_tile_motif()
+
+        page._custom_tile_repeat.setCurrentText("Straight")
+        page._custom_tile_gap.setText("0.5")
+        page._pattern_combo.setCurrentText("— None —")
+        page._pattern_combo.setCurrentText("Custom · Dropped Tile")
+
+        assert page._custom_tile_repeat.currentText() == "Half drop"
+        assert page._custom_tile_gap.text() == "2.75"
+        assert page._settings["custom_tile_settings"]["Dropped Tile"]["custom_tile_repeat"] == "Half drop"
+
+        page._custom_tile_repeat.setCurrentText("Brick offset")
+        page._custom_tile_gap.setText("4.25")
+        assert page._save_tile_btn.text() == "Update custom tile"
+        assert not page._save_tile_btn.isHidden()
+        page._save_tile_motif()
+
+        page._pattern_combo.setCurrentText("— None —")
+        page._pattern_combo.setCurrentText("Custom · Dropped Tile")
+        assert page._custom_tile_repeat.currentText() == "Brick offset"
+        assert page._custom_tile_gap.text() == "4.25"
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
+def test_custom_tile_library_loads_verified_svg_and_fvi_formats(qapp, tmp_path):
+    from src.core.settings import validate_settings
+    from src.ui.pages.pattern.tab import PatternPage
+
+    (tmp_path / "line.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" '
+        'viewBox="0 0 10 10"><path d="M 0 0 L 10 0 L 10 10 Z"/></svg>',
+        encoding="utf-8",
+    )
+    (tmp_path / "mark.fvi").write_text(
+        "MOVEDIST 0,0\nDRAWLINE 10,0\nDRAWLINE 0,10\n",
+        encoding="utf-8",
+    )
+
+    page = PatternPage(settings=validate_settings({"custom_tiles_dir": str(tmp_path)}))
+    try:
+        assert "line" in page._tile_motifs
+        assert "mark" in page._tile_motifs
+        assert page._pattern_combo.findText("Custom · line") >= 0
+        assert page._pattern_combo.findText("Custom · mark") >= 0
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
+def test_missing_custom_tile_keeps_embedded_fallback_and_offers_locate(qapp, tmp_path):
+    from src.core.settings import validate_settings
+    from src.ui.pages.pattern.tab import PatternPage
+
+    motif = [[(0.0, 0.0), (2.0, 0.0), (0.0, 0.0)]]
+    missing = tmp_path / "moved.dxf"
+    page = PatternPage(settings=validate_settings({
+        "custom_tiles_dir": str(tmp_path),
+        "custom_tile_motifs": {"Moved": motif},
+        "custom_tile_assets": {
+            "Moved": {"path": str(missing), "status": "valid", "format": ".dxf"}
+        },
+    }))
+    try:
+        page._pattern_combo.setCurrentText("Custom · Moved")
+        assert page._custom_tile_polys == motif
+        assert page._tile_assets["Moved"]["status"] == "missing"
+        assert "embedded fallback" in page._tile_asset_status.text()
+        assert not page._locate_tile_btn.isHidden()
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
+def test_invalid_custom_tile_offers_repair_without_discarding_fallback(qapp, tmp_path):
+    from src.core.settings import validate_settings
+    from src.ui.pages.pattern.tab import PatternPage
+
+    broken = tmp_path / "Broken.dxf"
+    broken.write_text("not a dxf", encoding="utf-8")
+    motif = [[(0.0, 0.0), (1.0, 0.0), (0.0, 0.0)]]
+    page = PatternPage(settings=validate_settings({
+        "custom_tiles_dir": str(tmp_path),
+        "custom_tile_motifs": {"Broken": motif},
+    }))
+    requested = []
+    page.repairTileRequested.connect(requested.append)
+    try:
+        page._pattern_combo.setCurrentText("Custom · Broken")
+        assert page._custom_tile_polys == motif
+        assert page._tile_assets["Broken"]["status"] == "invalid"
+        assert "Invalid source" in page._tile_asset_status.text()
+        assert not page._repair_tile_btn.isHidden()
+        page._repair_tile_btn.click()
+        assert requested == [str(broken)]
+    finally:
+        page.shutdown()
+        page.deleteLater()
+        qapp.processEvents()
+
+
 def test_pattern_size_percent_scales_custom_tile_geometry():
     from shapely.geometry import box
 

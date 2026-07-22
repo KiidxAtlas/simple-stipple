@@ -8,9 +8,8 @@ but validate and coerce those dicts through ``PatternTabState`` internally.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 from pydantic import ValidationError
@@ -48,6 +47,9 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "outline_ids": list(page._outline_ids),
         "outline_roles": dict(page._outline_roles),
         "pattern_cell_cutouts": [list(poly) for poly in page._pattern_cell_cutouts],
+        "pattern_cell_instance_cutouts": [
+            list(poly) for poly in page._pattern_cell_instance_cutouts
+        ],
         "orig_w": page._orig_w,
         "orig_h": page._orig_h,
         "canvas_view": page._canvas.get_view_state(),
@@ -97,6 +99,9 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         if str(value) in {"boundary", "cutout", "open_path", "ignore"}
     }
     page._pattern_cell_cutouts = [list(poly) for poly in pattern_state.pattern_cell_cutouts]
+    page._pattern_cell_instance_cutouts = [
+        list(poly) for poly in pattern_state.pattern_cell_instance_cutouts
+    ]
     page._orig_w = float(pattern_state.orig_w)
     page._orig_h = float(pattern_state.orig_h)
     if page._orig_w > 0 and page._orig_h > 0:

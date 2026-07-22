@@ -124,6 +124,33 @@ def test_keybindings_dialog_has_one_row_per_settings_slot(qapp):
     assert "mode.draw" not in keys
 
 
+def test_keybindings_import_export_roundtrip(qapp, tmp_path):
+    from src.ui.widgets.dialogs.keybindings_dialog import KeybindingsDialog
+
+    dialog = KeybindingsDialog(keybindings={})
+    dialog._entries["workspace.open"].setText("Ctrl+Alt+O")
+    path = tmp_path / "shortcuts.json"
+    dialog.export_to_path(path)
+    dialog._entries["workspace.open"].setText("changed")
+    dialog.import_from_path(path)
+
+    assert dialog._entries["workspace.open"].text() == "Ctrl+Alt+O"
+
+
+def test_essential_shortcuts_cannot_all_be_removed(qapp):
+    from src.ui.widgets.dialogs.keybindings_dialog import KeybindingsDialog
+
+    dialog = KeybindingsDialog(keybindings={})
+    bindings = dialog._current_bindings()
+    bindings["workspace.open"] = ""
+    bindings["app.settings"] = ""
+
+    assert KeybindingsDialog._missing_essential_bindings(bindings) == [
+        "Open Workspace",
+        "Open Settings",
+    ]
+
+
 def test_new_draw_primitive_commands_are_registered_and_unbound_by_default():
     for tool in (
         "polyline",

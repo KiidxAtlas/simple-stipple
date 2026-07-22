@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from PySide6.QtGui import QIcon, QResizeEvent
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton
 
 from src.ui.components import info_chip
@@ -31,13 +34,15 @@ class CanvasStatusStrip(QFrame):
         self._objects_label.setProperty("role", "status-meta")
         layout.addWidget(self._objects_label)
 
-        layout.addWidget(self._dot())
+        self._objects_dot = self._dot()
+        layout.addWidget(self._objects_dot)
 
         self._selection_label = QLabel("0 sel")
         self._selection_label.setProperty("role", "status-selection")
         layout.addWidget(self._selection_label)
 
-        layout.addWidget(self._dot())
+        self._selection_dot = self._dot()
+        layout.addWidget(self._selection_dot)
 
         self._precision_label = QLabel("Free move")
         self._precision_label.setProperty("role", "status-detail")
@@ -52,7 +57,17 @@ class CanvasStatusStrip(QFrame):
         layout.addWidget(self._dot())
 
         self._zoom_label = QToolButton()
-        self._zoom_label.setText("100% ▾")
+        self._zoom_label.setText("100%")
+        self._zoom_label.setIcon(
+            QIcon(
+                str(
+                    Path(__file__).parents[2]
+                    / "style"
+                    / "icons"
+                    / "chevron_down.svg"
+                )
+            )
+        )
         self._zoom_label.setProperty("role", "status-zoom")
         self._zoom_label.setToolTip("Zoom level — open presets")
         self._zoom_label.setAccessibleName("Canvas zoom")
@@ -66,6 +81,7 @@ class CanvasStatusStrip(QFrame):
         self._readiness_chip = info_chip("No geometry", "warn")
         layout.addWidget(self._readiness_chip)
         self._readiness_dot.hide()
+        self._update_responsive_visibility()
 
     @staticmethod
     def _dot() -> QLabel:
@@ -104,7 +120,7 @@ class CanvasStatusStrip(QFrame):
         if topology_text:
             combined_precision = f"{precision_text} · {topology_text}"
         self._precision_label.setText(combined_precision)
-        self._zoom_label.setText(f"{zoom_percent}% ▾")
+        self._zoom_label.setText(f"{zoom_percent}%")
         if cursor_pos:
             self._cursor_label.setText(f"X {cursor_pos[0]:.2f}  Y {cursor_pos[1]:.2f}")
         else:
@@ -113,6 +129,31 @@ class CanvasStatusStrip(QFrame):
         self._readiness_chip.setProperty("tone", readiness_tone)
         self._readiness_chip.style().unpolish(self._readiness_chip)
         self._readiness_chip.style().polish(self._readiness_chip)
+        self._update_details_tooltip()
+        self._update_responsive_visibility()
+
+    def _update_details_tooltip(self) -> None:
+        details = (
+            f"{self._objects_label.text()} · {self._selection_label.text()} · "
+            f"{self._precision_label.text()}"
+        )
+        self._mode_label.setToolTip(details)
+        self._readiness_chip.setToolTip(details)
+
+    def _update_responsive_visibility(self) -> None:
+        compact = self.width() < 800
+        for widget in (
+            self._objects_label,
+            self._objects_dot,
+            self._selection_label,
+            self._selection_dot,
+            self._precision_label,
+        ):
+            widget.setVisible(not compact)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._update_responsive_visibility()
 
     def set_zoom_callback(self, callback) -> None:
         """callback(value) where value is a percent int or "fit"."""
@@ -136,6 +177,7 @@ class CanvasStatusStrip(QFrame):
         self._selection_label.setProperty("active", bool(count))
         self._selection_label.style().unpolish(self._selection_label)
         self._selection_label.style().polish(self._selection_label)
+        self._update_details_tooltip()
 
     def set_readiness(self, text: str, tone: str = "neutral") -> None:
         """Lightweight command-lifecycle update without rebuilding page state."""

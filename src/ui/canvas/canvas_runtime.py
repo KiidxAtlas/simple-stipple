@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
 from src.ui.widgets.canvas.precision_bar import CanvasPrecisionBar
 from src.ui.widgets.canvas.toolbar import canvas_toolbar
@@ -727,9 +727,17 @@ class CanvasToolbarModule(QWidget):
 
                 button.clicked.connect(_toggle)
                 toolbar_layout.insertWidget(toolbar_layout.count() - 1, button)
+                if hasattr(toolbar, "register_secondary"):
+                    toolbar.register_secondary(button)
         if isinstance(toolbar_layout, QHBoxLayout) and extra_widgets:
             for widget in extra_widgets:
                 toolbar_layout.insertWidget(toolbar_layout.count() - 1, widget)
+                if isinstance(widget, QAbstractButton) and hasattr(
+                    toolbar, "register_secondary"
+                ):
+                    toolbar.register_secondary(widget)
+                elif hasattr(toolbar, "register_secondary_widget"):
+                    toolbar.register_secondary_widget(widget)
 
         root.addWidget(toolbar)
 

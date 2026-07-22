@@ -28,7 +28,7 @@ def explode_path(points: list[Point]) -> list[list[Point]]:
     return [
         [vertices[index], vertices[(index + 1) % len(vertices)]]
         for index in range(max(0, count))
-        if math.dist(vertices[index], vertices[(index + 1) % len(vertices)]) >= 1e-6
+        if math.dist(vertices[index], vertices[(index + 1) % len(vertices)]) >= 1e-8
     ]
 
 

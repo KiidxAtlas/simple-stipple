@@ -15,11 +15,14 @@ commands pick it up too.
 
 from __future__ import annotations
 
+import json
 import platform
+from pathlib import Path
 
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -32,9 +35,22 @@ from PySide6.QtWidgets import (
 
 from src.core.settings import DEFAULT_KEYBINDINGS
 from src.ui.canvas.interaction import commands as canvas_commands
-from src.ui.components import section_label, sep, surface_frame
+from src.ui.components import (
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    install_dialog_focus_lifecycle,
+    section_label,
+    sep,
+    surface_frame,
+)
 
 _KBD_MOD = "Meta" if platform.system() == "Darwin" else "Ctrl"
+_ESSENTIAL_BINDINGS = {
+    "workspace.open": "Open Workspace",
+    "app.settings": "Open Settings",
+    "app.command_palette": "Open Command Palette",
+}
 
 # App-level ids aren't canvas Commands, so they need their own labels/groups.
 _APP_LABELS: dict[str, str] = {
@@ -129,8 +145,8 @@ class KeybindingsDialog(QDialog):
         }
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
 
         title = QLabel("Keyboard Shortcuts")
         title.setProperty("role", "page-title")
@@ -152,11 +168,17 @@ class KeybindingsDialog(QDialog):
 
         card = surface_frame("panel")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 12, 12, 12)
-        card_layout.setSpacing(6)
+        card_layout.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        card_layout.setSpacing(SPACE_SM)
         section_label(card_layout, "Shortcuts")
 
         actions_row = QHBoxLayout()
+        import_btn = QPushButton("Import…")
+        import_btn.clicked.connect(self._import_file)
+        export_btn = QPushButton("Export…")
+        export_btn.clicked.connect(self._export_file)
+        actions_row.addWidget(import_btn)
+        actions_row.addWidget(export_btn)
         actions_row.addStretch()
         reset_btn = QPushButton("Reset all to defaults")
         reset_btn.setToolTip("Restore all keyboard shortcuts to their defaults")
@@ -195,12 +217,13 @@ class KeybindingsDialog(QDialog):
         layout.addLayout(btn_row)
 
         self._apply_filter("")
+        install_dialog_focus_lifecycle(self, self._filter)
 
     def _add_row(self, layout: QVBoxLayout, key: str, label: str) -> None:
         row_widget = QWidget()
         row = QHBoxLayout(row_widget)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row.setSpacing(SPACE_SM)
 
         lbl = QLabel(label)
         lbl.setMinimumWidth(180)
@@ -256,6 +279,52 @@ class KeybindingsDialog(QDialog):
             by_shortcut.setdefault(norm, []).append(key)
         return {norm: keys for norm, keys in by_shortcut.items() if len(keys) > 1}
 
+    @staticmethod
+    def _missing_essential_bindings(bindings: dict[str, str]) -> list[str]:
+        return [
+            label
+            for key, label in _ESSENTIAL_BINDINGS.items()
+            if not str(bindings.get(key, "")).strip()
+        ]
+
+    def _current_bindings(self) -> dict[str, str]:
+        return {key: entry.text().strip() for key, entry in self._entries.items()}
+
+    def export_to_path(self, path: str | Path) -> None:
+        Path(path).write_text(
+            json.dumps(self._current_bindings(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def import_from_path(self, path: str | Path) -> None:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in payload.items()
+        ):
+            raise ValueError("Shortcut file must contain a string-to-string object")
+        for key, value in payload.items():
+            if key in self._entries:
+                self._entries[key].setText(value)
+
+    def _export_file(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Shortcuts", "simple-stipple-shortcuts.json", "JSON (*.json)"
+        )
+        if path:
+            self.export_to_path(path)
+
+    def _import_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Shortcuts", "", "JSON (*.json)"
+        )
+        if not path:
+            return
+        try:
+            self.import_from_path(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            QMessageBox.warning(self, "Import Shortcuts", str(exc))
+
     def _apply(self) -> None:
         result: dict[str, str] = dict(self._defaults)
         for key, entry in self._entries.items():
@@ -274,6 +343,16 @@ class KeybindingsDialog(QDialog):
                 "The same shortcut is assigned to more than one action:\n\n"
                 + "\n".join(lines)
                 + "\n\nGive each action a unique shortcut before applying.",
+            )
+            return
+
+        missing_essential = self._missing_essential_bindings(result)
+        if missing_essential:
+            QMessageBox.warning(
+                self,
+                "Essential Shortcuts Required",
+                "Keep a keyboard route to these recovery commands:\n\n"
+                + "\n".join(f"  • {label}" for label in missing_essential),
             )
             return
 

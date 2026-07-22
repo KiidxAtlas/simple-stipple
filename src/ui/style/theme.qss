@@ -1,5 +1,4 @@
-/* ── Global font ─────────────────────────────────────── */
-* { font-family: "Arial"; }
+/* Use Qt's native platform UI font. */
 
 QMainWindow {
     background: #0d1117;
@@ -148,6 +147,9 @@ QLabel[role="section-subtitle"] {
 QLabel[role="section-subtitle"][dim="true"] {
     color: #8b949e;
 }
+QLabel[role="field-label"] {
+    color: #8b949e;
+}
 QLabel[role="zone-edit-scope"] {
     color: #8b949e;
     border: 1px solid #30363d;
@@ -195,6 +197,9 @@ QPushButton:checked {
     background: #1f3a6e;
     border-color: #2f81f7;
     color: #79c0ff;
+}
+QPushButton:focus, QToolButton:focus {
+    border: 2px solid #58a6ff;
 }
 
 QPushButton[active="true"] {
@@ -308,6 +313,15 @@ QToolButton[active="true"] {
     border-color: #2f81f7;
     color: #ffffff;
 }
+QToolButton[role="drawer-toggle"] {
+    background: rgba(13, 17, 23, 0.94);
+    border: 1px solid #58a6ff;
+    color: #f0f6fc;
+    font-weight: 700;
+}
+QToolButton[role="drawer-toggle"]:hover {
+    background: #1f3a6e;
+}
 
 /* ── Input fields ────────────────────────────────────── */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
@@ -320,7 +334,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     selection-background-color: #1f3a6e;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-    border-color: #2f81f7;
+    border: 2px solid #58a6ff;
 }
 QLineEdit[error="true"] {
     border: 1px solid #f85149;
@@ -431,6 +445,9 @@ QFrame[surface="sidebar"], QFrame[surface="panel"], QFrame[surface="canvas"] {
     background: rgba(17, 23, 32, 0.92);
     border: 1px solid #26303b;
     border-radius: 10px;
+}
+QWidget[role="pattern-side-panel"] {
+    background: #111720;
 }
 
 QFrame[role="hero"] {
@@ -546,6 +563,13 @@ QSplitter::handle:hover {
 }
 
 /* ── Sliders ─────────────────────────────────────────── */
+QSlider {
+    min-height: 28px;
+}
+QSlider:focus {
+    border: 1px solid #58a6ff;
+    border-radius: 4px;
+}
 QSlider::groove:horizontal {
     height: 3px;
     background: #21262d;
@@ -585,11 +609,12 @@ QProgressBar::chunk {
 
 /* ── Check boxes ─────────────────────────────────────── */
 QCheckBox {
-    spacing: 6px;
+    min-height: 28px;
+    spacing: 8px;
 }
 QCheckBox::indicator {
-    width: 15px;
-    height: 15px;
+    width: 18px;
+    height: 18px;
     border: 1px solid #30363d;
     border-radius: 4px;
     background: #0d1117;
@@ -600,6 +625,10 @@ QCheckBox::indicator:checked {
 }
 QCheckBox::indicator:hover {
     border-color: #58a6ff;
+}
+QCheckBox:focus {
+    border: 1px solid #58a6ff;
+    border-radius: 4px;
 }
 
 /* ── Plain text / log ────────────────────────────────── */
@@ -650,6 +679,31 @@ QLabel[role="status-neutral"] {
     border: 1px solid transparent;
     border-radius: 4px;
     padding: 4px 6px;
+    font-size: 11px;
+}
+
+QLabel[role="dialog-title"] {
+    color: #f0f6fc;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel[role="dialog-subtitle"], QLabel[role="dialog-message"] {
+    color: #8b949e;
+    font-size: 12px;
+}
+
+QLabel[role="section-title"] {
+    color: #e6edf3;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+QTextEdit[role="release-notes"] {
+    background: #0f141b;
+    border: 1px solid #2b3440;
+    border-radius: 4px;
+    color: #c9d1d9;
     font-size: 11px;
 }
 
@@ -908,6 +962,13 @@ QTreeWidget QLineEdit {
     border-radius: 3px;
     background: #0d1117;
     color: #e6edf3;
+}
+
+/* Item views and tabs otherwise lose all visible keyboard focus because their
+   platform outline is intentionally disabled by the themed surfaces. */
+QListWidget:focus, QTreeView:focus, QTabBar:focus {
+    border: 1px solid #58a6ff;
+    border-radius: 4px;
 }
 
 /* ── QTextEdit (git log) ─────────────────────────────── */
