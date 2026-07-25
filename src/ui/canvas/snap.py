@@ -30,11 +30,15 @@ from src.backend.cad.shapes import (
     SplineShape,
     StarShape,
 )
-from src.backend.cad.snapping import angle_snap, resolve_drag_snap, resolve_snap
+from src.backend.cad.snapping import (
+    angle_snap,
+    resolve_drag_snap,
+    resolve_snap,
+)
 
 if TYPE_CHECKING:
     from src.backend.cad.shapes import Shape
-    from src.ui.canvas.view import CanvasView
+    from src.ui.canvas.view.main import CanvasView
 
 SnapResult = tuple[float, float, str]
 
@@ -61,18 +65,18 @@ class SnapEngine:
         allow_grid: bool = True,
         allow_vertex: bool = True,
         allow_edge: bool = True,
-        exclude_vertices: set[tuple[int, int]] | None = None,
-        exclude_segments: set[tuple[int, int]] | None = None,
-        exclude_polys: set[int] | None = None,
+        exclude_vertices: set[tuple[str, int]] | None = None,
+        exclude_segments: set[tuple[str, int]] | None = None,
+        exclude_polys: set[str] | None = None,
         reference_point: tuple[float, float] | None = None,
     ) -> SnapResult | None:
         v = self.v
         if not getattr(v, "_snap_master_enabled", True):
             return None
-        polylines = [e.points for e in v._entities]
+        polylines = {e.id: e.points for e in v._entities}
         # Locked and non-active-layer entities remain useful references, but
         # explicitly hidden geometry must not create invisible snap targets.
-        hidden_polys: set[int] = set(v._flagged("hidden"))
+        hidden_polys = v._flagged("hidden")
         vertex_enabled = allow_vertex and getattr(v, "_snap_vertex_enabled", True)
         edge_enabled = allow_edge and getattr(v, "_snap_edge_enabled", True)
         if drag:
@@ -97,9 +101,9 @@ class SnapEngine:
                 poly_bounds=v._poly_bounds,
                 is_poly_closed=v._is_poly_closed,
                 segment_intersection_point=v._segment_intersection_point,
-                mode=v._mode,
+                mode=getattr(v, "_mode", None),
                 reference_point=reference_point,
-                draw_points=v._draw_pts,
+                draw_points=getattr(v, "_draw_pts", []),
             )
         else:
             best = resolve_snap(
@@ -121,9 +125,9 @@ class SnapEngine:
                 poly_bounds=v._poly_bounds,
                 is_poly_closed=v._is_poly_closed,
                 segment_intersection_point=v._segment_intersection_point,
-                mode=v._mode,
+                mode=getattr(v, "_mode", None),
                 reference_point=reference_point,
-                draw_points=v._draw_pts,
+                draw_points=getattr(v, "_draw_pts", []),
             )
         best = self._pick_better(cx, cy, best, self._shape_candidate(cx, cy, exclude=exclude_polys))
         # Tangent/extension are inferred edge snaps and deliberately lower
@@ -170,11 +174,7 @@ class SnapEngine:
                 best,
                 self._axis_alignment_candidate(cx, cy, wx, wy, exclude=exclude_polys),
             )
-        if (
-            allow_polyline
-            and edge_enabled
-            and getattr(v, "_snap_extension_enabled", True)
-        ):
+        if allow_polyline and edge_enabled and getattr(v, "_snap_extension_enabled", True):
             best = self._pick_better(
                 cx,
                 cy,
@@ -192,7 +192,7 @@ class SnapEngine:
         wy: float,
         reference: tuple[float, float],
         *,
-        exclude: set[int] | None = None,
+        exclude: set[str] | None = None,
     ) -> SnapResult | None:
         """Infer parallel, perpendicular, and equal-length line endpoints.
 
@@ -206,12 +206,12 @@ class SnapEngine:
         pointer_length = math.hypot(wx - ax, wy - ay)
         if pointer_length <= 1e-12:
             return None
-        hidden = self.v._flagged("hidden")
+        hidden_ids = self.v._flagged("hidden")
         relationship_candidates: list[SnapResult] = []
         lengths: set[float] = set()
         angles: set[float] = set()
-        for index, entity in enumerate(self.v._entities):
-            if index in (exclude or ()) or index in hidden:
+        for entity in self.v._entities:
+            if entity.id in (exclude or ()) or entity.id in hidden_ids:
                 continue
             for start, end in zip(entity.points, entity.points[1:]):
                 dx, dy = end[0] - start[0], end[1] - start[1]
@@ -269,14 +269,14 @@ class SnapEngine:
         wx: float,
         wy: float,
         *,
-        exclude: set[int] | None = None,
+        exclude: set[str] | None = None,
     ) -> SnapResult | None:
         """Align the moving endpoint's X or Y coordinate to visible endpoints."""
-        hidden = self.v._flagged("hidden")
+        hidden_ids = self.v._flagged("hidden")
         best: SnapResult | None = None
         best_distance = ShapeSnapEngine.SNAP_RADIUS
-        for index, entity in enumerate(self.v._entities):
-            if index in (exclude or ()) or index in hidden or not entity.points:
+        for entity in self.v._entities:
+            if entity.id in (exclude or ()) or entity.id in hidden_ids or not entity.points:
                 continue
             # Open-path endpoints are the primary intent. Closed paths have no
             # topological endpoint, so their vertices remain regular vertex
@@ -313,7 +313,7 @@ class SnapEngine:
     # ── Candidate sources ─────────────────────────────────────────────────
 
     def _shape_candidate(
-        self, cx: float, cy: float, exclude: set[int] | None = None
+        self, cx: float, cy: float, exclude: set[str] | None = None
     ) -> SnapResult | None:
         v = self.v
         if not getattr(v, "_snap_vertex_enabled", True):
@@ -321,14 +321,14 @@ class SnapEngine:
         best: SnapResult | None = None
         best_dist = float("inf")
         excluded = exclude or ()
-        hidden = self.v._flagged("hidden")
+        hidden_ids = self.v._flagged("hidden")
         # Shape snapping works across visible layers — shapes on non-active
         # layers remain valid targets even when not selectable/editable.
         # ``exclude`` skips the entity being dragged itself — otherwise its
         # OWN (stale, pre-drag) cached shape stays a valid snap target and
         # the drag can stick to a "ghost" of where it started.
-        for idx, shape in enumerate(v._snap_shapes()):
-            if idx in excluded or idx in hidden:
+        for eid, shape in v._snap_shapes().items():
+            if eid in excluded or eid in hidden_ids:
                 continue
             if not getattr(shape, "visible", True):
                 continue
@@ -371,15 +371,15 @@ class SnapEngine:
         return offset <= sweep + 1e-9
 
     def _curve_candidate(
-        self, cx: float, cy: float, *, exclude: set[int] | None = None
+        self, cx: float, cy: float, *, exclude: set[str] | None = None
     ) -> SnapResult | None:
         """Nearest analytic point on circles, arcs, and rotated ellipses."""
         wx, wy = self.v._c2w(cx, cy)
         best: SnapResult | None = None
         best_distance = ShapeSnapEngine.SNAP_RADIUS
-        hidden = self.v._flagged("hidden")
-        for index, shape in enumerate(self.v._snap_shapes()):
-            if index in (exclude or ()) or index in hidden:
+        hidden_ids = self.v._flagged("hidden")
+        for eid, shape in self.v._snap_shapes().items():
+            if eid in (exclude or ()) or eid in hidden_ids:
                 continue
             point: tuple[float, float] | None = None
             if isinstance(shape, (CircleShape, ArcShape)):
@@ -431,7 +431,7 @@ class SnapEngine:
         cy: float,
         reference: tuple[float, float] | None,
         *,
-        exclude: set[int] | None = None,
+        exclude: set[str] | None = None,
     ) -> SnapResult | None:
         """Tangency points from the active draw/reference point to circles."""
         if reference is None or not getattr(self.v, "_snap_tangent_enabled", True):
@@ -439,9 +439,13 @@ class SnapEngine:
         ax, ay = reference
         best: SnapResult | None = None
         best_dist = ShapeSnapEngine.SNAP_RADIUS
-        hidden = self.v._flagged("hidden")
-        for index, shape in enumerate(self.v._snap_shapes()):
-            if index in (exclude or ()) or index in hidden or not isinstance(shape, CircleShape):
+        hidden_ids = self.v._flagged("hidden")
+        for eid, shape in self.v._snap_shapes().items():
+            if (
+                eid in (exclude or ())
+                or eid in hidden_ids
+                or not isinstance(shape, CircleShape)
+            ):
                 continue
             dx, dy = ax - shape.center[0], ay - shape.center[1]
             distance_sq = dx * dx + dy * dy
@@ -465,7 +469,7 @@ class SnapEngine:
         cx: float,
         cy: float,
         *,
-        exclude: set[int] | None = None,
+        exclude: set[str] | None = None,
     ) -> SnapResult | None:
         """Project onto the infinite extension of visible straight segments."""
         if not getattr(self.v, "_snap_extension_enabled", True):
@@ -473,9 +477,9 @@ class SnapEngine:
         wx, wy = self.v._c2w(cx, cy)
         best: SnapResult | None = None
         best_dist = ShapeSnapEngine.SNAP_RADIUS
-        hidden = self.v._flagged("hidden")
-        for index, entity in enumerate(self.v._entities):
-            if index in (exclude or ()) or index in hidden:
+        hidden_ids = self.v._flagged("hidden")
+        for entity in self.v._entities:
+            if entity.id in (exclude or ()) or entity.id in hidden_ids:
                 continue
             points = entity.points
             for start, end in zip(points, points[1:]):
@@ -543,9 +547,7 @@ class SnapEngine:
             ("vertex_", "spline_control_", "arc_start", "arc_end")
         ):
             return 115
-        if snap_type == "center" or snap_type.startswith(
-            ("circle_", "ellipse_", "quadrant_")
-        ):
+        if snap_type == "center" or snap_type.startswith(("circle_", "ellipse_", "quadrant_")):
             return 110
         if snap_type == "midpoint":
             return 105
@@ -571,9 +573,8 @@ class SnapEngine:
 
     @staticmethod
     def _is_magnetic_point(snap_type: str) -> bool:
-        return (
-            snap_type in {"intersection", "vertex", "midpoint"}
-            or snap_type.startswith(("vertex_", "spline_control_", "arc_start", "arc_end"))
+        return snap_type in {"intersection", "vertex", "midpoint"} or snap_type.startswith(
+            ("vertex_", "spline_control_", "arc_start", "arc_end")
         )
 
 

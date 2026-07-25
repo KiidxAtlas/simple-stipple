@@ -49,7 +49,7 @@ from src.ui.components import (
     surface_frame,
     tool_icon,
 )
-from src.ui.pages.trace.form import TRACE_DEFAULT_FIELDS, trace_default
+from src.ui.pages.trace.ui.form import TRACE_DEFAULT_FIELDS, trace_default
 from src.ui.util import DEFAULT_UNIT_SYSTEM
 from src.ui.widgets.dialogs.customize_dialogs import (
     ContextMenuCustomizeDialog,

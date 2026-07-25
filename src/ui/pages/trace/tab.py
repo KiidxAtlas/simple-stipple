@@ -30,9 +30,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.dxf.io import write_polylines_dxf
-from src.backend.raster_engraving import RasterEngravingSpec, export_raster_job
-from src.backend.trace import TraceCancelled, image_to_outlines
+from src.app.services.presets_service import (
+    RasterEngravingSpec,
+    TraceCancelled,
+    export_raster_job,
+    image_to_outlines,
+)
+from src.backend.dxf.service import DxfService
 from src.core.settings import save_settings
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
@@ -53,7 +57,12 @@ from src.ui.components import (
     workflow_strip,
 )
 from src.ui.pages.base import BasePage
-from src.ui.pages.trace.form import (
+from src.ui.pages.trace.domain.session import (
+    apply_trace_workspace_state,
+    clear_trace_workspace_state,
+    get_trace_workspace_state,
+)
+from src.ui.pages.trace.ui.form import (
     PathField,
     SliderField,
     TextField,
@@ -61,11 +70,6 @@ from src.ui.pages.trace.form import (
     build_lazy_section,
     build_trace_kwargs,
     trace_default,
-)
-from src.ui.pages.trace.session import (
-    apply_trace_workspace_state,
-    clear_trace_workspace_state,
-    get_trace_workspace_state,
 )
 from src.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 from src.ui.util import KIND_IMAGE, pick_open_file, pick_save_file, record_recent
@@ -629,13 +633,20 @@ class TracePage(BasePage):
     def _build_advanced_fields(self, layout: QVBoxLayout) -> None:
         layout.addWidget(
             SliderField(
-                "Simplify (px)", entry=self._simplify, minimum=0, maximum=10, step=0.1,
+                "Simplify (px)",
+                entry=self._simplify,
+                minimum=0,
+                maximum=10,
+                step=0.1,
                 tooltip=self._simplify.toolTip(),
             )
         )
         layout.addWidget(
             SliderField(
-                "Min area (px²)", entry=self._min_area, minimum=0, maximum=1000,
+                "Min area (px²)",
+                entry=self._min_area,
+                minimum=0,
+                maximum=1000,
                 tooltip=self._min_area.toolTip(),
             )
         )
@@ -652,14 +663,21 @@ class TracePage(BasePage):
         )
         layout.addWidget(
             SliderField(
-                "Closing radius", entry=self._close_r, minimum=0, maximum=20,
+                "Closing radius",
+                entry=self._close_r,
+                minimum=0,
+                maximum=20,
                 tooltip=self._close_r.toolTip(),
             )
         )
         layout.addWidget(self._outer_only_cb)
         layout.addWidget(
             SliderField(
-                "Max resolution", entry=self._max_res, minimum=64, maximum=8000, step=16,
+                "Max resolution",
+                entry=self._max_res,
+                minimum=64,
+                maximum=8000,
+                step=16,
                 tooltip=self._max_res.toolTip(),
             )
         )
@@ -1065,6 +1083,7 @@ class TracePage(BasePage):
         if not self._canvas.get_polylines_state():
             self._set_status("Nothing to smooth yet — trace an image first.", STATUS_ERR)
             return
+
         def apply_smoothing(tolerance: float) -> None:
             self._canvas.select_all()
             count = self._canvas.fit_selected_to_curve(tolerance)
@@ -1304,9 +1323,7 @@ class TracePage(BasePage):
         if choice == "pattern":
             closed = [poly for poly in polys if len(poly) >= 4 and poly[0] == poly[-1]]
             if not closed:
-                self._set_status(
-                    "Pattern needs one or more closed trace outlines.", STATUS_WARN
-                )
+                self._set_status("Pattern needs one or more closed trace outlines.", STATUS_WARN)
                 return
             self.sendSelectedToPatternRequested.emit(closed)
         else:
@@ -1410,8 +1427,8 @@ class TracePage(BasePage):
 
     def _build_layer_tree_rows(
         self,
-        layer_view_state: dict[str, dict[str, set[int]]],
-    ) -> list[dict[str, object]]:
+        layer_view_state: dict[str, dict[str, set[str]]],
+    ) -> list[dict[str, Any]]:
         return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
     def _on_send_selected_to_draft(
@@ -1460,7 +1477,7 @@ class TracePage(BasePage):
         if not out:
             return
         try:
-            write_polylines_dxf(
+            DxfService.write_polylines_dxf(
                 [list(r["polyline"]) for r in records],
                 out,
                 close=False,
@@ -1475,10 +1492,8 @@ class TracePage(BasePage):
             QMessageBox.critical(self, "Export Error", str(exc))
 
     def _export_selected(self) -> None:
-        selected = self._canvas.get_selection_indices()
-        records = [
-            r for r in self._canvas.get_export_dxf_state() if int(r.get("index", -1)) in selected
-        ]
+        selected = set(self._canvas.get_selected_ids())
+        records = [r for r in self._canvas.get_export_dxf_state() if r.get("entity_id") in selected]
         if not records:
             QMessageBox.information(self, "Export Selected", "Nothing is selected.")
             return
@@ -1486,7 +1501,7 @@ class TracePage(BasePage):
         if not out:
             return
         try:
-            write_polylines_dxf(
+            DxfService.write_polylines_dxf(
                 [list(r["polyline"]) for r in records],
                 out,
                 close=False,
@@ -1542,12 +1557,18 @@ class TracePage(BasePage):
         passes.setRange(1, 100)
         invert = QCheckBox("Invert light and dark")
         for label, field in (
-            ("X position (mm)", x), ("Y position (mm)", y),
-            ("Width (mm)", width), ("Height (mm)", height),
-            ("Line interval (mm)", interval), ("Minimum power (%)", min_power),
-            ("Maximum power (%)", max_power), ("Gamma / shadow detail", gamma),
+            ("X position (mm)", x),
+            ("Y position (mm)", y),
+            ("Width (mm)", width),
+            ("Height (mm)", height),
+            ("Line interval (mm)", interval),
+            ("Minimum power (%)", min_power),
+            ("Maximum power (%)", max_power),
+            ("Gamma / shadow detail", gamma),
             ("Speed (mm/s)", speed),
-            ("Contrast", contrast), ("Brightness", brightness), ("Passes", passes),
+            ("Contrast", contrast),
+            ("Brightness", brightness),
+            ("Passes", passes),
         ):
             form.addRow(label, field)
         form.addRow("Tone", invert)
@@ -1568,18 +1589,30 @@ class TracePage(BasePage):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         out = pick_save_file(
-            self, self._settings, "raster_output", "Export raster engraving",
-            f"{Path(self._img_path).stem}_engraving.png", "PNG image (*.png)",
+            self,
+            self._settings,
+            "raster_output",
+            "Export raster engraving",
+            f"{Path(self._img_path).stem}_engraving.png",
+            "PNG image (*.png)",
         )
         if not out:
             return
         try:
             spec = RasterEngravingSpec(
-                x_mm=x.value(), y_mm=y.value(), width_mm=width.value(), height_mm=height.value(),
-                line_interval_mm=interval.value(), min_power_percent=min_power.value(),
-                max_power_percent=max_power.value(), gamma=gamma.value(), contrast=contrast.value(),
+                x_mm=x.value(),
+                y_mm=y.value(),
+                width_mm=width.value(),
+                height_mm=height.value(),
+                line_interval_mm=interval.value(),
+                min_power_percent=min_power.value(),
+                max_power_percent=max_power.value(),
+                gamma=gamma.value(),
+                contrast=contrast.value(),
                 speed_mm_s=speed.value(),
-                brightness=brightness.value(), passes=passes.value(), invert=invert.isChecked(),
+                brightness=brightness.value(),
+                passes=passes.value(),
+                invert=invert.isChecked(),
             )
             png, metadata, positioned = export_raster_job(self._img_path, out, spec)
             self._last_out = str(png)

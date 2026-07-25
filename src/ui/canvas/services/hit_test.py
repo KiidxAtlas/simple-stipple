@@ -6,6 +6,7 @@ import math
 from typing import Any, cast
 
 from src.backend.spatial import VertexIndex, build_vertex_index, query_within_radius
+from src.backend.model.document import EntityId
 from src.ui.canvas.constants import EDGE_HIT, SNAP_DIST, VERT_HIT
 
 Point = tuple[float, float]
@@ -69,8 +70,8 @@ class HitTestService:
         host = self._host
         best_distance: float = SNAP_DIST
         best: Point | None = None
-        for index, entity in enumerate(host._entities):
-            if not host._entity_selectable(index) or len(entity.points) < 2:
+        for entity_id, entity in host._entities_by_id.items():
+            if not host._entity_selectable_by_id(entity_id) or len(entity.points) < 2:
                 continue
             for point in (entity.points[0], entity.points[-1]):
                 distance = math.dist((cx, cy), host._w2c(*point))
@@ -87,15 +88,8 @@ class HitTestService:
             self._vertex_index_key = key
         return self._vertex_index
 
-    def nearest_vertex(self, cx: float, cy: float) -> tuple[int, int] | None:
+    def nearest_vertex(self, cx: float, cy: float) -> tuple[EntityId, int] | None:
         host = self._host
-        # Fast path: a spatial query prunes to the handful of vertices near the
-        # cursor instead of scanning every vertex of every entity on each mouse
-        # move. It is exact, not approximate — the same strict canvas-space
-        # distance test and lowest-index tie-break as the linear scan run on the
-        # candidate set, so the returned vertex is identical. Requires the
-        # canvas transform's uniform scale to convert the pixel radius to world
-        # space; anything unexpected falls back to the linear scan below.
         scale = getattr(host, "_scale", None)
         if isinstance(scale, (int, float)) and scale > 0:
             index = self._current_vertex_index()
@@ -103,13 +97,18 @@ class HitTestService:
                 wx, wy = host._c2w(cx, cy)
                 candidates = query_within_radius(index, (wx, wy), VERT_HIT / scale)
                 best_distance: float = VERT_HIT
-                best: tuple[int, int] | None = None
+                best: tuple[EntityId, int] | None = None
                 for i in candidates:
-                    path_index, vertex_index = index.owners[i]
-                    if not host._entity_selectable(path_index):
+                    path_idx, vertex_index = index.owners[i]
+                    if 0 <= path_idx < len(host._entities):
+                        entity = host._entities[path_idx]
+                        entity_id = entity.id
+                    else:
+                        continue
+                    if not host._entity_selectable_by_id(entity_id):
                         continue
                     distance = math.dist((cx, cy), host._w2c(*index.coords[i]))
-                    key = (path_index, vertex_index)
+                    key = (entity_id, vertex_index)
                     if distance < best_distance or (
                         distance == best_distance and best is not None and key < best
                     ):
@@ -117,17 +116,20 @@ class HitTestService:
                 return best
         return self._nearest_vertex_linear(cx, cy)
 
-    def _nearest_vertex_linear(self, cx: float, cy: float) -> tuple[int, int] | None:
+    def nearest_vertex_by_id(self, cx: float, cy: float) -> tuple[str, int] | None:
+        return self.nearest_vertex(cx, cy)
+
+    def _nearest_vertex_linear(self, cx: float, cy: float) -> tuple[EntityId, int] | None:
         host = self._host
         best_distance: float = VERT_HIT
-        best: tuple[int, int] | None = None
-        for path_index, entity in enumerate(host._entities):
-            if not host._entity_selectable(path_index):
+        best: tuple[EntityId, int] | None = None
+        for entity_id, entity in host._entities_by_id.items():
+            if not host._entity_selectable_by_id(entity_id):
                 continue
             for vertex_index, point in enumerate(entity.points):
                 distance = math.dist((cx, cy), host._w2c(*point))
                 if distance < best_distance:
-                    best_distance, best = distance, (path_index, vertex_index)
+                    best_distance, best = distance, (entity_id, vertex_index)
         return best
 
     def closest_point(
@@ -166,13 +168,13 @@ class HitTestService:
             else (best_distance if best is not None else None)
         )
 
-    def nearest_edge(self, cx: float, cy: float) -> tuple[int, int, Point] | None:
+    def nearest_edge(self, cx: float, cy: float) -> tuple[EntityId, int, Point] | None:
         host = self._host
         wx, wy = host._c2w(cx, cy)
         best_distance: float = float(EDGE_HIT)
-        best: tuple[int, int, Point] | None = None
-        for path_index, entity in enumerate(host._entities):
-            if not host._entity_selectable(path_index):
+        best: tuple[EntityId, int, Point] | None = None
+        for entity in host._entities:
+            if not host._entity_selectable(entity.id):
                 continue
             distance, result = cast(
                 tuple[float | None, tuple[int, Point] | None],
@@ -180,36 +182,36 @@ class HitTestService:
             )
             if distance is not None and distance < best_distance and result is not None:
                 best_distance = distance
-                best = path_index, result[0], result[1]
+                best = entity.id, result[0], result[1]
         return best
 
-    def entity_at(self, cx: float, cy: float) -> int | None:
+    def entity_at(self, cx: float, cy: float) -> EntityId | None:
         host = self._host
         wx, wy = host._c2w(cx, cy)
         best_distance: float = 8.0
-        best: int | None = None
-        for index, entity in enumerate(host._entities):
-            if not host._entity_selectable(index):
+        best: EntityId | None = None
+        for entity in host._entities:
+            if not host._entity_selectable(entity.id):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
             if isinstance(distance, float) and distance < best_distance:
-                best_distance, best = distance, index
+                best_distance, best = distance, entity.id
         return best
 
-    def entities_at(self, cx: float, cy: float) -> list[int]:
+    def entities_at(self, cx: float, cy: float) -> list[EntityId]:
         """Return every selectable entity under the pointer, nearest first."""
         host = self._host
         wx, wy = host._c2w(cx, cy)
-        hits: list[tuple[float, int]] = []
-        for index, entity in enumerate(host._entities):
-            if not host._entity_selectable(index):
+        hits: list[tuple[float, EntityId]] = []
+        for entity in host._entities:
+            if not host._entity_selectable(entity.id):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
             if isinstance(distance, float) and distance < 8.0:
-                hits.append((distance, index))
-        return [index for _distance, index in sorted(hits)]
+                hits.append((distance, entity.id))
+        return [entity_id for _distance, entity_id in sorted(hits)]
 
-    def profile_at(self, cx: float, cy: float) -> set[int]:
+    def profile_at(self, cx: float, cy: float) -> set[EntityId]:
         """Find entities bounding the smallest enclosed profile at a point."""
         from shapely.geometry import LineString
         from shapely.geometry import Point as ShapelyPoint
@@ -217,23 +219,27 @@ class HitTestService:
 
         host = self._host
         wx, wy = host._c2w(cx, cy)
-        lines: list[tuple[int, LineString]] = []
-        for index in range(len(host._entities)):
-            if not host._entity_selectable(index):
+        lines: list[tuple[EntityId, LineString]] = []
+        for entity in host._entities:
+            if not host._entity_selectable(entity.id):
                 continue
-            points = host._flattened_points(index)
+            points = host._flattened_points_by_id(entity.id)
             if len(points) >= 2:
-                lines.append((index, LineString(points)))
+                lines.append((entity.id, LineString(points)))
         if not lines:
             return set()
-        merged = unary_union([line for _index, line in lines])
+        merged = unary_union([line for _entity_id, line in lines])
         candidates = [
             polygon for polygon in polygonize(merged) if polygon.covers(ShapelyPoint(wx, wy))
         ]
         if not candidates:
             return set()
         profile = min(candidates, key=lambda polygon: polygon.area)
-        return {index for index, line in lines if line.intersection(profile.boundary).length > 1e-7}
+        return {
+            entity_id
+            for entity_id, line in lines
+            if line.intersection(profile.boundary).length > 1e-7
+        }
 
     def guide_at(self, cx: float, cy: float) -> int | None:
         best, best_distance = None, 6.0
@@ -248,18 +254,18 @@ class HitTestService:
                 best, best_distance = index, distance
         return best
 
-    def inactive_entity_at(self, cx: float, cy: float) -> int | None:
+    def inactive_entity_at(self, cx: float, cy: float) -> EntityId | None:
         host = self._host
         if host._active_layer is None:
             return None
         wx, wy = host._c2w(cx, cy)
         best, best_distance = None, 8.0
-        for index, entity in enumerate(host._entities):
+        for entity in host._entities:
             if entity.hidden or host._on_active_layer(entity):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
             if isinstance(distance, float) and distance < best_distance:
-                best, best_distance = index, distance
+                best, best_distance = entity.id, distance
         return best
 
     def ghost_at(self, cx: float, cy: float) -> int | None:

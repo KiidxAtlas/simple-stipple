@@ -61,9 +61,9 @@ class CanvasRuntime:
         canvas = self._canvas
         # Clicking a shape row that lives on a non-active layer activates
         # that layer first, so tree selection always works.
-        for i in idxs:
-            if 0 <= i < len(canvas._entities):
-                layer = canvas._entities[i].layer
+        for entity_id in idxs:
+            if entity_id in canvas._entities_by_id:
+                layer = canvas._entities_by_id[entity_id].layer
                 if layer and layer != canvas.active_layer:
                     canvas.set_active_layer(layer)
                 break
@@ -104,16 +104,16 @@ class CanvasRuntime:
     ) -> bool:
         if source_layer == target_layer:
             return False
-        indices = sorted(set(flatten_shape_keys(shape_keys)))
-        if not indices:
+        entity_ids = sorted(set(flatten_shape_keys(shape_keys)))
+        if not entity_ids:
             return False
-        return self._canvas.move_indices_to_layer(indices, target_layer) > 0
+        return self._canvas.move_indices_to_layer(entity_ids, target_layer) > 0
 
     def move_selected_to_layer(self, target_layer: str) -> bool:
-        indices = self._canvas.get_selection_indices()
-        if not indices:
+        entity_ids = self._canvas.get_selected_ids()
+        if not entity_ids:
             return False
-        return self._canvas.move_indices_to_layer(indices, target_layer) > 0
+        return self._canvas.move_indices_to_layer(entity_ids, target_layer) > 0
 
     def layer_renamed(self, old_name: str, new_name: str) -> None:
         self._canvas.rename_layer(old_name, new_name)
@@ -148,11 +148,7 @@ class CanvasRuntime:
 
     def set_shapes_hidden(self, keys: object, hidden: bool) -> None:
         canvas = self._canvas
-        entity_ids = {
-            canvas._entities[idx].id
-            for idx in flatten_shape_keys(keys)
-            if 0 <= idx < len(canvas._entities)
-        }
+        entity_ids = {eid for eid in flatten_shape_keys(keys) if eid in canvas._entities_by_id}
 
         def apply(entities) -> None:
             for entity in entities:
@@ -189,16 +185,15 @@ class CanvasRuntime:
         """Persist a custom display label for a shape (or name a group)."""
         if isinstance(shape_key, (tuple, list)) and shape_key:
             first = shape_key[0]
-            gid = self._canvas._group_of(first) if isinstance(first, int) else None
+            gid = self._canvas._group_of(first) if isinstance(first, str) else None
             if gid is not None:
                 self._canvas.set_group_label(gid, new_label)
             return
-        if not isinstance(shape_key, int):
+        if not isinstance(shape_key, str):
             return
-        ents = self._canvas._entities
-        if not (0 <= shape_key < len(ents)):
+        e = self._canvas._entity_for_id(shape_key)
+        if e is None:
             return
-        e = ents[shape_key]
         label = str(new_label).strip()
         if label:
             e.meta = {**(e.meta or {}), "label": label}
@@ -207,10 +202,9 @@ class CanvasRuntime:
 
     # ── Layer tree rows ───────────────────────────────────────────────────
 
-    def _shape_label(self, ordinal: int, e: Any) -> str:
-        """Row label. ``ordinal`` is the shape's position within its layer
-        (stable, human-friendly numbering — not the entity index)."""
-        geo = describe_polyline(ordinal, e.points)
+    def _shape_label(self, entity_id: str, e: Any) -> str:
+        """Row label. ``entity_id`` is the shape's unique identifier."""
+        geo = describe_polyline(entity_id, e.points)
         custom = (e.meta or {}).get("label")
         if not custom:
             return geo
@@ -220,31 +214,31 @@ class CanvasRuntime:
 
     def build_layer_shape_rows(self, layer_name: str) -> list[dict[str, Any]]:
         """One row per shape (grouped shapes collapse into one row per
-        group). Row keys are canvas entity indices."""
+        group). Row keys are entity IDs (or a tuple of member IDs for a
+        grouped row)."""
         canvas = self._canvas
-        pairs = [(i, e) for i, e in enumerate(canvas._entities) if e.layer == layer_name]
+        pairs = [(eid, e) for eid, e in canvas._entities_by_id.items() if e.layer == layer_name]
         group_labels = dict(getattr(canvas, "_group_labels", {}))
         members_by_gid: dict[int, list[int]] = {}
-        for i, e in pairs:
+        for eid, e in pairs:
             if e.group is not None:
-                members_by_gid.setdefault(e.group, []).append(i)
+                members_by_gid.setdefault(e.group, []).append(eid)
 
         rows: list[dict[str, Any]] = []
         emitted: set[int] = set()
         ordinal = 0
-        for i, e in pairs:
+        for eid, e in pairs:
             gid = e.group
             if gid is None or len(members_by_gid.get(gid, [])) < 2:
                 rows.append(
                     {
-                        "key": i,
-                        "label": self._shape_label(ordinal, e),
+                        "key": eid,
+                        "label": self._shape_label(eid, e),
                         "visible": not e.hidden,
                         "editable": True,
                         "draggable": True,
                     }
                 )
-                ordinal += 1
                 continue
             if gid in emitted:
                 continue
@@ -255,7 +249,7 @@ class CanvasRuntime:
                 {
                     "key": tuple(members),
                     "label": (f"{ordinal + 1:02d}  {title}  ·  {len(members)} shapes"),
-                    "visible": any(not canvas._entities[m].hidden for m in members),
+                    "visible": any(not canvas._entities_by_id[m].hidden for m in members),
                     "editable": True,
                     "draggable": True,
                 }
@@ -265,7 +259,7 @@ class CanvasRuntime:
 
     def build_layer_tree_rows(
         self,
-        layer_view_state: dict[str, dict[str, set[int]]] | None = None,
+        layer_view_state: dict[str, dict[str, set[str]]] | None = None,
     ) -> list[dict[str, Any]]:
         canvas = self._canvas
         active = self.current_layer_name()
@@ -393,7 +387,7 @@ class TraceCanvasPageRuntime(CanvasPageRuntimeBase):
 
     def build_layer_tree_rows(
         self,
-        layer_view_state: dict[str, dict[str, set[int]]],
+        layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, object]]:
         hidden = layer_view_state.setdefault("trace_preview", {}).setdefault("hidden", set())
         return [
@@ -480,28 +474,28 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         self._has_preview_cache = has_preview_cache
         self._has_zones = has_zones
         self._get_preview_categories = get_preview_categories
-        # Custom shape labels for outline mode: layer_name → {poly_index: label}
-        self._shape_labels: dict[str, dict[int, str]] = {}
+        # Custom shape labels for outline mode: layer_name → {entity_id: label}
+        self._shape_labels: dict[str, dict[str, str]] = {}
 
     def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
         """Persist a custom display label for an outline shape."""
         if isinstance(shape_key, (tuple, list)) and shape_key:
             first = shape_key[0]
-            gid = self._canvas._group_of(first) if isinstance(first, int) else None
+            gid = self._canvas._group_of(first) if isinstance(first, str) else None
             if gid is not None:
                 self._canvas.set_group_label(gid, new_label)
             return
-        if not isinstance(shape_key, int):
+        if not isinstance(shape_key, str):
             return
-        self._shape_labels.setdefault(layer_name, {})[int(shape_key)] = new_label
+        self._shape_labels.setdefault(layer_name, {})[shape_key] = new_label
 
     def _shape_label_builder(self, layer_name: str):
         """Return a label function that uses custom names if set."""
         labels = self._shape_labels.get(layer_name, {})
 
-        def _label(idx: int, poly: list[tuple[float, float]]) -> str:
-            custom = labels.get(idx)
-            geo = describe_polyline(idx, poly)
+        def _label(entity_id: str, poly: list[tuple[float, float]]) -> str:
+            custom = labels.get(entity_id)
+            geo = describe_polyline(entity_id, poly)
             if not custom:
                 return geo
             parts = geo.split("  ", 1)
@@ -513,8 +507,9 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
     def _build_tree_shape_rows(
         self,
         layer_name: str,
+        entity_ids: list[str],
         polylines: list[list[tuple[float, float]]],
-        layer_view_state: dict[str, dict[str, set[int]]],
+        layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
         hidden = layer_view_state.setdefault(layer_name, {}).setdefault("hidden", set())
         # Outline layer (not preview) is editable/draggable so users get the
@@ -523,6 +518,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         label_fn = self._shape_label_builder(layer_name) if is_outline else describe_polyline
         groups = self._canvas._group_map() if is_outline else None
         return build_shape_rows(
+            entity_ids,
             polylines,
             hidden,
             label_fn,
@@ -534,7 +530,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
 
     def build_layer_tree_rows(
         self,
-        layer_view_state: dict[str, dict[str, set[int]]],
+        layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
         showing_preview = self._get_showing_preview()
         rows: list[dict[str, Any]] = []
@@ -555,6 +551,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             fill_polys = categories.get("fill", [])
 
             if outline_polys:
+                outline_entity_ids = [f"outline_{i}" for i in range(len(outline_polys))]
                 rows.append(
                     build_layer_row(
                         name="pattern_outline",
@@ -564,6 +561,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                         editable=False,
                         shapes=self._build_tree_shape_rows(
                             "pattern_outline",
+                            outline_entity_ids,
                             outline_polys,
                             layer_view_state,
                         ),
@@ -578,12 +576,23 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                     editable=False,
                     shapes=self._build_tree_shape_rows(
                         "pattern_preview",
+                        [
+                            f"preview_{i}"
+                            for i in range(
+                                len(
+                                    pattern_polys
+                                    if categories
+                                    else self._canvas.get_polylines_state()
+                                )
+                            )
+                        ],
                         pattern_polys if categories else self._canvas.get_polylines_state(),
                         layer_view_state,
                     ),
                 )
             )
             if fill_polys:
+                fill_entity_ids = [f"fill_{i}" for i in range(len(fill_polys))]
                 rows.append(
                     build_layer_row(
                         name="pattern_fill",
@@ -593,6 +602,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                         editable=False,
                         shapes=self._build_tree_shape_rows(
                             "pattern_fill",
+                            fill_entity_ids,
                             fill_polys,
                             layer_view_state,
                         ),
@@ -602,6 +612,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
 
         # Edit mode: the canvas state IS the outline. Show a single row
         # so the tree is honest about what is actually on the canvas.
+        entity_ids = list(self._canvas._entities_by_id.keys())
         rows.append(
             build_layer_row(
                 name="pattern_active",
@@ -611,6 +622,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                 editable=False,
                 shapes=self._build_tree_shape_rows(
                     "pattern_active",
+                    entity_ids,
                     self._canvas.get_polylines_state(),
                     layer_view_state,
                 ),
@@ -732,9 +744,7 @@ class CanvasToolbarModule(QWidget):
         if isinstance(toolbar_layout, QHBoxLayout) and extra_widgets:
             for widget in extra_widgets:
                 toolbar_layout.insertWidget(toolbar_layout.count() - 1, widget)
-                if isinstance(widget, QAbstractButton) and hasattr(
-                    toolbar, "register_secondary"
-                ):
+                if isinstance(widget, QAbstractButton) and hasattr(toolbar, "register_secondary"):
                     toolbar.register_secondary(widget)
                 elif hasattr(toolbar, "register_secondary_widget"):
                     toolbar.register_secondary_widget(widget)
@@ -876,8 +886,8 @@ class CanvasLayerTreeModule(QWidget):
         self.controller.apply_current_visibility()
 
     def _sync_tree_selection(self, _count: int = 0) -> None:
-        if hasattr(self._canvas, "get_selection_indices"):
-            self.tree.select_shape_keys(self._canvas.get_selection_indices())
+        if hasattr(self._canvas, "get_selected_ids"):
+            self.tree.select_shape_keys(self._canvas.get_selected_ids())
 
     def _default_select(self, indices: list[int]) -> None:
         if hasattr(self._canvas, "set_selection"):
@@ -900,6 +910,11 @@ class CanvasLayerTreeModule(QWidget):
 
         layer_name = self._resolve_active_layer_name()
         hidden = hidden_bucket(layer_view_state, layer_name)
+        entity_ids = (
+            list(self._canvas._entities_by_id.keys())
+            if hasattr(self._canvas, "_entities_by_id")
+            else []
+        )
         polylines = (
             self._canvas.get_polylines_state()
             if hasattr(self._canvas, "get_polylines_state")
@@ -913,6 +928,7 @@ class CanvasLayerTreeModule(QWidget):
                 visible=True,
                 editable=False,
                 shapes=build_shape_rows(
+                    entity_ids,
                     polylines,
                     hidden,
                     describe_polyline,

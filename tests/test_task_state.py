@@ -1,6 +1,6 @@
 import threading
 
-from src.ui.pages.pattern.workers import (
+from src.ui.pages.pattern.domain.workers import (
     CANCELLED_MESSAGE,
     CancellableTaskState,
     TaskPhase,

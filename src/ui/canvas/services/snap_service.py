@@ -15,7 +15,7 @@ class SnapService:
         self._host = host
 
     def _static_snap_geometry(
-        self, *, exclude: set[int] | None = None
+        self, *, exclude: set[str] | None = None
     ) -> tuple[
         list[tuple[float, float]],
         list[tuple[tuple[float, float], tuple[float, float]]],
@@ -33,8 +33,8 @@ class SnapService:
         pts: list[tuple[float, float]] = []
         segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
         centers: list[tuple[float, float]] = []
-        for i, e in enumerate(self._host._entities):
-            if i in excluded or e.hidden:
+        for e in self._host._entities:
+            if e.id in excluded or e.hidden:
                 continue
             poly = e.points
             pts.extend(poly)
@@ -43,7 +43,7 @@ class SnapService:
             seg_count = n if closed else n - 1
             for k in range(seg_count):
                 segs.append((poly[k], poly[(k + 1) % n]))
-            center = self._host._entity_center(i)
+            center = self._host._entity_center(e.id)
             if center is not None:
                 centers.append(center)
         if len(segs) > 4000:

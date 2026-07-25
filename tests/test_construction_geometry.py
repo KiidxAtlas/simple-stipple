@@ -35,33 +35,39 @@ def test_centerline_and_tangent_construction():
 
 def test_canvas_creates_infinite_line_ray_and_circle(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.construction_line_from_selection() == 1
-    xline = canvas._entities[next(iter(canvas._sel))]
+    xline = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert xline is not None
     assert xline.kind == "xline" and xline.construction
     assert math.dist(*xline.points) > 1_000_000
     assert canvas._bbox() == (0, 0, 10, 0)
 
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.construction_line_from_selection(ray=True) == 1
-    assert canvas._entities[next(iter(canvas._sel))].kind == "ray"
+    ray = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert ray is not None
+    assert ray.kind == "ray"
 
     canvas = make_canvas(qapp, [[(1, 0), (0, 1), (-1, 0)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.create_circle_through_three_points() == 1
-    entity = canvas._entities[next(iter(canvas._sel))]
+    entity = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert entity is not None
     assert entity.kind == "circle" and entity.construction
 
 
 def test_canvas_creates_derived_bisector_centerline_and_tangents(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)], [(0, 0), (0, 10)]])
-    canvas.set_selection([0, 1])
+    canvas.set_selection([canvas._entities[0].id, canvas._entities[1].id])
     assert canvas.create_angle_bisector() == 1
 
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)], [(0, 4), (10, 4)]])
-    canvas.set_selection([0, 1])
+    canvas.set_selection([canvas._entities[0].id, canvas._entities[1].id])
     assert canvas.create_centerline() == 1
-    assert canvas._entities[next(iter(canvas._sel))].points == [(0, 2), (10, 2)]
+    entity = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert entity is not None
+    assert entity.points == [(0, 2), (10, 2)]
 
     canvas = make_canvas(qapp)
     canvas.set_entity_records(
@@ -70,5 +76,5 @@ def test_canvas_creates_derived_bisector_centerline_and_tangents(qapp):
             {"points": [], "kind": "circle", "meta": {"center": (10, 0), "radius": 2}},
         ]
     )
-    canvas.set_selection([0, 1])
+    canvas.set_selection([canvas._entities[0].id, canvas._entities[1].id])
     assert canvas.create_common_circle_tangents() == 4

@@ -20,10 +20,10 @@ from src.backend.cad.geometry import (
 )
 from src.backend.model.document import EntityRecord
 from src.core.settings import DEFAULT_RADIAL_MENU_TOOLS
-from src.ui.canvas.interaction import commands as canvas_commands
-from src.ui.canvas.interaction import tools as canvas_tools
-from src.ui.canvas.interaction.tools import RadialMenuService
-from src.ui.canvas.view import CanvasView
+from src.ui.canvas import commands as canvas_commands
+from src.ui.canvas.tools import tools as canvas_tools
+from src.ui.canvas.tools.tools import RadialMenuService
+from src.ui.canvas.view.main import CanvasView
 
 
 class DxfSelectTool(canvas_tools.SelectTool):
@@ -163,10 +163,10 @@ class DxfCanvas(CanvasView):
         self._on_pattern_cell_cutout_toggle = on_pattern_cell_cutout_toggle
         self._on_create_zone_from_selection = on_create_zone_from_selection
         self._on_ghost_click = on_ghost_click
-        self._cutout_indices: set[int] = set()
-        self._outline_roles: dict[int, str] = {}
+        self._cutout_indices: set[str] = set()
+        self._outline_roles: dict[str, str] = {}
         self._pattern_cell_indices: set[int] = set()
-        self._pattern_cell_cutout_indices: set[int] = set()
+        self._pattern_cell_cutout_indices: set[str] = set()
         self._draft_profile = bool(draft_profile or selectable)
 
         self._quick_shape_mode: str = "rectangle"
@@ -192,6 +192,13 @@ class DxfCanvas(CanvasView):
             self.set_grid_visible(True)
             self.set_grid_snap(False)
             self.set_grid_spacing(1.0)
+
+    def _entity_for_id(self, entity_id: int | str) -> EntityRecord | None:
+        if isinstance(entity_id, str):
+            return next((e for e in self._entities if e.id == entity_id), None)
+        elif isinstance(entity_id, int) and 0 <= entity_id < len(self._entities):
+            return self._entities[entity_id]
+        return None
 
     def _toggle_radial_menu(self) -> None:
         self._radial_menu._toggle_radial_menu()
@@ -234,12 +241,12 @@ class DxfCanvas(CanvasView):
             self._show_flash(f"Drag shape: {m}", 900)
         self._redraw()
 
-    def set_cutout_indices(self, indices: set[int]) -> None:
-        """Mark poly indices as cutout shapes, rendering them in amber."""
+    def set_cutout_indices(self, indices: set[str]) -> None:
+        """Mark entities as cutout shapes, rendering them in amber."""
         self._cutout_indices = set(indices)
-        self.set_accent_polys({idx: self._CUTOUT_COLOR for idx in indices})
+        self.set_accent_polys({eid: self._CUTOUT_COLOR for eid in indices})
 
-    def set_outline_roles(self, roles: dict[int, str]) -> None:
+    def set_outline_roles(self, roles: dict[str, str]) -> None:
         self._outline_roles = dict(roles)
         colors = {
             "cutout": self._CUTOUT_COLOR,
@@ -251,14 +258,13 @@ class DxfCanvas(CanvasView):
         )
 
     def set_pattern_cell_context(
-        self, indices: set[int], cutout_indices: set[int] | None = None
+        self, indices: set[int], cutout_indices: set[str] | None = None
     ) -> None:
         """Identify generated preview cells that can be toggled as fill cutouts."""
         self._pattern_cell_indices = set(indices)
-        self._pattern_cell_cutout_indices = set(cutout_indices or set())
-        self.set_accent_polys(
-            {index: self._CUTOUT_COLOR for index in self._pattern_cell_cutout_indices}
-        )
+        cutout_ids = cutout_indices or set()
+        self._pattern_cell_cutout_indices = cutout_ids
+        self.set_accent_polys({eid: self._CUTOUT_COLOR for eid in cutout_ids})
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         # Handled here (not in a per-mode tool) so the radial menu opens and
@@ -380,32 +386,37 @@ class DxfCanvas(CanvasView):
 
         poly_hit = poly_hit_early
         if poly_hit is not None:
-            idx = poly_hit
-            if self.text_params_at(idx) is not None:
-                menu.addAction("Edit text…", lambda _i=idx: self.prompt_edit_text(_i))
-            if idx in self._sel:
-                menu.addAction("Deselect", lambda: self._ctx_deselect(idx))
-            else:
-                menu.addAction("Select", lambda: self._ctx_select(idx))
-            menu.addAction("Delete", lambda: self._ctx_delete_poly(idx))
-            if idx in self._pattern_cell_indices and callable(self._on_pattern_cell_cutout_toggle):
-                is_cutout = idx in self._pattern_cell_cutout_indices
+            entity = self._entity_for_id(poly_hit)
+            entity_id = entity.id if entity else None
+            if entity_id and self.text_params_at(entity_id) is not None:
+                menu.addAction("Edit text…", lambda eid=entity_id: self.prompt_edit_text(eid))
+            if entity_id and entity_id in self._sel:
+                menu.addAction("Deselect", lambda eid=entity_id: self._ctx_deselect(eid))
+            elif entity_id:
+                menu.addAction("Select", lambda eid=entity_id: self._ctx_select(eid))
+            menu.addAction("Delete", lambda: self._ctx_delete_poly(entity_id))
+            if poly_hit in self._pattern_cell_indices and callable(
+                self._on_pattern_cell_cutout_toggle
+            ):
+                is_cutout = poly_hit in self._pattern_cell_cutout_indices
                 toggle_pattern_cutout = self._on_pattern_cell_cutout_toggle
                 cutout_menu = menu.addMenu(
                     "Restore Pattern Cell Fill" if is_cutout else "Mark Pattern Cell as Cutout"
                 )
                 cutout_menu.addAction(
                     "This cell only",
-                    lambda _checked=False, target=idx: toggle_pattern_cutout(target, "instance"),
+                    lambda _checked=False, target=poly_hit: toggle_pattern_cutout(
+                        target, "instance"
+                    ),
                 )
                 cutout_menu.addAction(
                     "Every matching tile",
-                    lambda _checked=False, target=idx: toggle_pattern_cutout(target, "repeat"),
+                    lambda _checked=False, target=poly_hit: toggle_pattern_cutout(target, "repeat"),
                 )
             elif callable(self._on_outline_role_change):
                 change_outline_role = self._on_outline_role_change
                 role_menu = menu.addMenu("Outline role")
-                current_role = self._outline_roles.get(idx, "boundary")
+                current_role = self._outline_roles.get(poly_hit, "boundary")
                 for role, label in (
                     ("boundary", "Boundary (fillable)"),
                     ("cutout", "Cutout (subtract)"),
@@ -416,7 +427,7 @@ class DxfCanvas(CanvasView):
                     action.setCheckable(True)
                     action.setChecked(role == current_role)
                     action.triggered.connect(
-                        lambda _checked=False, value=role, target=idx: change_outline_role(
+                        lambda _checked=False, value=role, target=poly_hit: change_outline_role(
                             target, value
                         )
                     )
@@ -425,17 +436,20 @@ class DxfCanvas(CanvasView):
                     role_menu.addSeparator()
                     role_menu.addAction(
                         "Explain this role…",
-                        lambda _checked=False, target=idx: explain_outline_role(target),
+                        lambda _checked=False, target=poly_hit: explain_outline_role(target),
                     )
             if callable(self._on_cutout_toggle) and not callable(self._on_outline_role_change):
-                is_cutout = idx in self._cutout_indices
+                is_cutout = poly_hit in self._cutout_indices
                 cutout_label = "Remove Cutout" if is_cutout else "Mark as Cutout"
                 cutout_toggle = self._on_cutout_toggle
                 if callable(cutout_toggle):
-                    menu.addAction(cutout_label, lambda _idx=idx: cutout_toggle(_idx))
+                    menu.addAction(cutout_label, lambda _idx=poly_hit: cutout_toggle(_idx))
                 # When multiple shapes are selected, offer bulk cutout toggle.
-                if len(self._sel) > 1 and idx in self._sel:
-                    all_cutout = all(i in self._cutout_indices for i in self._sel)
+                if len(self._sel) > 1 and entity_id and entity_id in self._sel:
+                    all_cutout = all(
+                        self._entities_by_id[eid] in self._cutout_indices
+                        for eid in self._selected_ids()
+                    )
                     bulk_label = (
                         "Remove Cutout for all selected"
                         if all_cutout
@@ -455,7 +469,10 @@ class DxfCanvas(CanvasView):
                 return True
             if context_idx is None:
                 return False
-            self._sel = {context_idx}
+            entity = self._entity_for_id(context_idx)
+            if entity is None:
+                return False
+            self._sel = {entity.id}
             self._redraw()
             self._notify()
             return True
@@ -499,8 +516,8 @@ class DxfCanvas(CanvasView):
                 )
             open_count = sum(
                 1
-                for i in self._sel
-                if i < len(self._entities) and not self._is_poly_closed(self._entities[i].points)
+                for entity in self._entities
+                if entity.id in self._sel and not self._is_poly_closed(entity.points)
             )
             if open_count:
                 label = "Close path"
@@ -521,16 +538,17 @@ class DxfCanvas(CanvasView):
                     )
                 ),
             )
-            vertex_hit = self._find_nearest_vertex(cx, cy)
+            vertex_hit = self._find_nearest_vertex_by_id(cx, cy)
             if vertex_hit is not None and vertex_hit[0] in self._sel:
-                entity_index, vertex_index = vertex_hit
+                entity_id, vertex_index = vertex_hit
                 corner_menu = menu.addMenu("Corner")
 
                 def _run_vertex_command(command_id: str) -> None:
                     # Corner commands intentionally operate on the vertex at
                     # the menu invocation point, not whichever vertex the
                     # pointer happens to hover after the menu opens.
-                    self._hover_vert = (entity_index, vertex_index)
+                    eid: str = vertex_hit[0]  # type: ignore[assignment]
+                    self._hover_vert = (eid, vertex_index)
                     canvas_commands.run(self, command_id)
 
                 for command_id in ("vertex.round", "vertex.chamfer"):
@@ -542,31 +560,38 @@ class DxfCanvas(CanvasView):
             if (
                 vertex_hit is not None
                 and vertex_hit[0] in self._sel
-                and self._entities[vertex_hit[0]].kind == "bezier"
+                and (ent := self._entity_for_id(vertex_hit[0])) is not None
+                and ent.kind == "bezier"
             ):
-                entity_index, anchor_index = vertex_hit
-                metadata = self._entities[entity_index].meta or {}
-                node_types = list(metadata.get("node_types", []))
-                current_type = (
-                    str(node_types[anchor_index]) if anchor_index < len(node_types) else "symmetric"
-                )
-                node_menu = menu.addMenu("Bézier node")
-                for mode, label in (
-                    ("corner", "Corner — independent handles"),
-                    ("smooth", "Smooth — aligned handles"),
-                    ("symmetric", "Symmetric — linked handles"),
-                ):
-                    action = node_menu.addAction(label)
-                    action.setCheckable(True)
-                    action.setChecked(mode == current_type)
-                    action.triggered.connect(
-                        lambda _checked=False, value=mode, ei=entity_index, ai=anchor_index: (
-                            self.set_bezier_node_type(ei, ai, value)
-                        )
+                entity_id, anchor_index = vertex_hit
+                if (ent2 := self._entity_for_id(entity_id)) is not None:
+                    metadata = ent2.meta or {}
+                    node_types = list(metadata.get("node_types", []))
+                    current_type = (
+                        str(node_types[anchor_index])
+                        if anchor_index < len(node_types)
+                        else "symmetric"
                     )
+                    node_menu = menu.addMenu("Bézier node")
+                    for mode, label in (
+                        ("corner", "Corner — independent handles"),
+                        ("smooth", "Smooth — aligned handles"),
+                        ("symmetric", "Symmetric — linked handles"),
+                    ):
+                        action = node_menu.addAction(label)
+                        action.setCheckable(True)
+                        action.setChecked(mode == current_type)
+                        action.triggered.connect(
+                            lambda _checked=False, value=mode, ei=entity_id, ai=anchor_index: (
+                                self.set_bezier_node_type(ei, ai, value)
+                            )
+                        )
             if len(self._sel) >= 2:
                 menu.addAction(canvas_commands.menu_text("group.create"), self._group_selected)
-            if any(self._group_of(i) is not None for i in self._sel):
+            if any(
+                self._entity_for_id(eid) is not None and self._group_of(eid) is not None
+                for eid in self._sel
+            ):
                 menu.addAction(canvas_commands.menu_text("group.dissolve"), self._ungroup_selected)
             constraints_menu = menu.addMenu("Constraints")
             for command_id in (
@@ -819,7 +844,7 @@ class DxfCanvas(CanvasView):
         menu.popup(self.mapToGlobal(QPoint(int(cx), int(cy))))
 
     def _show_size_hud(self) -> None:
-        indices = self._selected_indices()
+        indices = self._selected_ids()
         bounds = self._selection_bounds(indices)
         if not indices or bounds is None:
             self._show_flash("Select shape(s) first", 1200)
@@ -890,7 +915,7 @@ class DxfCanvas(CanvasView):
         except ValueError:
             self._show_flash("Invalid size", 900)
             return
-        indices = self._selected_indices()
+        indices = self._selected_ids()
         bounds = self._selection_bounds(indices)
         if not indices or bounds is None:
             self._dismiss_size_hud()
@@ -1009,20 +1034,19 @@ class DxfCanvas(CanvasView):
                 before = self._canvas_service.begin_preview()
                 carved, carved_count = self._carve_geometry_with_shape(poly)
                 if carved:
-                    self._entities.append(
-                        EntityRecord(
-                            points=list(poly),
-                            kind=kind,
-                            meta=meta,
-                            layer=self._active_layer,
-                        )
+                    new_entity = EntityRecord(
+                        points=list(poly),
+                        kind=kind,
+                        meta=meta,
+                        layer=self._active_layer,
                     )
-                    self._document.selection = {len(self._entities) - 1}
+                    self._entities.append(new_entity)
+                    self._document.selection = {new_entity.id}
                     self._canvas_service.commit_preview(before)
                     self._show_flash(f"Carved {carved_count} region(s)", 1000)
             if not carved:
                 self._append_draw_polyline(poly, enter_edit=False, kind=kind, meta=meta)
-                self._sel = {len(self._entities) - 1}
+                self._sel = {self._entities[-1].id}
             if was_empty:
                 self._fit()
             else:

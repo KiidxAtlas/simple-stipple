@@ -1,0 +1,1 @@
+"""Canvas view components."""

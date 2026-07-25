@@ -29,42 +29,36 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDoubleSpinBox,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMenu,
     QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QScrollArea,
-    QSlider,
-    QSpinBox,
-    QSplitter,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from src.backend.pattern.processing import PATTERNS, PatternProcessor
-from src.backend.raster_engraving import RasterEngravingSpec, export_raster_job
-from src.backend.laserstar_package import export_laserstar_package
+from src.backend.dxf.service import (
+    load_dxf_polylines_with_report,
+    read_fvi,
+    svg_to_dxf,
+    write_polylines_dxf,
+)
+from src.app.services.presets_service import (
+    PATTERNS,
+    PatternProcessor,
+    SETTINGS_KEY as PRESET_SETTINGS_KEY,
+    ensure_builtins_seeded,
+    export_laserstar_package,
+    export_raster_job,
+)
 from src.ui.canvas.constants import DIM
 from src.ui.pages.base import BasePage
 from src.ui.components import (
     CollapsibleSection,
     clear_line_edit_error,
-    collapsible_content_widget,
     content_splitter,
     EscapeBlurFilter,
-    make_resettable_line_edit,
     parse_float_field_with_feedback,
-    primary_button,
-    RecentFilesButton,
-    section_label,
     set_line_edit_error,
     set_status_label,
     sidebar_panel,
@@ -72,59 +66,34 @@ from src.ui.components import (
     workflow_strip,
 )
 from src.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
-from src.ui.canvas.canvas_runtime import (
-    CanvasGridModule,
-    CanvasLayerTreeModule,
-    CanvasToolbarModule,
-    PatternCanvasPageRuntime,
-)
-from src.ui.canvas.dxf_canvas import DxfCanvas
-from src.ui.pages.pattern.session import (
+from src.ui.pages.pattern.domain.session import (
     apply_pattern_workspace_state,
     clear_pattern_workspace_state,
     get_pattern_workspace_state,
 )
-from src.ui.widgets.canvas.status_strip import CanvasStatusStrip
 from src.ui.widgets.dialogs.laserstar_export_dialog import LaserStarExportDialog
-from src.ui.pages.pattern.form import build_param_widget
-from src.ui.pages.pattern.form_spec import PARAM_SPECS
-from src.ui.pages.pattern.params import (
+from src.ui.pages.pattern.ui.form_spec import PARAM_SPECS
+from src.ui.pages.pattern.ui.params import (
     collect_form_state,
     collect_pattern_params,
     restore_form_state,
 )
-from src.backend.pattern.presets import (
-    SETTINGS_KEY as PRESET_SETTINGS_KEY,
-    ensure_builtins_seeded,
-)
-from src.ui.pages.pattern.defaults import (
+from src.ui.pages.pattern.domain.defaults import (
     DEFAULT_BORDER_FADE,
-    DEFAULT_DENSITY_ANGLE,
-    DEFAULT_DENSITY_STRENGTH,
     DEFAULT_FILL_ANGLE,
     DEFAULT_FILL_INSET,
     DEFAULT_FILL_SPACING,
-    DEFAULT_GRID_SPACING_MM,
-    DEFAULT_GRID_VISIBLE,
     DEFAULT_MIN_ISLAND_AREA,
     DEFAULT_MIN_SEGMENT,
     DEFAULT_PATTERN_ROTATION,
     DEFAULT_PREVIEW_QUALITY,
     FILL_SPACING_FLOOR_MM,
     PREVIEW_DEBOUNCE_MS,
-    SCALE_MAX_MM,
     SCALE_MIN_MM,
 )
-from src.ui.pages.pattern.presets_dialog import PresetManagerDialog
-from src.ui.pages.pattern.workers import CancellableTaskState
-from src.backend.dxf.io import (
-    load_dxf_polylines_with_report,
-    summarize_dxf_import_report,
-    write_polylines_dxf,
-)
-from src.backend.dxf.fvi import read_fvi
-from src.backend.dxf.svg_dxf import svg_to_dxf
-from src.core.settings import save_settings
+from src.ui.pages.pattern.ui.presets_dialog import PresetManagerDialog
+from src.ui.pages.pattern.ui.layout import build_left, build_right, refresh_pattern_properties_panel
+from src.ui.pages.pattern.domain.workers import CancellableTaskState
 from src.core.paths import custom_tiles_dir
 from src.ui.util import (
     KIND_DXF,
@@ -133,6 +102,7 @@ from src.ui.util import (
     pick_save_file,
     record_recent,
 )
+from src.core.settings import save_settings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -277,10 +247,10 @@ class PatternPage(BasePage):
         )
         root.addWidget(self._splitter, stretch=1)
 
-        self._build_left(left)
-        self._build_right(right)
+        build_left(self, left)
+        build_right(self, right)
         self._refresh_zone_list()
-        self._refresh_pattern_properties_panel()
+        refresh_pattern_properties_panel(self)
         self._left_esc_filter = EscapeBlurFilter(self._canvas, within=left_w)
         for edit in left_w.findChildren(QLineEdit):
             edit.installEventFilter(self._left_esc_filter)
@@ -308,152 +278,6 @@ class PatternPage(BasePage):
 
     # ── Right panel ───────────────────────────────────────────────────────────
 
-    def _build_right(self, layout: QVBoxLayout) -> None:
-        self._preview_btn = QPushButton("Show Preview")
-        self._preview_btn.setCheckable(True)
-        self._preview_btn.setMinimumHeight(28)
-        self._preview_btn.setToolTip("Toggle between outline editing and pattern preview")
-        self._preview_btn.clicked.connect(self._on_preview_clicked)
-        self._cancel_preview_btn = QToolButton()
-        self._cancel_preview_btn.setText("Cancel")
-        self._cancel_preview_btn.setToolTip("Cancel the preview currently computing")
-        self._cancel_preview_btn.setAccessibleName("Cancel preview")
-        self._cancel_preview_btn.setVisible(False)
-        self._cancel_preview_btn.clicked.connect(lambda: self._on_preview_clicked(False))
-        self._auto_preview_cb = QCheckBox("Auto-preview")
-        self._auto_preview_cb.setChecked(True)
-        self._auto_preview_cb.setToolTip(
-            "Show completed previews automatically when no selection or drawing gesture is active"
-        )
-
-        self._reset_preview_btn = QPushButton("Reset")
-        self._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
-        self._reset_preview_btn.clicked.connect(self._reset_preview)
-
-        self._preview_status = QLabel("No preview available")
-        self._set_preview_status("No preview available")
-        self._preview_status.setWordWrap(True)
-
-        self._canvas = DxfCanvas(
-            selectable=True,
-            on_change=self._on_sel_change,
-            on_mode_change=self._on_canvas_mode_change,
-            on_poly_change=self._on_canvas_geometry_change,
-            on_send_selected_to_draft=self._on_send_selected_to_draft_from_canvas,
-            on_use_selected_as_custom_tile=self.use_custom_tile,
-            on_cutout_toggle=self._on_canvas_cutout_toggle,
-            on_outline_role_change=self._on_canvas_outline_role_change,
-            on_outline_role_explain=self._explain_outline_role,
-            on_pattern_cell_cutout_toggle=self._on_pattern_cell_cutout_toggle,
-            on_create_zone_from_selection=self._assign_zone,
-            draft_profile=True,
-        )
-        self._canvas.set_empty_message(
-            "Start a pattern\nImport an outline on the left, drop a DXF here, or send shapes from Draft"
-        )
-        self._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
-        self._canvas.set_grid_snap(False)
-        self._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
-        self._canvas.set_selection_follows_geometry(True)
-        self._canvas.backgroundSelectionChanged.connect(
-            self._on_engraving_selection_changed
-        )
-
-        self._toolbar_module = CanvasToolbarModule(
-            canvas=self._canvas,
-            on_mode=self._on_toolbar_mode,
-            on_fit=self._canvas.fit,
-            extra_widgets=[
-                self._auto_preview_cb,
-                self._preview_btn,
-                self._cancel_preview_btn,
-                self._reset_preview_btn,
-            ],
-        )
-        layout.addWidget(self._toolbar_module)
-
-        self._grid_module = CanvasGridModule(
-            canvas=self._canvas,
-            on_changed=self._refresh_canvas_panels,
-        )
-        layout.addWidget(self._grid_module)
-        self._precision_bar = self._grid_module
-
-        # Placed at the bottom of the page (after the splitter) so every
-        # canvas page keeps the same anatomy: toolbars up top, canvas in
-        # the middle, status strip along the bottom — same as Draft.
-        self._canvas_status = CanvasStatusStrip()
-        self._canvas_status.set_zoom_callback(self._on_zoom_preset)
-
-        canvas_shell = QWidget()
-        canvas_shell_layout = QVBoxLayout(canvas_shell)
-        canvas_shell_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_shell_layout.setSpacing(8)
-        canvas_shell_layout.addWidget(self._preview_status)
-        canvas_shell_layout.addWidget(self._canvas, stretch=1)
-
-        side_panel = QWidget()
-        side_panel.setProperty("role", "pattern-side-panel")
-        side_layout = QVBoxLayout(side_panel)
-        # Keep sticky footer controls clear of the splitter and window edge.
-        side_layout.setContentsMargins(6, 0, 6, 6)
-        side_layout.setSpacing(8)
-        zone_scroll = QScrollArea()
-        zone_scroll.setWidgetResizable(True)
-        zone_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        zone_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        zone_scroll.setWidget(self._zones_section)
-        self._zone_layers_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._zone_layers_splitter.setChildrenCollapsible(False)
-        self._zone_layers_splitter.addWidget(zone_scroll)
-
-        self._layer_module = CanvasLayerTreeModule(
-            canvas=self._canvas,
-            title="Layers",
-            editable=True,
-            get_active_layer_name=lambda: (
-                "pattern_preview" if self._showing_preview else "pattern_active"
-            ),
-            build_layer_rows=self._build_layer_tree_rows,
-            on_selection_requested=self._on_browser_selection_requested,
-            on_fit_requested=self._fit_selection,
-            on_visibility_changed=self._refresh_canvas_panels,
-        )
-        self._layers_tree = self._layer_module.tree
-        self._layer_sidebar = self._layer_module.controller
-        # Wire outline-mode shape rename to the runtime's label store.
-        self._layers_tree.shapeRenamed.connect(self._on_shape_renamed)
-        self._zone_layers_splitter.addWidget(self._layer_module)
-        self._zone_layers_splitter.setStretchFactor(0, 3)
-        self._zone_layers_splitter.setStretchFactor(1, 2)
-        self._zone_layers_splitter.setSizes([390, 220])
-        side_layout.addWidget(self._zone_layers_splitter, stretch=1)
-        self._build_export_section(side_layout)
-
-        self._canvas_runtime = PatternCanvasPageRuntime(
-            canvas=self._canvas,
-            toolbar_module=self._toolbar_module,
-            layer_sidebar=self._layer_sidebar,
-            canvas_status=self._canvas_status,
-            precision_bar=self._precision_bar,
-            get_orig_polys=lambda: self._edit_polys,
-            get_showing_preview=lambda: self._showing_preview,
-            is_preview_running=lambda: self._preview_task.running,
-            has_preview_cache=lambda: bool(self._preview_polys_cache),
-            has_zones=lambda: bool(self._zones),
-            get_preview_categories=lambda: self._preview_categories,
-        )
-
-        splitter = content_splitter(canvas_shell, side_panel, sizes=(780, 340))
-        # Layers, zones, and the only persistent Export surface share this
-        # sidebar. Keep it visible at every supported window width.
-        splitter.setCollapsible(1, False)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
-        self._canvas_splitter = splitter
-        layout.addWidget(splitter, stretch=1)
-        layout.addWidget(self._canvas_status)
-        self._refresh_canvas_panels()
 
     def _on_zoom_preset(self, value) -> None:
         if value == "fit":
@@ -462,55 +286,7 @@ class PatternPage(BasePage):
             self._canvas.set_zoom_percent(float(value))
         self._refresh_canvas_panels()
 
-    def _build_pattern_properties_panel(self) -> QWidget:
-        panel = surface_frame("panel")
-        root = QVBoxLayout(panel)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(6)
-        title = QLabel("Zones")
-        title.setProperty("role", "section-title")
-        root.addWidget(title)
-        root.addWidget(self._zones_section)
 
-        self._pattern_props_scope = QLabel("New zone defaults")
-        self._pattern_props_scope.setWordWrap(True)
-        self._pattern_props_scope.setProperty("role", "hint")
-        root.addWidget(self._pattern_props_scope)
-
-        output_row = QHBoxLayout()
-        output_row.setContentsMargins(0, 0, 0, 0)
-        output_row.setSpacing(8)
-        output_row.addWidget(QLabel("Output"))
-        output_row.addWidget(self._zone_output_combo, stretch=1)
-        root.addLayout(output_row)
-
-        # Reuse the real editors rather than maintaining a second, partial
-        # set of parameter widgets.  Qt reparents these sections out of the
-        # left workflow column into the selected-zone properties panel.
-        root.addWidget(self._pattern_section)
-        root.addWidget(self._fill_section)
-        hint = QLabel("All changes above apply to the selected zone and rebuild the live preview.")
-        hint.setWordWrap(True)
-        hint.setProperty("role", "hint-sm")
-        root.addWidget(hint)
-        self._refresh_zone_list()
-        self._refresh_pattern_properties_panel()
-        return panel
-
-    def _refresh_pattern_properties_panel(self) -> None:
-        if not hasattr(self, "_pattern_props_scope"):
-            return
-        row = self._zone_list.currentRow() if hasattr(self, "_zone_list") else -1
-        if 0 <= row < len(self._zones):
-            self._pattern_props_scope.setText(f"Editing Zone {row + 1}")
-            self._pattern_props_scope.setProperty("editing", True)
-        else:
-            self._pattern_props_scope.setText(
-                "New zone defaults — select geometry, then create a zone."
-            )
-            self._pattern_props_scope.setProperty("editing", False)
-        self._pattern_props_scope.style().unpolish(self._pattern_props_scope)
-        self._pattern_props_scope.style().polish(self._pattern_props_scope)
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
@@ -580,13 +356,13 @@ class PatternPage(BasePage):
             self._pattern_service._poly_signature(poly)
             for poly in self._pattern_cell_instance_cutouts
         }
-        cutout_indices = {
-            outline_count + index
+        cutout_entity_ids = {
+            f"preview_{outline_count + index}"
             for index, poly in enumerate(pattern_polys)
             if self._pattern_service._poly_repeat_signature(poly) in cutout_signatures
             or self._pattern_service._poly_signature(poly) in instance_signatures
         }
-        self._canvas.set_pattern_cell_context(indices, cutout_indices)
+        self._canvas.set_pattern_cell_context(indices, cutout_entity_ids)
 
     def _preview_outline_indices_for_zone(self, zone_row: int) -> list[int]:
         """Select only a zone's boundary entities, not all generated output."""
@@ -658,9 +434,7 @@ class PatternPage(BasePage):
         del self._pattern_cell_cutouts[existing]
         return False
 
-    def _toggle_pattern_cell_instance_cutout_poly(
-        self, poly: list[tuple[float, float]]
-    ) -> bool:
+    def _toggle_pattern_cell_instance_cutout_poly(self, poly: list[tuple[float, float]]) -> bool:
         signature = self._pattern_service._poly_signature(poly)
         existing = next(
             (
@@ -695,21 +469,18 @@ class PatternPage(BasePage):
             self._canvas_status.set_selection_count(count)
 
     def _select_zone_for_canvas_selection(self, *, preview: bool) -> None:
-        indices = self._canvas.get_selection_indices()
-        if not indices:
+        entity_ids = self._canvas.get_selected_ids()
+        if not entity_ids:
             return
         zone_rows: list[int] = []
         if preview:
             zone_rows = [
                 owner
-                for index in indices
-                if 0 <= index < len(self._preview_zone_owners)
-                and (owner := self._preview_zone_owners[index]) is not None
+                for idx, owner in enumerate(self._preview_zone_owners[: len(entity_ids)])
+                if idx < len(entity_ids) and owner is not None
             ]
         else:
-            selected_ids = {
-                self._outline_ids[index] for index in indices if 0 <= index < len(self._outline_ids)
-            }
+            selected_ids = set(entity_ids)
             zone_rows = [
                 row
                 for row, zone in enumerate(self._zones)
@@ -720,7 +491,7 @@ class PatternPage(BasePage):
 
     def _build_layer_tree_rows(
         self,
-        layer_view_state: dict[str, dict[str, set[int]]],
+        layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
         return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
@@ -1052,689 +823,11 @@ class PatternPage(BasePage):
 
     # ── Build (UI construction) ───────────────────────────────────────────────
 
-    def _build_left(self, layout: QVBoxLayout) -> None:
-        self._build_shape_section(layout)
-        # Construct Zones before Pattern signal wiring; _build_right reparents
-        # the completed card into the right inspector above Layers.
-        self._build_zones_section(layout)
-        self._build_pattern_section(layout)
-        self._build_fill_section(layout)
-        self._build_image_engraving_section(layout)
-        layout.addStretch()
-        self._install_pattern_shortcuts()
-        self._refresh_section_subtitles()
 
-    def _build_shape_section(self, layout: QVBoxLayout) -> None:
-        shape_content, shape_layout = collapsible_content_widget(spacing=8)
-        file_row = QHBoxLayout()
-        self._dxf_edit = QLineEdit()
-        self._dxf_edit.setPlaceholderText("Select DXF, FVI, or SVG…")
-        self._dxf_edit.setToolTip("Path to a DXF, FVI, or SVG outline (drag-and-drop supported)")
-        self._dxf_edit.editingFinished.connect(self._reload_dxf)
-        file_row.addWidget(self._dxf_edit, stretch=1)
-        self._recent_btn = RecentFilesButton(
-            self._settings,
-            KIND_DXF,
-            empty_message="No recent vector files.",
-        )
-        self._recent_btn.setToolTip("Pick from recently opened vector files")
-        self._recent_btn.fileSelected.connect(self._quick_load)
-        file_row.addWidget(self._recent_btn)
-        browse_btn = QPushButton("Browse")
-        browse_btn.setFixedWidth(72)
-        browse_btn.setToolTip("Browse for a DXF, FVI, or SVG outline")
-        browse_btn.clicked.connect(self._browse_dxf)
-        file_row.addWidget(browse_btn)
-        _reload_btn = QToolButton()
-        _reload_btn.setIcon(
-            QIcon(str(Path(__file__).parents[2] / "style" / "icons" / "reload.svg"))
-        )
-        _reload_btn.setAccessibleName("Reload outline file")
-        _reload_btn.setFixedWidth(28)
-        _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
-        _reload_btn.clicked.connect(self._reload_dxf)
-        file_row.addWidget(_reload_btn)
-        shape_layout.addLayout(file_row)
-        orig_row = QHBoxLayout()
-        orig_row.addWidget(QLabel("Original:"))
-        self._orig_dims_label = QLabel("—")
-        self._orig_dims_label.setProperty("role", "dim")
-        orig_row.addWidget(self._orig_dims_label)
-        orig_row.addStretch()
-        shape_layout.addLayout(orig_row)
-        dims_row = QHBoxLayout()
-        dims_row.setSpacing(6)
-        dims_row.addWidget(QLabel("W (mm)"))
-        self._scale_w = QLineEdit()
-        self._scale_w.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, self._scale_w))
-        self._scale_w.setFixedWidth(72)
-        self._scale_w.setPlaceholderText("auto")
-        self._scale_w.setToolTip("Target width of the outline in millimetres")
-        self._scale_w.textChanged.connect(self._on_scale_w_changed)
-        self._scale_w.textChanged.connect(self._schedule_preview)
-        dims_row.addWidget(self._scale_w)
-        self._ar_lock_btn = QToolButton()
-        self._ar_lock_btn.setIcon(
-            QIcon(str(Path(__file__).parents[2] / "style" / "icons" / "lock.svg"))
-        )
-        self._ar_lock_btn.setAccessibleName("Lock outline aspect ratio")
-        self._ar_lock_btn.setFixedWidth(28)
-        self._ar_lock_btn.setCheckable(True)
-        self._ar_lock_btn.setChecked(True)
-        self._ar_lock_btn.setToolTip("Lock aspect ratio — keep W and H proportional")
-        dims_row.addWidget(self._ar_lock_btn)
-        dims_row.addWidget(QLabel("H (mm)"))
-        self._scale_h = QLineEdit()
-        self._scale_h.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, self._scale_h))
-        self._scale_h.setFixedWidth(72)
-        self._scale_h.setPlaceholderText("auto")
-        self._scale_h.setToolTip("Target height of the outline in millimetres")
-        self._scale_h.textChanged.connect(self._on_scale_h_changed)
-        self._scale_h.textChanged.connect(self._schedule_preview)
-        dims_row.addWidget(self._scale_h)
-        dims_row.addStretch()
-        shape_layout.addLayout(dims_row)
-        self._shape_section = CollapsibleSection(
-            "Shape", shape_content, expanded=True, subtitle="No file loaded"
-        )
-        layout.addWidget(self._shape_section)
 
-    def _build_pattern_section(self, layout: QVBoxLayout) -> None:
-        pattern_content, pattern_layout = collapsible_content_widget(spacing=8)
-        self._pattern_combo = QComboBox()
-        self._pattern_combo.setToolTip("Choose the fill pattern")
-        self._refresh_pattern_choices()
-        self._pattern_combo.setCurrentText("— None —")
-        self._pattern_combo.currentTextChanged.connect(self._switch_pattern)
-        pattern_layout.addWidget(self._pattern_combo)
 
-        section_label(pattern_layout, "Presets")
-        self._preset_combo = QComboBox()
-        self._preset_combo.setEditable(True)
-        self._preset_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self._preset_combo.setToolTip("Saved parameter presets for this pattern")
-        self._preset_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self._preset_combo.setMinimumContentsLength(10)
-        preset_editor = self._preset_combo.lineEdit()
-        if preset_editor is not None:
-            preset_editor.setPlaceholderText("Name or select preset…")
-        pattern_layout.addWidget(self._preset_combo)
-        preset_actions = QHBoxLayout()
-        preset_actions.setSpacing(4)
-        load_preset_btn = QPushButton("Apply Preset")
-        load_preset_btn.setToolTip("Apply the selected preset to current parameters  (⌘P)")
-        load_preset_btn.clicked.connect(self._apply_selected_preset)
-        preset_actions.addWidget(load_preset_btn, stretch=1)
-        save_preset_btn = QPushButton("Save")
-        save_preset_btn.setFixedWidth(60)
-        save_preset_btn.setToolTip("Save current parameters as a new preset")
-        save_preset_btn.clicked.connect(self._save_preset)
-        preset_actions.addWidget(save_preset_btn)
-        overflow_btn = QToolButton()
-        overflow_btn.setText("Options")
-        overflow_btn.setProperty("role", "overflow")
-        overflow_btn.setFixedWidth(72)
-        overflow_btn.setToolTip("More preset actions")
-        overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        overflow_menu = QMenu(overflow_btn)
-        overflow_menu.addAction("Delete preset", self._delete_selected_preset)
-        overflow_menu.addSeparator()
-        overflow_menu.addAction("Manage presets…", self._open_preset_manager)
-        overflow_btn.setMenu(overflow_menu)
-        preset_actions.addWidget(overflow_btn)
-        pattern_layout.addLayout(preset_actions)
-        self._refresh_preset_combo()
-        _sp = self._schedule_preview
-        _named_patterns = [
-            "Custom Tile",
-            "Flow Lines",
-            "Honeycomb",
-            "Gradient Honeycomb",
-            "Basketweave",
-            "Stipple Dots",
-            "Brick",
-            "Mesh",
-            "Voronoi",
-            "Topographic",
-        ]
-        self._pattern_widgets: dict[str, QWidget] = {}
-        for name in _named_patterns:
-            w = build_param_widget(self, name, _sp)
-            self._pattern_widgets[name] = w
-            pattern_layout.addWidget(w)
-            w.hide()
-        tile_actions = QHBoxLayout()
-        self._tile_name_edit = QLineEdit()
-        self._tile_name_edit.setPlaceholderText("Custom tile name")
-        self._tile_name_edit.setToolTip("Name the tile before saving it to the library")
-        self._tile_name_edit.returnPressed.connect(self._save_tile_motif)
-        tile_actions.addWidget(self._tile_name_edit, stretch=1)
-        self._save_tile_btn = QPushButton("Save custom tile")
-        self._save_tile_btn.setToolTip(
-            "Save the current Custom Tile geometry into the Pattern list"
-        )
-        self._save_tile_btn.clicked.connect(self._save_tile_motif)
-        tile_actions.addWidget(self._save_tile_btn)
-        self._delete_tile_btn = QPushButton("Delete custom")
-        self._delete_tile_btn.setToolTip("Delete the selected custom pattern")
-        self._delete_tile_btn.clicked.connect(self._delete_tile_motif)
-        tile_actions.addWidget(self._delete_tile_btn)
-        open_tiles_btn = QPushButton("Open Tiles Folder")
-        open_tiles_btn.setToolTip("Open the configured DXF custom-tile library")
-        open_tiles_btn.clicked.connect(self._open_custom_tiles_folder)
-        tile_actions.addWidget(open_tiles_btn)
-        self._save_tile_btn.hide()
-        self._tile_name_edit.hide()
-        self._delete_tile_btn.hide()
-        pattern_layout.addLayout(tile_actions)
-        tile_asset_actions = QHBoxLayout()
-        self._tile_asset_status = QLabel("")
-        self._tile_asset_status.setWordWrap(True)
-        self._tile_asset_status.setProperty("role", "status-neutral")
-        tile_asset_actions.addWidget(self._tile_asset_status, stretch=1)
-        self._locate_tile_btn = QPushButton("Locate…")
-        self._locate_tile_btn.clicked.connect(self._locate_tile_asset)
-        tile_asset_actions.addWidget(self._locate_tile_btn)
-        self._repair_tile_btn = QPushButton("Repair / Convert")
-        self._repair_tile_btn.clicked.connect(self._repair_tile_asset)
-        tile_asset_actions.addWidget(self._repair_tile_btn)
-        self._tile_asset_status.hide()
-        self._locate_tile_btn.hide()
-        self._repair_tile_btn.hide()
-        pattern_layout.addLayout(tile_asset_actions)
-        self._modifiers_label = section_label(pattern_layout, "Modifiers")
-        self._modifiers_widget = QWidget()
-        rot_row = QGridLayout(self._modifiers_widget)
-        rot_row.setContentsMargins(0, 0, 0, 0)
-        rot_row.addWidget(QLabel("Rotation (°)"), 0, 0)
-        self._pattern_rotation = QLineEdit(DEFAULT_PATTERN_ROTATION)
-        make_resettable_line_edit(self._pattern_rotation, DEFAULT_PATTERN_ROTATION)
-        self._pattern_rotation.setValidator(
-            QDoubleValidator(-36000, 36000, 4, self._pattern_rotation)
-        )
-        self._pattern_rotation.setFixedWidth(80)
-        self._pattern_rotation.setToolTip("Rotate generated pattern around the outline center")
-        self._pattern_rotation.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._pattern_rotation, 0, 1)
-        rot_row.addWidget(QLabel("Pattern size (%)"), 1, 0)
-        self._pattern_size_percent = QLineEdit("100")
-        self._pattern_size_percent.setValidator(
-            QDoubleValidator(1, 10000, 3, self._pattern_size_percent)
-        )
-        self._pattern_size_percent.setToolTip(
-            "Scale pattern elements and spacing without resizing the outline"
-        )
-        self._pattern_size_percent.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._pattern_size_percent, 1, 1)
-        rot_row.addWidget(QLabel("Fade (mm)"), 2, 0)
-        self._border_fade = QLineEdit(DEFAULT_BORDER_FADE)
-        make_resettable_line_edit(self._border_fade, DEFAULT_BORDER_FADE)
-        self._border_fade.setValidator(QDoubleValidator(0, 1e9, 6, self._border_fade))
-        self._border_fade.setFixedWidth(80)
-        self._border_fade.setToolTip("Thin the pattern near the outline edge. 0 = off.")
-        self._border_fade.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._border_fade, 2, 1)
-        rot_row.addWidget(QLabel("Density field"), 3, 0)
-        self._density_mode_combo = QComboBox()
-        self._density_mode_combo.addItems(["Uniform", "Horizontal", "Radial", "Boundary"])
-        self._density_mode_combo.setToolTip(
-            "Deterministically thin pattern elements across a field"
-        )
-        self._density_mode_combo.currentTextChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_mode_combo, 3, 1)
-        rot_row.addWidget(QLabel("Density strength"), 4, 0)
-        self._density_strength = QLineEdit(DEFAULT_DENSITY_STRENGTH)
-        make_resettable_line_edit(self._density_strength, DEFAULT_DENSITY_STRENGTH)
-        self._density_strength.setValidator(QDoubleValidator(0, 1, 4, self._density_strength))
-        self._density_strength.setToolTip("0 = uniform; 1 = strongest thinning")
-        self._density_strength.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_strength, 4, 1)
-        rot_row.addWidget(QLabel("Density angle (°)"), 5, 0)
-        self._density_angle = QLineEdit(DEFAULT_DENSITY_ANGLE)
-        make_resettable_line_edit(self._density_angle, DEFAULT_DENSITY_ANGLE)
-        self._density_angle.setValidator(QDoubleValidator(-36000, 36000, 4, self._density_angle))
-        self._density_angle.setToolTip("Direction of the linear density gradient")
-        self._density_angle.textChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_angle, 5, 1)
-        self._density_reverse = QCheckBox("Reverse density")
-        self._density_reverse.setToolTip("Swap the dense and sparse sides of the field")
-        self._density_reverse.stateChanged.connect(self._schedule_preview)
-        rot_row.addWidget(self._density_reverse, 6, 0, 1, 2)
-        pattern_layout.addWidget(self._modifiers_widget)
-        self._modifiers_label.hide()
-        self._modifiers_widget.hide()
-        self._pattern_section = CollapsibleSection(
-            "Pattern", pattern_content, expanded=True, subtitle=""
-        )
-        layout.addWidget(self._pattern_section)
 
-    def _build_zones_section(self, layout: QVBoxLayout) -> None:
-        zones_content, zones_layout = collapsible_content_widget(spacing=6)
-        section_label(zones_layout, "Assigned zones")
-        scope_hint = QLabel(
-            "Select shapes on the canvas, then create a zone. Selecting a zone below highlights its shapes."
-        )
-        scope_hint.setWordWrap(True)
-        scope_hint.setProperty("role", "hint")
-        zones_layout.addWidget(scope_hint)
-        assign_row = QHBoxLayout()
-        self._assign_zone_btn = QPushButton("Create Zone from Selection")
-        self._assign_zone_btn.setMinimumHeight(30)
-        self._assign_zone_btn.setToolTip(
-            "Create a zone for the selected outlines using the current settings."
-        )
-        self._assign_zone_btn.clicked.connect(self._assign_zone)
-        assign_row.addWidget(self._assign_zone_btn, stretch=1)
-        zones_layout.addLayout(assign_row)
-        self._zone_list = QListWidget()
-        self._zone_list.setMinimumHeight(120)
-        self._zone_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._zone_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._zone_list.setToolTip(
-            "Assigned pattern zones — each outline group with its own pattern"
-        )
-        self._zone_list.currentRowChanged.connect(self._on_zone_selected)
-        self._zone_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._zone_list.customContextMenuRequested.connect(self._show_zone_context_menu)
-        self._delete_zone_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._zone_list)
-        self._delete_zone_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
-        self._delete_zone_shortcut.activated.connect(self._remove_selected_zone)
-        zones_layout.addWidget(self._zone_list)
 
-        section_label(zones_layout, "Selected zone settings")
-        self._pattern_props_scope = QLabel("Select a zone to edit its settings")
-        self._pattern_props_scope.setWordWrap(True)
-        self._pattern_props_scope.setProperty("role", "zone-edit-scope")
-        zones_layout.addWidget(self._pattern_props_scope)
-
-        self._zone_output_combo = QComboBox()
-        self._zone_output_combo.addItem("Pattern + Fill", "pattern_fill")
-        self._zone_output_combo.addItem("Pattern only", "pattern")
-        self._zone_output_combo.addItem("Fill only", "fill")
-        self._zone_output_combo.addItem("Outline only", "outline")
-        self._zone_output_combo.addItem("Disabled", "none")
-        self._zone_output_combo.setToolTip(
-            "Output for the selected zone, or the next zone when none is selected"
-        )
-        self._zone_output_combo.currentIndexChanged.connect(self._schedule_preview)
-        self._zone_output_combo.currentIndexChanged.connect(self._live_update_selected_zone)
-        pattern_row = QHBoxLayout()
-        pattern_row.addWidget(QLabel("Pattern"))
-        self._zone_pattern_combo = QComboBox()
-        self._populate_pattern_combo(self._zone_pattern_combo)
-        self._zone_pattern_combo.currentTextChanged.connect(self._rebuild_zone_parameter_editor)
-        self._zone_pattern_combo.currentTextChanged.connect(self._live_update_selected_zone)
-        self._zone_pattern_combo.currentTextChanged.connect(self._update_zone_actions)
-        pattern_row.addWidget(self._zone_pattern_combo, stretch=1)
-        zones_layout.addLayout(pattern_row)
-        self._zone_params_widget = QWidget()
-        self._zone_params_grid = QGridLayout(self._zone_params_widget)
-        self._zone_params_grid.setContentsMargins(0, 0, 0, 0)
-        self._zone_params_grid.setSpacing(5)
-        self._zone_param_inputs: dict[str, QWidget] = {}
-        zones_layout.addWidget(self._zone_params_widget)
-        fill_grid = QGridLayout()
-        fill_grid.addWidget(QLabel("Fill"), 0, 0)
-        self._zone_fill_mode = QComboBox()
-        self._zone_fill_mode.addItem("None", "none")
-        self._zone_fill_mode.addItem("Lines", "lines")
-        self._zone_fill_mode.addItem("Zigzag", "zigzag")
-        self._zone_fill_mode.addItem("Crosshatch", "crosshatch")
-        self._zone_fill_mode.addItem("Concentric", "concentric")
-        self._zone_fill_mode.currentIndexChanged.connect(self._live_update_selected_zone)
-        fill_grid.addWidget(self._zone_fill_mode, 0, 1)
-        self._zone_fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
-        self._zone_fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
-        self._zone_fill_inset = QLineEdit(DEFAULT_FILL_INSET)
-        for row, (label, field) in enumerate(
-            (
-                ("Spacing (mm)", self._zone_fill_spacing),
-                ("Angle (°)", self._zone_fill_angle),
-                ("Inset (mm)", self._zone_fill_inset),
-            ),
-            start=1,
-        ):
-            field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
-            field.textChanged.connect(self._live_update_selected_zone)
-            fill_grid.addWidget(QLabel(label), row, 0)
-            fill_grid.addWidget(field, row, 1)
-        zones_layout.addLayout(fill_grid)
-        fill_targets = QHBoxLayout()
-        fill_targets.addWidget(QLabel("Fill targets"))
-        self._zone_fill_target_outline = QCheckBox("Outline space")
-        self._zone_fill_target_outline.setChecked(True)
-        self._zone_fill_target_outline.toggled.connect(self._live_update_selected_zone)
-        fill_targets.addWidget(self._zone_fill_target_outline)
-        self._zone_fill_target_pattern = QCheckBox("Pattern cells")
-        self._zone_fill_target_pattern.setChecked(False)
-        self._zone_fill_target_pattern.toggled.connect(self._live_update_selected_zone)
-        fill_targets.addWidget(self._zone_fill_target_pattern)
-        fill_targets.addStretch()
-        zones_layout.addLayout(fill_targets)
-        output_row = QHBoxLayout()
-        output_row.addWidget(QLabel("Output"))
-        output_row.addWidget(self._zone_output_combo, stretch=1)
-        zones_layout.addLayout(output_row)
-        self._zones_section = CollapsibleSection(
-            "Zone Manager", zones_content, expanded=True, subtitle="No zones assigned"
-        )
-        layout.addWidget(self._zones_section)
-        self._rebuild_zone_parameter_editor()
-
-    def _build_fill_section(self, layout: QVBoxLayout) -> None:
-        fill_content, fill_layout = collapsible_content_widget(spacing=8)
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("Mode"))
-        self._fill_mode_combo = QComboBox()
-        self._fill_mode_combo.addItem("None", "none")
-        self._fill_mode_combo.addItem("Lines", "lines")
-        self._fill_mode_combo.addItem("Zigzag", "zigzag")
-        self._fill_mode_combo.addItem("Crosshatch", "crosshatch")
-        self._fill_mode_combo.addItem("Concentric", "concentric")
-        self._fill_mode_combo.setToolTip(
-            "Fill the shape with laser-engraving paths.\n"
-            "Lines = separate hatch strokes. Zigzag = fewer travel moves.\n"
-            "Crosshatch = two angled passes. Concentric = inward contour passes."
-        )
-        self._fill_mode_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
-        mode_row.addWidget(self._fill_mode_combo, stretch=1)
-        fill_layout.addLayout(mode_row)
-        params_row = QGridLayout()
-        params_row.addWidget(QLabel("Spacing (mm)"), 0, 0)
-        self._fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
-        make_resettable_line_edit(self._fill_spacing, DEFAULT_FILL_SPACING)
-        self._fill_spacing.setFixedWidth(80)
-        self._fill_spacing.setToolTip("Distance between adjacent infill lines")
-        self._fill_spacing.textChanged.connect(self._schedule_preview)
-        params_row.addWidget(self._fill_spacing, 0, 1)
-        params_row.addWidget(QLabel("Angle (°)"), 1, 0)
-        self._fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
-        make_resettable_line_edit(self._fill_angle, DEFAULT_FILL_ANGLE)
-        self._fill_angle.setFixedWidth(80)
-        self._fill_angle.setToolTip("Angle of the infill direction")
-        self._fill_angle.textChanged.connect(self._schedule_preview)
-        params_row.addWidget(self._fill_angle, 1, 1)
-        params_row.addWidget(QLabel("Boundary inset (mm)"), 2, 0)
-        self._fill_inset = QLineEdit(DEFAULT_FILL_INSET)
-        make_resettable_line_edit(self._fill_inset, DEFAULT_FILL_INSET)
-        self._fill_inset.setFixedWidth(80)
-        self._fill_inset.setToolTip(
-            "Keep engraving this far inside each target boundary; useful for kerf and edge clearance"
-        )
-        self._fill_inset.textChanged.connect(self._schedule_preview)
-        params_row.addWidget(self._fill_inset, 2, 1)
-        target_row = QHBoxLayout()
-        target_row.setSpacing(8)
-        target_row.addWidget(QLabel("Targets"))
-        self._fill_target_outline_cb = QCheckBox("Outline space")
-        self._fill_target_outline_cb.setToolTip(
-            "Fill the outline's negative space without crossing into closed pattern cells"
-        )
-        self._fill_target_outline_cb.setChecked(False)
-        self._fill_target_outline_cb.toggled.connect(self._schedule_preview)
-        target_row.addWidget(self._fill_target_outline_cb)
-        self._fill_target_pattern_cb = QCheckBox("Pattern cells")
-        self._fill_target_pattern_cb.setToolTip(
-            "Hatch each closed pattern stroke (tiles, tessellation, …)"
-        )
-        self._fill_target_pattern_cb.setChecked(True)
-        self._fill_target_pattern_cb.toggled.connect(self._schedule_preview)
-        target_row.addWidget(self._fill_target_pattern_cb)
-        target_row.addStretch()
-        self._fill_keep_outline_cb = QCheckBox("Keep pattern strokes alongside fill")
-        self._fill_keep_outline_cb.setToolTip(
-            "Output both pattern strokes and laser-fill lines.\nUncheck for fill-only output."
-        )
-        self._fill_keep_outline_cb.setChecked(True)
-        self._fill_keep_outline_cb.stateChanged.connect(self._schedule_preview)
-        self._fill_params_container = QWidget()
-        _fpc_layout = QVBoxLayout(self._fill_params_container)
-        _fpc_layout.setContentsMargins(0, 0, 0, 0)
-        _fpc_layout.setSpacing(8)
-        _fpc_layout.addLayout(params_row)
-        _fpc_layout.addLayout(target_row)
-        _fpc_layout.addWidget(self._fill_keep_outline_cb)
-        self._fill_params_container.setVisible(False)
-        fill_layout.addWidget(self._fill_params_container)
-        section_label(fill_layout, "Cutouts")
-        self._cutout_callout = QFrame()
-        self._cutout_callout.setObjectName("cutoutCallout")
-        cutout_callout_layout = QHBoxLayout(self._cutout_callout)
-        cutout_callout_layout.setContentsMargins(8, 6, 8, 6)
-        cutout_callout_layout.setSpacing(6)
-        self._cutout_icon = QLabel()
-        self._cutout_icon.setFixedWidth(18)
-        self._cutout_icon.setPixmap(
-            QIcon(
-                str(Path(__file__).parents[2] / "style" / "icons" / "info.svg")
-            ).pixmap(16, 16)
-        )
-        self._cutout_icon.setProperty("role", "cutout-icon")
-        cutout_callout_layout.addWidget(self._cutout_icon)
-        self._cutout_status_label = QLabel("Right-click a shape on canvas to mark as cutout")
-        self._cutout_status_label.setWordWrap(True)
-        self._cutout_status_label.setProperty("role", "cutout-desc")
-        cutout_callout_layout.addWidget(self._cutout_status_label, stretch=1)
-        self._cutout_clear_btn = QPushButton("Clear")
-        self._cutout_clear_btn.setFixedWidth(52)
-        self._cutout_clear_btn.setToolTip("Remove all cutout assignments")
-        self._cutout_clear_btn.setVisible(False)
-        self._cutout_clear_btn.clicked.connect(self._clear_exclusions)
-        cutout_callout_layout.addWidget(self._cutout_clear_btn)
-        self._apply_cutout_callout_style(active=False)
-        fill_layout.addWidget(self._cutout_callout)
-        self._mark_cutout_btn = QPushButton("Mark Selected as Cutout")
-        self._mark_cutout_btn.setMinimumHeight(28)
-        self._mark_cutout_btn.setToolTip(
-            "Mark the selected canvas shapes as cutout regions.\nCutouts exclude areas from laser fill.  Right-click a shape to toggle individually."
-        )
-        self._mark_cutout_btn.clicked.connect(self._mark_selection_as_cutout)
-        fill_layout.addWidget(self._mark_cutout_btn)
-        self._fill_section = CollapsibleSection(
-            "Fill", fill_content, expanded=False, subtitle="None"
-        )
-        layout.addWidget(self._fill_section)
-        self._on_fill_mode_changed()
-
-    def _build_image_engraving_section(self, layout: QVBoxLayout) -> None:
-        content, form = collapsible_content_widget(spacing=8)
-        choose = QPushButton("Choose engraving image…")
-        choose.clicked.connect(self._choose_engraving_image)
-        form.addWidget(choose)
-        self._engraving_image_label = QLabel("No image selected")
-        self._engraving_image_label.setWordWrap(True)
-        form.addWidget(self._engraving_image_label)
-
-        placement_content, placement = collapsible_content_widget(spacing=8)
-        placement_grid = QGridLayout()
-
-        def number(value, minimum, maximum, decimals=2, step=1.0):
-            widget = QDoubleSpinBox()
-            widget.setRange(minimum, maximum)
-            widget.setDecimals(decimals)
-            widget.setSingleStep(step)
-            widget.setValue(value)
-            widget.valueChanged.connect(self._update_engraving_overlay)
-            return widget
-
-        self._engrave_x = number(0, -100000, 100000)
-        self._engrave_y = number(0, -100000, 100000)
-        self._engrave_w = number(100, 0.01, 100000)
-        self._engrave_h = number(100, 0.01, 100000)
-        self._engrave_rotation = number(0, -360, 360, 1, 1)
-        for row, (label, widget) in enumerate((
-            ("X (mm)", self._engrave_x),
-            ("Y (mm)", self._engrave_y),
-            ("Width (mm)", self._engrave_w),
-            ("Height (mm)", self._engrave_h),
-            ("Rotation (°)", self._engrave_rotation),
-        )):
-            placement_grid.addWidget(QLabel(label), row, 0)
-            placement_grid.addWidget(widget, row, 1)
-        placement.addLayout(placement_grid)
-        self._engrave_canvas_edit = QCheckBox("Select, drag, and resize image on canvas")
-        self._engrave_canvas_edit.setChecked(True)
-        self._engrave_canvas_edit.toggled.connect(
-            lambda enabled: self._canvas.set_background_image_editable(
-                enabled, self._on_engraving_canvas_transform
-            )
-        )
-        placement.addWidget(self._engrave_canvas_edit)
-        self._engraving_placement_section = CollapsibleSection(
-            "Placement", placement_content, expanded=True, subtitle="100 × 100 mm"
-        )
-        form.addWidget(self._engraving_placement_section)
-
-        appearance_content, appearance = collapsible_content_widget(spacing=8)
-        self._engrave_gamma = number(1, 0.1, 5, 2, 0.05)
-        appearance_grid = QGridLayout()
-        appearance_grid.addWidget(QLabel("Gamma / depth detail"), 0, 0)
-        appearance_grid.addWidget(self._engrave_gamma, 0, 1)
-        self._engrave_invert = QCheckBox("Invert light and dark")
-        appearance_grid.addWidget(self._engrave_invert, 1, 0, 1, 2)
-        appearance.addLayout(appearance_grid)
-        self._engraving_appearance_section = CollapsibleSection(
-            "Appearance", appearance_content, expanded=False, subtitle="Gamma 1.00 · Normal"
-        )
-        form.addWidget(self._engraving_appearance_section)
-
-        process_content, process = collapsible_content_widget(spacing=8)
-        material_row = QHBoxLayout()
-        material_row.addWidget(QLabel("Material starting profile"))
-        self._engrave_material = QComboBox()
-        for label, key in (
-            ("Custom", "custom"), ("Wood", "wood"),
-            ("Laser-safe polymer", "polymer"),
-            ("Anodized aluminum", "aluminum"),
-            ("Coated / marking steel", "steel"),
-        ):
-            self._engrave_material.addItem(label, key)
-        material_row.addWidget(self._engrave_material, stretch=1)
-        self._apply_material_btn = QPushButton("Apply values")
-        self._apply_material_btn.setEnabled(False)
-        self._apply_material_btn.setToolTip(
-            "Explicitly replace the current process values with conservative starting values"
-        )
-        self._apply_material_btn.clicked.connect(self._apply_engraving_material)
-        self._engrave_material.currentIndexChanged.connect(
-            lambda: self._apply_material_btn.setEnabled(
-                self._engrave_material.currentData() != "custom"
-            )
-        )
-        material_row.addWidget(self._apply_material_btn)
-        process.addLayout(material_row)
-        process_grid = QGridLayout()
-        self._engrave_interval = number(0.1, 0.025, 2, 3, 0.025)
-        self._engrave_min_power = number(0, 0, 100, 1)
-        self._engrave_max_power = number(80, 0, 100, 1)
-        self._engrave_speed = number(100, 0.1, 10000, 1, 10)
-        self._engrave_passes = QSpinBox()
-        self._engrave_passes.setRange(1, 100)
-        labels = (
-            ("Detail / interval", self._engrave_interval),
-            ("Min power (%)", self._engrave_min_power),
-            ("Max power (%)", self._engrave_max_power),
-            ("Speed (mm/s)", self._engrave_speed),
-        )
-        slider_scales = {
-            self._engrave_interval: 1000,
-            self._engrave_min_power: 10,
-            self._engrave_max_power: 10,
-            self._engrave_gamma: 100,
-        }
-
-        def make_slider(field: QDoubleSpinBox, scale: int) -> QSlider:
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setMinimumWidth(120)
-            slider.setRange(round(field.minimum() * scale), round(field.maximum() * scale))
-            slider.setValue(round(field.value() * scale))
-            slider.valueChanged.connect(lambda value, f=field, s=scale: f.setValue(value / s))
-            field.valueChanged.connect(lambda value, sl=slider, s=scale: sl.setValue(round(value * s)))
-            return slider
-
-        grid_row = 0
-        for label, widget in labels:
-            process_grid.addWidget(QLabel(label), grid_row, 0)
-            process_grid.addWidget(widget, grid_row, 1)
-            grid_row += 1
-            scale = slider_scales.get(widget)
-            if scale is not None:
-                # Full-width second row remains usable in the narrow sidebar.
-                process_grid.addWidget(make_slider(widget, scale), grid_row, 0, 1, 2)
-                grid_row += 1
-        process_grid.addWidget(QLabel("Passes"), grid_row, 0)
-        process_grid.addWidget(self._engrave_passes, grid_row, 1)
-        process.addLayout(process_grid)
-        self._engraving_process_error = QLabel()
-        self._engraving_process_error.setWordWrap(True)
-        self._engraving_process_error.setProperty("role", "status-err")
-        self._engraving_process_error.setVisible(False)
-        process.addWidget(self._engraving_process_error)
-        safety_callout = QLabel(
-            "Machine and material settings are starting points only. Review settings before output."
-        )
-        safety_callout.setWordWrap(True)
-        safety_callout.setProperty("role", "warning")
-        process.addWidget(safety_callout)
-        safety_detail_content, safety_detail = collapsible_content_widget(spacing=8)
-        safety = QLabel(
-            "Use only laser-safe materials; never engrave PVC or vinyl. Bare aluminum and steel "
-            "usually require a fiber laser or approved marking compound. Frame the job and run a "
-            "material test on scrap before production."
-        )
-        safety.setWordWrap(True)
-        safety_detail.addWidget(safety)
-        process.addWidget(CollapsibleSection(
-            "Review settings", safety_detail_content, expanded=False, subtitle="Material safety"
-        ))
-        self._engraving_process_section = CollapsibleSection(
-            "Laser Process", process_content, expanded=False, subtitle="Custom · 80% · 100 mm/s"
-        )
-        form.addWidget(self._engraving_process_section)
-
-        output_content, output = collapsible_content_widget(spacing=8)
-        target_row = QHBoxLayout()
-        target_row.addWidget(QLabel("Clip to"))
-        self._engrave_target = QComboBox()
-        self._engrave_target.addItem("Entire outline", "outline")
-        self._engrave_target.addItem("Selected zone", "zone")
-        target_row.addWidget(self._engrave_target, stretch=1)
-        output.addLayout(target_row)
-        export = QPushButton("Export Positioned Engraving Package…")
-        export.setProperty("role", "primary")
-        export.clicked.connect(self._export_pattern_engraving)
-        output.addWidget(export)
-        note = QLabel(
-            "Machine handoff: 1) Export the pattern DXF. 2) Export this engraving package. "
-            "3) Import the DXF and .positioned.svg into the same laser-software job without "
-            "moving either file. 4) Put the SVG raster on an engraving layer and copy speed, "
-            "power, interval, and passes from the .engrave.json sidecar. 5) Frame the job and "
-            "run a material test before production."
-        )
-        note.setWordWrap(True)
-        output.addWidget(note)
-        self._engraving_output_section = CollapsibleSection(
-            "Output", output_content, expanded=False, subtitle="Entire outline · positioned assets"
-        )
-        form.addWidget(self._engraving_output_section)
-
-        for field in (
-            self._engrave_x, self._engrave_y, self._engrave_w, self._engrave_h,
-            self._engrave_rotation,
-            self._engrave_interval, self._engrave_min_power, self._engrave_max_power,
-            self._engrave_speed, self._engrave_gamma,
-        ):
-            field.valueChanged.connect(self._update_engraving_section_summaries)
-        self._engrave_passes.valueChanged.connect(self._update_engraving_section_summaries)
-        self._engrave_invert.toggled.connect(self._update_engraving_section_summaries)
-        self._engrave_material.currentIndexChanged.connect(self._update_engraving_section_summaries)
-        self._engrave_target.currentIndexChanged.connect(self._update_engraving_section_summaries)
-        self._engraving_section = CollapsibleSection(
-            "Image Engraving", content, expanded=False, subtitle="No image"
-        )
-        layout.addWidget(self._engraving_section)
 
     def _update_engraving_section_summaries(self, *_args) -> None:
         self._engraving_placement_section.set_subtitle(
@@ -1755,13 +848,17 @@ class PatternPage(BasePage):
         valid = self._engrave_min_power.value() <= self._engrave_max_power.value()
         self._engraving_process_error.setText(
             "Minimum power cannot exceed maximum power. Lower Min power or raise Max power."
-            if not valid else ""
+            if not valid
+            else ""
         )
         self._engraving_process_error.setVisible(not valid)
 
     def _choose_engraving_image(self) -> None:
         path = pick_open_file(
-            self, self._settings, "pattern_engraving_image", "Choose engraving image",
+            self,
+            self._settings,
+            "pattern_engraving_image",
+            "Choose engraving image",
             "Image files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;All files (*)",
             recent_kind=KIND_IMAGE,
         )
@@ -1779,9 +876,7 @@ class PatternPage(BasePage):
                     self._engrave_w.setValue(source.width / float(dpi[0]) * 25.4)
                     self._engrave_h.setValue(source.height / float(dpi[1]) * 25.4)
                 elif source.width > 0:
-                    self._engrave_h.setValue(
-                        self._engrave_w.value() * source.height / source.width
-                    )
+                    self._engrave_h.setValue(self._engrave_w.value() * source.height / source.width)
         except OSError:
             pass
         center_x, center_y = self._canvas._c2w(
@@ -1823,8 +918,10 @@ class PatternPage(BasePage):
         self, x: float, y: float, w: float, h: float, rotation: float = 0.0
     ) -> None:
         for field, value in (
-            (self._engrave_x, x), (self._engrave_y, y),
-            (self._engrave_w, w), (self._engrave_h, h),
+            (self._engrave_x, x),
+            (self._engrave_y, y),
+            (self._engrave_w, w),
+            (self._engrave_h, h),
             (self._engrave_rotation, rotation),
         ):
             field.blockSignals(True)
@@ -1854,8 +951,11 @@ class PatternPage(BasePage):
                 overlay = source.convert("RGBA")
                 overlay.putalpha(125)
                 self._canvas.set_background_image(
-                    overlay.copy(), self._engrave_w.value(), self._engrave_h.value(),
-                    self._engrave_x.value(), self._engrave_y.value(),
+                    overlay.copy(),
+                    self._engrave_w.value(),
+                    self._engrave_h.value(),
+                    self._engrave_x.value(),
+                    self._engrave_y.value(),
                     self._engrave_rotation.value(),
                 )
                 self._canvas.set_background_image_editable(
@@ -1871,9 +971,7 @@ class PatternPage(BasePage):
         if not 0 <= row < len(self._zones):
             raise ValueError("Select a zone before exporting a zone-clipped engraving.")
         ids = set(self._zones[row].get("outline_ids", []))
-        return [
-            list(poly) for oid, poly in zip(self._outline_ids, self._edit_polys) if oid in ids
-        ]
+        return [list(poly) for oid, poly in zip(self._outline_ids, self._edit_polys) if oid in ids]
 
     def _export_pattern_engraving(self) -> None:
         if not self._engraving_image_path:
@@ -1886,7 +984,10 @@ class PatternPage(BasePage):
             )
             return
         out = pick_save_file(
-            self, self._settings, "pattern_engraving_output", "Export positioned engraving",
+            self,
+            self._settings,
+            "pattern_engraving_output",
+            "Export positioned engraving",
             f"{Path(self._engraving_image_path).stem}_pattern_engraving.png",
             "PNG image (*.png)",
         )
@@ -1894,14 +995,18 @@ class PatternPage(BasePage):
             return
         try:
             spec = RasterEngravingSpec(
-                x_mm=self._engrave_x.value(), y_mm=self._engrave_y.value(),
-                width_mm=self._engrave_w.value(), height_mm=self._engrave_h.value(),
+                x_mm=self._engrave_x.value(),
+                y_mm=self._engrave_y.value(),
+                width_mm=self._engrave_w.value(),
+                height_mm=self._engrave_h.value(),
                 line_interval_mm=self._engrave_interval.value(),
                 min_power_percent=self._engrave_min_power.value(),
                 max_power_percent=self._engrave_max_power.value(),
                 speed_mm_s=self._engrave_speed.value(),
-                gamma=self._engrave_gamma.value(), invert=self._engrave_invert.isChecked(),
-                passes=self._engrave_passes.value(), rotation_deg=self._engrave_rotation.value(),
+                gamma=self._engrave_gamma.value(),
+                invert=self._engrave_invert.isChecked(),
+                passes=self._engrave_passes.value(),
+                rotation_deg=self._engrave_rotation.value(),
             )
             png, _metadata, _svg = export_raster_job(
                 self._engraving_image_path, out, spec, self._engraving_mask_polys()
@@ -1910,140 +1015,6 @@ class PatternPage(BasePage):
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Engraving Export", str(exc))
 
-    def _build_export_section(self, layout: QVBoxLayout) -> None:
-        # Export options live in a card matching Shape/Pattern/Fill/Zones —
-        # previously a bare caption label, the odd one out on this sidebar.
-        # The action button/progress/status stay outside and unwrapped
-        # below it, since a primary CTA should never be hidden behind a
-        # collapsible header.
-        card_content = QWidget()
-        card_layout = QVBoxLayout(card_content)
-        card_layout.setContentsMargins(0, 0, 0, 0)
-        card_layout.setSpacing(4)
-        self._include_border_cb = QCheckBox("Border on separate layer")
-        self._include_border_cb.setToolTip(
-            "Writes the pattern fill to a 'pattern' layer and every\noutline to a shared 'outline' layer (CAM-friendly)."
-        )
-        self._include_border_cb.setChecked(True)
-        self._include_border_cb.stateChanged.connect(self._schedule_preview)
-        card_layout.addWidget(self._include_border_cb)
-        self._export_open_paths_cb = QCheckBox("Export as Open Paths")
-        self._export_open_paths_cb.setToolTip(
-            "Write pattern strokes as open polylines (no forced closure)."
-        )
-        self._export_open_paths_cb.setChecked(False)
-        card_layout.addWidget(self._export_open_paths_cb)
-        quality_row = QHBoxLayout()
-        quality_row.addWidget(QLabel("Preview quality"))
-        self._preview_quality_combo = QComboBox()
-        self._preview_quality_combo.addItem("Fast", "fast")
-        self._preview_quality_combo.addItem("Balanced", "balanced")
-        self._preview_quality_combo.addItem("High", "high")
-        self._preview_quality_combo.setCurrentIndex(
-            max(0, self._preview_quality_combo.findData(DEFAULT_PREVIEW_QUALITY))
-        )
-        self._preview_quality_combo.currentIndexChanged.connect(self._schedule_preview)
-        quality_row.addWidget(self._preview_quality_combo)
-        card_layout.addLayout(quality_row)
-        cleanup_grid = QGridLayout()
-        cleanup_grid.addWidget(QLabel("Min segment (mm)"), 0, 0)
-        self._minimum_segment_edit = QLineEdit(DEFAULT_MIN_SEGMENT)
-        make_resettable_line_edit(self._minimum_segment_edit, DEFAULT_MIN_SEGMENT)
-        self._minimum_segment_edit.setToolTip(
-            "Remove vertices closer than this at export; 0 disables"
-        )
-        cleanup_grid.addWidget(self._minimum_segment_edit, 0, 1)
-        cleanup_grid.addWidget(QLabel("Min island (mm²)"), 1, 0)
-        self._minimum_area_edit = QLineEdit(DEFAULT_MIN_ISLAND_AREA)
-        make_resettable_line_edit(self._minimum_area_edit, DEFAULT_MIN_ISLAND_AREA)
-        self._minimum_area_edit.setToolTip(
-            "Discard closed pattern islands smaller than this; 0 disables"
-        )
-        cleanup_grid.addWidget(self._minimum_area_edit, 1, 1)
-        card_layout.addLayout(cleanup_grid)
-        self._optimize_paths_cb = QCheckBox("Optimize path order")
-        self._optimize_paths_cb.setToolTip(
-            "Emit nested cutouts first, then reduce non-cutting travel between paths"
-        )
-        self._optimize_paths_cb.setChecked(True)
-        card_layout.addWidget(self._optimize_paths_cb)
-        self._summary_chip = QLabel("Preflight · Load an outline to begin")
-        self._summary_chip.setProperty("role", "summary-banner")
-        self._summary_chip.setProperty("tone", "neutral")
-        self._summary_chip.setWordWrap(True)
-        self._summary_chip.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        card_layout.addWidget(self._summary_chip)
-        layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
-        export_default = str(self._settings.get("pattern_export_default", "vector"))
-        if export_default not in {"vector", "engraving", "laserstar"}:
-            export_default = "vector"
-        self._export_default = export_default
-        self._gen_btn = primary_button(
-            "Export",
-            height=38,
-            tooltip="Run the remembered export format  (⌘E)",
-        )
-        self._gen_btn.clicked.connect(self._run_remembered_export)
-        export_action_row = QHBoxLayout()
-        export_action_row.addWidget(self._gen_btn, stretch=1)
-        self._export_more = QToolButton()
-        self._export_more.setText("Options")
-        self._export_more.setMinimumSize(72, 38)
-        self._export_more.setToolTip("Choose an export by operator purpose")
-        self._export_more.setAccessibleName("Choose export format")
-        self._export_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._export_menu = QMenu(self._export_more)
-        self._export_actions = {
-            "vector": self._export_menu.addAction(
-                "Vector-only — Pattern and fill DXF"
-            ),
-            "engraving": self._export_menu.addAction(
-                "Engraving-only — Positioned image assets"
-            ),
-            "laserstar": self._export_menu.addAction(
-                "Combined job — LaserStar operator package"
-            ),
-        }
-        for kind, action in self._export_actions.items():
-            action.triggered.connect(
-                lambda _checked=False, export_kind=kind: self._select_export_kind(export_kind)
-            )
-        self._export_more.setMenu(self._export_menu)
-        export_action_row.addWidget(self._export_more)
-        self._cancel_generate_btn = QToolButton()
-        self._cancel_generate_btn.setText("Cancel")
-        self._cancel_generate_btn.setToolTip("Cancel the current export")
-        self._cancel_generate_btn.setAccessibleName("Cancel pattern export")
-        self._cancel_generate_btn.setVisible(False)
-        self._cancel_generate_btn.clicked.connect(self._cancel_generation)
-        export_action_row.addWidget(self._cancel_generate_btn)
-        layout.addLayout(export_action_row)
-        self._progress = QProgressBar()
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        self._progress.setVisible(False)
-        layout.addWidget(self._progress)
-        self._status = QLabel("")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status)
-        self._undo_transfer_btn = QPushButton("Undo transfer")
-        self._undo_transfer_btn.setToolTip("Restore the Pattern outline from before this transfer")
-        self._undo_transfer_btn.setVisible(False)
-        self._undo_transfer_btn.clicked.connect(self._undo_outline_transfer)
-        layout.addWidget(self._undo_transfer_btn)
-        self._reveal_btn = QPushButton("Show in Finder")
-        self._reveal_btn.setMinimumHeight(26)
-        self._reveal_btn.setToolTip("Open the exported file location in Finder")
-        # Hidden until an export exists — a permanently disabled button is
-        # just sidebar noise before the first export.
-        self._reveal_btn.setVisible(False)
-        self._reveal_btn.clicked.connect(self._reveal_in_finder)
-        layout.addWidget(self._reveal_btn)
-        self._operator_notes_btn = QPushButton("Copy Operator Notes")
-        self._operator_notes_btn.setVisible(False)
-        self._operator_notes_btn.clicked.connect(self._copy_operator_notes)
-        layout.addWidget(self._operator_notes_btn)
-        self._refresh_export_default_label()
 
     def _refresh_export_default_label(self) -> None:
         labels = {
@@ -2103,9 +1074,7 @@ class PatternPage(BasePage):
             Path(self._dxf_edit.text()).stem if self._dxf_edit.text().strip() else "stipple-job"
         )
         default_name = str(
-            self._settings.get(
-                "laserstar_job_name", f"{source_name}-{date.today().isoformat()}"
-            )
+            self._settings.get("laserstar_job_name", f"{source_name}-{date.today().isoformat()}")
         )
         dialog = LaserStarExportDialog(
             job_name=default_name,
@@ -2130,13 +1099,17 @@ class PatternPage(BasePage):
         if self._engraving_image_path:
             raster_source = self._engraving_image_path
             raster_spec = RasterEngravingSpec(
-                x_mm=self._engrave_x.value(), y_mm=self._engrave_y.value(),
-                width_mm=self._engrave_w.value(), height_mm=self._engrave_h.value(),
+                x_mm=self._engrave_x.value(),
+                y_mm=self._engrave_y.value(),
+                width_mm=self._engrave_w.value(),
+                height_mm=self._engrave_h.value(),
                 line_interval_mm=self._engrave_interval.value(),
                 min_power_percent=self._engrave_min_power.value(),
                 max_power_percent=self._engrave_max_power.value(),
-                speed_mm_s=self._engrave_speed.value(), gamma=self._engrave_gamma.value(),
-                passes=self._engrave_passes.value(), invert=self._engrave_invert.isChecked(),
+                speed_mm_s=self._engrave_speed.value(),
+                gamma=self._engrave_gamma.value(),
+                passes=self._engrave_passes.value(),
+                invert=self._engrave_invert.isChecked(),
                 rotation_deg=self._engrave_rotation.value(),
             )
             try:
@@ -2146,8 +1119,12 @@ class PatternPage(BasePage):
                 return
         try:
             folder = export_laserstar_package(
-                destination, name, list(self._preview_polys_cache),
-                raster_source=raster_source, raster_spec=raster_spec, raster_mask=raster_mask,
+                destination,
+                name,
+                list(self._preview_polys_cache),
+                raster_source=raster_source,
+                raster_spec=raster_spec,
+                raster_mask=raster_mask,
             )
             self._last_out_path = str(folder / "LaserStar-Setup.txt")
             self._reveal_btn.setVisible(True)
@@ -2224,9 +1201,7 @@ class PatternPage(BasePage):
         elif status == "valid":
             self._tile_asset_status.setText(f"Valid · {Path(asset.get('path', '')).name}")
         elif status == "missing":
-            self._tile_asset_status.setText(
-                "Missing source · embedded fallback remains available"
-            )
+            self._tile_asset_status.setText("Missing source · embedded fallback remains available")
         elif status == "invalid":
             self._tile_asset_status.setText(
                 f"Invalid source · {asset.get('error', 'could not read geometry')}"
@@ -2281,17 +1256,23 @@ class PatternPage(BasePage):
             except (OSError, ValueError, RuntimeError) as exc:
                 LOGGER.warning("Skipping unreadable custom tile: %s", path)
                 self._tile_assets[path.stem] = {
-                    "path": str(path), "status": "invalid", "error": str(exc)
+                    "path": str(path),
+                    "status": "invalid",
+                    "error": str(exc),
                 }
                 continue
             if polys:
                 self._tile_motifs[path.stem] = [list(poly) for poly in polys]
                 self._tile_assets[path.stem] = {
-                    "path": str(path), "status": "valid", "format": path.suffix.lower()
+                    "path": str(path),
+                    "status": "valid",
+                    "format": path.suffix.lower(),
                 }
             else:
                 self._tile_assets[path.stem] = {
-                    "path": str(path), "status": "invalid", "error": "No drawable geometry"
+                    "path": str(path),
+                    "status": "invalid",
+                    "error": "No drawable geometry",
                 }
 
     def _persist_tile_motifs(self) -> None:
@@ -2336,9 +1317,7 @@ class PatternPage(BasePage):
         tile_path = custom_tiles_dir(self._settings.get("custom_tiles_dir")) / f"{safe_name}.dxf"
         tile_path.parent.mkdir(parents=True, exist_ok=True)
         write_polylines_dxf(self._custom_tile_polys, str(tile_path), close=False)
-        self._tile_assets[name] = {
-            "path": str(tile_path), "status": "valid", "format": ".dxf"
-        }
+        self._tile_assets[name] = {"path": str(tile_path), "status": "valid", "format": ".dxf"}
         self._persist_tile_motifs()
         self._refresh_tile_motif_combo(name)
         self._pattern_combo.setCurrentText(f"Custom · {name}")
@@ -2419,15 +1398,15 @@ class PatternPage(BasePage):
                 raise ValueError("No drawable geometry was found.")
             self._tile_motifs[name] = [list(poly) for poly in polys]
             self._tile_assets[name] = {
-                "path": str(source), "status": "valid", "format": source.suffix.lower()
+                "path": str(source),
+                "status": "valid",
+                "format": source.suffix.lower(),
             }
             self._persist_tile_motifs()
             self._refresh_pattern_choices(current=f"Custom · {name}")
             self._set_status(f"Located custom tile: {source.name}", STATUS_OK)
         except (OSError, ValueError, RuntimeError) as exc:
-            self._tile_assets[name] = {
-                "path": str(source), "status": "invalid", "error": str(exc)
-            }
+            self._tile_assets[name] = {"path": str(source), "status": "invalid", "error": str(exc)}
             self._persist_tile_motifs()
             self._update_custom_pattern_actions(f"Custom · {name}")
 
@@ -2694,9 +1673,7 @@ class PatternPage(BasePage):
             "target_pattern": target_pattern,
             "inset": inset,
             "cell_cutouts": [list(poly) for poly in self._pattern_cell_cutouts],
-            "cell_instance_cutouts": [
-                list(poly) for poly in self._pattern_cell_instance_cutouts
-            ],
+            "cell_instance_cutouts": [list(poly) for poly in self._pattern_cell_instance_cutouts],
         }
 
     def _collect_fabrication_options(self) -> dict:
@@ -3065,7 +2042,7 @@ class PatternPage(BasePage):
         item = self._zone_list.item(row)
         if item is not None:
             item.setText(zone["label"])
-        self._refresh_pattern_properties_panel()
+        refresh_pattern_properties_panel(self)
 
     def _populate_pattern_combo(self, combo: QComboBox, current: str | None = None) -> None:
         current = combo.currentText() if current is None else current
@@ -3278,7 +2255,7 @@ class PatternPage(BasePage):
         valid = 0 <= row < len(self._zones)
         if not valid:
             self._canvas.set_accent_polys({})
-            self._refresh_pattern_properties_panel()
+            refresh_pattern_properties_panel(self)
             return
         zone = self._zones[row]
         self._highlight_zone_on_canvas(row)
@@ -3306,7 +2283,7 @@ class PatternPage(BasePage):
             self._suspend_state = False
             self._loading_zone = False
         self._refresh_section_subtitles()
-        self._refresh_pattern_properties_panel()
+        refresh_pattern_properties_panel(self)
 
     def _assign_zone(self) -> None:
         sel_polys = self._canvas.get_selected()
@@ -3318,9 +2295,7 @@ class PatternPage(BasePage):
             sel_ids = self._fresh_outline_ids(len(promoted))
         else:
             sel_ids = [
-                self._outline_ids[idx]
-                for idx in self._canvas.get_selection_indices()
-                if 0 <= idx < len(self._outline_ids)
+                eid for eid in self._canvas.get_selected_ids() if eid in self._outline_ids
             ]
         if not sel_polys:
             QMessageBox.information(
@@ -3440,7 +2415,7 @@ class PatternPage(BasePage):
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
         self._update_zone_actions()
         self._refresh_section_subtitles()
-        self._refresh_pattern_properties_panel()
+        refresh_pattern_properties_panel(self)
 
     # ── Exclusions (cutouts) ──────────────────────────────────────────────────
 
@@ -3521,16 +2496,25 @@ class PatternPage(BasePage):
         self._canvas._show_flash(detail, 3500)
 
     def _mark_selection_as_cutout(self) -> None:
-        indices = list(self._canvas.get_selection_indices())
-        if not indices:
+        entity_ids = self._canvas.get_selected_ids()
+        if not entity_ids:
             self._set_status("Select one or more shapes on canvas first.", STATUS_WARN)
             return
         if self._showing_preview:
             outline_count = len(self._preview_categories.get("outline", []))
             pattern_polys = self._preview_categories.get("pattern", [])
+            # Convert entity IDs to preview cell indices
+            cell_indices = set()
+            for eid in entity_ids:
+                if eid.startswith("preview_"):
+                    try:
+                        cell_idx = int(eid.split("_")[1])
+                        cell_indices.add(cell_idx)
+                    except (ValueError, IndexError):
+                        pass
             selected_cells = [
                 list(pattern_polys[idx - outline_count])
-                for idx in indices
+                for idx in cell_indices
                 if idx in self._canvas._pattern_cell_indices
                 and 0 <= idx - outline_count < len(pattern_polys)
             ]
@@ -3544,8 +2528,9 @@ class PatternPage(BasePage):
                 self._refresh_cutout_status()
                 self._schedule_preview()
             return
-        for idx in indices:
-            self._on_canvas_cutout_toggle(idx)
+        for eid in entity_ids:
+            if eid in self._outline_ids:
+                self._on_canvas_cutout_toggle(self._outline_ids.index(eid))
 
     def _clear_exclusions(self) -> None:
         if (
@@ -3598,24 +2583,22 @@ class PatternPage(BasePage):
         if not hasattr(self, "_cutout_status_label"):
             return
         outline_count = len(self._exclusion_ids)
-        cell_count = len(self._pattern_cell_cutouts) + len(
-            self._pattern_cell_instance_cutouts
-        )
+        cell_count = len(self._pattern_cell_cutouts) + len(self._pattern_cell_instance_cutouts)
         n = outline_count + cell_count
         if n == 0:
             self._cutout_icon.setPixmap(
-                QIcon(
-                    str(Path(__file__).parents[2] / "style" / "icons" / "info.svg")
-                ).pixmap(16, 16)
+                QIcon(str(Path(__file__).parents[2] / "style" / "icons" / "info.svg")).pixmap(
+                    16, 16
+                )
             )
             self._cutout_status_label.setText("Right-click a shape on canvas to mark as cutout")
             self._cutout_clear_btn.setVisible(False)
             self._apply_cutout_callout_style(active=False)
         else:
             self._cutout_icon.setPixmap(
-                QIcon(
-                    str(Path(__file__).parents[2] / "style" / "icons" / "check.svg")
-                ).pixmap(16, 16)
+                QIcon(str(Path(__file__).parents[2] / "style" / "icons" / "check.svg")).pixmap(
+                    16, 16
+                )
             )
             parts = []
             if outline_count:
@@ -3668,7 +2651,7 @@ class PatternPage(BasePage):
     def _start_preview_thread(self) -> None:
         if self._shutting_down:
             return
-        from src.ui.pages.pattern.workers import compute_preview, compute_preview_zones
+        from src.ui.pages.pattern.domain.workers import compute_preview, compute_preview_zones
 
         can_start, cancel_event = self._preview_task.request_start()
         if not can_start:
@@ -3804,7 +2787,7 @@ class PatternPage(BasePage):
             for poly in self._pattern_cell_instance_cutouts
             if self._pattern_service._poly_signature(poly) in generated_signatures
         ]
-        from src.backend.pattern.output import diagnose_output
+        from src.app.services.presets_service import diagnose_output
 
         diagnostics = diagnose_output(
             self._preview_categories.get("pattern", []) + self._preview_categories.get("fill", [])
@@ -3861,7 +2844,7 @@ class PatternPage(BasePage):
     def _handle_preview_error(self, payload: tuple) -> None:
         if self._shutting_down:
             return
-        from src.ui.pages.pattern.workers import CANCELLED_MESSAGE
+        from src.ui.pages.pattern.domain.workers import CANCELLED_MESSAGE
 
         preview_token, msg = payload
         restart = self._preview_task.finish_run()
@@ -3878,9 +2861,7 @@ class PatternPage(BasePage):
         self._set_preview_status(f"Preview error: {msg}", "error")
         if self._pending_export_after_preview is not None:
             self._pending_export_after_preview = None
-            self._set_status(
-                f"Export blocked — preview validation failed: {msg}", STATUS_ERR
-            )
+            self._set_status(f"Export blocked — preview validation failed: {msg}", STATUS_ERR)
         if self._showing_preview:
             self._canvas.setToolTip("Preview refresh failed; showing the last completed result.")
         self._update_preview_controls()
@@ -4068,7 +3049,7 @@ class PatternPage(BasePage):
     # ── Generation ────────────────────────────────────────────────────────────
 
     def _generate(self) -> None:
-        from src.ui.pages.pattern.workers import run_generate, run_generate_zones
+        from src.ui.pages.pattern.domain.workers import run_generate, run_generate_zones
 
         if self._generate_task.running:
             self._cancel_generation()
@@ -4219,7 +3200,7 @@ class PatternPage(BasePage):
     def _handle_gen_error(self, payload: tuple) -> None:
         if self._shutting_down:
             return
-        from src.ui.pages.pattern.workers import CANCELLED_MESSAGE
+        from src.ui.pages.pattern.domain.workers import CANCELLED_MESSAGE
 
         generation_token, msg = payload
         self._generate_task.finish_run()

@@ -2,13 +2,11 @@
 
 Four previously-separate modules merged here — all pure-math helpers with
 no cross-dependencies on each other, none individually large enough to
-argue for staying split. Also absorbs the former ``geometry/__init__.py``,
-which held shared tolerances (used as the single source of truth for
-``src/backend/cad/snapping.py`` and ``src/ui/canvas/constants.py`` — previously
-each hardcoded its own copy of ``SNAP_DIST``/``MIN_SCALE`` "to avoid a UI
-dependency," which meant changing one and forgetting the other would
-silently desync interactive snapping from the pure-Python snap-resolution
-logic) rather than being its own tiny file.
+argue for staying split.
+
+Constants (EPS, SNAP_DIST, MIN_SCALE, etc.) have been moved to
+``src.backend.cad.constants`` as the single source of truth.  This module
+re-exports the core constants for backwards compatibility.
 """
 
 from __future__ import annotations
@@ -27,21 +25,22 @@ from shapely.geometry import (  # type: ignore[import-untyped]
 )
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 
+from src.backend.cad.constants import (
+    EPS,
+    EPS_SQ_DEGENERATE,
+    MIN_SCALE,
+    SNAP_DIST,
+)
+
 PointTuple = tuple[float, float]
 
-# ── Geometry tolerances ─────────────────────────────────────────────────────
-# EPS is the canonical "two world coordinates are the same" tolerance, in
-# the same units as the canvas (millimetres). Use it for closure detection,
-# duplicate-point culling, near-equality comparisons.
-#
-# EPS_SQ_DEGENERATE is for degenerate-segment detection (squared distance);
-# segments with length^2 below this are treated as zero-length.
-EPS = 1e-6
-EPS_SQ_DEGENERATE = 1e-12
-
-# Snap distance (screen pixels) and minimum zoom scale.
-SNAP_DIST = 14
-MIN_SCALE = 1e-6
+# Re-export for backwards compatibility — callers may import from geometry.
+__all__ = [
+    "EPS",
+    "EPS_SQ_DEGENERATE",
+    "MIN_SCALE",
+    "SNAP_DIST",
+]
 
 
 def distance(first: PointTuple, second: PointTuple) -> float:
@@ -408,7 +407,9 @@ def _shape_circle_cached(r: float, n: int) -> tuple[PointTuple, ...]:
     from src.backend.jit import tessellate_arc
 
     segments = max(12, int(n))
-    return tuple((float(x), float(y)) for x, y in tessellate_arc(0.0, 0.0, r, 0.0, math.tau, segments))
+    return tuple(
+        (float(x), float(y)) for x, y in tessellate_arc(0.0, 0.0, r, 0.0, math.tau, segments)
+    )
 
 
 def shape_circle(r: float, n: int = 64) -> list[PointTuple]:
@@ -571,10 +572,8 @@ def clip_line_to_outline(points: list[PointTuple], outline: Polygon) -> BaseGeom
 # Spline sampling (Catmull-Rom, cubic bezier tessellation)
 # ════════════════════════════════════════════════════════════════════════════
 
-_CLOSURE_EPS = 1e-6
 
-
-def _points_close(a: PointTuple, b: PointTuple, eps: float = _CLOSURE_EPS) -> bool:
+def _points_close(a: PointTuple, b: PointTuple, eps: float = EPS) -> bool:
     return abs(a[0] - b[0]) <= eps and abs(a[1] - b[1]) <= eps
 
 

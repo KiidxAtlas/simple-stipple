@@ -196,9 +196,7 @@ class CanvasPropertiesPanel(QWidget):
         self._rot.setToolTip("Absolute angle of the selected shape in degrees")
         rotation_row.addWidget(self._rot, stretch=1)
         transform_layout.addLayout(rotation_row)
-        self._transform_section = CollapsibleSection(
-            "Transform", transform_content, expanded=True
-        )
+        self._transform_section = CollapsibleSection("Transform", transform_content, expanded=True)
         fields_root.addWidget(self._transform_section)
 
         constraints_content = QWidget()
@@ -275,9 +273,7 @@ class CanvasPropertiesPanel(QWidget):
         shape_layout = QVBoxLayout(shape_content)
         shape_layout.setContentsMargins(0, 0, 0, 0)
         shape_layout.addLayout(self._param_grid)
-        self._shape_section = CollapsibleSection(
-            "Shape Parameters", shape_content, expanded=True
-        )
+        self._shape_section = CollapsibleSection("Shape Parameters", shape_content, expanded=True)
         fields_root.addWidget(self._shape_section)
         self._selection_constraints_section = CollapsibleSection(
             "Constraints / Dimensions", constraints_content, expanded=False
@@ -323,9 +319,7 @@ class CanvasPropertiesPanel(QWidget):
                     f"{'Driving' if driving else 'Reference'} "
                     f"{'Angle' if angular else 'Linear'} Dimension"
                 )
-                target = (
-                    dimension.get("driving", {}).get("target") if driving else None
-                )
+                target = dimension.get("driving", {}).get("target") if driving else None
                 conflict = isinstance(target, (int, float)) and abs(value - float(target)) > max(
                     1e-5, abs(float(target)) * 1e-6
                 )
@@ -395,11 +389,15 @@ class CanvasPropertiesPanel(QWidget):
             self._context_buttons["duplicate"].setVisible(count > 0)
             self._context_buttons["delete"].setVisible(count > 0)
             self._actions_section.setVisible(count > 0)
-            selected = [
-                self._canvas._entities[i]
-                for i in getattr(self._canvas, "_sel", set())
-                if 0 <= i < len(self._canvas._entities)
-            ]
+            selected = []
+            for item in getattr(self._canvas, "_sel", set()):
+                if isinstance(item, int):
+                    if 0 <= item < len(self._canvas._entities):
+                        selected.append(self._canvas._entities_by_id[item])
+                else:
+                    entity = next((e for e in self._canvas._entities if e.id == item), None)
+                    if entity is not None:
+                        selected.append(entity)
             selected_ids = {entity.id for entity in selected}
             constraint_count = sum(
                 1
@@ -424,14 +422,10 @@ class CanvasPropertiesPanel(QWidget):
                     f"{'s' if constraint_count != 1 else ''}"
                     f"{' · ' + str(conflict_count) + ' conflicting' if conflict_count else ''}"
                 )
-            has_open = any(
-                len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected
-            )
+            has_open = any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
             self._context_buttons["constraints"].setVisible(constraint_count > 0)
             self._context_buttons["close"].setVisible(has_open)
-            self._selection_constraints_section.setVisible(
-                constraint_count > 0 or has_open
-            )
+            self._selection_constraints_section.setVisible(constraint_count > 0 or has_open)
         finally:
             self._updating = False
 
@@ -466,7 +460,7 @@ class CanvasPropertiesPanel(QWidget):
         if kind == "line":
             pts = None
             if index is not None:
-                pts = self._canvas._entities[index].points
+                pts = self._canvas._entities_by_id[index].points
             if pts and len(pts) >= 2:
                 import math
 

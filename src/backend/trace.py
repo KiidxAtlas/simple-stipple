@@ -38,8 +38,10 @@ class TraceCancelled(Exception):
     early instead of burning CPU through every remaining pipeline stage."""
 
 
+from src.backend.cad.constants import TRACE_CLOSE_TOL
+
 # Shared closure tolerance (mm / pixel space) — must match canvas _is_poly_closed.
-_CLOSE_TOL = 0.01
+_CLOSE_TOL = TRACE_CLOSE_TOL
 
 # Binarizing/edge-detecting at the source image's native pixel grid makes
 # every boundary a hard staircase of whole-pixel steps — that's the actual

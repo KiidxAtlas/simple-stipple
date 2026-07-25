@@ -76,7 +76,7 @@ def write_polylines_svg(
     Coordinates are mm, y-up; the viewBox hugs the drawing plus padding.
     Returns ``{"polylines", "width_mm", "height_mm"}``.
     """
-    from ..persistence import atomic_write_via
+    from src.core.storage import atomic_write_via
 
     if not polys:
         root = ET.Element(

@@ -37,7 +37,7 @@ def test_pure_solver_handles_parallel_perpendicular_equal_and_coincident():
 
 def test_canvas_constraint_is_persistent_and_undoable(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 4)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.add_geometric_constraint("horizontal") == 1
     assert canvas._entities[0].points[0][1] == pytest.approx(canvas._entities[0].points[1][1])
     assert len(canvas._constraints) == 1
@@ -51,7 +51,7 @@ def test_canvas_constraint_is_persistent_and_undoable(qapp):
 
 def test_constraint_round_trips_with_entity_ids(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 4)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.add_geometric_constraint("vertical")
     records = canvas.get_entity_records()
     view_state = canvas.get_view_state()
@@ -65,7 +65,7 @@ def test_constraint_round_trips_with_entity_ids(qapp):
 
 def test_fixed_constraint_restores_geometry_after_edit(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.add_geometric_constraint("fixed")
     canvas._entities[0].points = [(0, 0), (20, 5)]
     canvas._fire_poly_change()

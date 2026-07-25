@@ -19,25 +19,19 @@ from shapely.geometry import Polygon  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
+from src.backend.cad.constants import (
+    DXF_CLOSURE_EPS,
+    DXF_DEDUP_EPS,
+    DXF_PLANAR_Z_TOLERANCE,
+    OUTLINE_CLOSE_TOLERANCE_MM,
+    OUTLINE_MIN_AREA_MM2,
+)
 from src.backend.cad.shapes import shape_from_meta
 from src.backend.dxf.schema import validate_dxf_document
 
 _LOG = logging.getLogger(__name__)
-OUTLINE_CLOSE_TOLERANCE_MM = 2.0
-# Keep only numerical dust out of pattern regions.  A 1 mm² floor rejected
-# legitimate small laser features while reporting them as "not closed" in the
-# Pattern page.  The pattern geometry pipeline already uses 0.001 mm² as its
-# stable minimum when extracting polygon rings, so use the same floor here.
-OUTLINE_MIN_AREA_MM2 = 0.001
-
-# Tolerance (in drawing units) for detecting that a polyline's first and
-# last points coincide.  Tight enough to avoid false positives on real
-# open chains, loose enough to absorb float round-trips through shapely.
-_DXF_CLOSURE_EPS = 1e-4
-_DXF_DEDUP_EPS = 1e-9
 MAX_DXF_FILE_BYTES = 64 * 1024 * 1024
 MAX_DXF_ENTITIES = 500_000
-_PLANAR_Z_TOLERANCE = 1e-9
 
 
 def _require_finite_unit_scale(unit_code: int) -> float:
@@ -70,7 +64,7 @@ def _z_is_planar(value: Any) -> bool:
             z = float(value)
     except (AttributeError, IndexError, TypeError, ValueError):
         return False
-    return math.isfinite(z) and abs(z) <= _PLANAR_Z_TOLERANCE
+    return math.isfinite(z) and abs(z) <= DXF_PLANAR_Z_TOLERANCE
 
 
 def _entity_is_planar(entity: _DxfEntity, dxftype: str) -> bool:
@@ -101,9 +95,9 @@ def _entity_is_planar(entity: _DxfEntity, dxftype: str) -> bool:
             ez = float(getattr(extrusion, "z", 1.0))
             if not all(math.isfinite(v) for v in (ex, ey, ez)):
                 return False
-            if abs(ex) > _PLANAR_Z_TOLERANCE or abs(ey) > _PLANAR_Z_TOLERANCE:
+            if abs(ex) > DXF_PLANAR_Z_TOLERANCE or abs(ey) > DXF_PLANAR_Z_TOLERANCE:
                 return False
-            if abs(abs(ez) - 1.0) > _PLANAR_Z_TOLERANCE:
+            if abs(abs(ez) - 1.0) > DXF_PLANAR_Z_TOLERANCE:
                 return False
     except (AttributeError, TypeError, ValueError):
         return False
@@ -113,7 +107,7 @@ def _entity_is_planar(entity: _DxfEntity, dxftype: str) -> bool:
 def _normalize_polyline_for_dxf(
     pts: list[tuple[float, float]],
     *,
-    closure_eps: float = _DXF_CLOSURE_EPS,
+    closure_eps: float = DXF_CLOSURE_EPS,
     force_close: bool = False,
 ) -> tuple[list[tuple[float, float]], bool]:
     """Clean a polyline for DXF emission.
@@ -148,7 +142,7 @@ def _normalize_polyline_for_dxf(
     cleaned: list[tuple[float, float]] = [finite[0]]
     for p in finite[1:]:
         last = cleaned[-1]
-        if abs(p[0] - last[0]) > _DXF_DEDUP_EPS or abs(p[1] - last[1]) > _DXF_DEDUP_EPS:
+        if abs(p[0] - last[0]) > DXF_DEDUP_EPS or abs(p[1] - last[1]) > DXF_DEDUP_EPS:
             cleaned.append(p)
 
     if len(cleaned) < 2:
@@ -844,6 +838,6 @@ def write_polylines_dxf(
         )
         raise
 
-    from ..persistence import atomic_write_via
+    from src.core.storage import atomic_write_via
 
     atomic_write_via(out_path, lambda p: doc.saveas(str(p)))

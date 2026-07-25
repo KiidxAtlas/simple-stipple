@@ -25,18 +25,13 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from pydantic import BaseModel, Field, model_validator
 
 from src.backend.cad.constraints import GeometricConstraint
+from src.core.entities import EntityId, new_entity_id
 
 Point = tuple[float, float]
-EntityId = str
-
-
-def new_entity_id() -> EntityId:
-    return uuid4().hex
 
 
 @dataclass
@@ -59,29 +54,16 @@ class Document:
     """Canonical runtime aggregate for entities, selection, layers, and groups."""
 
     entities: list[EntityRecord] = field(default_factory=list)
-    selection: set[int] = field(default_factory=set)
+    selection: set[EntityId] = field(default_factory=set)
     layer_order: list[str] = field(default_factory=list)
     active_layer: str | None = None
     layer_colors: dict[str, str] = field(default_factory=dict)
     group_labels: dict[int, str] = field(default_factory=dict)
     next_group_id: int = 0
     constraints: list[GeometricConstraint] = field(default_factory=list)
-    # Canvas annotations. These live on the document (not as loose view state)
-    # so they share the one undo stack and snapshot machinery as geometry:
-    # a guide/orientation pair, and a dimension dict (see the dimension tool).
     guides: list[tuple[str, float]] = field(default_factory=list)
     dimensions: list[dict[str, Any]] = field(default_factory=list)
-
-    def replace(self, entities: Iterable[EntityRecord]) -> None:
-        self.entities = list(entities)
-        self.selection.clear()
-        self.ensure_unique_ids()
-
-    def append(self, entity: EntityRecord) -> int:
-        if self.index_for_id(entity.id) is not None:
-            entity.id = new_entity_id()
-        self.entities.append(entity)
-        return len(self.entities) - 1
+    _validate_on_mutate: bool = field(default=True)
 
     def ensure_unique_ids(self) -> None:
         seen: set[EntityId] = set()
@@ -90,51 +72,42 @@ class Document:
                 entity.id = new_entity_id()
             seen.add(entity.id)
 
-    def index_for_id(self, entity_id: EntityId) -> int | None:
-        return next(
-            (index for index, entity in enumerate(self.entities) if entity.id == entity_id), None
-        )
+    def _by_id_map(self) -> dict[EntityId, EntityRecord]:
+        return {entity.id: entity for entity in self.entities}
 
     def entity_for_id(self, entity_id: EntityId) -> EntityRecord | None:
-        index = self.index_for_id(entity_id)
-        return self.entities[index] if index is not None else None
+        return self._by_id_map().get(entity_id)
+
+    def entity_ids(self) -> list[EntityId]:
+        return [entity.id for entity in self.entities]
 
     def selected_ids(self) -> set[EntityId]:
-        return {
-            self.entities[index].id for index in self.selection if 0 <= index < len(self.entities)
-        }
+        return set(self.selection)
 
     def select_ids(self, entity_ids: Iterable[EntityId]) -> None:
+        self.selection = set(entity_ids)
+
+    def flagged_ids(self, attribute: str) -> set[EntityId]:
+        return {entity.id for entity in self.entities if bool(getattr(entity, attribute, False))}
+
+    def set_flagged_ids(self, attribute: str, entity_ids: Iterable[EntityId]) -> None:
         wanted = set(entity_ids)
-        self.selection = {
-            index for index, entity in enumerate(self.entities) if entity.id in wanted
-        }
-
-    def flagged_indices(self, attribute: str) -> set[int]:
-        return {
-            index
-            for index, entity in enumerate(self.entities)
-            if bool(getattr(entity, attribute, False))
-        }
-
-    def set_flagged_indices(self, attribute: str, indices: Iterable[int]) -> None:
-        wanted = {index for index in indices if isinstance(index, int)}
-        for index, entity in enumerate(self.entities):
-            setattr(entity, attribute, index in wanted)
+        for entity in self.entities:
+            setattr(entity, attribute, entity.id in wanted)
 
     def on_active_layer(self, entity: EntityRecord) -> bool:
         return (
             self.active_layer is None or entity.layer is None or entity.layer == self.active_layer
         )
 
-    def entity_selectable(self, index: int) -> bool:
-        if not 0 <= index < len(self.entities):
+    def entity_selectable_by_id(self, entity_id: EntityId) -> bool:
+        entity = self.entity_for_id(entity_id)
+        if entity is None:
             return False
-        entity = self.entities[index]
         return not entity.hidden and self.on_active_layer(entity)
 
     def drop_inactive_selection(self) -> bool:
-        selection = {index for index in self.selection if self.entity_selectable(index)}
+        selection = {eid for eid in self.selection if self.entity_selectable_by_id(eid)}
         changed = selection != self.selection
         self.selection = selection
         return changed
@@ -153,6 +126,75 @@ class Document:
             group: label for group, label in self.group_labels.items() if group in groups
         }
         self.next_group_id = max(self.next_group_id, max(groups, default=-1) + 1)
+
+    # ── Invariant enforcement ──────────────────────────────────────────────
+
+    def _validate(self) -> list[str]:
+        """Validate document invariants. Returns list of violation messages."""
+        violations: list[str] = []
+
+        # 1. Entity ID uniqueness
+        seen_ids: set[EntityId] = set()
+        for entity in self.entities:
+            if entity.id in seen_ids:
+                violations.append(f"Duplicate entity ID: {entity.id}")
+            seen_ids.add(entity.id)
+
+        # 2. Selection contains only valid entity IDs (non-empty, non-duplicate)
+        for eid in self.selection:
+            if not eid or not isinstance(eid, str):
+                violations.append(f"Selection contains invalid entity ID: {repr(eid)}")
+
+        # 3. Entity layers are valid strings or None (layer_order membership enforced by set_layer_model)
+        for entity in self.entities:
+            if entity.layer is not None and not isinstance(entity.layer, str):
+                violations.append(f"Entity {entity.id} has invalid layer: {repr(entity.layer)}")
+
+        # 4. Groups have 2+ members — enforced by reconcile_groups(), not validated here
+        # (groups may be in transient state during command application)
+
+        # 5. Entity point count matches kind
+        # Only kinds that store geometry in points require minimum counts.
+        # Circle/arc/ellipse/point store geometry in metadata (center, radius, etc.)
+        for entity in self.entities:
+            kind = entity.kind
+            n = len(entity.points)
+            if kind == "line" and n < 2:
+                violations.append(f"Entity {entity.id} kind='line' has {n} points (need >= 2)")
+            elif kind == "bezier" and n < 2:
+                violations.append(f"Entity {entity.id} kind='bezier' has {n} points (need >= 2)")
+            elif kind == "polyline" and n < 2:
+                violations.append(f"Entity {entity.id} kind='polyline' has {n} points (need >= 2)")
+
+        # 6. Active layer exists when entities exist
+        if self.entities and self.active_layer and self.layer_order:
+            if self.active_layer not in self.layer_order:
+                violations.append(f"Active layer '{self.active_layer}' not in layer_order")
+
+        return violations
+
+    def _assert_valid(self) -> None:
+        """Raise AssertionError on invariant violations (dev-time only)."""
+        violations = self._validate()
+        if violations:
+            raise AssertionError(
+                "Document invariant violations:\n" + "\n".join(f"  - {v}" for v in violations)
+            )
+
+    def append(self, entity: EntityRecord) -> int:
+        if self.entity_for_id(entity.id) is not None:
+            entity.id = new_entity_id()
+        self.entities.append(entity)
+        if self._validate_on_mutate:
+            self._assert_valid()
+        return len(self.entities) - 1
+
+    def replace(self, entities: Iterable[EntityRecord]) -> None:
+        self.entities = list(entities)
+        self.selection.clear()
+        self.ensure_unique_ids()
+        if self._validate_on_mutate:
+            self._assert_valid()
 
 
 CanvasDocument = Document

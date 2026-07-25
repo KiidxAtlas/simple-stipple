@@ -163,7 +163,7 @@ def test_rotate_selected_bezier_also_rotates_its_tangents(qapp):
 
     key(v, Qt.Key.Key_Return)
     v.set_mode("select")
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
 
     meta = v._entities[0].meta
     assert meta is not None

@@ -90,5 +90,61 @@ class CanvasService:
         self.documents.restore_preview(before)
         self.model.replace_document(self.documents.document)
 
+    def set_guides(
+        self, guides: list[tuple[str, float]], *, record: bool = True
+    ) -> OperationResult:
+        """Replace all guides atomically."""
+        return self.update_document(lambda doc: setattr(doc, "guides", list(guides)), record=record)
+
+    def set_dimensions(self, dimensions: list[dict], *, record: bool = True) -> OperationResult:
+        """Replace all dimensions atomically."""
+        return self.update_document(
+            lambda doc: setattr(doc, "dimensions", list(dimensions)), record=record
+        )
+
+    def set_layer_order(self, order: list[str], *, record: bool = True) -> OperationResult:
+        """Replace layer order atomically."""
+        return self.update_document(
+            lambda doc: setattr(doc, "layer_order", list(order)), record=record
+        )
+
+    def set_active_layer(self, layer: str | None, *, record: bool = True) -> OperationResult:
+        """Set the active layer atomically."""
+        return self.update_document(lambda doc: setattr(doc, "active_layer", layer), record=record)
+
+    def set_layer_colors(self, colors: dict[str, str], *, record: bool = True) -> OperationResult:
+        """Replace layer colors atomically."""
+        return self.update_document(
+            lambda doc: setattr(doc, "layer_colors", dict(colors)), record=record
+        )
+
+    def set_group_labels(self, labels: dict[int, str], *, record: bool = True) -> OperationResult:
+        """Replace group labels atomically."""
+        return self.update_document(
+            lambda doc: setattr(doc, "group_labels", dict(labels)), record=record
+        )
+
+    def set_next_group_id(self, next_id: int, *, record: bool = True) -> OperationResult:
+        """Set the next group ID atomically."""
+        return self.update_document(
+            lambda doc: setattr(doc, "next_group_id", int(next_id)), record=record
+        )
+
+    def set_constraints(self, constraints: list, *, record: bool = True) -> OperationResult:
+        """Replace all constraints atomically."""
+        return self.update_document(
+            lambda doc: setattr(doc, "constraints", list(constraints)), record=record
+        )
+
+    def set_flagged_ids(self, attr: str, entity_ids, *, record: bool = True) -> OperationResult:
+        """Set boolean ``attr`` to exactly ``entity_ids`` (wholesale assignment)."""
+        return self.update_document(
+            lambda doc: doc.set_flagged_ids(attr, entity_ids), record=record
+        )
+
+    def append_entity(self, entity: EntityRecord, *, record: bool = True) -> OperationResult:
+        """Append a single entity to the document."""
+        return self.update_document(lambda doc: doc.append(entity), record=record)
+
     def _document_changed(self, _event: DocumentEvent) -> None:
         self.model.replace_document(self.documents.document)

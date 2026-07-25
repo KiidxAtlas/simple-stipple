@@ -5,7 +5,7 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QBoxLayout
 
 from src.ui.pages.convert import ConvertPage
-from src.ui.pages.trace.form import TextField
+from src.ui.pages.trace.ui.form import TextField
 from src.ui.pages.trace.tab import TracePage
 
 

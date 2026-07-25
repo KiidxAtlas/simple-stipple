@@ -28,13 +28,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.cad.recognition import convert_to_parametric, recognized_entities
-from src.backend.dxf.fvi import read_fvi, summarize_fvi_import, write_fvi
-from src.backend.dxf.io import (
-    load_dxf_polylines_by_layer_with_report,
-    write_polylines_dxf,
+from src.backend.cad.recognition import (
+    convert_to_parametric,
+    recognized_entities,
 )
-from src.backend.dxf.svg_dxf import svg_to_dxf, write_polylines_svg
+from src.backend.dxf.service import DxfService
 from src.backend.model.document import DraftTabState, EntityRecord
 from src.ui.canvas.canvas_runtime import (
     CanvasGridModule,
@@ -347,8 +345,8 @@ class DraftPage(BasePage):
         def convert() -> None:
             chosen = set(dialog.selected_indices())
             selected_by_id = {
-                self._canvas._entities[index].id: shape
-                for candidate_index, (index, shape) in enumerate(candidates)
+                self._canvas._entities[candidates[candidate_index][0]].id: shape
+                for candidate_index, (_, shape) in enumerate(candidates)
                 if candidate_index in chosen
             }
             if not selected_by_id:
@@ -391,7 +389,10 @@ class DraftPage(BasePage):
         self, source_layer: str, shape_keys: list, target_layer: str
     ) -> None:
         if self._rt().shapes_move_requested(source_layer, shape_keys, target_layer):
-            count = len([k for k in shape_keys if isinstance(k, int)])
+            from src.ui.widgets.layer_tree.logic import flatten_shape_keys
+
+            entity_ids = flatten_shape_keys(shape_keys)
+            count = len(entity_ids)
             self._canvas._show_flash(
                 f"Moved {count} shape{'s' if count != 1 else ''} to {target_layer}",
                 1200,
@@ -505,11 +506,10 @@ class DraftPage(BasePage):
     def _on_shapes_delete_requested(self, layer: str, keys: list) -> None:
         from src.ui.widgets.layer_tree.logic import flatten_shape_keys
 
-        indices = flatten_shape_keys(keys)
-        if not indices:
+        entity_ids = flatten_shape_keys(keys)
+        if not entity_ids:
             return
-        # Keys are entity indices, so rows from any layer can be deleted.
-        if self._canvas.delete_indices(indices):
+        if self._canvas.delete_entities(entity_ids):
             self._refresh_status()
             self._emit_state_changed()
 
@@ -520,15 +520,13 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
 
-    def _on_ghost_poly_click(self, entity_idx: int) -> None:
+    def _on_ghost_poly_click(self, entity_id: str) -> None:
         """Clicking a shape from another layer activates that layer and selects the shape."""
         canvas = self._canvas
-        if not (0 <= entity_idx < len(canvas._entities)):
-            return
-        layer_name = canvas._entities[entity_idx].layer
+        layer_name = canvas._entities_by_id[entity_id].layer
         if layer_name:
             self._switch_active_layer(layer_name, fit=False)
-        canvas.set_selection([entity_idx])
+        canvas.set_selection([entity_id])
         self._refresh_status()
 
     def _on_send_selected_to_pattern(
@@ -593,7 +591,7 @@ class DraftPage(BasePage):
             first_name = order[0] if order else (active_name or "Layer")
             first = by_layer.get(first_name, [])
             extra_records = {name: by_layer[name] for name in order[1:]}
-            write_polylines_dxf(
+            DxfService.write_polylines_dxf(
                 [list(r["polyline"]) for r in first],
                 out_path,
                 close=False,
@@ -686,7 +684,7 @@ class DraftPage(BasePage):
 
     def _build_layer_tree_rows(
         self,
-        layer_view_state: dict[str, dict[str, set[int]]],
+        layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
         return self._rt().build_layer_tree_rows(layer_view_state)
 
@@ -748,7 +746,7 @@ class DraftPage(BasePage):
     def _import_dxf_add(self, path: str) -> None:
         """Add a DXF's shapes to the existing drawing (instead of replacing)."""
         try:
-            by_layer, report = load_dxf_polylines_by_layer_with_report(path)
+            by_layer, report = DxfService.DxfService.load_dxf_polylines_by_layer_with_report(path)
             if not by_layer:
                 QMessageBox.information(self, "Import DXF", "No shapes found in that DXF.")
                 return
@@ -780,7 +778,7 @@ class DraftPage(BasePage):
         if not out_path:
             return
         try:
-            stats = write_polylines_svg([list(r["polyline"]) for r in records], out_path)
+            stats = DxfService.write_polylines_svg([list(r["polyline"]) for r in records], out_path)
             self._last_out_path = out_path
             self._canvas._show_flash(
                 f"Exported SVG: {Path(out_path).name} ({stats['polylines']} paths)",
@@ -813,7 +811,7 @@ class DraftPage(BasePage):
         if not out_path:
             return
         try:
-            report = write_fvi(records, out_path, dialog.options())
+            report = DxfService.write_fvi(records, out_path, dialog.options())
             self._last_out_path = out_path
             message = (
                 f"Exported FVI: {Path(out_path).name} "
@@ -832,7 +830,7 @@ class DraftPage(BasePage):
 
     def _load_dxf(self, path: str) -> None:
         try:
-            by_layer, report = load_dxf_polylines_by_layer_with_report(path)
+            by_layer, report = DxfService.load_dxf_polylines_by_layer_with_report(path)
             if not by_layer:
                 QMessageBox.information(self, "Open DXF", "No usable shapes found in that DXF.")
                 return
@@ -845,10 +843,10 @@ class DraftPage(BasePage):
 
     def _load_fvi(self, path: str, *, append: bool = False) -> None:
         try:
-            document = read_fvi(path)
+            document = DxfService.read_fvi(path)
             polys = [list(poly) for poly in document.paths]
             if not polys:
-                details = summarize_fvi_import(document.report)
+                details = DxfService.summarize_fvi_import(document.report)
                 message = "No supported drawable geometry was found in that FVI program."
                 if details:
                     message += f"\n\n{details}"
@@ -863,7 +861,7 @@ class DraftPage(BasePage):
             self._last_in_path = path
             record_recent(self._settings, KIND_VECTOR, path)
             self._canvas._show_flash(f"{verb} FVI: {Path(path).name} ({len(polys)} paths)", 1400)
-            details = summarize_fvi_import(document.report)
+            details = DxfService.summarize_fvi_import(document.report)
             if details:
                 self._canvas.setToolTip(f"FVI import notes:\n{details}")
                 self._canvas._show_flash("Imported with notes — hover the canvas for details", 4000)
@@ -877,8 +875,10 @@ class DraftPage(BasePage):
         try:
             with tempfile.TemporaryDirectory(prefix="simple-stipple-svg-") as directory:
                 converted = Path(directory) / "import.dxf"
-                stats = svg_to_dxf(path, converted)
-                by_layer, _report = load_dxf_polylines_by_layer_with_report(str(converted))
+                stats = DxfService.svg_to_dxf(path, converted)
+                by_layer, _report = DxfService.load_dxf_polylines_by_layer_with_report(
+                    str(converted)
+                )
             if not by_layer:
                 QMessageBox.information(
                     self,

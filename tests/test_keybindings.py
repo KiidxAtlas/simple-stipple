@@ -14,7 +14,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import Qt  # noqa: E402
 
 from src.core.settings import DEFAULT_KEYBINDINGS  # noqa: E402
-from src.ui.canvas.interaction import commands as canvas_commands  # noqa: E402
+from src.ui.canvas import commands as canvas_commands  # noqa: E402
 
 
 def test_default_keymap_has_no_collisions():

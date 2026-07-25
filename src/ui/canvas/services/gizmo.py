@@ -9,7 +9,10 @@ from typing import Any, ClassVar
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from src.backend.cad.editor_geometry import transform_entity_metadata, update_entity_parameter
+from src.backend.cad.editor_geometry import (
+    transform_entity_metadata,
+    update_entity_parameter,
+)
 from src.backend.cad.shapes import transform_meta
 
 
@@ -44,8 +47,8 @@ class GizmoService:
             frac_a, frac_h = self._HANDLE_ANCHORS[mode[6:]]
             if from_center:
                 frac_a = (0.5, 0.5)
-            indices = self._host._mutable_selected_indices()
-            entity = self._host._entities[indices[0]] if len(indices) == 1 else None
+            indices = self._host._selected_ids()
+            entity = self._host._entities_by_id[indices[0]] if len(indices) == 1 else None
             meta = entity.meta if entity is not None and isinstance(entity.meta, dict) else None
             dims = None
             if entity is not None and meta is not None:
@@ -85,7 +88,7 @@ class GizmoService:
                 self._host._gizmo_anchor_w = _world(frac_a)
                 self._host._gizmo_handle_w = _world(frac_h)
                 self._host._gizmo_local_shape = {
-                    "index": indices[0],
+                    "entity_id": indices[0],
                     "center": (cx, cy),
                     "rotation": rotation,
                     "width": dims[0],
@@ -112,16 +115,16 @@ class GizmoService:
         self._host._gizmo_drag_mode = mode
         self._host._gizmo_center_w = (cx, cy)
         self._host._gizmo_snapshot = {
-            idx: list(self._host._entities[idx].points)
-            for idx in self._host._mutable_selected_indices()
+            eid: list(self._host._entities_by_id[eid].points)
+            for eid in self._host._selected_ids()
         }
 
-        def _meta_copy(idx: int) -> dict[str, Any] | None:
-            meta = self._host._entities[idx].meta
+        def _meta_copy(eid: str) -> dict[str, Any] | None:
+            meta = self._host._entities_by_id[eid].meta
             return dict(meta) if isinstance(meta, dict) else None
 
         self._host._gizmo_meta_snapshot = {
-            idx: _meta_copy(idx) for idx in self._host._mutable_selected_indices()
+            eid: _meta_copy(eid) for eid in self._host._selected_ids()
         }
         self._host._gizmo_drag_moved = False
         self._host._gizmo_undo_pushed = False
@@ -197,8 +200,8 @@ class GizmoService:
         if not self._host._gizmo_undo_pushed:
             self._host._gizmo_command_snapshot = self._host._canvas_service.begin_preview()
             self._host._gizmo_undo_pushed = True
-        for idx, src_poly in self._host._gizmo_snapshot.items():
-            self._host._entities[idx].points = [
+        for eid, src_poly in self._host._gizmo_snapshot.items():
+            self._host._entities_by_id[eid].points = [
                 (ax + (x - ax) * sx, ay + (y - ay) * sy) for x, y in src_poly
             ]
             # Keep parametric meta (circle/ellipse/rectangle "center") in
@@ -208,17 +211,19 @@ class GizmoService:
             # recomputing it from `.points`. Always derive from the drag-
             # start snapshot (never the live/already-updated meta) so
             # repeated mouse-move events don't compound the transform.
-            snap_meta = self._host._gizmo_meta_snapshot.get(idx)
+            snap_meta = self._host._gizmo_meta_snapshot.get(eid)
             if isinstance(snap_meta, dict):
                 if abs(sx - sy) <= 1e-9:
                     new_meta = transform_meta(
-                        self._host._entities[idx].kind,
+                        self._host._entities_by_id[eid].kind,
                         snap_meta,
                         transform="scale",
                         center=(ax, ay),
                         factor=sx,
                     )
-                    self._host._entities[idx].meta = new_meta if new_meta is not None else snap_meta
+                    self._host._entities_by_id[eid].meta = (
+                        new_meta if new_meta is not None else snap_meta
+                    )
                 else:
                     # A world-axis non-uniform scale can turn circles into
                     # ellipses and rotated rectangles into parallelograms.
@@ -226,8 +231,8 @@ class GizmoService:
                     # original parametric schema. Keep the transformed points
                     # as canonical geometry instead of leaving stale metadata
                     # that redraw would use to restore the old shape.
-                    self._host._entities[idx].kind = "polyline"
-                    self._host._entities[idx].meta = None
+                    self._host._entities_by_id[eid].kind = "polyline"
+                    self._host._entities_by_id[eid].meta = None
         self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
@@ -238,7 +243,7 @@ class GizmoService:
         state = self._host._gizmo_local_shape
         if state is None or self._host._gizmo_anchor_w is None:
             return
-        idx = int(state["index"])
+        eid = state["entity_id"]
         cx, cy = state["center"]
         angle = math.radians(-float(state["rotation"]))
 
@@ -265,7 +270,7 @@ class GizmoService:
             if len(handle) == 2:
                 diameter = max(new_w, new_h)
             new_w = new_h = diameter
-        candidate = deepcopy(self._host._entities[idx])
+        candidate = deepcopy(self._host._entities_by_id[eid])
         x_value = new_w / 2.0 if state["x_key"] in {"rx", "radius"} else new_w
         y_value = new_h / 2.0 if state["y_key"] in {"ry", "radius"} else new_h
         update_entity_parameter(candidate, str(state["x_key"]), x_value)
@@ -287,7 +292,7 @@ class GizmoService:
         if not self._host._gizmo_undo_pushed:
             self._host._gizmo_command_snapshot = self._host._canvas_service.begin_preview()
             self._host._gizmo_undo_pushed = True
-        self._host._entities[idx] = candidate
+        self._host._update_entity_in_storage(candidate)
         self._host._gizmo_drag_moved = True
         self._host._sync_shape_storage_from_entities()
         self._host._refresh_driving_dimensions()
@@ -332,7 +337,7 @@ class GizmoService:
                 self._host._gizmo_drag_moved = True
 
         ca, sa = math.cos(angle), math.sin(angle)
-        for idx, src_poly in self._host._gizmo_snapshot.items():
+        for eid, src_poly in self._host._gizmo_snapshot.items():
             out_poly: list[tuple[float, float]] = []
             for x, y in src_poly:
                 sx = cx + (x - cx) * scale
@@ -340,22 +345,24 @@ class GizmoService:
                 rx = cx + (sx - cx) * ca - (sy - cy) * sa
                 ry = cy + (sx - cx) * sa + (sy - cy) * ca
                 out_poly.append((rx, ry))
-            self._host._entities[idx].points = out_poly
+            self._host._entities_by_id[eid].points = out_poly
             # Same staleness fix as _apply_handle_scale: recompute meta["center"]
             # under the identical scale+rotate transform, from the drag-start
             # snapshot, so circle/ellipse centroid snapping stays accurate
             # after a uniform corner-scale or rotate gizmo drag too.
-            snap_meta = self._host._gizmo_meta_snapshot.get(idx)
+            snap_meta = self._host._gizmo_meta_snapshot.get(eid)
             if isinstance(snap_meta, dict):
                 new_meta = transform_meta(
-                    self._host._entities[idx].kind,
+                    self._host._entities_by_id[eid].kind,
                     snap_meta,
                     transform=("rotate" if self._host._gizmo_drag_mode == "rotate" else "scale"),
                     center=(cx, cy),
                     angle_deg=math.degrees(angle),
                     factor=scale,
                 )
-                self._host._entities[idx].meta = new_meta if new_meta is not None else snap_meta
+                self._host._entities_by_id[eid].meta = (
+                    new_meta if new_meta is not None else snap_meta
+                )
         self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 

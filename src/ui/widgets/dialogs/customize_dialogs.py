@@ -35,7 +35,7 @@ from src.core.settings import (
     DRAW_SIDEBAR_SECTION_LABELS,
     DRAW_SIDEBAR_SHAPE_TOOL_LABELS,
 )
-from src.ui.canvas.interaction import commands as canvas_commands
+from src.ui.canvas import commands as canvas_commands
 from src.ui.components import SPACE_LG, SPACE_MD, sep
 
 # ══════════════════════════════════════════════════════════════════════════

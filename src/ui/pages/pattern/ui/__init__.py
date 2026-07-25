@@ -1,0 +1,1 @@
+"""Pattern tab UI components."""

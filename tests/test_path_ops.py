@@ -48,7 +48,7 @@ def test_line_and_circle_fitting():
 
 def test_canvas_reverse_resample_and_fit(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (5, 0), (10, 0.1)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.reverse_selected_paths() == 1
     assert canvas._entities[0].points[0] == (10, 0.1)
     assert canvas.resample_selected_paths(7, by_count=True) == 1
@@ -60,7 +60,7 @@ def test_canvas_reverse_resample_and_fit(qapp):
 def test_canvas_set_start_uses_cursor_nearest_vertex(qapp):
     square = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
     canvas = make_canvas(qapp, [square])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas._cursor_wx, canvas._cursor_wy = 9.9, 10.1
     assert canvas.set_selected_path_start()
     assert canvas._entities[0].points[0] == (10, 10)
@@ -76,7 +76,7 @@ def test_morph_paths_resamples_and_preserves_closed_topology():
 
 def test_canvas_morph_creates_new_path_as_one_operation(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)], [(0, 10), (10, 10), (20, 10)]])
-    canvas.set_selection([0, 1])
+    canvas.set_selection([canvas._entities[0].id, canvas._entities[1].id])
     canvas.prompt_morph_selected_paths()
     canvas._hud_prompt_edit.setText("50")
     canvas._hud_prompt_edit.returnPressed.emit()

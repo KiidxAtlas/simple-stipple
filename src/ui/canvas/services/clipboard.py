@@ -6,8 +6,8 @@ import math
 from copy import deepcopy
 from typing import Any
 
-from src.backend.model.commands import MoveEntityCommand
 from src.backend.model.document import EntityRecord
+from src.backend.model.commands import MoveEntityCommand
 
 _SHARED_CLIPBOARD: list[dict[str, Any]] = []
 
@@ -26,21 +26,24 @@ class ClipboardService:
 
     def copy_selected(self) -> None:
         host = self._host
-        self.records = [
-            {
-                "polyline": list(host._entities[index].points),
-                "kind": host._entities[index].kind,
-                "meta": deepcopy(host._entities[index].meta),
-                "construction": host._entities[index].construction,
-                "group": host._entities[index].group,
-            }
-            for index in sorted(host._sel)
-            if index < len(host._entities)
-        ]
+        self.records = []
+        for eid in host._sel:
+            entity = host._entity_for_id(eid)
+            if entity is None:
+                continue
+            self.records.append(
+                {
+                    "polyline": list(entity.points),
+                    "kind": entity.kind,
+                    "meta": deepcopy(entity.meta),
+                    "construction": entity.construction,
+                    "group": entity.group,
+                }
+            )
 
     def paste_records(
         self, dx: float, dy: float | None = None, *, record_history: bool = True
-    ) -> list[int]:
+    ) -> list[str]:
         host = self._host
         dy = dx if dy is None else dy
         entities: list[EntityRecord] = []
@@ -68,8 +71,7 @@ class ClipboardService:
                 )
             )
         result = host._canvas_service.create_entities(entities, record=record_history)
-        wanted = set(result.created_ids)
-        return [index for index, entity in enumerate(host._entities) if entity.id in wanted]
+        return result.created_ids
 
     def paste(self, offset: float = 0.0) -> None:
         if not self.records:
@@ -85,9 +87,8 @@ class ClipboardService:
         host = self._host
         points = [
             point
-            for index in host._sel
-            if index < len(host._entities)
-            for point in host._entities[index].points
+            for eid in host._sel
+            for point in (host._entity_for_id(eid).points if host._entity_for_id(eid) else [])
         ]
         if not points:
             return
@@ -109,9 +110,9 @@ class ClipboardService:
         before = self._host._canvas_service.begin_preview()
         dx, dy = direction
         created = [
-            index
+            eid
             for copy in range(1, count + 1)
-            for index in self.paste_records(
+            for eid in self.paste_records(
                 dx * distance * copy, dy * distance * copy, record_history=False
             )
         ]
@@ -162,13 +163,11 @@ class ClipboardService:
         self.copy_selected()
         before = host._canvas_service.begin_preview()
         created = [
-            index
+            eid
             for row in range(rows)
             for column in range(columns)
             if row or column
-            for index in self.paste_records(
-                column * spacing, row * spacing, record_history=False
-            )
+            for eid in self.paste_records(column * spacing, row * spacing, record_history=False)
         ]
         host._canvas_service.commit_preview(before)
         self._finish(created)
@@ -201,9 +200,9 @@ class ClipboardService:
         self.copy_selected()
         before = host._canvas_service.begin_preview()
         created = [
-            index
+            eid
             for copy in range(1, count)
-            for index in self.paste_records(
+            for eid in self.paste_records(
                 radius * math.cos(2.0 * math.pi * copy / count),
                 radius * math.sin(2.0 * math.pi * copy / count),
                 record_history=False,
@@ -216,21 +215,25 @@ class ClipboardService:
 
     def prompt_along_path(self) -> None:
         host = self._host
-        selected = [index for index in sorted(host._sel) if index < len(host._entities)]
-        if len(selected) < 2:
+        selected_ids = [eid for eid in host._sel if host._entity_for_id(eid) is not None]
+        if len(selected_ids) < 2:
             host._show_flash("Select source shape(s) and one path", 1400)
             return
 
-        def length(index: int) -> float:
-            return sum(
-                math.dist(a, b)
-                for a, b in zip(host._entities[index].points, host._entities[index].points[1:])
-            )
+        def length(entity_id: str) -> float:
+            entity = host._entity_for_id(entity_id)
+            if entity is None:
+                return 0.0
+            return sum(math.dist(a, b) for a, b in zip(entity.points, entity.points[1:]))
 
-        path_index = max(selected, key=length)
-        path = list(host._entities[path_index].points)
-        sources = [index for index in selected if index != path_index]
-        if len(path) < 2 or length(path_index) <= 1e-9 or not sources:
+        path_id = max(selected_ids, key=length)
+        path_entity = host._entity_for_id(path_id)
+        if path_entity is None:
+            host._show_flash("Selected path entity not found", 1400)
+            return
+        path = list(path_entity.points)
+        sources = [eid for eid in selected_ids if eid != path_id]
+        if len(path) < 2 or length(path_id) <= 1e-9 or not sources:
             host._show_flash("Selected path has no usable length", 1400)
             return
 
@@ -238,16 +241,20 @@ class ClipboardService:
             count = max(2, int(round(value)))
             segments = [(a, b, math.dist(a, b)) for a, b in zip(path, path[1:])]
             total = sum(segment[2] for segment in segments)
-            source_points = [point for index in sources for point in host._entities[index].points]
+            source_points = [
+                point
+                for eid in sources
+                for point in (host._entity_for_id(eid).points if host._entity_for_id(eid) else [])
+            ]
             origin = (
                 (min(p[0] for p in source_points) + max(p[0] for p in source_points)) / 2.0,
                 (min(p[1] for p in source_points) + max(p[1] for p in source_points)) / 2.0,
             )
-            selection = set(host._sel)
+            current_sel = set(host._sel)
             host._sel = set(sources)
             self.copy_selected()
-            host._sel = selection
-            created: list[int] = []
+            host._sel = current_sel
+            created: list[str] = []
             for copy in range(count):
                 distance = total * copy / (count - 1)
                 walked = 0.0
@@ -269,25 +276,25 @@ class ClipboardService:
 
     def cut_selected(self) -> None:
         host = self._host
-        dropped = {index for index in host._sel if not host._is_locked(index)}
-        if not dropped:
+        dropped_ids = [eid for eid in host._sel if not host._entity_for_id(eid).locked]
+        if not dropped_ids:
             return
         self.copy_selected()
-        entity_ids = tuple(host._entities[index].id for index in sorted(dropped))
-        host._canvas_service.delete_entities(entity_ids)
+        host._canvas_service.delete_entities(tuple(dropped_ids))
         self._changed()
 
     def nudge_selected(self, dx: float, dy: float) -> None:
         host = self._host
-        indices = [index for index in host._sel if not host._is_locked(index)]
-        if not indices:
+        selected_ids = [eid for eid in host._sel if not host._entity_for_id(eid).locked]
+        if not selected_ids:
             return
-        entity_ids = tuple(host._entities[index].id for index in indices)
-        host._canvas_service.execute(MoveEntityCommand(entity_ids=entity_ids, dx=dx, dy=dy))
+        host._canvas_service.execute(
+            MoveEntityCommand(entity_ids=tuple(selected_ids), dx=dx, dy=dy)
+        )
         self._changed()
 
-    def _finish(self, indices: list[int]) -> None:
-        self._host._sel = set(indices)
+    def _finish(self, entity_ids: list[str]) -> None:
+        self._host._sel = set(entity_ids)
         self._changed()
 
     def _changed(self) -> None:

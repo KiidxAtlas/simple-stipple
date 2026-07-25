@@ -9,9 +9,11 @@ from typing import Any, Protocol
 class GroupingHost(Protocol):
     _canvas_service: Any
     _entities: list
-    _sel: set[int]
+    _entities_by_id: dict
+    _sel: set[str]
     _next_group_id: int
     _group_labels: dict[int, str]
+    _document: Any
 
     def _show_flash(self, text: str, ms: int) -> None: ...
     def _notify(self) -> None: ...
@@ -22,14 +24,15 @@ class GroupingService:
     def __init__(self, host: GroupingHost) -> None:
         self._host = host
 
-    def group_of(self, index: int) -> int | None:
+    def group_of(self, entity_id: str) -> int | None:
         host = self._host
-        return host._entities[index].group if 0 <= index < len(host._entities) else None
+        entity = host._entities_by_id.get(entity_id)
+        return entity.group if entity is not None else None
 
-    def group_map(self) -> dict[int, int]:
+    def group_map(self) -> dict[str, int | None]:
         return {
-            index: entity.group
-            for index, entity in enumerate(self._host._entities)
+            entity.id: entity.group
+            for entity in self._host._entities_by_id.values()
             if entity.group is not None
         }
 
@@ -37,7 +40,7 @@ class GroupingService:
         if len(self._host._sel) < 2:
             self._host._show_flash("Select 2+ shapes to group", 1000)
             return
-        self.group_indices(list(self._host._sel), select=False)
+        self.group_by_ids(list(self._host._sel), select=False)
 
     def set_label(self, group_id: int, label: str) -> None:
         clean = str(label).strip()
@@ -53,18 +56,19 @@ class GroupingService:
         self._changed()
 
     def ungroup_selected(self) -> None:
-        self.ungroup_indices(list(self._host._sel))
+        self.ungroup_by_ids(list(self._host._sel))
 
-    def group_indices(self, indices: list[int], *, select: bool = True) -> int:
+    def group_by_ids(self, entity_ids: list[str], *, select: bool = True) -> int:
         host = self._host
-        valid = [index for index in indices if 0 <= index < len(host._entities)]
+        valid = [eid for eid in entity_ids if host._document.entity_for_id(eid) is not None]
         if len(valid) < 2:
             host._show_flash("Select 2+ shapes to group", 1000)
             return 0
         group_id = host._next_group_id
-        candidates = [deepcopy(host._entities[index]) for index in valid]
+        candidates = [deepcopy(host._document.entity_for_id(eid)) for eid in valid]
         for entity in candidates:
-            entity.group = group_id
+            if entity is not None:
+                entity.group = group_id
         host._canvas_service.update_entities(candidates)
         if select:
             host._sel = set(valid)
@@ -72,10 +76,15 @@ class GroupingService:
         self._changed()
         return len(valid)
 
-    def ungroup_indices(self, indices: list[int]) -> int:
+    def ungroup_by_ids(self, entity_ids: list[str]) -> int:
         host = self._host
-        valid = [index for index in indices if 0 <= index < len(host._entities)]
-        groups = {group_id for index in valid if (group_id := self.group_of(index)) is not None}
+        valid = [eid for eid in entity_ids if host._document.entity_for_id(eid) is not None]
+        groups = {
+            entity.group
+            for eid in valid
+            if (entity := host._document.entity_for_id(eid)) is not None
+            and (group := entity.group) is not None
+        }
         if not groups:
             host._show_flash("Shapes are not grouped", 700)
             return 0
@@ -86,6 +95,12 @@ class GroupingService:
         host._show_flash("Ungrouped", 700)
         self._changed()
         return len(valid)
+
+    def group_entities(self, entity_ids: list[str], *, select: bool = True) -> int:
+        return self.group_by_ids(entity_ids, select=select)
+
+    def ungroup_entities(self, entity_ids: list[str]) -> int:
+        return self.ungroup_by_ids(entity_ids)
 
     def _changed(self) -> None:
         self._host._notify()

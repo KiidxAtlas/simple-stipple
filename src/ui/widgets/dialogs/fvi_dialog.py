@@ -19,7 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.dxf.fvi import FVI_UNIT_MM, FviExportOptions, render_fvi
+from src.backend.dxf.fvi import FVI_UNIT_MM, FviExportOptions
+from src.backend.dxf.service import DxfService
 
 
 class FviExportDialog(QDialog):
@@ -136,7 +137,7 @@ class FviExportDialog(QDialog):
         )
 
     def _refresh_summary(self, *_args) -> None:
-        _text, report = render_fvi(self._records, self.options())
+        _text, report = DxfService.render_fvi(self._records, self.options())
         if report.bounds_mm is None:
             self._summary.setText("No drawable geometry will be exported.")
             return

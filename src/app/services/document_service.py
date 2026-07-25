@@ -6,13 +6,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 
-from src.backend.cad.constraints import GeometricConstraint
-from src.backend.cad.editor_geometry import transform_entity_metadata
-from src.backend.editing.boolean import boolean_polylines
-from src.backend.editing.merge_explode import PathInput, explode_path, merge_paths
-from src.backend.editing.resample import resample_by_count, resample_by_spacing
-from src.backend.editing.split import split_paths
-from src.backend.editing.transform import mirror, rotate, translate
+from src.app.services.geometry_service import GeometryService
 from src.backend.model.commands import (
     BooleanOpCommand,
     Command,
@@ -74,11 +68,7 @@ def _entity(snapshot: EntitySnapshot) -> EntityRecord:
 
 
 def _document(snapshot: DocumentSnapshot) -> CanvasDocument:
-    constraints = [
-        constraint
-        for item in snapshot.constraint_dicts()
-        if (constraint := GeometricConstraint.from_dict(item)) is not None
-    ]
+    constraints = GeometryService.constraints_from_dicts(snapshot.constraint_dicts())
     document = CanvasDocument(
         entities=[_entity(entity) for entity in snapshot.entities],
         layer_order=list(snapshot.layer_order),
@@ -100,6 +90,8 @@ def _document(snapshot: DocumentSnapshot) -> CanvasDocument:
 
 class DocumentService:
     """Validate and execute commands against one canvas document."""
+
+    document: CanvasDocument
 
     def __init__(self, document: CanvasDocument | None = None) -> None:
         self.document = document or CanvasDocument()
@@ -126,12 +118,35 @@ class DocumentService:
         self.document = _document(snapshot)
 
     def execute(self, command: Command, *, record: bool = True) -> OperationResult:
+        # Selection changes don't need document copying - they're just set updates
+        if isinstance(command, SelectCommand):
+            if not command.previous_ids:
+                command = replace(command, previous_ids=tuple(self.document.selected_ids()))
+            previous = self.document.selected_ids()
+            self.document.select_ids(command.entity_ids)
+            changed = self.document.selected_ids() != previous
+            event = DocumentEvent(
+                "document_changed",
+                OperationResult(
+                    changed,
+                    "Selection changed" if changed else "Selection unchanged",
+                    selected_ids=command.entity_ids,
+                ),
+                command,
+            )
+            for callback in tuple(self._subscribers):
+                callback(event)
+            return OperationResult(
+                changed,
+                "Selection changed" if changed else "Selection unchanged",
+                selected_ids=command.entity_ids,
+            )
         prepared = self._prepare(command)
-        previous = self.document
-        self.document = deepcopy(previous)
+        doc_before = self.document
+        self.document = deepcopy(doc_before)
         result = self._apply(prepared)
         if not result.changed:
-            self.document = previous
+            self.document = doc_before
         if result.changed and record:
             self.history.record(prepared, prepared.reverse())
         if result.changed:
@@ -184,35 +199,38 @@ class DocumentService:
         sources = self._selected(command.entity_ids)
         snapshots: tuple[EntitySnapshot, ...] = ()
         if isinstance(command, SplitCommand):
-            result = split_paths([entity.points for entity in sources], list(command.cutter))
-            changed_source_indices = {path.source_index for path in result.paths if path.changed}
-            if not result.changed or not changed_source_indices:
+            entity_ids = [entity.id for entity in sources]
+            result = GeometryService.split_paths(
+                [entity.points for entity in sources], list(command.cutter), entity_ids
+            )
+            changed_source_ids = {path.source_id for path in result.paths if path.changed}
+            if not result.changed or not changed_source_ids:
                 return replace(command, before=(), after=())
             output = []
-            emitted: dict[int, int] = {}
+            emitted: dict[str, int] = {}
             for path in result.paths:
-                if path.source_index not in changed_source_indices:
+                if path.source_id not in changed_source_ids:
                     continue
-                source = sources[path.source_index]
-                count = emitted.get(path.source_index, 0)
-                emitted[path.source_index] = count + 1
+                source_entity = next((s for s in sources if s.id == path.source_id), None)
+                if source_entity is None:
+                    continue
+                count = emitted.get(path.source_id, 0)
+                emitted[path.source_id] = count + 1
                 output.append(
                     _snapshot(
                         EntityRecord(
-                            id=source.id if count == 0 else new_entity_id(),
+                            id=source_entity.id if count == 0 else new_entity_id(),
                             points=path.points,
-                            kind="polyline" if path.changed else source.kind,
-                            meta=None if path.changed else deepcopy(source.meta),
-                            construction=source.construction,
-                            hidden=source.hidden,
-                            locked=source.locked,
-                            layer=source.layer,
+                            kind="polyline" if path.changed else source_entity.kind,
+                            meta=None if path.changed else deepcopy(source_entity.meta),
+                            construction=source_entity.construction,
+                            hidden=source_entity.hidden,
+                            locked=source_entity.locked,
+                            layer=source_entity.layer,
                         )
                     )
                 )
-            changed_sources = tuple(
-                source for index, source in enumerate(sources) if index in changed_source_indices
-            )
+            changed_sources = tuple(s for s in sources if s.id in changed_source_ids)
             command = replace(
                 command,
                 entity_ids=tuple(source.id for source in changed_sources),
@@ -222,7 +240,7 @@ class DocumentService:
         elif isinstance(command, BooleanOpCommand):
             snapshots = tuple(
                 _snapshot(EntityRecord(points=ring))
-                for ring in boolean_polylines(
+                for ring in GeometryService.boolean_polylines(
                     [entity.points for entity in sources], command.operation
                 )
             )
@@ -230,17 +248,20 @@ class DocumentService:
             output = []
             for entity in sources:
                 points = (
-                    resample_by_count(entity.points, int(command.value))
+                    GeometryService.resample_by_count(entity.points, int(command.value))
                     if command.by_count
-                    else resample_by_spacing(entity.points, command.value)
+                    else GeometryService.resample_by_spacing(entity.points, command.value)
                 )
                 copy = deepcopy(entity)
                 copy.points, copy.kind, copy.meta = points, "polyline", None
                 output.append(_snapshot(copy))
             snapshots = tuple(output)
         elif isinstance(command, MergeCommand):
-            merged = merge_paths(
-                [PathInput(entity.points, entity.construction) for entity in sources]
+            from src.app.services.geometry_service import PathInput
+
+            merged = GeometryService.merge_paths_with_construction(
+                [PathInput(entity.points, entity.construction) for entity in sources],
+                tolerance=0.01,
             )
             snapshots = tuple(
                 _snapshot(
@@ -269,7 +290,7 @@ class DocumentService:
                     )
                 )
                 for entity in sources
-                for segment in explode_path(entity.points)
+                for segment in GeometryService.explode_path(entity.points)
             )
         return replace(command, after=snapshots)
 
@@ -354,8 +375,10 @@ class DocumentService:
             )
         if isinstance(command, MoveEntityCommand):
             for entity in self._selected(command.entity_ids):
-                entity.points = translate(entity.points, command.dx, command.dy)
-                transform_entity_metadata(
+                entity.points = GeometryService.translate_points(
+                    entity.points, command.dx, command.dy
+                )
+                GeometryService.transform_entity_metadata(
                     entity,
                     transform="translate",
                     center=(0.0, 0.0),
@@ -368,8 +391,10 @@ class DocumentService:
         if isinstance(command, TransformCommand):
             for entity in self._selected(command.entity_ids):
                 if command.operation == "translate":
-                    entity.points = translate(entity.points, command.x, command.y)
-                    transform_entity_metadata(
+                    entity.points = GeometryService.translate_points(
+                        entity.points, command.x, command.y
+                    )
+                    GeometryService.transform_entity_metadata(
                         entity,
                         transform="translate",
                         center=command.origin,
@@ -377,8 +402,10 @@ class DocumentService:
                         dy=command.y,
                     )
                 elif command.operation == "rotate":
-                    entity.points = rotate(entity.points, command.origin, command.x)
-                    transform_entity_metadata(
+                    entity.points = GeometryService.rotate_points(
+                        entity.points, command.origin, command.x
+                    )
+                    GeometryService.transform_entity_metadata(
                         entity,
                         transform="rotate",
                         center=command.origin,
@@ -391,7 +418,7 @@ class DocumentService:
                         for x, y in entity.points
                     ]
                     if abs(command.x - command.y) <= 1e-12:
-                        transform_entity_metadata(
+                        GeometryService.transform_entity_metadata(
                             entity,
                             transform="scale",
                             center=command.origin,
@@ -402,8 +429,10 @@ class DocumentService:
                         entity.meta = None
                 elif command.operation == "mirror":
                     axis = "horizontal" if command.x else "vertical"
-                    entity.points = mirror(entity.points, command.origin, axis)
-                    transform_entity_metadata(
+                    entity.points = GeometryService.mirror_points(
+                        entity.points, command.origin, axis
+                    )
+                    GeometryService.transform_entity_metadata(
                         entity,
                         transform="mirror",
                         center=command.origin,

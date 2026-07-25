@@ -8,7 +8,7 @@ here, so the interactive canvas and the pure-Python snap-resolution logic in
 
 from PySide6.QtGui import QColor
 
-from src.backend.cad.geometry import MIN_SCALE, SNAP_DIST
+from src.backend.cad.constants import MIN_SCALE, SNAP_DIST
 
 # ── Base canvas palette ───────────────────────────────────────────────────────
 BG = "#0d1117"

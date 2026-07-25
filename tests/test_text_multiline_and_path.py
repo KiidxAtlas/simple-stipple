@@ -75,7 +75,8 @@ def test_attach_text_to_path_moves_contours_onto_the_path(qapp):
 
     meta = v._entities[text_idx].meta
     assert meta is not None
-    assert meta["text_params"]["attached_path_idx"] == path_idx
+    path_entity = v._entities[path_idx]
+    assert meta["text_params"]["attached_path_id"] == path_entity.id
 
 
 def test_rebuild_text_reflows_onto_the_attached_path(qapp):
@@ -92,7 +93,7 @@ def test_rebuild_text_reflows_onto_the_attached_path(qapp):
     values = v.text_params_at(text_idx)
     assert values is not None
     values["text"] = "Bye"
-    assert v._text_service.rebuild_text(text_idx, values)
+    assert v.rebuild_text(text_idx, values)
 
     assert v._sel
     new_members = v._text_service._text_member_indices(next(iter(v._sel)))

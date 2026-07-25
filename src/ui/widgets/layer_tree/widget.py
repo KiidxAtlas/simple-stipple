@@ -642,11 +642,11 @@ class DxfLayersTree(QFrame):
         else:
             self.fitRequested.emit()
 
-    def select_shape_keys(self, indices: Sequence[int]) -> None:
-        """Highlight tree rows matching the given entity indices (canvas
+    def select_shape_keys(self, entity_ids: Sequence[str]) -> None:
+        """Highlight tree rows matching the given entity IDs (canvas
         selection -> tree sync). A group row is highlighted when any of its
-        members is in *indices*. Does not re-emit ``selectionRequested``."""
-        target = set(indices)
+        members is in *entity_ids*. Does not re-emit ``selectionRequested``."""
+        target = set(entity_ids)
         self._syncing = True
         try:
             self._tree.clearSelection()
@@ -659,7 +659,7 @@ class DxfLayersTree(QFrame):
                     child = layer_item.child(c)
                     key = self._item_shape_key(child)
                     members = key if isinstance(key, (tuple, list)) else (key,)
-                    if any(m in target for m in members if isinstance(m, int)):
+                    if any(m in target for m in members if isinstance(m, str)):
                         child.setSelected(True)
                         if first is None:
                             first = child

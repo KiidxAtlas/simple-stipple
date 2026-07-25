@@ -21,7 +21,7 @@ PointTuple = tuple[float, float]
 
 @dataclass(frozen=True, slots=True)
 class SplitPath:
-    source_index: int
+    source_id: str
     points: list[PointTuple]
     changed: bool
 
@@ -98,9 +98,16 @@ def _polygon_pieces(polygon: Polygon, cutter: LineString) -> list[list[PointTupl
     return [[(float(x), float(y)) for x, y in geometry.exterior.coords] for geometry in geometries]
 
 
-def split_paths(paths: list[list[PointTuple]], cutter_points: list[PointTuple]) -> SplitResult:
-    """Split paths with a cutter, retaining source-index provenance."""
-    unchanged = tuple(SplitPath(index, list(points), False) for index, points in enumerate(paths))
+def split_paths(
+    paths: list[list[PointTuple]],
+    cutter_points: list[PointTuple],
+    entity_ids: list[str] | None = None,
+) -> SplitResult:
+    """Split paths with a cutter, retaining source-ID provenance."""
+    ids = entity_ids if entity_ids is not None else [str(i) for i in range(len(paths))]
+    unchanged = tuple(
+        SplitPath(ids[index], list(points), False) for index, points in enumerate(paths)
+    )
     if len(cutter_points) < 2:
         return SplitResult(unchanged)
     try:
@@ -113,8 +120,9 @@ def split_paths(paths: list[list[PointTuple]], cutter_points: list[PointTuple]) 
     output: list[SplitPath] = []
     closed_count = open_count = 0
     for source_index, path in enumerate(paths):
+        source_id = ids[source_index]
         if len(path) < 2:
-            output.append(SplitPath(source_index, list(path), False))
+            output.append(SplitPath(source_id, list(path), False))
             continue
         try:
             closed = len(path) >= 3 and _equal(path[0], path[-1])
@@ -124,7 +132,7 @@ def split_paths(paths: list[list[PointTuple]], cutter_points: list[PointTuple]) 
                     polygon = polygon.buffer(0)
                 pieces = _polygon_pieces(polygon, cutter) if not polygon.is_empty else []
                 if pieces:
-                    output.extend(SplitPath(source_index, points, True) for points in pieces)
+                    output.extend(SplitPath(source_id, points, True) for points in pieces)
                     closed_count += 1
                     continue
                 # A touch or partial entry may add an intersection vertex,
@@ -143,11 +151,11 @@ def split_paths(paths: list[list[PointTuple]], cutter_points: list[PointTuple]) 
                         chains[-1].append(second)
                 if changed:
                     output.extend(
-                        SplitPath(source_index, chain, True) for chain in chains if len(chain) >= 2
+                        SplitPath(source_id, chain, True) for chain in chains if len(chain) >= 2
                     )
                     open_count += 1
                     continue
         except (TypeError, ValueError, GEOSException):
             pass
-        output.append(SplitPath(source_index, list(path), False))
+        output.append(SplitPath(source_id, list(path), False))
     return SplitResult(tuple(output), closed_count, open_count)

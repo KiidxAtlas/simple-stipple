@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from PySide6.QtCore import QObject, Signal
 
-from src.backend.persistence import read_json_file, write_json_file_atomic
+from src.core.storage import read_json_file, write_json_file_atomic
 from src.core.paths import custom_tiles_dir, user_data_dir
 
 _SETTINGS_FILE = user_data_dir() / "settings.json"

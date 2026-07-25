@@ -7,7 +7,11 @@ from typing import Any, cast
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation
 
-from src.backend.cad.constraints import ConstraintKind, GeometricConstraint, solve_constraints
+from src.backend.cad.constraints import (
+    ConstraintKind,
+    GeometricConstraint,
+    solve_constraints,
+)
 from src.backend.cad.geometry import (
     build_circle_poly,
     build_ellipse_poly,
@@ -290,7 +294,7 @@ class DrawOpsService:
                             layer=self._host._active_layer,
                         )
                     )
-                    self._host._document.selection = {len(self._host._entities) - 1}
+                    self._host._document.selection = {self._host._entities[-1].id}
                     self._host._canvas_service.commit_preview(before)
                     self._host._notify()
                     self._host._fire_poly_change()
@@ -447,8 +451,8 @@ class ConstructionService:
         """Attach an explicit persistent constraint to selected line geometry."""
         line_indices = [
             index
-            for index in self._host._mutable_selected_indices()
-            if len(self._host._entities[index].points) == 2
+            for index in self._host._selected_ids()
+            if len(self._host._entities_by_id[index].points) == 2
         ]
         unary = {"horizontal", "vertical", "fixed"}
         binary = {"parallel", "perpendicular", "equal_length", "coincident"}
@@ -464,7 +468,7 @@ class ConstructionService:
         if kind in {"horizontal", "vertical"}:
             additions = [
                 GeometricConstraint(
-                    kind=constraint_kind, entity_ids=(self._host._entities[index].id,)
+                    kind=constraint_kind, entity_ids=(self._host._entities_by_id[index].id,)
                 )
                 for index in line_indices
             ]
@@ -472,15 +476,17 @@ class ConstructionService:
             additions = [
                 GeometricConstraint(
                     kind="fixed",
-                    entity_ids=(self._host._entities[index].id,),
+                    entity_ids=(self._host._entities_by_id[index].id,),
                     parameters={
-                        "points": [list(point) for point in self._host._entities[index].points]
+                        "points": [
+                            list(point) for point in self._host._entities_by_id[index].points
+                        ]
                     },
                 )
                 for index in line_indices
             ]
         elif kind in binary:
-            first, second = (self._host._entities[index] for index in line_indices)
+            first, second = (self._host._entities_by_id[index] for index in line_indices)
             parameters: dict[str, Any] = {}
             if kind == "coincident":
                 choice = min(
@@ -513,9 +519,7 @@ class ConstructionService:
 
     def remove_constraints_for_selection(self) -> int:
         selected_ids = {
-            self._host._entities[index].id
-            for index in self._host._selected_indices()
-            if 0 <= index < len(self._host._entities)
+            eid for eid in self._host._selected_ids() if self._host._entity_for_id(eid) is not None
         }
         removed = [
             constraint
@@ -576,13 +580,13 @@ class ConstructionService:
     def construction_line_from_selection(self, *, ray: bool = False) -> int:
         indices = [
             index
-            for index in self._host._mutable_selected_indices()
-            if len(self._host._entities[index].points) == 2
+            for index in self._host._selected_ids()
+            if len(self._host._entities_by_id[index].points) == 2
         ]
         if len(indices) != 1:
             self._host._show_flash("Select exactly one line segment", 1100)
             return 0
-        start, end = self._host._entities[indices[0]].points
+        start, end = self._host._entities_by_id[indices[0]].points
         origin = start if ray else ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
         kind = "ray" if ray else "xline"
         points = self._infinite_line_points(origin, (end[0] - start[0], end[1] - start[1]), ray=ray)
@@ -605,9 +609,9 @@ class ConstructionService:
         from src.backend.cad.construction import angle_bisector
 
         lines = [
-            self._host._entities[index].points
-            for index in self._host._mutable_selected_indices()
-            if len(self._host._entities[index].points) == 2
+            self._host._entities_by_id[index].points
+            for index in self._host._selected_ids()
+            if len(self._host._entities_by_id[index].points) == 2
         ]
         if len(lines) != 2:
             self._host._show_flash("Select exactly two intersecting lines", 1200)
@@ -626,9 +630,9 @@ class ConstructionService:
         from src.backend.cad.construction import centerline
 
         lines = [
-            self._host._entities[index].points
-            for index in self._host._mutable_selected_indices()
-            if len(self._host._entities[index].points) == 2
+            self._host._entities_by_id[index].points
+            for index in self._host._selected_ids()
+            if len(self._host._entities_by_id[index].points) == 2
         ]
         if len(lines) != 2:
             self._host._show_flash("Select exactly two edges", 1100)
@@ -639,15 +643,15 @@ class ConstructionService:
     def create_circle_through_three_points(self) -> int:
         from src.backend.cad.construction import circumcircle
 
-        selected = self._host._mutable_selected_indices()
+        selected = self._host._selected_ids()
         candidates: list[tuple[float, float]] = []
         if len(selected) == 1:
-            candidates = list(self._host._entities[selected[0]].points[:3])
+            candidates = list(self._host._entities_by_id[selected[0]].points[:3])
         elif len(selected) == 3:
             candidates = [
-                self._host._entities[index].points[0]
+                self._host._entities_by_id[index].points[0]
                 for index in selected
-                if self._host._entities[index].points
+                if self._host._entities_by_id[index].points
             ]
         if len(candidates) != 3:
             self._host._show_flash("Select one 3+ point path or three point-bearing objects", 1500)
@@ -665,7 +669,9 @@ class ConstructionService:
     def create_tangents_from_point(self) -> int:
         from src.backend.cad.construction import tangents_from_point
 
-        selected = [self._host._entities[index] for index in self._host._mutable_selected_indices()]
+        selected = [
+            self._host._entities_by_id[index] for index in self._host._selected_ids()
+        ]
         circles = [entity for entity in selected if entity.kind == "circle" and entity.meta]
         others = [entity for entity in selected if entity not in circles and entity.points]
         if len(circles) != 1 or len(others) != 1:
@@ -683,9 +689,10 @@ class ConstructionService:
         from src.backend.cad.construction import common_circle_tangents
 
         circles = [
-            self._host._entities[index]
-            for index in self._host._mutable_selected_indices()
-            if self._host._entities[index].kind == "circle" and self._host._entities[index].meta
+            self._host._entities_by_id[index]
+            for index in self._host._selected_ids()
+            if self._host._entities_by_id[index].kind == "circle"
+            and self._host._entities_by_id[index].meta
         ]
         if len(circles) != 2:
             self._host._show_flash("Select exactly two circles", 1100)

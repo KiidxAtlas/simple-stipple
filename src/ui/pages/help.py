@@ -617,7 +617,7 @@ def _build_repo_page() -> str:
 def _build_canvas_commands() -> str:
     """Canvas command reference from the actual registry."""
     try:
-        from src.ui.canvas.interaction import commands as cmd_mod
+        from src.ui.canvas.tools import commands as cmd_mod
 
         rows = cmd_mod.shortcut_reference_rows()
     except Exception:  # noqa: BLE001 — graceful fallback if commands module unavailable

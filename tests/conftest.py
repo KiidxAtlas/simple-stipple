@@ -97,7 +97,7 @@ def _reset_canvas_keymap():
     whatever the machine's actual settings.json has. Reset it around every
     test so one test's App() can't change which key another test's plain
     key() call resolves to."""
-    from src.ui.canvas.interaction import commands as canvas_commands
+    from src.ui.canvas import commands as canvas_commands
 
     canvas_commands.apply_keybindings(None)
     yield

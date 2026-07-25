@@ -46,7 +46,7 @@ def test_canvas_recognition_restores_editable_metadata(qapp):
 
     rectangle = [(0, 0), (10, 0), (10, 4), (0, 4), (0, 0)]
     canvas = make_canvas(qapp, [rectangle])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.recognize_selected_shapes() == 1
     entity = canvas._entities[0]
     assert entity.kind == "rectangle"

@@ -37,10 +37,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.backend.dxf.fix import fix_dxf
-from src.backend.dxf.fvi import FviNoGeometryError, convert_fvi_to_dxf, summarize_fvi_import
-from src.backend.dxf.io import load_dxf_polylines
-from src.backend.dxf.svg_dxf import dxf_to_svg, svg_to_dxf
+from src.backend.dxf.fvi import FviNoGeometryError
+from src.backend.dxf.service import DxfService, fix_dxf
 from src.core.settings import save_settings
 from src.ui.canvas.canvas_runtime import CanvasGridModule
 from src.ui.canvas.dxf_canvas import DxfCanvas
@@ -154,11 +152,7 @@ class _ConversionSubTab(QWidget):
         self._refresh_readiness()
         completed = getattr(self, "_job_completed", 0)
         total = getattr(self, "_job_total", 0)
-        detail = (
-            f" — {completed}/{total} completed output(s) retained"
-            if total
-            else ""
-        )
+        detail = f" — {completed}/{total} completed output(s) retained" if total else ""
         message = f"Cancelled{detail} · elapsed {self._elapsed_text()}"
         self._status_sig.emit(message, STATUS_WARN)
         self.log_line.emit(message + ".")
@@ -462,10 +456,10 @@ class FviSubTab(_ConversionSubTab):
                 dest = fvi.with_suffix(".dxf")
             try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                report = convert_fvi_to_dxf(fvi, dest)
+                report = DxfService.convert_fvi_to_dxf(fvi, dest)
                 display_source = str(fvi.relative_to(p)) if p.is_dir() else fvi.name
                 display_dest = str(dest.relative_to(Path(out_dir))) if out_dir else dest.name
-                warning = summarize_fvi_import(report)
+                warning = DxfService.summarize_fvi_import(report)
                 marker = "⚠" if warning else "✓"
                 self.log_line.emit(f"  {marker}  {display_source}  →  {display_dest}")
                 if warning:
@@ -695,9 +689,7 @@ class FixerSubTab(_ConversionSubTab):
                 else source_path.iterdir()
             )
             files = sorted(
-                path
-                for path in iterator
-                if path.is_file() and path.suffix.casefold() == ".dxf"
+                path for path in iterator if path.is_file() and path.suffix.casefold() == ".dxf"
             )
             root = source_path
             destinations = [Path(out) / file.relative_to(root) for file in files]
@@ -1046,13 +1038,10 @@ class SvgSubTab(_ConversionSubTab):
                 else source_path.iterdir()
             )
             files = sorted(
-                path
-                for path in iterator
-                if path.is_file() and path.suffix.casefold() == ".dxf"
+                path for path in iterator if path.is_file() and path.suffix.casefold() == ".dxf"
             )
             destinations = [
-                Path(out_dir) / file.relative_to(source_path).with_suffix(".svg")
-                for file in files
+                Path(out_dir) / file.relative_to(source_path).with_suffix(".svg") for file in files
             ]
             if not self._confirm_replace(destinations):
                 return
@@ -1087,7 +1076,7 @@ class SvgSubTab(_ConversionSubTab):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
-            stats = dxf_to_svg(src, out)
+            stats = DxfService.dxf_to_svg(src, out)
             msg = (
                 f"Done — {stats['polylines']} polyline(s)"
                 f"  · {stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm"
@@ -1138,7 +1127,7 @@ class SvgSubTab(_ConversionSubTab):
             self._report_batch_progress(index, "Converting", dxf.name)
             try:
                 svg.parent.mkdir(parents=True, exist_ok=True)
-                stats = dxf_to_svg(dxf, svg)
+                stats = DxfService.dxf_to_svg(dxf, svg)
                 msg = (
                     f"  ✓  {relative} → {svg.name}"
                     f"  ({stats['polylines']} polyline(s), "
@@ -1332,13 +1321,10 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 else source_path.iterdir()
             )
             files = sorted(
-                path
-                for path in iterator
-                if path.is_file() and path.suffix.casefold() == ".svg"
+                path for path in iterator if path.is_file() and path.suffix.casefold() == ".svg"
             )
             destinations = [
-                Path(out_dir) / file.relative_to(source_path).with_suffix(".dxf")
-                for file in files
+                Path(out_dir) / file.relative_to(source_path).with_suffix(".dxf") for file in files
             ]
             if not self._confirm_replace(destinations):
                 return
@@ -1373,7 +1359,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
-            stats = svg_to_dxf(src, out)
+            stats = DxfService.svg_to_dxf(src, out)
             msg = (
                 f"Done — {stats['polylines']} polyline(s)"
                 f"  · {stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm"
@@ -1434,7 +1420,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
             self._report_batch_progress(index, "Converting", svg.name)
             try:
                 dxf.parent.mkdir(parents=True, exist_ok=True)
-                stats = svg_to_dxf(svg, dxf)
+                stats = DxfService.svg_to_dxf(svg, dxf)
                 msg = (
                     f"  ✓  {relative} → {dxf.name}"
                     f"  ({stats['polylines']} polyline(s), "
@@ -1905,10 +1891,7 @@ class ConvertPage(BasePage):
         self._task_combo.blockSignals(True)
         self._task_combo.setCurrentIndex(idx)
         self._task_combo.blockSignals(False)
-        if (
-            not self._initializing_task
-            and self._settings.get("convert_selected_task") != idx
-        ):
+        if not self._initializing_task and self._settings.get("convert_selected_task") != idx:
             self._settings["convert_selected_task"] = idx
             save_settings(self._settings)
         self._tool_stack.setCurrentIndex(idx)
@@ -1921,7 +1904,12 @@ class ConvertPage(BasePage):
         self._footer_btn.setText(self._BTN_LABELS[idx])
         if hasattr(self, "_shared_input_hint"):
             self._shared_input_hint.setText(
-                ("FVI file or folder", "DXF file or folder", "DXF file or folder", "SVG file or folder")[idx]
+                (
+                    "FVI file or folder",
+                    "DXF file or folder",
+                    "DXF file or folder",
+                    "SVG file or folder",
+                )[idx]
             )
             self._sync_shared_input_from_task()
 
@@ -2144,7 +2132,7 @@ class ConvertPage(BasePage):
 
     def _load_preview(self, dxf_path: str) -> None:
         try:
-            polys = load_dxf_polylines(dxf_path)
+            polys = DxfService.load_dxf_polylines(dxf_path)
             if polys:
                 self._right_stack.setCurrentIndex(1)
                 self._preview_canvas.load(polys)

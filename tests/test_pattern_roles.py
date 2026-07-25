@@ -212,14 +212,14 @@ def test_selecting_outline_or_preview_geometry_selects_owning_zone(qapp):
         ]
         page._refresh_zone_list()
 
-        page._canvas.set_selection([1])
+        page._canvas.set_selection([page._outline_ids[1]])
         assert page._zone_list.currentRow() == 1
         assert page._pattern_props_scope.text() == "Editing Zone 2"
 
         page._showing_preview = True
         page._preview_zone_owners = [0, 1]
         page._canvas.load([first, second])
-        page._canvas.set_selection([0])
+        page._canvas.set_selection([page._outline_ids[0]])
         assert page._zone_list.currentRow() == 0
         assert page._pattern_props_scope.text() == "Editing Zone 1"
     finally:
@@ -246,7 +246,7 @@ def test_selecting_zone_in_list_highlights_its_canvas_shapes(qapp):
 
         page._zone_list.setCurrentRow(0)
 
-        assert page._canvas.get_selection_indices() == []
+        assert page._canvas.get_selected_ids() == []
         assert page._canvas._accent_polys == {1: "#f5a623"}
     finally:
         page.shutdown()
@@ -281,7 +281,7 @@ def test_selecting_zone_in_preview_does_not_select_generated_pattern_vertices(qa
 
         page._zone_list.setCurrentRow(0)
 
-        assert page._canvas.get_selection_indices() == []
+        assert page._canvas.get_selected_ids() == []
         assert page._canvas._accent_polys == {
             0: "#f5a623",
             1: "#f5a623",
@@ -393,7 +393,7 @@ def test_zone_pattern_enables_assignment_and_selected_zone_can_auto_preview(qapp
     outline = [(0, 0), (20, 0), (20, 20), (0, 20), (0, 0)]
     try:
         page.load_outline_polys([outline], source_label="zone preview")
-        page._canvas.set_selection([0])
+        page._canvas.set_selection([page._outline_ids[0]])
         page._pattern_combo.setCurrentText("— None —")
         page._zone_pattern_combo.setCurrentText("Honeycomb")
 
@@ -407,7 +407,7 @@ def test_zone_pattern_enables_assignment_and_selected_zone_can_auto_preview(qapp
                 "scale": (20.0, 20.0),
             }
         ]
-        assert page._canvas.get_selection_indices() == [0]
+        assert page._canvas.get_selected_ids() == [page._outline_ids[0]]
         assert page._should_auto_preview()
     finally:
         page.shutdown()
@@ -431,7 +431,7 @@ def test_preview_pattern_cell_can_be_promoted_to_a_zone(qapp):
             "zone_owners": [None, None],
         }
         page._canvas.load([outline, cell])
-        page._canvas.set_selection([1])
+        page._canvas.set_selection([page._canvas._entities[1].id])
 
         page._assign_zone()
 

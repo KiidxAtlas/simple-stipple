@@ -43,7 +43,7 @@ def test_snap_menu_actions_drive_canvas_flags(qapp):
 
 def test_sketch_palette_exposes_construction_and_constraints(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     bar = CanvasPrecisionBar(canvas)
     bar._construction_btn.setChecked(True)
     assert canvas._draw_construction_mode is True

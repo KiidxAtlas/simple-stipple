@@ -16,16 +16,17 @@ class SignalEmitter(Protocol):
 class SmoothingHost(Protocol):
     _canvas_service: Any
     _entities: list
+    _entities_by_id: dict[str, Any]
     _smoothing_method: str
     _smooth_iterations: int
     _simplify_tolerance: float
-    _sel: set[int]
+    _sel: set[str]
     selectionChanged: SignalEmitter
     smoothingMethodChanged: SignalEmitter
     smoothIterationsChanged: SignalEmitter
     simplifyToleranceChanged: SignalEmitter
 
-    def _mutable_selected_indices(self) -> list[int]: ...
+    def _mutable_selected_ids(self) -> list[str]: ...
     def _is_poly_closed(self, points: list[tuple[float, float]]) -> bool: ...
     def _redraw(self) -> None: ...
     def _notify(self) -> None: ...
@@ -69,14 +70,14 @@ class SmoothingService:
         host = self._host
         indices = [
             index
-            for index in host._mutable_selected_indices()
-            if len(host._entities[index].points) >= 3
+            for index in host._mutable_selected_ids()
+            if len(host._entities_by_id[index].points) >= 3
         ]
         if not indices:
             return 0
         candidates = []
         for index in indices:
-            entity = deepcopy(host._entities[index])
+            entity = deepcopy(host._entities_by_id[index])
             entity.points = smooth(
                 entity.points,
                 method=host._smoothing_method,
@@ -93,12 +94,12 @@ class SmoothingService:
         host = self._host
         indices = [
             index
-            for index in host._mutable_selected_indices()
-            if len(host._entities[index].points) >= 3
+            for index in host._mutable_selected_ids()
+            if len(host._entities_by_id[index].points) >= 3
         ]
         candidates = []
         for index in indices:
-            entity = host._entities[index]
+            entity = host._entities_by_id[index]
             points = simplify(entity.points, tolerance, closed=host._is_poly_closed(entity.points))
             if 2 <= len(points) < len(entity.points):
                 candidate = deepcopy(entity)
@@ -113,8 +114,8 @@ class SmoothingService:
     def fit_selected_to_curve(self, tolerance: float = 0.3, corner_angle_deg: float = 55.0) -> int:
         host = self._host
         fitted = []
-        for index in host._mutable_selected_indices():
-            entity = host._entities[index]
+        for index in host._mutable_selected_ids():
+            entity = host._entities_by_id[index]
             if len(entity.points) < 3:
                 continue
             result = fit_polyline_to_bezier(
@@ -129,7 +130,7 @@ class SmoothingService:
             return 0
         candidates = []
         for index, (anchors, tangents) in fitted:
-            entity = deepcopy(host._entities[index])
+            entity = deepcopy(host._entities_by_id[index])
             entity.points = anchors
             entity.kind = "bezier"
             entity.meta = {"control_points": tangents}

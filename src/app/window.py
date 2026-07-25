@@ -39,7 +39,7 @@ from src.core.settings import (
     save_settings,
     settings_bus,
 )
-from src.ui.canvas.interaction import commands as canvas_commands
+from src.ui.canvas import commands as canvas_commands
 from src.ui.style.theme import accessibility_palette, apply_dark_theme, load_app_qss
 
 LOGGER = logging.getLogger(__name__)
@@ -354,9 +354,7 @@ class App(QMainWindow):
         self._page_runtime.connect_signal_if_present(
             page_id="draft",
             signal_name="sendSelectedToPatternRequested",
-            slot=lambda polys: self._send_shape_selection_to_pattern(
-                polys, source_label="Draft"
-            ),
+            slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Draft"),
         )
         self._page_runtime.connect_signal_if_present(
             page_id="pattern",
@@ -376,9 +374,7 @@ class App(QMainWindow):
         self._page_runtime.connect_signal_if_present(
             page_id="trace",
             signal_name="sendSelectedToPatternRequested",
-            slot=lambda polys: self._send_shape_selection_to_pattern(
-                polys, source_label="Trace"
-            ),
+            slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Trace"),
         )
         self._page_runtime.connect_signal_if_present(
             page_id="convert",
@@ -388,9 +384,7 @@ class App(QMainWindow):
         self._page_runtime.connect_signal_if_present(
             page_id="convert",
             signal_name="openInPatternRequested",
-            slot=lambda polys: self._send_shape_selection_to_pattern(
-                polys, source_label="Convert"
-            ),
+            slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Convert"),
         )
         for page_id in ("draft", "trace"):
             self._page_runtime.connect_signal_if_present(
@@ -496,9 +490,7 @@ class App(QMainWindow):
         appearance = str(self._settings.get("appearance", "system"))
         if appearance == "system":
             appearance = (
-                "dark"
-                if app.styleHints().colorScheme() == Qt.ColorScheme.Dark
-                else "light"
+                "dark" if app.styleHints().colorScheme() == Qt.ColorScheme.Dark else "light"
             )
         app.setProperty("highContrast", high_contrast)
         app.setProperty("appearance", appearance)

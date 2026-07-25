@@ -56,9 +56,16 @@ def test_spiral_is_open_and_ring_has_opposite_wound_loops():
 def test_canvas_procedural_creation_groups_multi_loop_ring(qapp):
     canvas = make_canvas(qapp)
     assert canvas.create_procedural_primitive("ring") == 2
-    indices = sorted(canvas._sel)
-    assert canvas._entities[indices[0]].group == canvas._entities[indices[1]].group
-    assert all(canvas._entities[index].kind == "ring" for index in indices)
+    entity_ids = sorted(canvas._sel)
+    entity_a = canvas._entity_for_id(entity_ids[0])
+    entity_b = canvas._entity_for_id(entity_ids[1])
+    assert entity_a is not None
+    assert entity_b is not None
+    assert entity_a.group == entity_b.group
+    for index in entity_ids:
+        ent = canvas._entity_for_id(index)
+        assert ent is not None
+        assert ent.kind == "ring"
 
 
 @pytest.mark.parametrize(
@@ -79,7 +86,8 @@ def test_canvas_procedural_creation_groups_multi_loop_ring(qapp):
 def test_canvas_creates_each_procedural_primitive(qapp, primitive):
     canvas = make_canvas(qapp)
     assert canvas.create_procedural_primitive(primitive) == 1
-    entity = canvas._entities[next(iter(canvas._sel))]
+    entity = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert entity is not None
     assert entity.kind == primitive
     assert entity.meta["generator"] == primitive
 
@@ -91,6 +99,8 @@ def test_regular_polygon_from_edge_uses_edge_and_requested_sides(qapp):
     assert points[1] == pytest.approx((10, 0))
 
     canvas = make_canvas(qapp, [[(0, 0), (10, 0)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.create_polygon_from_selected_edge(7) == 1
-    assert len(canvas._entities[next(iter(canvas._sel))].points) == 8
+    selected_entity = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert selected_entity is not None
+    assert len(selected_entity.points) == 8

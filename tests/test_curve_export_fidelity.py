@@ -60,7 +60,7 @@ def _arc_view(qapp):
 def test_get_selected_returns_tessellated_curve_not_sparse_anchors(qapp, build):
     v = build(qapp)
     raw_count = len(v._entities[0].points)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     tessellated = v.get_selected()[0]
     assert len(tessellated) > raw_count
 
@@ -78,7 +78,7 @@ def test_curve_points_themselves_are_left_untouched(qapp):
     control-point representation Edit mode/undo/session-save rely on."""
     v = _spline_view(qapp)
     before = list(v._entities[0].points)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.get_selected()
     v.get_polylines_state()
     assert v._entities[0].points == before

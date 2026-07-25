@@ -323,10 +323,11 @@ class HudTextService:
         """
         self._dismiss_sel_dim_editor()
         if axis in ("l", "a"):
-            line_idx = self._host._selected_single_line()
-            if line_idx is None:
+            entity_id = self._host._selected_single_line()
+            if entity_id is None:
                 return
-            (ax, ay), (bx, by) = self._host._entities[line_idx].points
+            entity = self._host._entities_by_id[entity_id]
+            (ax, ay), (bx, by) = entity.points
             if axis == "l":
                 cur_val = math.hypot(bx - ax, by - ay)
             else:
@@ -748,7 +749,7 @@ class TextService:
         )
         if not polys:
             return 0
-        new_indices = self._place_text_contours(
+        new_ids = self._place_text_contours(
             polys,
             wx,
             wy,
@@ -760,12 +761,12 @@ class TextService:
                 "italic": bool(italic),
             },
         )
-        self._host._sel = set(new_indices)
-        self._host._show_flash(f"Text placed ({len(new_indices)} contours)", 900)
+        self._host._sel = set(new_ids)
+        self._host._show_flash(f"Text placed ({len(new_ids)} contours)", 900)
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
-        return len(new_indices)
+        return len(new_ids)
 
     def _place_text_contours(
         self,
@@ -773,12 +774,11 @@ class TextService:
         wx: float,
         wy: float,
         params: dict[str, Any],
-    ) -> list[int]:
+    ) -> list[str]:
         """Create grouped, editable text contours through the command boundary."""
         entities = self._text_entities(polys, wx, wy, params)
         result = self._host._canvas_service.create_entities(entities)
-        wanted = set(result.created_ids)
-        return [index for index, entity in enumerate(self._host._entities) if entity.id in wanted]
+        return list(result.created_ids)
 
     def _text_entities(
         self,
@@ -801,23 +801,43 @@ class TextService:
             for poly in polys
         ]
 
-    def text_params_at(self, idx: int) -> dict[str, Any] | None:
-        if not (0 <= idx < len(self._host._entities)):
-            return None
-        params = (self._host._entities[idx].meta or {}).get("text_params")
-        return dict(params) if isinstance(params, dict) else None
+    def text_params_at(self, entity_id: str) -> dict[str, Any] | None:
+        for entity in self._host._entities:
+            if entity.id == entity_id:
+                params = (entity.meta or {}).get("text_params")
+                return dict(params) if isinstance(params, dict) else None
+        return None
 
-    def _text_member_indices(self, idx: int) -> list[int]:
-        gid = self._host._entities[idx].group
-        if gid is None:
-            return [idx]
-        return [i for i, e in enumerate(self._host._entities) if e.group == gid]
+    def _text_member_ids(self, entity_id: str) -> list[str]:
+        for entity in self._host._entities:
+            if entity.id == entity_id:
+                gid = entity.group
+                if gid is None:
+                    return [entity_id]
+                return [e.id for e in self._host._entities if e.group == gid]
+        return [entity_id]
 
-    def rebuild_text(self, idx: int, values: dict[str, Any]) -> bool:
+    def _text_member_indices(self, index_or_id: int | str) -> list[int]:
+        entity_id: str
+        if isinstance(index_or_id, int):
+            entity_id = (
+                self._host._entities_by_id[index_or_id].id
+                if 0 <= index_or_id < len(self._host._entities)
+                else ""
+            )
+        else:
+            entity_id = index_or_id
+        if not entity_id:
+            return []
+        member_ids = self._text_member_ids(entity_id)
+        return [i for i, e in enumerate(self._host._entities) if e.id in member_ids]
+
+    def rebuild_text(self, entity_id: str, values: dict[str, Any]) -> bool:
         """Replace a text entity's contours with newly rendered ones (same
         bottom-left anchor)."""
-        members = self._text_member_indices(idx)
-        pts = [pt for i in members for pt in self._host._entities[i].points]
+        members = self._text_member_ids(entity_id)
+        member_entities = [e for e in self._host._entities if e.id in members]
+        pts = [pt for entity in member_entities for pt in entity.points]
         if not pts:
             return False
         anchor_x = min(x for x, _ in pts)
@@ -836,17 +856,14 @@ class TextService:
         # If this text was attached to a path, remember which one so it can
         # be re-flowed after the rebuild (indices shift once the old
         # contours are compacted out, so remap it through that removal).
-        existing_params = self.text_params_at(idx) or {}
+        existing_params = self.text_params_at(entity_id) or {}
         raw_path_idx = existing_params.get("attached_path_idx")
         attached_path_id: str | None = None
-        if (
-            isinstance(raw_path_idx, int)
-            and raw_path_idx not in members
-            and 0 <= raw_path_idx < len(self._host._entities)
-        ):
-            attached_path_id = self._host._entities[raw_path_idx].id
+        if isinstance(raw_path_idx, int) and 0 <= raw_path_idx < len(self._host._entities):
+            attached_path_id = self._host._entities_by_id[raw_path_idx].id
 
-        group_id = self._host._entities[members[0]].group
+        member_entity = next((e for e in self._host._entities if e.id == entity_id), None)
+        group_id = member_entity.group if member_entity else None
         replacements = self._text_entities(
             polys,
             anchor_x,
@@ -854,31 +871,16 @@ class TextService:
             values,
             group_id=group_id,
         )
-        source_ids = tuple(self._host._entities[index].id for index in members)
+        source_ids = tuple(members)
         self._host._canvas_service.update_entities(
             replacements,
             source_ids=source_ids,
         )
-        wanted = {entity.id for entity in replacements}
-        new_indices = [
-            index for index, entity in enumerate(self._host._entities) if entity.id in wanted
-        ]
-        attached_path_idx = next(
-            (
-                index
-                for index, entity in enumerate(self._host._entities)
-                if entity.id == attached_path_id
-            ),
-            None,
-        )
-        if (
-            attached_path_idx is not None
-            and new_indices
-            and 0 <= attached_path_idx < len(self._host._entities)
-        ):
+        new_ids = [entity.id for entity in replacements]
+        if attached_path_id is not None and new_ids:
             # The contour replacement already owns this user-visible undo step.
-            self.attach_text_to_path(new_indices[0], attached_path_idx, record_undo=False)
-        self._host._sel = set(new_indices)
+            self.attach_text_to_path(new_ids[0], attached_path_id, record_undo=False)
+        self._host._sel = set(new_ids)
         self._host._sync_shape_storage_from_entities()
         self._host._redraw()
         self._host._notify()
@@ -886,24 +888,24 @@ class TextService:
         self._host._show_flash("Text updated", 800)
         return True
 
-    def attach_text_to_path(
-        self, text_idx: int, path_idx: int, *, record_undo: bool = True
-    ) -> bool:
+    def attach_text_to_path(self, text_id: str, path_id: str, *, record_undo: bool = True) -> bool:
         """Reposition a text entity's glyph contours to sit tangent to an
         open/closed path, ordered left-to-right along its arc length.
 
         The path's own geometry is untouched; only the text's contours move.
         """
-        if not (0 <= path_idx < len(self._host._entities)):
+        path_entity = next((e for e in self._host._entities if e.id == path_id), None)
+        if path_entity is None:
             return False
-        members = self._text_member_indices(text_idx)
-        if not members or path_idx in members:
+        members = self._text_member_ids(text_id)
+        if not members or path_id in members:
             return False
-        path_pts = self._host._entities[path_idx].points
+        path_pts = path_entity.points
         if len(path_pts) < 2:
             return False
 
-        all_pts = [pt for i in members for pt in self._host._entities[i].points]
+        member_entities = [e for e in self._host._entities if e.id in members]
+        all_pts = [pt for entity in member_entities for pt in entity.points]
         if not all_pts:
             return False
         anchor_x = min(x for x, _ in all_pts)
@@ -928,8 +930,11 @@ class TextService:
             return path_pts[-1][0], path_pts[-1][1], math.atan2(b[1] - a[1], b[0] - a[0])
 
         candidates = []
-        for i in members:
-            entity = deepcopy(self._host._entities[i])
+        for member_id in members:
+            entity = next((e for e in self._host._entities if e.id == member_id), None)
+            if entity is None:
+                continue
+            entity = deepcopy(entity)
             pts = entity.points
             xs = [x for x, _ in pts]
             local_cx = (min(xs) + max(xs)) / 2.0
@@ -946,7 +951,7 @@ class TextService:
             entity.points = new_pts
             meta = entity.meta
             if isinstance(meta, dict) and isinstance(meta.get("text_params"), dict):
-                meta["text_params"]["attached_path_idx"] = path_idx
+                meta["text_params"]["attached_path_id"] = path_id
             candidates.append(entity)
         self._host._canvas_service.update_entities(candidates, record=record_undo)
         self._host._redraw()
@@ -954,9 +959,9 @@ class TextService:
         self._host._fire_poly_change()
         return True
 
-    def prompt_edit_text(self, idx: int) -> None:
+    def prompt_edit_text(self, entity_id: str) -> None:
         """Reopen the text dialog prefilled with an entity's parameters."""
-        params = self.text_params_at(idx)
+        params = self.text_params_at(entity_id)
         if params is None:
             return
         from src.ui.widgets.dialogs.text_dialog import AddTextDialog
@@ -968,7 +973,7 @@ class TextService:
         vals = dlg.values()
         if not vals["text"].strip():
             return
-        self.rebuild_text(idx, vals)
+        self.rebuild_text(entity_id, vals)
 
     def prompt_add_text(self, wx: float, wy: float) -> None:
         """Open the Add Text dialog and place the result at world (wx, wy)."""

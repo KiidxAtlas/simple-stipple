@@ -2,30 +2,31 @@
 
 These helpers are intentionally UI-agnostic: callers supply coordinate conversion
 callbacks and geometry accessors, and the functions return the resolved snap
-position plus a string describing the snap kind.
+position plus a string describing the snap kind. Polylines are identified by
+the caller's entity IDs (opaque strings), never by list position — a snap
+computation may run across several frames of a drag and the identity of "this
+polyline" must stay valid even if other entities are added/removed/reordered
+in between.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
-from src.backend.cad.geometry import (
+from src.backend.cad.constants import (
     MIN_SCALE as _MIN_SCALE,
 )
-from src.backend.cad.geometry import (
+from src.backend.cad.constants import (
     SNAP_DIST as _SNAP_DIST,
 )
 from src.backend.spatial import build_snap_tree, find_nearest_index
-
-# Geometry epsilons (kept local to avoid pulling backend.geometry into the
-# UI-only behaviors layer; values mirror src/backend/cad/geometry.py).
-_EPS = 1e-6
-_EPS_SQ_DEGENERATE = 1e-12
+from src.core.entities import EntityId
 
 Point = tuple[float, float]
 Polyline = list[Point]
 SnapResult = tuple[float, float, str]
+Polylines = Mapping[EntityId, Polyline]
 
 WorldToCanvas = Callable[[float, float], Point]
 CanvasToWorld = Callable[[float, float], Point]
@@ -91,22 +92,22 @@ def angle_snap(
 def find_nearest_vertex_snap(
     cx: float,
     cy: float,
-    polylines: Sequence[Polyline],
-    hidden_polys: set[int],
+    polylines: Polylines,
+    hidden_polys: set[EntityId],
     w2c: WorldToCanvas,
     *,
     snap_dist: float = _SNAP_DIST,
-    exclude: set[tuple[int, int]] | None = None,
+    exclude: set[tuple[EntityId, int]] | None = None,
 ) -> Point | None:
     """Return nearest vertex world position within snap distance."""
     canvas_points: list[Point] = []
     world_points: list[Point] = []
     excluded = exclude or set()
-    for pi, poly in enumerate(polylines):
-        if pi in hidden_polys:
+    for eid, poly in polylines.items():
+        if eid in hidden_polys:
             continue
         for vi, pt in enumerate(poly):
-            if (pi, vi) in excluded:
+            if (eid, vi) in excluded:
                 continue
             canvas_points.append(w2c(*pt))
             world_points.append(pt)
@@ -117,32 +118,32 @@ def find_nearest_vertex_snap(
 
 
 def _candidate_polylines(
-    polylines: Sequence[Polyline],
-    hidden_polys: set[int],
+    polylines: Polylines,
+    hidden_polys: set[EntityId],
     *,
     cwx: float,
     cwy: float,
     world_r: float,
     poly_bounds: PolylineBounds,
-) -> list[tuple[int, Polyline]]:
-    candidate_polys: list[tuple[int, Polyline]] = []
-    for pi, poly in enumerate(polylines):
-        if pi in hidden_polys or len(poly) < 2:
+) -> list[tuple[EntityId, Polyline]]:
+    candidate_polys: list[tuple[EntityId, Polyline]] = []
+    for eid, poly in polylines.items():
+        if eid in hidden_polys or len(poly) < 2:
             continue
         x0, y0, x1, y1 = poly_bounds(poly)
         if cwx < x0 - world_r or cwx > x1 + world_r:
             continue
         if cwy < y0 - world_r or cwy > y1 + world_r:
             continue
-        candidate_polys.append((pi, poly))
+        candidate_polys.append((eid, poly))
     return candidate_polys
 
 
 def snap_to_polyline(
     cx: float,
     cy: float,
-    polylines: Sequence[Polyline],
-    hidden_polys: set[int],
+    polylines: Polylines,
+    hidden_polys: set[EntityId],
     scale: float,
     w2c: WorldToCanvas,
     c2w: CanvasToWorld,
@@ -152,8 +153,8 @@ def snap_to_polyline(
     *,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
-    exclude_vertices: set[tuple[int, int]] | None = None,
-    mode: str = "select",
+    exclude_vertices: set[tuple[EntityId, int]] | None = None,
+    mode: str | None = "select",
     snap_dist: float = _SNAP_DIST,
     min_scale: float = _MIN_SCALE,
     allow_vertex: bool = True,
@@ -186,9 +187,9 @@ def snap_to_polyline(
     if allow_vertex:
         canvas_points: list[Point] = []
         world_points: list[Point] = []
-        for pi, poly in candidate_polys:
+        for eid, poly in candidate_polys:
             for vi, pt in enumerate(poly):
-                if (pi, vi) in excluded:
+                if (eid, vi) in excluded:
                     continue
                 canvas_points.append(w2c(*pt))
                 world_points.append(pt)
@@ -199,7 +200,7 @@ def snap_to_polyline(
 
         best_dist = snap_dist
         best_pt: Point | None = None
-        for _pi, poly in candidate_polys:
+        for _eid, poly in candidate_polys:
             n = len(poly)
             closed = is_poly_closed(poly)
             seg_count = n if closed else n - 1
@@ -218,7 +219,7 @@ def snap_to_polyline(
         best_dist = snap_dist
         best_pt = None
         segments: list[tuple[Point, Point]] = []
-        for _pi, poly in candidate_polys:
+        for _eid, poly in candidate_polys:
             n = len(poly)
             closed = is_poly_closed(poly)
             seg_count = n if closed else n - 1
@@ -242,7 +243,7 @@ def snap_to_polyline(
 
         best_dist = snap_dist
         best_pt = None
-        for _pi, poly in candidate_polys:
+        for _eid, poly in candidate_polys:
             if not is_poly_closed(poly):
                 continue
             center = polygon_centroid(poly)
@@ -262,7 +263,7 @@ def snap_to_polyline(
             best_dist = snap_dist
             best_pt = None
             last_wx, last_wy = perp_ref
-            for _pi, poly in candidate_polys:
+            for _eid, poly in candidate_polys:
                 n = len(poly)
                 closed = is_poly_closed(poly)
                 seg_count = n if closed else n - 1
@@ -287,7 +288,7 @@ def snap_to_polyline(
 
         best_dist = snap_dist
         best_pt = None
-        for _pi, poly in candidate_polys:
+        for _eid, poly in candidate_polys:
             n = len(poly)
             closed = is_poly_closed(poly)
             seg_count = n if closed else n - 1
@@ -321,16 +322,16 @@ def resolve_snap(
     allow_grid: bool,
     grid_snap_enabled: bool,
     grid_spacing: float,
-    polylines: Sequence[Polyline],
-    hidden_polys: set[int],
+    polylines: Polylines,
+    hidden_polys: set[EntityId],
     scale: float,
     w2c: WorldToCanvas,
     c2w: CanvasToWorld,
     poly_bounds: PolylineBounds,
     is_poly_closed: IsPolylineClosed,
     segment_intersection_point: SegmentIntersectionPoint,
-    mode: str,
-    exclude_vertices: set[tuple[int, int]] | None = None,
+    mode: str | None,
+    exclude_vertices: set[tuple[EntityId, int]] | None = None,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
     allow_vertex: bool = True,
@@ -390,19 +391,19 @@ def resolve_drag_snap(
     allow_grid: bool,
     grid_snap_enabled: bool,
     grid_spacing: float,
-    polylines: Sequence[Polyline],
-    hidden_polys: set[int],
+    polylines: Polylines,
+    hidden_polys: set[EntityId],
     scale: float,
     w2c: WorldToCanvas,
     c2w: CanvasToWorld,
     poly_bounds: PolylineBounds,
     is_poly_closed: IsPolylineClosed,
     segment_intersection_point: SegmentIntersectionPoint,
-    mode: str,
+    mode: str | None,
     allow_vertex: bool = True,
     allow_edge: bool = True,
-    exclude_vertices: set[tuple[int, int]] | None = None,
-    exclude_segments: set[tuple[int, int]] | None = None,
+    exclude_vertices: set[tuple[EntityId, int]] | None = None,
+    exclude_segments: set[tuple[EntityId, int]] | None = None,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
 ) -> SnapResult | None:
@@ -412,10 +413,10 @@ def resolve_drag_snap(
 
     # If a segment is excluded, also exclude its endpoint vertices from vertex-snap
     # so immediate connected-segment endpoints do not generate drag snap labels.
-    for pi, si in excluded_segments:
-        if pi < 0 or pi >= len(polylines):
+    for eid, si in excluded_segments:
+        poly = polylines.get(eid)
+        if poly is None:
             continue
-        poly = polylines[pi]
         n = len(poly)
         if n < 2:
             continue
@@ -423,8 +424,8 @@ def resolve_drag_snap(
         seg_count = n if closed else n - 1
         if seg_count <= 0 or si < 0 or si >= seg_count:
             continue
-        excluded_vertices.add((pi, si))
-        excluded_vertices.add((pi, (si + 1) % n))
+        excluded_vertices.add((eid, si))
+        excluded_vertices.add((eid, (si + 1) % n))
 
     if allow_polyline:
         cwx, cwy = c2w(cx, cy)
@@ -463,12 +464,12 @@ def resolve_drag_snap(
         if allow_vertex:
             best_dist: float = float(_SNAP_DIST)
             best_midpoint: Point | None = None
-            for _pi, poly in candidate_polys:
+            for _eid, poly in candidate_polys:
                 n = len(poly)
                 closed = is_poly_closed(poly)
                 seg_count = n if closed else n - 1
                 for vi in range(seg_count):
-                    if (_pi, vi) in excluded_segments:
+                    if (_eid, vi) in excluded_segments:
                         continue
                     ax, ay = poly[vi]
                     bx, by = poly[(vi + 1) % n]
@@ -493,12 +494,12 @@ def resolve_drag_snap(
             best_dist = float(_SNAP_DIST)
             best_intersection: Point | None = None
             segments: list[tuple[Point, Point]] = []
-            for _pi, poly in candidate_polys:
+            for _eid, poly in candidate_polys:
                 n = len(poly)
                 closed = is_poly_closed(poly)
                 seg_count = n if closed else n - 1
                 for vi in range(seg_count):
-                    if (_pi, vi) in excluded_segments:
+                    if (_eid, vi) in excluded_segments:
                         continue
                     segments.append((poly[vi], poly[(vi + 1) % n]))
             for i in range(len(segments)):
@@ -524,12 +525,12 @@ def resolve_drag_snap(
         if allow_edge:
             best_dist = float(_SNAP_DIST)
             best_edge: Point | None = None
-            for _pi, poly in candidate_polys:
+            for _eid, poly in candidate_polys:
                 n = len(poly)
                 closed = is_poly_closed(poly)
                 seg_count = n if closed else n - 1
                 for vi in range(seg_count):
-                    if (_pi, vi) in excluded_segments:
+                    if (_eid, vi) in excluded_segments:
                         continue
                     ax, ay = poly[vi]
                     bx, by = poly[(vi + 1) % n]

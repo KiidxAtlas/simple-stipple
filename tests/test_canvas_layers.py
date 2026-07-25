@@ -36,51 +36,51 @@ def test_load_by_layer_sets_model(qapp):
 def test_inactive_layer_not_selectable(qapp):
     canvas, rt = make_rig(qapp)
     click_world(canvas, 35.0, 0.0)  # square on Layer 2 (inactive)
-    assert canvas.get_selection_indices() == []
+    assert canvas.get_selected_ids() == []
     canvas.select_all()
-    assert canvas.get_selection_indices() == [0]  # only Layer 1's square
+    assert canvas.get_selected_ids() == [canvas._entities[0].id]  # only Layer 1's square
 
 
 def test_click_inactive_shape_activates_its_layer(qapp):
     """DxfCanvas routes clicks on inactive-layer shapes to the ghost-click
-    callback with the entity index."""
+    callback with the entity ID."""
     from src.ui.canvas.canvas_runtime import CanvasRuntime
     from src.ui.canvas.dxf_canvas import DxfCanvas
 
     clicked = []
-    canvas = DxfCanvas(on_ghost_click=lambda idx: clicked.append(idx))
+    canvas = DxfCanvas(on_ghost_click=lambda eid: clicked.append(eid))
     canvas.resize(800, 600)
     canvas.set_rulers_visible(False)
     rt = CanvasRuntime(canvas=canvas, default_layer="Layer 1")
     rt.load_polys_by_layer({"Layer 1": [square(0, 0)], "Layer 2": [square(30, 0)]}, fit=True)
     click_world(canvas, 35.0, 0.0)
-    assert clicked == [1]
+    assert clicked == [canvas._entities[1].id]
     # the draft page handler then switches layer + selects:
     target_layer = canvas._entities[1].layer
     assert target_layer is not None
     canvas.set_active_layer(target_layer)
-    canvas.set_selection([1])
+    canvas.set_selection([canvas._entities[1].id])
     assert canvas.active_layer == "Layer 2"
-    assert canvas.get_selection_indices() == [1]
+    assert canvas.get_selected_ids() == [canvas._entities[1].id]
 
 
 def test_switch_active_layer_keeps_entities_and_drops_selection(qapp):
     canvas, rt = make_rig(qapp)
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert rt.switch_active_layer("Layer 2")
     assert canvas.poly_count == 2  # nothing reloaded or lost
-    assert canvas.get_selection_indices() == []  # selection was on Layer 1
+    assert canvas.get_selected_ids() == []  # selection was on Layer 1
     click_world(canvas, 35.0, 0.0)
-    assert canvas.get_selection_indices() == [1]
+    assert canvas.get_selected_ids() == [canvas._entities[1].id]
 
 
 def test_move_selection_between_layers(qapp):
     canvas, rt = make_rig(qapp)
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert rt.move_selected_to_layer("Layer 2")
     assert canvas._entities[0].layer == "Layer 2"
     # moved shape left the active layer, so it left the selection too
-    assert canvas.get_selection_indices() == []
+    assert canvas.get_selected_ids() == []
     assert canvas.undo()
     assert canvas._entities[0].layer == "Layer 1"
 
@@ -114,7 +114,7 @@ def test_layer_visibility_entity_native(qapp):
     rt.set_layer_hidden("Layer 1", True)
     assert canvas._entities[0].hidden
     click_world(canvas, 5.0, 0.0)
-    assert canvas.get_selection_indices() == []
+    assert canvas.get_selected_ids() == []
     rt.solo_layer("Layer 1")
     assert not canvas._entities[0].hidden
     assert canvas._entities[1].hidden
@@ -149,18 +149,18 @@ def test_visibility_change_notifies_workspace_dirty_callback(qapp):
     assert canvas.get_entity_records()[0]["hidden"] is True
 
 
-def test_layer_tree_rows_use_entity_indices(qapp):
+def test_layer_tree_rows_use_entity_ids(qapp):
     canvas, rt = make_rig(qapp)
     rows = rt.build_layer_tree_rows()
     assert [r["name"] for r in rows] == ["Layer 1", "Layer 2"]
     assert rows[0]["active"] and not rows[1]["active"]
-    assert [s["key"] for s in rows[0]["shapes"]] == [0]
-    assert [s["key"] for s in rows[1]["shapes"]] == [1]
+    assert [s["key"] for s in rows[0]["shapes"]] == [canvas._entities[0].id]
+    assert [s["key"] for s in rows[1]["shapes"]] == [canvas._entities[1].id]
 
 
 def test_shape_label_persists_in_meta(qapp):
     canvas, rt = make_rig(qapp)
-    rt.rename_shape("Layer 1", 0, "Base plate")
+    rt.rename_shape("Layer 1", canvas._entities[0].id, "Base plate")
     meta = canvas._entities[0].meta
     assert meta is not None
     assert meta["label"] == "Base plate"
@@ -239,9 +239,9 @@ def test_add_layer_is_undoable(qapp):
 def test_tree_selection_activates_shape_layer(qapp):
     canvas, rt = make_rig(qapp)
     assert canvas.active_layer == "Layer 1"
-    rt.on_tree_selection_requested([1])  # shape on Layer 2
+    rt.on_tree_selection_requested([canvas._entities[1].id])  # shape on Layer 2
     assert canvas.active_layer == "Layer 2"
-    assert canvas.get_selection_indices() == [1]
+    assert canvas.get_selected_ids() == [canvas._entities[1].id]
 
 
 def test_tree_rows_number_per_layer(qapp):
@@ -254,9 +254,9 @@ def test_tree_rows_number_per_layer(qapp):
     assert labels["Layer 2"] == ["01", "02"]  # per-layer, not global indices
 
 
-def test_delete_indices_works_across_layers(qapp):
+def test_delete_entities_works_across_layers(qapp):
     canvas, rt = make_rig(qapp)
-    assert canvas.delete_indices([1]) == 1  # Layer 2's shape, Layer 1 active
+    assert canvas.delete_entities([canvas._entities[1].id]) == 1  # Layer 2's shape, Layer 1 active
     assert canvas.poly_count == 1
     assert canvas.undo()
     assert canvas.poly_count == 2

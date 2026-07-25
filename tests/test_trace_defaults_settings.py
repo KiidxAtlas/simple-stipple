@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from src.ui.pages.trace.form import TRACE_DEFAULTS, trace_default
+from src.ui.pages.trace.ui.form import TRACE_DEFAULTS, trace_default
 
 
 def test_trace_default_falls_back_to_the_built_in_value_when_unset():
@@ -51,7 +51,7 @@ def test_trace_workflow_header_never_expands_into_content_area(qapp):
 
 
 def test_clearing_the_workspace_reapplies_the_configured_default(qapp):
-    from src.ui.pages.trace.session import clear_trace_workspace_state
+    from src.ui.pages.trace.domain.session import clear_trace_workspace_state
     from src.ui.pages.trace.tab import TracePage
 
     settings = {"trace_defaults": {"max_res": "3000"}}

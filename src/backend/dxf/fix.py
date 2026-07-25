@@ -21,15 +21,18 @@ import ezdxf  # type: ignore[attr-defined]
 from ezdxf import units  # type: ignore[attr-defined]
 from shapely.geometry import LineString  # type: ignore[import-untyped]
 
+from src.backend.cad.constants import (
+    DXF_DEDUP_EPS,
+    DXF_FIX_CLOSE_TOL,
+    DXF_FIX_COLINEAR_TOL,
+)
 from src.backend.dxf.io import (
     _normalize_polyline_for_dxf,
     load_dxf_polylines_with_report,
     summarize_dxf_import_report,
 )
-from src.backend.persistence import atomic_write_via
+from src.core.storage import atomic_write_via
 
-_CLOSE_TOL = 0.01  # mm — endpoints closer than this are merged to close polyline
-_COLINEAR_TOL = 0.001  # mm — max cross-product deviation to treat segment as collinear
 _LOG = logging.getLogger(__name__)
 FixMode = Literal["safe", "flatten"]
 
@@ -46,7 +49,7 @@ def _remove_duplicates(
         return pts
     result = [pts[0]]
     for p in pts[1:]:
-        if _dist(result[-1], p) > 1e-9:
+        if _dist(result[-1], p) > DXF_DEDUP_EPS:
             result.append(p)
     return result
 
@@ -70,7 +73,7 @@ def _simplify_collinear(pts: list[tuple[float, float]], tol: float) -> list[tupl
 def _fix_polyline(
     pts: list[tuple[float, float]],
     *,
-    close_tol: float = _CLOSE_TOL,
+    close_tol: float = DXF_FIX_CLOSE_TOL,
     simplify: bool = True,
 ) -> list[tuple[float, float]] | None:
     """Apply all fixes to a single polyline.  Returns None to discard."""
@@ -81,7 +84,7 @@ def _fix_polyline(
     if len(pts) >= 3 and pts[0] != pts[-1] and _dist(pts[0], pts[-1]) < close_tol:
         pts = pts + [pts[0]]
     if simplify:
-        pts = _simplify_collinear(pts, _COLINEAR_TOL)
+        pts = _simplify_collinear(pts, DXF_FIX_COLINEAR_TOL)
     if len(pts) < 2:
         return None
     return pts
@@ -136,7 +139,7 @@ def _safe_repair_dxf(input_path: Path, output_path: Path) -> dict[str, Any]:
         )
     except (ValueError, TypeError):
         mm_per_drawing_unit = 1.0
-    close_tol = _CLOSE_TOL / mm_per_drawing_unit
+    close_tol = DXF_FIX_CLOSE_TOL / mm_per_drawing_unit
     to_delete: list[Any] = []
 
     for entity in modelspace:

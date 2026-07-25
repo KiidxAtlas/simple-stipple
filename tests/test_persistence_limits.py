@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.backend.persistence import read_json_file
+from src.core.storage import read_json_file
 
 
 def test_json_reader_rejects_file_over_limit(tmp_path):

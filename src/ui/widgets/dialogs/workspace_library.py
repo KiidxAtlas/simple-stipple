@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.backend.model.document import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
-from src.backend.persistence import (
+from src.core.storage import (
     MAX_WORKSPACE_FILE_BYTES,
     read_json_file,
     write_json_file_atomic,
@@ -171,9 +171,7 @@ class WorkspaceLibraryDialog(QDialog):
                         default={},
                         max_bytes=MAX_WORKSPACE_FILE_BYTES,
                     )
-                    valid = isinstance(raw, dict) and isinstance(
-                        raw.get("document", raw), dict
-                    )
+                    valid = isinstance(raw, dict) and isinstance(raw.get("document", raw), dict)
                     metadata = raw.get("recovery", {}) if isinstance(raw, dict) else {}
                     original = Path(str(metadata.get("workspace_path", ""))).name
                     timestamp = str(metadata.get("timestamp", ""))
@@ -233,9 +231,7 @@ class WorkspaceLibraryDialog(QDialog):
 
     def _selected_paths(self) -> list[Path]:
         return [
-            Path(str(value))
-            for item in self._list.selectedItems()
-            if (value := item.data(0x0100))
+            Path(str(value)) for item in self._list.selectedItems() if (value := item.data(0x0100))
         ]
 
     def _recovery_paths(self) -> list[Path]:

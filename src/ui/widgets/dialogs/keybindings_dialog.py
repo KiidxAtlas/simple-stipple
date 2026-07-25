@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.settings import DEFAULT_KEYBINDINGS
-from src.ui.canvas.interaction import commands as canvas_commands
+from src.ui.canvas import commands as canvas_commands
 from src.ui.components import (
     SPACE_LG,
     SPACE_MD,
@@ -299,8 +299,7 @@ class KeybindingsDialog(QDialog):
     def import_from_path(self, path: str | Path) -> None:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or any(
-            not isinstance(key, str) or not isinstance(value, str)
-            for key, value in payload.items()
+            not isinstance(key, str) or not isinstance(value, str) for key, value in payload.items()
         ):
             raise ValueError("Shortcut file must contain a string-to-string object")
         for key, value in payload.items():
@@ -315,9 +314,7 @@ class KeybindingsDialog(QDialog):
             self.export_to_path(path)
 
     def _import_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import Shortcuts", "", "JSON (*.json)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Import Shortcuts", "", "JSON (*.json)")
         if not path:
             return
         try:

@@ -30,7 +30,7 @@ def _dense_arc_view(qapp, radius: float = 20.0, n: int = 80):
 
 def test_fit_selected_to_curve_converts_kind_to_bezier(qapp):
     v = _dense_arc_view(qapp)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     n = v.fit_selected_to_curve(tolerance=0.5)
     assert n == 1
     ent = v._entities[0]
@@ -41,7 +41,7 @@ def test_fit_selected_to_curve_converts_kind_to_bezier(qapp):
 
 def test_fit_selected_to_curve_is_undo_tracked(qapp):
     v = _dense_arc_view(qapp)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     before = list(v._entities[0].points)
     v.fit_selected_to_curve(tolerance=0.5)
     assert v._entities[0].kind == "bezier"
@@ -55,7 +55,7 @@ def test_fit_selected_to_curve_result_tessellates_via_flattened_points(qapp):
     re-tessellate it smoothly (the curve-fidelity architecture from
     earlier this session), not hand back the sparse anchor list."""
     v = _dense_arc_view(qapp)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.fit_selected_to_curve(tolerance=0.5)
     raw_anchor_count = len(v._entities[0].points)
     tessellated = v.get_selected()[0]

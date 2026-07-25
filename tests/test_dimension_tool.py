@@ -52,7 +52,7 @@ def test_shape_can_be_selected_immediately_after_dimensioning(qapp):
     assert not v._dimension_mode
     click_world(v, 20.0, 10.0)
 
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
 
 
 def test_deleting_shape_removes_dimensions_that_reference_it(qapp):
@@ -70,7 +70,7 @@ def test_deleting_shape_removes_dimensions_that_reference_it(qapp):
             },
         }
     ]
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
 
     assert v.delete_selected() == 1
     assert v._dimensions == []
@@ -92,7 +92,7 @@ def test_angular_dimension_rays_do_not_block_shape_selection(qapp):
     assert not v._dimension_mode
     click_world(v, 8.0, 0.0)
 
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
 
 
 def test_clicking_parametric_circle_creates_diameter_dimension(qapp):
@@ -518,7 +518,7 @@ def test_dimension_placement_is_undoable(qapp):
     # Dimensions share the one undo stack with geometry: placing one is a
     # reversible command, and undo reverts the most recent action first.
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v._duplicate_selected()  # a real, undo-tracked mutation
     assert v.poly_count == 2
 
@@ -633,7 +633,7 @@ def test_gizmo_resize_refreshes_driving_dimension_anchors(qapp):
             },
         }
     ]
-    v._sel = {0}
+    v._sel = {v._entities[0].id}
     assert v._start_gizmo_drag("scale-e", 10.0, 0.0)
     v._apply_gizmo_drag(20.0, 0.0, Qt.KeyboardModifier.NoModifier)
     assert v._dimensions[0]["p2"] == pytest.approx((20.0, 0.0))
@@ -647,7 +647,7 @@ def test_nudging_shape_moves_its_attached_dimension(qapp):
     click_world(v, 15.0, 8.0)
     assert v._dimensions[0].get("driving")
 
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v._nudge_selected(5.0, 7.0)
 
     assert v._dimensions[0]["p1"] == pytest.approx((5.0, 7.0))

@@ -25,14 +25,14 @@ def test_explode_and_merge_disabled_with_no_selection(qapp):
 def test_explode_enables_with_one_selected_merge_needs_two(qapp):
     page = DraftPage(None, {})
     page._canvas.load([square(0, 0)])
-    page._canvas.set_selection([0])
+    page._canvas.set_selection([page._canvas._entities[0].id])
     page._refresh_status()
 
     assert page._explode_btn.isEnabled()
     assert not page._merge_btn.isEnabled()  # merge needs 2+
 
     page._canvas.load([square(0, 0), square(20, 0)])
-    page._canvas.set_selection([0, 1])
+    page._canvas.set_selection([page._canvas._entities[0].id, page._canvas._entities[1].id])
     page._refresh_status()
     assert page._merge_btn.isEnabled()
 

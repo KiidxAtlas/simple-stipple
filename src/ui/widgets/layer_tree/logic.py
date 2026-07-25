@@ -14,68 +14,69 @@ from typing import Any
 
 # ── Type aliases ──────────────────────────────────────────────────────────────
 
-LayerTreeState = dict[str, dict[str, set[int]]]
+LayerTreeState = dict[str, dict[str, set[str]]]
 LayerTreeRow = dict[str, Any]
 LayerRowsBuilder = Callable[[LayerTreeState], list[dict[str, Any]]]
 
 # ── Layer tree helper functions ───────────────────────────────────────────────
 
 
-def hidden_bucket(state: LayerTreeState, layer_name: str) -> set[int]:
-    bucket = state.setdefault(layer_name, {"hidden": set()})
+def hidden_bucket(state: LayerTreeState, layer_name: str) -> set[str]:
+    bucket = state.setdefault(layer_name, {"hidden": set[str]()})
     hidden = bucket.get("hidden")
     if hidden is None:
-        hidden = set()
+        hidden = set[str]()
         bucket["hidden"] = hidden
     return hidden
 
 
-def apply_layer_visibility(hidden: set[int], count: int, visible: bool) -> None:
+def apply_layer_visibility(hidden: set[str], count: int, visible: bool) -> None:
     if visible:
         hidden.clear()
     else:
         hidden.clear()
-        hidden.update(range(max(0, count)))
+        hidden.update(str(i) for i in range(max(0, count)))
 
 
-def apply_shape_visibility(hidden: set[int], idx: int, visible: bool) -> None:
+def apply_shape_visibility(hidden: set[str], entity_id: str, visible: bool) -> None:
     if visible:
-        hidden.discard(idx)
+        hidden.discard(entity_id)
     else:
-        hidden.add(idx)
+        hidden.add(entity_id)
 
 
 def build_shape_rows(
+    entity_ids: list[str],
     polylines: list[list[tuple[float, float]]],
-    hidden: set[int],
-    label_builder: Callable[[int, list[tuple[float, float]]], str],
+    hidden: set[str],
+    label_builder: Callable[[str, list[tuple[float, float]]], str],
     *,
     editable: bool,
     draggable: bool,
-    groups: dict[int, int] | None = None,
+    groups: dict[str, int] | None = None,
     group_labels: dict[int, str] | None = None,
 ) -> list[LayerTreeRow]:
     """Build one tree row per shape — except grouped shapes, which collapse
-    into a single row per group (like an SVG ``<g>``). A group row's key is
-    the tuple of member indices; use :func:`flatten_shape_keys` to resolve
-    keys back to indices."""
+    into a single row per group (like an SVG ``<g``)). A group row's key is
+    the tuple of member entity IDs; use :func:`flatten_shape_keys` to resolve
+    keys back to entity IDs."""
     rows: list[LayerTreeRow] = []
     groups = groups or {}
-    members_by_gid: dict[int, list[int]] = {}
-    for idx in range(len(polylines)):
-        gid = groups.get(idx)
+    members_by_gid: dict[int, list[str]] = {}
+    for eid in entity_ids:
+        gid = groups.get(eid)
         if gid is not None:
-            members_by_gid.setdefault(gid, []).append(idx)
+            members_by_gid.setdefault(gid, []).append(eid)
 
     emitted: set[int] = set()
-    for idx, poly in enumerate(polylines):
-        gid = groups.get(idx)
+    for eid, poly in zip(entity_ids, polylines):
+        gid = groups.get(eid)
         if gid is None:
             rows.append(
                 {
-                    "key": idx,
-                    "label": label_builder(idx, poly),
-                    "visible": idx not in hidden,
+                    "key": eid,
+                    "label": label_builder(eid, poly),
+                    "visible": eid not in hidden,
                     "editable": editable,
                     "draggable": draggable,
                 }
@@ -90,8 +91,8 @@ def build_shape_rows(
         rows.append(
             {
                 "key": tuple(members),
-                "label": f"{idx + 1:02d}  {title}  ·  {len(members)} shapes",
-                "visible": any(i not in hidden for i in members),
+                "label": f"{title}  ·  {len(members)} shapes",
+                "visible": any(e not in hidden for e in members),
                 "editable": editable,
                 "draggable": draggable,
             }
@@ -99,16 +100,16 @@ def build_shape_rows(
     return rows
 
 
-def flatten_shape_keys(keys: object) -> list[int]:
-    """Resolve tree shape keys (ints or group tuples) to shape indices."""
+def flatten_shape_keys(keys: object) -> list[str]:
+    """Resolve tree shape keys (str entity IDs or group tuples) to entity IDs."""
     if not isinstance(keys, (list, tuple, set)):
         keys = [keys]
-    out: list[int] = []
+    out: list[str] = []
     for k in keys:
-        if isinstance(k, int):
+        if isinstance(k, str):
             out.append(k)
         elif isinstance(k, (tuple, list)):
-            out.extend(int(i) for i in k if isinstance(i, int))
+            out.extend(str(i) for i in k if isinstance(i, (str, int)))
     return out
 
 
@@ -134,9 +135,9 @@ def build_layer_row(
     }
 
 
-def describe_polyline(idx: int, poly: list[tuple[float, float]]) -> str:
+def describe_polyline(entity_id: str, poly: list[tuple[float, float]]) -> str:
     if not poly:
-        return f"{idx + 1:02d}  Empty"
+        return f"{entity_id}  Empty"
     xs, ys = zip(*poly)
     width = max(xs) - min(xs)
     height = max(ys) - min(ys)
@@ -146,7 +147,7 @@ def describe_polyline(idx: int, poly: list[tuple[float, float]]) -> str:
         kind = "Closed"
     else:
         kind = "Open"
-    return f"{idx + 1:02d}  {kind}  ·  {point_count} pts  ·  {width:.1f} × {height:.1f} mm"
+    return f"{entity_id}  {kind}  ·  {point_count} pts  ·  {width:.1f} × {height:.1f} mm"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -211,31 +212,30 @@ class CanvasLayerSidebarController:
 
     def _handle_shape_operation(self, op: str, layer: str, keys: list) -> None:
         """Dispatch shape operations from the layer tree to the canvas."""
-        indices = flatten_shape_keys(keys)
-        if not indices:
+        entity_ids = flatten_shape_keys(keys)
+        if not entity_ids:
             return
         canvas = self._canvas
         if op == "group":
-            if hasattr(canvas, "group_indices"):
-                canvas.group_indices(indices)
+            if hasattr(canvas, "group_entities"):
+                canvas.group_entities(entity_ids)
         elif op == "ungroup":
-            if hasattr(canvas, "ungroup_indices"):
-                canvas.ungroup_indices(indices)
+            if hasattr(canvas, "ungroup_entities"):
+                canvas.ungroup_entities(entity_ids)
         elif op == "merge":
             if hasattr(canvas, "merge_selected_segments_to_objects"):
                 # Temporarily select, merge, then restore selection.
-                canvas.set_selection(indices)
+                canvas.set_selection(entity_ids)
                 canvas.merge_selected_segments_to_objects()
         elif op == "copy" and hasattr(canvas, "_clipboard"):
-            ents = canvas._entities
             clip_items = [
                 {
-                    "points": list(ents[i].points),
-                    "kind": ents[i].kind,
-                    "meta": ents[i].meta,
+                    "points": list(canvas._entities_by_id[eid].points),
+                    "kind": canvas._entities_by_id[eid].kind,
+                    "meta": canvas._entities_by_id[eid].meta,
                 }
-                for i in indices
-                if 0 <= i < len(ents)
+                for eid in entity_ids
+                if eid in canvas._entities_by_id
             ]
             canvas._clipboard = clip_items
 
@@ -247,7 +247,7 @@ class CanvasLayerSidebarController:
         self._layer_view_state = {}
         self._shape_counts = {}
 
-    def hidden_for(self, layer_name: str) -> set[int]:
+    def hidden_for(self, layer_name: str) -> set[str]:
         return hidden_bucket(self._layer_view_state, layer_name)
 
     def apply_current_visibility(self) -> None:
@@ -255,7 +255,7 @@ class CanvasLayerSidebarController:
             return  # hidden flags live on the entities themselves
         active_name = self._get_active_layer_name()
         hidden = sorted(self.hidden_for(active_name))
-        self._canvas.set_hidden_indices(hidden)
+        self._canvas.set_hidden_ids(hidden)
 
     def refresh_tree(self) -> None:
         rows = self._build_rows(self._layer_view_state)
@@ -271,7 +271,7 @@ class CanvasLayerSidebarController:
         # the active layer, which triggers a refresh right after the shape
         # selection was set; without this, the tree would show only the
         # newly-active LAYER highlighted, not the actual selected shape).
-        get_indices = getattr(self._canvas, "get_selection_indices", None)
+        get_indices = getattr(self._canvas, "get_selected_ids", None)
         select_keys = getattr(self._layers_tree, "select_shape_keys", None)
         if callable(get_indices) and callable(select_keys):
             select_keys(get_indices())
@@ -292,16 +292,16 @@ class CanvasLayerSidebarController:
         shape_key: object,
         visible: bool,
     ) -> None:
-        indices = flatten_shape_keys(shape_key)
-        if not indices:
+        entity_ids = flatten_shape_keys(shape_key)
+        if not entity_ids:
             return
         if self._visibility_adapter is not None:
-            self._visibility_adapter.set_shapes_hidden(indices, not visible)
+            self._visibility_adapter.set_shapes_hidden(entity_ids, not visible)
             self._on_visibility_changed()
             return
         hidden = self.hidden_for(layer)
-        for idx in indices:
-            apply_shape_visibility(hidden, idx, visible)
+        for entity_id in entity_ids:
+            apply_shape_visibility(hidden, entity_id, visible)
         self.apply_current_visibility()
         self._on_visibility_changed()
 

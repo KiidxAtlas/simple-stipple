@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from src.backend.persistence import (
+from src.core.storage import (
     MAX_WORKSPACE_FILE_BYTES,
     read_json_file,
     write_json_file_atomic,

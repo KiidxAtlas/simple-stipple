@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.settings import DEFAULT_KEYBINDINGS, DEFAULT_RADIAL_MENU_TOOLS
-from src.ui.canvas.interaction import commands as canvas_commands
+from src.ui.canvas import commands as canvas_commands
 from src.ui.components import download_icon, gear_icon, info_chip, surface_frame
 from src.ui.widgets.dialogs.command_palette import CommandPaletteDialog
 from src.ui.widgets.dialogs.settings_dialog import SettingsDialog
@@ -256,9 +256,7 @@ class MenuController:
             "Open saved workspaces, recent files, and recovery snapshots"
         )
         self._app._workspace_title_label.setAccessibleName("Current workspace")
-        self._app._workspace_title_label.clicked.connect(
-            self._app._open_saved_workspaces
-        )
+        self._app._workspace_title_label.clicked.connect(self._app._open_saved_workspaces)
         layout.addWidget(self._app._workspace_title_label)
 
         # Status chip
@@ -616,9 +614,7 @@ class CommandController:
             if command.hidden or command.keybinding_id in represented_bindings:
                 continue
             category = command.category or "Canvas"
-            enabled = active_canvas is not None and canvas_commands.can_run(
-                active_canvas, command
-            )
+            enabled = active_canvas is not None and canvas_commands.can_run(active_canvas, command)
             reason = (
                 "Open a canvas page first"
                 if active_canvas is None
@@ -666,10 +662,8 @@ class CommandController:
                 item.setdefault("enabled", True)
                 item.setdefault("disabled_reason", "")
                 callback = item["run"]
-                item["run"] = (
-                    lambda page_id=spec.page_id, run=callback: self._run_page_command(
-                        page_id, run
-                    )
+                item["run"] = lambda page_id=spec.page_id, run=callback: self._run_page_command(
+                    page_id, run
                 )
                 entries.append(item)
         return entries

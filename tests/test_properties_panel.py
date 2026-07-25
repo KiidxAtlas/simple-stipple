@@ -20,7 +20,7 @@ def make_panel(qapp, polys):
 def test_panel_reflects_selection(qapp):
     canvas, panel = make_panel(qapp, [square(10, 20)])
     assert panel._summary.text() == "No selection"
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert panel._x.text() == "10.00"
     assert panel._y.text() == "20.00"
     assert panel._w.text() == "10.00"
@@ -43,7 +43,7 @@ def test_panel_uses_contextual_scrollable_property_groups(qapp):
     assert panel._selection_constraints_section._title == "Constraints / Dimensions"
     assert panel._actions_section._title == "Actions"
 
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel.refresh()
     assert not panel._shape_section.isVisibleTo(panel)
     assert not panel._selection_constraints_section.isVisibleTo(panel)
@@ -67,7 +67,7 @@ def test_panel_stacks_action_grids_below_260_pixels(qapp):
 
 def test_panel_moves_selection(qapp):
     canvas, panel = make_panel(qapp, [square(0, 0)])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel._x.setText("25")
     panel._commit_pos()
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
@@ -77,7 +77,7 @@ def test_panel_moves_selection(qapp):
 
 def test_panel_resizes_selection(qapp):
     canvas, panel = make_panel(qapp, [square(0, 0)])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel._w.setText("40")
     panel._commit_size("w")
     x0, y0, x1, y1 = bbox(canvas._entities[0].points)
@@ -126,7 +126,7 @@ def test_aspect_lock_toggle_syncs_with_canvas_flag(qapp):
 
 def test_aspect_lock_keeps_width_and_height_proportional(qapp):
     canvas, panel = make_panel(qapp, [square(0, 0, s=10.0)])  # 10x10 square
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel._aspect_lock_btn.setChecked(True)
 
     panel._w.setText("40")
@@ -147,7 +147,7 @@ def test_aspect_lock_applies_to_gizmo_edge_drag(qapp):
 
     canvas, panel = make_panel(qapp, [square(0, 0, s=10.0)])
     canvas.fit()
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.set_aspect_ratio_locked(True)
 
     assert canvas._start_gizmo_drag("scale-e", 10.0, 5.0)
@@ -166,7 +166,7 @@ def test_panel_edits_circle_radius(qapp):
     click_world(canvas, 50.0, 50.0)
     click_world(canvas, 60.0, 50.0)
     canvas.set_mode("select")
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel.refresh()
     assert panel._param_edits and "radius" in panel._param_edits
     panel._param_edits["radius"].setText("20")
@@ -183,7 +183,7 @@ def test_panel_edits_circle_radius(qapp):
 
 def test_panel_rotate_via_field(qapp):
     canvas, panel = make_panel(qapp, [square(0, 0)])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel._rot.setText("45")
     panel._commit_rotation()
     import math
@@ -211,7 +211,7 @@ def test_panel_shows_live_slot_angle_after_gizmo_rotation(qapp):
             }
         ]
     )
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas._start_gizmo_drag("rotate", 10.0, 5.0)
     canvas._apply_gizmo_drag(5.0, 10.0, Qt.KeyboardModifier.NoModifier)
     assert canvas._entities[0].meta["rotation"] == pytest.approx(90.0)
@@ -227,7 +227,7 @@ def test_panel_shows_live_slot_angle_after_gizmo_rotation(qapp):
 )
 def test_panel_recognizes_hand_drawn_closed_shapes(qapp, points, label):
     canvas, panel = make_panel(qapp, [points])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas._entities[0].kind == "polyline"
     assert panel._summary.text() == label
 
@@ -241,7 +241,7 @@ def test_panel_edits_ellipse_radius(qapp):
     click_world(canvas, 50.0, 50.0)
     click_world(canvas, 70.0, 60.0)
     canvas.set_mode("select")
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel.refresh()
     assert "rx" in panel._param_edits
     panel._param_edits["rx"].setText("30")
@@ -261,7 +261,7 @@ def test_property_expression_preserves_parametric_width_and_focus_highlights(qap
             }
         ]
     )
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     panel.refresh()
     panel.show()
     panel._w.setFocus()

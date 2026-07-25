@@ -1,0 +1,1 @@
+"""Pattern tab domain logic."""

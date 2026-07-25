@@ -18,11 +18,12 @@ from typing import Any, Literal, cast
 import ezdxf  # type: ignore[attr-defined]
 from ezdxf.math import ConstructionArc  # type: ignore[attr-defined]
 
-from ..persistence import atomic_write_via
+from src.backend.cad.constants import FVI_CLOSE_TOL_MM
+
+from src.core.storage import atomic_write_via
 
 FVI_UNIT_MM = 0.254
 _ARC_SAGITTA_FVI = 0.01 / FVI_UNIT_MM
-_DXF_CLOSE_TOL_MM = 0.01
 _NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 _COMMAND = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\s*(.*)$")
 
@@ -520,7 +521,7 @@ def convert_fvi_to_dxf(src: Path, dst: Path) -> FviImportReport:
     modelspace = doc.modelspace()
     for path in parsed.paths:
         points = list(path)
-        closed = len(points) >= 3 and math.dist(points[0], points[-1]) <= _DXF_CLOSE_TOL_MM
+        closed = len(points) >= 3 and math.dist(points[0], points[-1]) <= FVI_CLOSE_TOL_MM
         if closed:
             points = points[:-1]
         if len(points) >= 2:

@@ -21,8 +21,9 @@ def test_union_welds(qapp):
     assert result.changed
     assert set(result.removed_ids) == source_ids
     assert result.created_ids == result.selected_ids
-    assert {v._entities[index].id for index in v._sel} == set(result.selected_ids)
-    x0, y0, x1, y1 = bbox(v._entities[0].points)
+    assert {entity.id for entity in v._entities if entity.id in v._sel} == set(result.selected_ids)
+    first = next(entity for entity in v._entities if entity.id in v._sel)
+    x0, y0, x1, y1 = bbox(first.points)
     assert (x1 - x0, y1 - y0) == (pytest.approx(15.0), pytest.approx(15.0))
     assert v.undo()
     assert v.poly_count == 2

@@ -21,7 +21,7 @@ from PySide6.QtGui import QKeyEvent, QMouseEvent
 
 
 def make_view(qapp, polys=None, size=(800, 600)):
-    from src.ui.canvas.view import CanvasView
+    from src.ui.canvas.view.main import CanvasView
 
     v = CanvasView()
     v.resize(*size)
@@ -84,7 +84,7 @@ def test_geometry_has_priority_over_unselected_background_image(qapp):
     click_world(canvas, 0.0, 5.0)
 
     assert not canvas.is_background_image_selected()
-    assert canvas._sel == {0}
+    assert canvas._sel == {canvas._entities[0].id}
 
 
 def test_background_image_exposes_rotation_handle_and_selection_signal(qapp):
@@ -163,14 +163,14 @@ def test_semantic_selection_filters(qapp):
         ]
     )
     assert canvas.select_geometry_category("parametric") == 1
-    assert canvas._sel == {1}
+    assert canvas._sel == {canvas._entities[1].id}
     assert canvas.select_geometry_category("construction") == 1
-    assert canvas._sel == {2}
+    assert canvas._sel == {canvas._entities[2].id}
 
 
 def test_selection_geometry_reports_length_area_and_circle_diameter(qapp):
     canvas = make_canvas(qapp, [[(0, 0), (10, 0), (10, 5), (0, 5), (0, 0)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     info = canvas.selection_geometry()
     assert info is not None
     assert info["length"] == pytest.approx(30)
@@ -179,7 +179,7 @@ def test_selection_geometry_reports_length_area_and_circle_diameter(qapp):
     canvas.set_entity_records(
         [{"points": [], "kind": "circle", "meta": {"center": (0, 0), "radius": 4}}]
     )
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     assert canvas.selection_geometry()["diameter"] == pytest.approx(8)
 
 
@@ -192,7 +192,7 @@ def test_selection_geometry_reports_minimum_clearance(qapp):
             [(20, 0), (22, 0), (22, 2), (20, 2), (20, 0)],
         ],
     )
-    canvas.set_selection([0, 1, 2])
+    canvas.set_selection([canvas._entities[0].id, canvas._entities[1].id, canvas._entities[2].id])
     info = canvas.selection_geometry()
     assert info is not None
     assert info["clearance"] == pytest.approx(3)
@@ -208,7 +208,7 @@ def test_entity_identity_round_trips_through_canvas_records(qapp):
 
 def test_hidden_geometry_is_not_an_invisible_snap_target(qapp):
     canvas = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0)], [(50.0, 50.0), (60.0, 50.0)]])
-    canvas.set_hidden_indices([0])
+    canvas.set_hidden_ids([canvas._entities[0].id])
     cx, cy = canvas._w2c(0.0, 0.0)
     assert canvas._snap_engine.query(cx, cy, 0.0, 0.0, allow_grid=False) is None
 
@@ -253,21 +253,23 @@ def test_array_along_path_places_copies_at_both_ends_and_middle(qapp):
     source = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]
     path = [(10.0, 10.0), (110.0, 10.0)]
     canvas = make_canvas(qapp, [source, path])
-    canvas.set_selection([0, 1])
+    canvas.set_selection([canvas._entities[0].id, canvas._entities[1].id])
     canvas._show_hud_prompt = lambda _label, _default, callback, **_kwargs: callback(3.0)
 
     canvas._array_duplicate_along_path()
 
     assert len(canvas._entities) == 5
     centers = []
-    for index in sorted(canvas._sel):
-        points = canvas._entities[index].points
+    for entity_id in canvas._sel:
+        entity = next(e for e in canvas._entities if e.id == entity_id)
+        points = entity.points
         centers.append(
             (
                 (min(x for x, _ in points) + max(x for x, _ in points)) / 2.0,
                 (min(y for _, y in points) + max(y for _, y in points)) / 2.0,
             )
         )
+    centers.sort()
     assert centers == pytest.approx([(10.0, 10.0), (60.0, 10.0), (110.0, 10.0)])
 
 
@@ -286,7 +288,7 @@ def test_rounding_parametric_rectangle_demotes_stale_metadata(qapp):
     entity = canvas._entities[0]
     assert entity.kind == "polyline"
     assert entity.meta is None
-    assert canvas._flattened_points(0) == entity.points
+    assert canvas._flattened_points(entity.id) == entity.points
 
 
 @pytest.mark.parametrize("tool", ["rounded_rectangle", "star"])
@@ -344,7 +346,7 @@ def test_arc_only_exposes_quadrants_on_its_sweep(qapp):
     )
     from src.ui.canvas.snap import ShapeSnapEngine
 
-    candidates = ShapeSnapEngine.get_snap_candidates(canvas._snap_shapes()[0])
+    candidates = ShapeSnapEngine.get_snap_candidates(next(iter(canvas._snap_shapes().values())))
     roles = {role for _x, _y, role in candidates}
     assert "quadrant_north" in roles
     assert "quadrant_west" in roles
@@ -466,7 +468,7 @@ def test_add_polylines_state_preserves_existing_entities(qapp):
     assert v.poly_count == 3
     v.add_polylines_state([square(100, 100)], fit=True)
     assert v.poly_count == 4
-    assert v.get_selection_indices() == [3]
+    assert v.get_selected_ids() == [v._entities[3].id]
     # the original three squares are untouched
     assert [tuple(p) for p in v._entities[0].points] == THREE_SQUARES[0]
 
@@ -496,7 +498,7 @@ def test_view_state_round_trip(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v._scale = 3.5
     v._ox, v._oy = 12.0, 34.0
-    v.set_hidden_indices([1])
+    v.set_hidden_ids([v._entities[1].id])
     st = v.get_view_state()
     v2 = make_view(qapp, THREE_SQUARES)
     v2.set_view_state(st)
@@ -511,37 +513,37 @@ def test_view_state_round_trip(qapp):
 def test_click_selects_and_empty_click_deselects(qapp):
     v = make_view(qapp, THREE_SQUARES)
     click_world(v, 5.0, 0.0)  # on first square's bottom edge
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
     click_world(v, 45.0, -20.0)  # empty space
-    assert v.get_selection_indices() == []
+    assert v.get_selected_ids() == []
 
 
 def test_shift_click_adds_to_selection(qapp):
     v = make_view(qapp, THREE_SQUARES)
     click_world(v, 5.0, 0.0)
     click_world(v, 35.0, 0.0, mods=SHIFT)
-    assert v.get_selection_indices() == [0, 1]
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[0].id, v._entities[1].id])
 
 
 def test_select_all_and_invert(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v.select_all()
-    assert v.get_selection_indices() == [0, 1, 2]
-    v.set_selection([0])
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[0].id, v._entities[1].id, v._entities[2].id])
+    v.set_selection([v._entities[0].id])
     v._invert_selection()
-    assert v.get_selection_indices() == [1, 2]
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[1].id, v._entities[2].id])
     v.deselect_all()
-    assert v.get_selection_indices() == []
+    assert v.get_selected_ids() == []
 
 
 def test_hidden_poly_not_clickable_locked_not_moved(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_hidden_indices([0])
+    v.set_hidden_ids([v._entities[0].id])
     click_world(v, 5.0, 0.0)
-    assert v.get_selection_indices() == []
+    assert v.get_selected_ids() == []
 
-    v.set_hidden_indices([])
-    v.set_locked_indices([1])
+    v.set_hidden_ids([])
+    v.set_locked_ids([v._entities[1].id])
     before = [tuple(p) for p in v._entities[1].points]
     drag_world(v, 35.0, 0.0, 45.0, 15.0)  # try to drag the locked square
     assert [tuple(p) for p in v._entities[1].points] == before
@@ -549,11 +551,11 @@ def test_hidden_poly_not_clickable_locked_not_moved(qapp):
 
 def test_group_click_selects_whole_group(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0, 1])
+    v.set_selection([v._entities[0].id, v._entities[1].id])
     v._group_selected()
     v.deselect_all()
     click_world(v, 5.0, 0.0)
-    assert v.get_selection_indices() == [0, 1]
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[0].id, v._entities[1].id])
     v._ungroup_selected()
     assert all(e.group is None for e in v._entities)
 
@@ -565,7 +567,7 @@ def test_delete_undo_redo_preserves_flags(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v._entities[2].hidden = True
     v._entities[1].group = 3
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.delete_selected() == 1
     assert v.poly_count == 2
     assert v.undo()
@@ -579,7 +581,7 @@ def test_delete_undo_redo_preserves_flags(qapp):
 def test_drag_move_translates_and_undo_restores(qapp):
     v = make_view(qapp, THREE_SQUARES)
     click_world(v, 5.0, 0.0)
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
     before = [tuple(p) for p in v._entities[0].points]
     drag_world(v, 5.0, 0.0, 20.0, 15.0)  # grab the bottom edge, move
     after = [tuple(p) for p in v._entities[0].points]
@@ -595,7 +597,7 @@ def test_drag_move_translates_and_undo_restores(qapp):
 
 def test_each_nudge_is_a_reversible_command(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     before = [tuple(p) for p in v._entities[0].points]
     key(v, Qt.Key.Key_Right)
     key(v, Qt.Key.Key_Right)
@@ -613,13 +615,13 @@ def test_each_nudge_is_a_reversible_command(qapp):
 
 def test_copy_paste_and_duplicate(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v._copy_selected()
     v._paste_clipboard()
     assert v.poly_count == 4
     # paste selects the new entity
-    assert v.get_selection_indices() == [3]
-    v.set_selection([1])
+    assert v.get_selected_ids() == [v._entities[3].id]
+    v.set_selection([v._entities[1].id])
     v.duplicate_selected()
     assert v.poly_count == 5
     assert v.undo() and v.undo()
@@ -628,7 +630,7 @@ def test_copy_paste_and_duplicate(qapp):
 
 def test_plain_paste_preserves_position_while_offset_paste_moves_five_mm(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     original = list(v._entities[0].points)
     v._copy_selected()
     v._paste_clipboard()
@@ -642,7 +644,7 @@ def test_clipboard_is_shared_across_canvas_instances(qapp):
     instance, so the clipboard can't be plain per-instance state or a copy
     in one tab silently pastes nothing in another."""
     draft = make_view(qapp, THREE_SQUARES)
-    draft.set_selection([0])
+    draft.set_selection([draft._entities[0].id])
     draft._copy_selected()
 
     pattern = make_view(qapp, [])  # a different tab's canvas
@@ -653,7 +655,7 @@ def test_clipboard_is_shared_across_canvas_instances(qapp):
 
 def test_cut_removes_and_paste_restores_geometry(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([2])
+    v.set_selection([v._entities[2].id])
     orig = [tuple(p) for p in v._entities[2].points]
     v._cut_selected()
     assert v.poly_count == 2
@@ -675,7 +677,7 @@ def test_align_left(qapp):
 
 def test_rotate_selected_keeps_center(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.rotate_selected(45.0)
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     assert (x0 + x1) / 2 == pytest.approx(5.0, abs=1e-6)
@@ -686,7 +688,7 @@ def test_rotate_selected_keeps_center(qapp):
 
 def test_mirror_selected(qapp):
     v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0), (10.0, 5.0)]])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.mirror_selected("horizontal")
     # mirrored about the selection bbox center (x=5)
     assert v._entities[0].points[0][0] == pytest.approx(10.0)
@@ -695,7 +697,7 @@ def test_mirror_selected(qapp):
 
 def test_set_selected_width_scales_uniformly(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v._set_selected_width(20.0)
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     assert x1 - x0 == pytest.approx(20.0)
@@ -704,7 +706,7 @@ def test_set_selected_width_scales_uniformly(qapp):
 def test_offset_selected_adds_offset_copy(qapp):
     v = make_view(qapp, [square(0, 0)])
     source_id = v._entities[0].id
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.offset_selected(2.0) >= 1
     assert v.poly_count >= 2
     result = v._last_operation_result
@@ -712,7 +714,9 @@ def test_offset_selected_adds_offset_copy(qapp):
     assert result.metadata == {"distance": 2.0}
     assert result.created_ids == result.selected_ids
     assert source_id not in result.created_ids
-    assert {v._entities[index].id for index in v._sel} == set(result.selected_ids)
+    assert {v._entity_for_id(index).id for index in v._sel if v._entity_for_id(index)} == set(
+        result.selected_ids
+    )
     # outward offset of a 10mm square is a 14mm-wide ring (with round joins)
     x0, y0, x1, y1 = bbox(v._entities[-1].points)
     assert x1 - x0 == pytest.approx(14.0, abs=0.5)
@@ -720,7 +724,7 @@ def test_offset_selected_adds_offset_copy(qapp):
 
 def test_offset_hud_previews_without_mutating_and_cancel_clears(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     original = [list(entity.points) for entity in v._entities]
 
     v._prompt_offset_selected()
@@ -739,7 +743,7 @@ def test_offset_hud_previews_without_mutating_and_cancel_clears(qapp):
 
 def test_close_and_open_polylines(qapp):
     v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.close_selected_polylines() == 1
     pts = v._entities[0].points
     assert pts[0] == pts[-1]
@@ -750,7 +754,7 @@ def test_close_and_open_polylines(qapp):
 
 def test_explode_then_merge_rectangle(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.explode_selected_to_segments() == 4
     assert v.poly_count == 4
     v.select_all()
@@ -767,7 +771,7 @@ def test_merge_preserves_source_layer_and_tree_identity(qapp):
         entity.layer = "Engrave"
     first_id = v._entities[0].id
     v.set_active_layer("Engrave")
-    v.set_selection([0, 1])
+    v.set_selection([v._entities[0].id, v._entities[1].id])
 
     assert v.merge_selected_segments_to_objects() == 1
     assert v.poly_count == 1
@@ -816,7 +820,8 @@ def test_closed_shape_tool_carves_existing_region(qapp):
     # Outer boundary, carved inner boundary, and the retained editable cutter.
     assert v.poly_count == 3
     assert all(v._is_poly_closed(entity.points) for entity in v._entities)
-    assert v._entities[next(iter(v._sel))].kind == "rectangle"
+    sel_entity = next(e for e in v._entities if e.id in v._sel)
+    assert sel_entity.kind == "rectangle"
 
 
 def test_circle_tool_carves_existing_region(qapp):
@@ -830,7 +835,8 @@ def test_circle_tool_carves_existing_region(qapp):
     assert v._draw_ops._commit_shape_preview()
     assert v.poly_count == 3
     assert all(v._is_poly_closed(entity.points) for entity in v._entities)
-    assert v._entities[next(iter(v._sel))].kind == "circle"
+    sel_entity = next(e for e in v._entities if e.id in v._sel)
+    assert sel_entity.kind == "circle"
 
 
 def test_quick_drag_circle_also_carves_existing_region(qapp):
@@ -847,7 +853,8 @@ def test_quick_drag_circle_also_carves_existing_region(qapp):
 
     assert v.poly_count == 3
     assert all(v._is_poly_closed(entity.points) for entity in v._entities)
-    assert v._entities[next(iter(v._sel))].kind == "circle"
+    sel_entity = next(e for e in v._entities if e.id in v._sel)
+    assert sel_entity.kind == "circle"
 
 
 def test_closed_bezier_carves_existing_region(qapp):
@@ -858,7 +865,8 @@ def test_closed_bezier_carves_existing_region(qapp):
 
     assert v._selection_service._finish_pen(close=True)
     assert v.poly_count == 3
-    assert v._entities[next(iter(v._sel))].kind == "bezier"
+    sel_entity = next(e for e in v._entities if e.id in v._sel)
+    assert sel_entity.kind == "bezier"
 
 
 def test_construction_bezier_never_cuts(qapp):
@@ -895,14 +903,12 @@ def test_enclosing_shape_does_not_erase_contained_regions(qapp):
     v._draw_split_enabled = True
     enclosing = square(0.0, 0.0, 20.0)
 
-    assert v._selection_service._commit_drawn_polyline(
-        enclosing, primitive="polyline", close=True
-    )
+    assert v._selection_service._commit_drawn_polyline(enclosing, primitive="polyline", close=True)
     assert v.poly_count == 3
     assert v._entities[0].points == inner_a
     assert v._entities[1].points == inner_b
     assert v._entities[2].points == enclosing
-    assert v._sel == {2}
+    assert v._sel == {v._entities[2].id}
 
 
 @pytest.mark.parametrize(
@@ -1002,14 +1008,15 @@ def test_edit_drag_vertex(qapp):
 def test_shift_drag_rubber_band_selects_contained(qapp):
     v = make_view(qapp, THREE_SQUARES)
     drag_world(v, -5.0, -5.0, 45.0, 15.0, mods=SHIFT)
-    assert v.get_selection_indices() == [0, 1]
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[0].id, v._entities[1].id])
 
 
 def test_edit_mode_band_select_does_not_require_shift(qapp):
     v = make_view(qapp, THREE_SQUARES)
     v.set_mode("edit")
     drag_world(v, -5.0, -5.0, 15.0, 15.0)  # encloses square(0, 0) only, no modifier
-    assert {pi for pi, _ in v._edit_selected_verts} == {0}
+    first_entity_id = v._entities[0].id
+    assert {eid for eid, _ in v._edit_selected_verts} == {first_entity_id}
     assert len(v._edit_selected_verts) >= 4
 
 
@@ -1081,7 +1088,7 @@ def test_scale_by_reference_affects_only_selection_and_keeps_first_point_fixed(q
     from PySide6.QtWidgets import QLineEdit
 
     v = make_view(qapp, [square(10, 0), square(100, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v._measure_anchor = (10.0, 0.0)
     v._measure_end = (20.0, 0.0)
     v._measure_edit = QLineEdit(v)
@@ -1098,8 +1105,8 @@ def test_scale_by_reference_affects_only_selection_and_keeps_first_point_fixed(q
 
 def test_scale_by_reference_does_not_fall_back_to_everything_for_locked_selection(qapp):
     v = make_view(qapp, [square(0, 0), square(20, 0)])
-    v.set_locked_indices([0])
-    v.set_selection([0])
+    v.set_locked_ids([v._entities[0].id])
+    v.set_selection([v._entities[0].id])
 
     assert not v.scale_by_reference(2.0, (0.0, 0.0))
     assert v._entities[0].points == square(0, 0)
@@ -1147,7 +1154,7 @@ def test_selection_dimension_editor_stays_inside_canvas_at_edge(qapp):
     from PySide6.QtCore import QRectF
 
     v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0)]], size=(320, 220))
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
 
     v._show_sel_dim_editor("l", QRectF(305, 210, 40, 18))
 
@@ -1160,7 +1167,7 @@ def test_selection_dimension_editor_stays_inside_canvas_at_edge(qapp):
 def test_size_hud_stays_grouped_and_inside_canvas(qapp):
     c = make_canvas(qapp, [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]])
     c.resize(320, 220)
-    c.set_selection([0])
+    c.set_selection([c._entities[0].id])
     c._ox = 310
     c._oy = 210
 
@@ -1213,7 +1220,7 @@ def test_escape_exits_locked_scale_mode_even_when_target_input_has_focus(qapp):
 
 def test_status_summary_counts(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0, 2])
+    v.set_selection([v._entities[0].id, v._entities[2].id])
     s = v.get_status_summary()
     assert s["object_count"] == 3
     assert s["selected_count"] == 2
@@ -1225,7 +1232,7 @@ def test_zoom_helpers(qapp):
     z0 = v.get_zoom_percent()
     v._zoom_by(2.0)
     assert v.get_zoom_percent() == pytest.approx(z0 * 2, rel=0.05)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.fit_selection()
 
 
@@ -1268,7 +1275,7 @@ def test_text_entity_add_and_records(qapp):
 
 def test_command_registry_keymap_matches_events(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     key(v, Qt.Key.Key_Delete)
     assert v.poly_count == 2
     key(v, Qt.Key.Key_Z, mods=Qt.KeyboardModifier.ControlModifier)
@@ -1301,9 +1308,9 @@ def test_command_registry_single_letter_commands(qapp):
 
 def test_pan_tool_left_drag_moves_view_without_editing_geometry(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     original_polys = v.get_polylines_state()
-    original_selection = v.get_selection_indices()
+    original_selection = v.get_selected_ids()
     ox, oy = v._ox, v._oy
 
     v.set_mode("pan")
@@ -1313,13 +1320,13 @@ def test_pan_tool_left_drag_moves_view_without_editing_geometry(qapp):
 
     assert (v._ox, v._oy) == pytest.approx((ox + 35, oy + 25))
     assert v.get_polylines_state() == original_polys
-    assert v.get_selection_indices() == original_selection
+    assert v.get_selected_ids() == original_selection
     assert v._lmb_prev is None
 
 
 def test_command_registry_group_shortcut(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0, 1])
+    v.set_selection([v._entities[0].id, v._entities[1].id])
     key(v, Qt.Key.Key_G, mods=Qt.KeyboardModifier.ControlModifier)
     assert v._entities[0].group is not None
     key(
@@ -1331,7 +1338,7 @@ def test_command_registry_group_shortcut(qapp):
 
 
 def test_command_registry_no_duplicate_shortcuts(qapp):
-    from src.ui.canvas.interaction import commands
+    from src.ui.canvas import commands
 
     seen = {}
     for c in commands.COMMANDS:
@@ -1344,7 +1351,7 @@ def test_command_registry_no_duplicate_shortcuts(qapp):
 
 
 def test_shortcut_reference_rows_nonempty(qapp):
-    from src.ui.canvas.interaction import commands
+    from src.ui.canvas import commands
 
     rows = commands.shortcut_reference_rows()
     labels = [r[0] for r in rows]
@@ -1370,7 +1377,7 @@ def test_radial_menu_is_a_rebindable_command_not_a_hardcoded_key(qapp):
     """ "Q" must resolve through the canvas Command registry (so it shows up
     in the Keybindings dialog and is rebindable), not a check the tool's
     key() hook shadows before the registry ever sees it."""
-    from src.ui.canvas.interaction import commands as canvas_commands
+    from src.ui.canvas import commands as canvas_commands
 
     cmd = canvas_commands.get("canvas.radial_menu")
     assert cmd.shortcut == "Q"
@@ -1467,7 +1474,7 @@ def test_radial_menu_tools_are_customizable(qapp):
 def test_radial_menu_tools_include_the_full_command_registry(qapp):
     """The pool is "every canvas Command", not just draw primitives — this
     is the point of the redesign (many more options than the original 6)."""
-    from src.ui.canvas.interaction import commands as canvas_commands
+    from src.ui.canvas import commands as canvas_commands
 
     c = make_canvas(qapp, THREE_SQUARES)
     c.set_radial_menu_tools(["edit.undo", "clipboard.copy", "boolean.union"])
@@ -1524,7 +1531,7 @@ def test_radial_menu_paints_long_labels_without_raising(qapp):
 def test_command_history_targets_only_changed_entities(qapp):
     """A move command references only the moved entity, not the document."""
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v._nudge_selected(1.0, 0.0)
     history = v._canvas_service.documents.history
     assert len(history._undo_commands) == 1
@@ -1535,7 +1542,7 @@ def test_command_history_targets_only_changed_entities(qapp):
 
 def test_undo_after_load_is_unavailable(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.delete_selected()
     v.load([square(0, 0)])
     assert not v.undo()  # fresh document, fresh history
@@ -1544,7 +1551,7 @@ def test_undo_after_load_is_unavailable(qapp):
 def test_undo_redo_deep_sequence(qapp):
     v = make_view(qapp, [square(0, 0)])
     for i in range(5):
-        v.set_selection([0])
+        v.set_selection([v._entities[0].id])
         v._duplicate_selected()
     assert v.poly_count == 6
     for _ in range(5):
@@ -1579,48 +1586,48 @@ def test_snap_engine_vertex_and_guides(qapp):
 def test_marquee_no_shift_on_empty_space(qapp):
     v = make_view(qapp, THREE_SQUARES)
     drag_world(v, -5.0, -5.0, 15.0, 15.0)  # plain drag, no Shift
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
 
 
 def test_marquee_window_requires_full_enclosure(qapp):
     v = make_view(qapp, THREE_SQUARES)
     # left→right drag covering all of square 0 but only half of square 1
     drag_world(v, -5.0, -5.0, 36.0, 15.0)
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
 
 
 def test_marquee_crossing_selects_touched(qapp):
     v = make_view(qapp, THREE_SQUARES)
     # right→left drag covering all of square 0 and part of square 1
     drag_world(v, 36.0, 15.0, -5.0, -5.0)
-    assert v.get_selection_indices() == [0, 1]
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[0].id, v._entities[1].id])
 
 
 def test_marquee_crossing_hits_segment_without_vertices(qapp):
     # long horizontal line; marquee crosses its middle, no endpoint inside
     v = make_view(qapp, [[(0.0, 0.0), (100.0, 0.0)]])
     drag_world(v, 55.0, 10.0, 45.0, -10.0)  # right→left box over the middle
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
     v.deselect_all()
     # window drag over the middle must NOT select (not fully enclosed)
     drag_world(v, 45.0, -10.0, 55.0, 10.0)
-    assert v.get_selection_indices() == []
+    assert v.get_selected_ids() == []
 
 
 def test_marquee_pulls_whole_group(qapp):
     v = make_view(qapp, THREE_SQUARES)
-    v.set_selection([1, 2])
+    v.set_selection([v._entities[1].id, v._entities[2].id])
     v._group_selected()
     v.deselect_all()
     drag_world(v, 45.0, 15.0, 25.0, -5.0)  # crossing box over square 1 only
-    assert v.get_selection_indices() == [1, 2]
+    assert sorted(v.get_selected_ids()) == sorted([v._entities[1].id, v._entities[2].id])
 
 
 def test_hover_pre_highlight_tracks_target(qapp):
     v = make_view(qapp, THREE_SQUARES)
     cx, cy = v._w2c(5.0, 0.0)
     move(v, cx, cy, button=Qt.MouseButton.NoButton)
-    assert v._hover_poly == 0
+    assert v._hover_poly == v._entities[0].id
     cx, cy = v._w2c(45.0, -20.0)  # empty space
     move(v, cx, cy, button=Qt.MouseButton.NoButton)
     assert v._hover_poly is None
@@ -1675,7 +1682,7 @@ def _paint_once(view):
 
 def test_handle_scale_corner_uniform(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _paint_once(v)
     handles = dict(v._gizmo_handle_rects)
     assert set(handles) == {"nw", "n", "ne", "e", "se", "s", "sw", "w"}
@@ -1714,7 +1721,7 @@ def test_transient_feedback_anchors_to_world_cursor(qapp):
 
 def test_handle_scale_corner_keeps_anchor(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _paint_once(v)
     handles = dict(v._gizmo_handle_rects)
     rect = handles["se"]  # world (max x, min y); anchor = world (0, 10)
@@ -1733,7 +1740,7 @@ def test_handle_scale_corner_keeps_anchor(qapp):
 
 def test_hud_prompt_offset_inline(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v._prompt_offset_selected()
     assert v._hud_prompt_edit is not None
     v._hud_prompt_edit.setText("2")
@@ -1780,7 +1787,7 @@ def test_double_click_inside_connected_edges_selects_enclosed_profile(qapp):
     canvas = make_canvas(qapp, edges)
     cx, cy = canvas._w2c(5.0, 5.0)
     canvas.mouseDoubleClickEvent(_mouse_event(QEvent.Type.MouseButtonDblClick, cx, cy))
-    assert canvas._sel == {0, 1, 2, 3}
+    assert canvas._sel == {canvas._entities[i].id for i in range(4)}
 
 
 def test_alt_click_cycles_overlapping_geometry(qapp):
@@ -1792,8 +1799,8 @@ def test_alt_click_cycles_overlapping_geometry(qapp):
     first = set(canvas._sel)
     click_world(canvas, 5.0, 0.0, Qt.KeyboardModifier.AltModifier)
     second = set(canvas._sel)
-    assert first == {0}
-    assert second == {1}
+    assert first == {canvas._entities[0].id}
+    assert second == {canvas._entities[1].id}
 
 
 # ── parametric text ──────────────────────────────────────────────────────────
@@ -1807,7 +1814,8 @@ def test_text_carries_params_and_rebuilds(qapp):
     n = v.add_text_at(10.0, 20.0, text="Hi", family=family, height_mm=8.0)
     if n == 0:
         pytest.skip("no usable font on offscreen platform")
-    params = v.text_params_at(0)
+    text_id = next(iter(v._sel))
+    params = v.text_params_at(text_id)
     assert params is not None
     assert params == {
         "text": "Hi",
@@ -1819,8 +1827,9 @@ def test_text_carries_params_and_rebuilds(qapp):
     # anchor stays put across a rebuild with different content
     old_min_x = min(x for e in v._entities for x, _ in e.points)
     old_min_y = min(y for e in v._entities for _, y in e.points)
-    assert v.rebuild_text(0, {**params, "text": "Hello", "height_mm": 8.0})
-    params_after_rebuild = v.text_params_at(0)
+    assert v.rebuild_text(text_id, {**params, "text": "Hello", "height_mm": 8.0})
+    new_text_id = next(iter(v._sel))
+    params_after_rebuild = v.text_params_at(new_text_id)
     assert params_after_rebuild is not None
     assert params_after_rebuild["text"] == "Hello"
     new_min_x = min(x for e in v._entities for x, _ in e.points)
@@ -1828,7 +1837,7 @@ def test_text_carries_params_and_rebuilds(qapp):
     assert new_min_x == pytest.approx(old_min_x, abs=0.5)
     assert new_min_y == pytest.approx(old_min_y, abs=0.5)
     assert v.undo()
-    params_after_undo = v.text_params_at(0)
+    params_after_undo = v.text_params_at(next(iter(v._sel)))
     assert params_after_undo is not None
     assert params_after_undo["text"] == "Hi"
 
@@ -1843,7 +1852,7 @@ def test_selected_circle_drags_as_move_not_vertex_edit(qapp):
     click_world(v, 60.0, 50.0)
     v.set_mode("select")
     click_world(v, 60.0, 50.0)  # select it (click on rim)
-    assert v.get_selection_indices() == [0]
+    assert v.get_selected_ids() == [v._entities[0].id]
     before = bbox(v._entities[0].points)
     drag_world(v, 60.0, 50.0, 75.0, 65.0)  # grab the rim, drag
     after = bbox(v._entities[0].points)
@@ -1856,7 +1865,7 @@ def test_selected_circle_drags_as_move_not_vertex_edit(qapp):
 def test_handle_corner_free_resize(qapp):
     """Corners resize X and Y independently by default."""
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _paint_once(v)
     rect = dict(v._gizmo_handle_rects)["se"]
     cx, cy = rect.center().x(), rect.center().y()
@@ -1871,7 +1880,7 @@ def test_handle_corner_free_resize(qapp):
 
 def test_handle_corner_shift_keeps_aspect(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _paint_once(v)
     rect = dict(v._gizmo_handle_rects)["se"]
     cx, cy = rect.center().x(), rect.center().y()
@@ -1900,20 +1909,20 @@ def test_multi_shape_gizmo_rotate_updates_parametric_geometry(qapp):
             },
         ]
     )
-    v.set_selection([0, 1])
+    v.set_selection([v._entities[0].id, v._entities[1].id])
     assert v._start_gizmo_drag("rotate", 30.0, 5.0)
     v._apply_gizmo_drag(15.0, 20.0, Qt.KeyboardModifier.NoModifier)
     assert [entity.meta["rotation"] for entity in v._entities] == pytest.approx([90.0, 90.0])
     assert [entity.meta["center"] for entity in v._entities] == pytest.approx(
         [(15.0, -5.0), (15.0, 15.0)]
     )
-    for index, entity in enumerate(v._entities):
-        assert bbox(v._flattened_points(index)) == pytest.approx(bbox(entity.points))
+    for entity in v._entities:
+        assert bbox(v._flattened_points(entity.id)) == pytest.approx(bbox(entity.points))
 
 
 def test_shift_snaps_gizmo_rotation_to_fifteen_degree_increment(qapp):
     v = make_view(qapp, [[(0.0, 0.0), (10.0, 0.0)]])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v._start_gizmo_drag("rotate", 10.0, 0.0)
     requested = math.radians(22.0)
 
@@ -1944,7 +1953,7 @@ def test_multi_shape_nonuniform_gizmo_resize_keeps_transformed_geometry(qapp):
             },
         ]
     )
-    v.set_selection([0, 1])
+    v.set_selection([v._entities[0].id, v._entities[1].id])
     assert v._start_gizmo_drag("scale-e", 30.0, 5.0)
     v._apply_gizmo_drag(60.0, 5.0, Qt.KeyboardModifier.NoModifier)
     assert [entity.kind for entity in v._entities] == ["polyline", "polyline"]
@@ -1975,7 +1984,7 @@ def test_rotated_rectangle_uses_local_gizmo_and_preserves_parameters(qapp):
             }
         ]
     )
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _paint_once(v)
     east = dict(v._gizmo_handle_rects)["e"].center()
     target_world = (5 + 15 / math.sqrt(2), 5 + 15 / math.sqrt(2))
@@ -2084,7 +2093,7 @@ def test_explicit_geometry_snap_outranks_inference_within_acquisition_radius(qap
 def test_edit_double_click_adds_visible_vertex_to_procedural_shape(qapp, kind, meta, click_at):
     v = make_view(qapp, [])
     v.set_entity_records([{"points": square(0, 0), "kind": kind, "meta": meta}])
-    before = len(v._flattened_points(0))
+    before = len(v._flattened_points(v._entities[0].id))
     v.set_mode("edit")
     cx, cy = v._w2c(*click_at)
     event = _mouse_event(QEvent.Type.MouseButtonDblClick, cx, cy)
@@ -2094,7 +2103,7 @@ def test_edit_double_click_adds_visible_vertex_to_procedural_shape(qapp, kind, m
     assert entity.meta is None
     assert len(entity.points) == before + 1
     assert len(v._edit_selected_verts) == 1
-    assert next(iter(v._edit_selected_verts))[0] == 0
+    assert next(iter(v._edit_selected_verts))[0] == entity.id
     assert any(math.dist(point, click_at) < 0.2 for point in entity.points)
     assert v.undo()
 
@@ -2103,7 +2112,7 @@ def test_move_drag_snaps_by_shape_vertices(qapp):
     """Dragging by the shape's interior still snaps its corners to other
     shapes' vertices."""
     v = make_view(qapp, [square(0, 0), square(30, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     # grab the first square's bottom edge midpoint (not a corner) and drag
     # near the second square: the dragged square's own corners find the
     # nearest static candidate (here: an edge) even though the grab point
@@ -2117,7 +2126,7 @@ def test_move_drag_snaps_by_shape_vertices(qapp):
 def test_move_drag_snaps_to_guides_by_geometry(qapp):
     v = make_view(qapp, [square(0, 0)])
     v._guides.append(("v", 50.0))
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     drag_world(v, 5.0, 0.0, 44.8, 3.0, steps=6)  # left edge near guide x=50...
     x0, y0, x1, y1 = bbox(v._entities[0].points)
     # one of the square's edges landed exactly on the guide
@@ -2126,7 +2135,7 @@ def test_move_drag_snaps_to_guides_by_geometry(qapp):
 
 def test_smooth_selected_default_is_chaikin(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     before_count = len(v._entities[0].points)
     assert v.smooth_selected(iterations=1) == 1
     # Chaikin roughly doubles vertex count per pass on a closed shape.
@@ -2135,7 +2144,7 @@ def test_smooth_selected_default_is_chaikin(qapp):
 
 def test_smooth_selected_gaussian_preserves_vertex_count(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.set_smoothing_method("gaussian")
     before_count = len(v._entities[0].points)
     assert v.smooth_selected(iterations=2) == 1
@@ -2144,7 +2153,7 @@ def test_smooth_selected_gaussian_preserves_vertex_count(qapp):
 
 def test_smooth_selected_catmull_rom_interpolates_original_vertices(qapp):
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.set_smoothing_method("catmull_rom")
     original = [tuple(p) for p in v._entities[0].points[:-1]]  # drop closure dup
     assert v.smooth_selected(iterations=2) == 1
@@ -2165,10 +2174,10 @@ def test_smooth_command_prompt_seeds_from_and_remembers_last_value(qapp):
     """Regression test: the Smooth HUD prompt used to always show a
     hardcoded "2", forcing the user to retype their preferred value every
     time. It must now seed from (and update) v._smooth_iterations."""
-    from src.ui.canvas.interaction.commands import _smooth_selected
+    from src.ui.canvas.commands import _smooth_selected
 
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v._smooth_iterations == 2
 
     _smooth_selected(v)
@@ -2178,16 +2187,16 @@ def test_smooth_command_prompt_seeds_from_and_remembers_last_value(qapp):
     assert v._smooth_iterations == 5
 
     # next time the prompt opens, it remembers "5" instead of "2".
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _smooth_selected(v)
     assert v._hud_prompt_edit.text() == "5"
 
 
 def test_simplify_command_prompt_seeds_from_and_remembers_last_value(qapp):
-    from src.ui.canvas.interaction.commands import _simplify_selected
+    from src.ui.canvas.commands import _simplify_selected
 
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v._simplify_tolerance == pytest.approx(0.2)
 
     _simplify_selected(v)
@@ -2196,16 +2205,16 @@ def test_simplify_command_prompt_seeds_from_and_remembers_last_value(qapp):
     v._hud_prompt_edit.returnPressed.emit()
     assert v._simplify_tolerance == pytest.approx(1.5)
 
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     _simplify_selected(v)
     assert v._hud_prompt_edit.text() == "1.5"
 
 
 def test_smooth_iterations_change_emits_persistence_signal(qapp):
-    from src.ui.canvas.interaction.commands import _smooth_selected
+    from src.ui.canvas.commands import _smooth_selected
 
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     seen: list[int] = []
     v.smoothIterationsChanged.connect(seen.append)
 
@@ -2224,7 +2233,7 @@ def test_smooth_selected_chaikin_preserves_sharp_spike(qapp):
     pass even though ordinary right-angle corners on the same path do not."""
     spike = [(0, 0), (10, 0), (10, 10), (15, 10), (10, 15), (10, 25), (0, 25)]
     v = make_view(qapp, [spike])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.smooth_selected(iterations=1)
     result = [tuple(p) for p in v._entities[0].points]
     assert any(math.hypot(x - 15, y - 10) < 1e-6 for x, y in result)
@@ -2239,7 +2248,7 @@ def test_smooth_selected_catmull_rom_decimates_dense_straight_runs(qapp):
     dense = [(i * 0.5, 0.0) for i in range(30)] + [(14.5 + i * 0.5, i * 0.5) for i in range(1, 30)]
     dense.append(dense[0])  # close it so it round-trips through load()
     v = make_view(qapp, [dense])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.set_smoothing_method("catmull_rom")
     naive_upper_bound = (len(dense) - 1) * 8
     v.smooth_selected(iterations=2)
@@ -2254,7 +2263,7 @@ def test_lasso_selection_picks_touched_geometry_once(qapp):
     for point in corners[1:]:
         move(v, *point)
     release(v, *corners[0])
-    assert v._sel == {0}
+    assert v._sel == {v._entities[0].id}
     assert not v._lasso_select_enabled
 
 
@@ -2266,7 +2275,7 @@ def test_knife_splits_crossed_open_path_and_undo_restores_it(qapp):
     original_ids = [entity.id for entity in v._entities]
     assert v.knife_cut((-5.0, 0.0), (5.0, 0.0))
     assert len(v._entities) == 3
-    assert v._sel == {0, 1}
+    assert v._sel == {v._entities[0].id, v._entities[1].id}
     assert all(entity.kind == "polyline" for entity in v._entities)
     assert v._entities[0].id == original_ids[0]
     assert v._entities[1].id not in original_ids
@@ -2280,7 +2289,7 @@ def test_knife_splits_crossed_open_path_and_undo_restores_it(qapp):
 
 def test_named_symbol_round_trips_in_view_state_and_inserts_at_cursor(qapp):
     source = make_view(qapp, [square(10, 20)])
-    source.set_selection([0])
+    source.set_selection([source._entities[0].id])
     source.create_symbol_from_selection()
     source._hud_prompt_edit.setText("Badge")
     source._hud_prompt_edit.returnPressed.emit()
@@ -2302,7 +2311,7 @@ def test_named_symbol_round_trips_in_view_state_and_inserts_at_cursor(qapp):
 
 def test_symbols_support_direct_insertion_rename_and_delete(qapp):
     canvas = make_view(qapp, [square(0, 0)])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.create_symbol_from_selection()
     canvas._hud_prompt_edit.setText("Badge")
     canvas._hud_prompt_edit.returnPressed.emit()
@@ -2317,10 +2326,10 @@ def test_symbols_support_direct_insertion_rename_and_delete(qapp):
 
 
 def test_repeat_last_command_replays_registry_action(qapp):
-    from src.ui.canvas.interaction import commands
+    from src.ui.canvas import commands
 
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert commands.run(v, "edit.duplicate")
     assert len(v._entities) == 2
     # A non-repeatable view toggle must not replace the remembered edit.
@@ -2330,12 +2339,14 @@ def test_repeat_last_command_replays_registry_action(qapp):
 
 
 def test_repeat_last_reuses_numeric_operation_parameters(qapp):
-    from src.ui.canvas.interaction import commands
+    from src.ui.canvas import commands
 
     v = make_view(qapp, [square(0, 0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.offset_selected(2.5) == 1
-    first_offset_id = v._entities[next(iter(v._sel))].id
+    first_offset_entity = v._entity_for_id(next(iter(v._sel)))
+    assert first_offset_entity is not None
+    first_offset_id = first_offset_entity.id
 
     assert commands.run(v, "edit.repeat_last")
     assert len(v._entities) == 3
@@ -2344,10 +2355,10 @@ def test_repeat_last_reuses_numeric_operation_parameters(qapp):
 
 
 def test_command_availability_accepts_registry_id_for_context_menus(qapp):
-    from src.ui.canvas.interaction import commands
+    from src.ui.canvas import commands
 
     v = make_canvas(qapp, [[(0, 0), (10, 0)]])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert commands.can_run(v, "path.reverse")
     assert not commands.can_run(v, "path.morph")
 
@@ -2378,7 +2389,7 @@ def test_context_menu_use_as_outline_passes_selected_polylines(qapp, monkeypatch
     canvas = DxfCanvas(on_send_selected_to_pattern=received.append)
     canvas.resize(800, 600)
     canvas.load([square(0, 0)])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.set_context_menu_sections(["share_diagnostics", "view"])
     captured: list[QMenu] = []
     monkeypatch.setattr(QMenu, "popup", lambda menu, _point: captured.append(menu))
@@ -2457,7 +2468,7 @@ def test_edit_mode_context_menu_exposes_corner_operations(qapp, monkeypatch):
     captured: list[QMenu] = []
     monkeypatch.setattr(QMenu, "popup", lambda menu, _point: captured.append(menu))
     canvas = make_canvas(qapp, [square(0, 0)])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.set_mode("edit")
 
     canvas._rightclick_cb(*canvas._w2c(0.0, 0.0))

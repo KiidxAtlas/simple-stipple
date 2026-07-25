@@ -39,7 +39,7 @@ def test_canvas_coordinate_entry_moves_selection_absolute(qapp):
     from tests.test_canvas_behavior import make_canvas
 
     canvas = make_canvas(qapp, [[(1, 1), (3, 1)]])
-    canvas.set_selection([0])
+    canvas.set_selection([canvas._entities[0].id])
     canvas.show_coordinate_entry("10,20")
     canvas._hud_prompt_edit.returnPressed.emit()
     assert canvas._entities[0].points[0] == pytest.approx((10.0, 20.0))

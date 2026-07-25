@@ -20,14 +20,16 @@ from src.backend.cad.editor_geometry import (
     update_entity_parameter,
 )
 from src.backend.cad.geometry import minimum_clearance
+from src.backend.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
 from src.backend.cad.shapes import ShapeFactory
-from src.backend.cad.snapping import (
-    snap_to_polyline as _snap_to_polyline_candidates,
-)
 from src.backend.editing.offset import offset_polyline
 from src.backend.editing.split import split_paths
 from src.backend.editing.transform import scale
-from src.backend.editing.trim_extend import extension_point, trim_polyline, trim_preview
+from src.backend.editing.trim_extend import (
+    extension_point,
+    trim_polyline,
+    trim_preview,
+)
 from src.backend.model.commands import (
     BooleanOpCommand,
     ExplodeCommand,
@@ -37,7 +39,11 @@ from src.backend.model.commands import (
     SplitCommand,
     TransformCommand,
 )
-from src.backend.model.document import EntityRecord, OperationResult, new_entity_id
+from src.backend.model.document import (
+    EntityRecord,
+    OperationResult,
+    new_entity_id,
+)
 
 
 class EditingService:
@@ -56,19 +62,26 @@ class EditingService:
     def _split_geometry_with_line(
         self, new_poly: list[tuple[float, float]]
     ) -> tuple[bool, int, int]:
-        result = split_paths([list(entity.points) for entity in self._host._entities], new_poly)
+        entity_ids = [entity.id for entity in self._host._entities_by_id.values()]
+        result = split_paths(
+            [list(entity.points) for entity in self._host._entities_by_id.values()],
+            new_poly,
+            entity_ids,
+        )
         if not result.changed:
             self._host._last_split_result_indices = set()
             return False, 0, 0
 
-        emitted: dict[int, int] = {}
+        emitted: dict[str, int] = {}
         entities: list[EntityRecord] = []
         changed_indices: set[int] = set()
         for item in result.paths:
-            source = self._host._entities[item.source_index]
-            piece_number = emitted.get(item.source_index, 0)
+            source = self._host._entity_for_id(item.source_id)
+            if source is None:
+                continue
+            piece_number = emitted.get(item.source_id, 0)
             identifier = source.id if piece_number == 0 else new_entity_id()
-            emitted[item.source_index] = piece_number + 1
+            emitted[item.source_id] = piece_number + 1
             entities.append(
                 EntityRecord(
                     points=item.points,
@@ -110,7 +123,9 @@ class EditingService:
             shape = Polygon(cutter).buffer(0)
             if shape.is_empty:
                 continue
-            cutter_shape = shape if cutter_shape is None else cutter_shape.symmetric_difference(shape)
+            cutter_shape = (
+                shape if cutter_shape is None else cutter_shape.symmetric_difference(shape)
+            )
         if cutter_shape is None or cutter_shape.is_empty:
             return False, 0
 
@@ -135,7 +150,7 @@ class EditingService:
         entities: list[EntityRecord] = []
         changed_indices: set[int] = set()
         carved = 0
-        for source in self._host._entities:
+        for source in self._host._entities_by_id.values():
             if not self._is_poly_closed(source.points) or source.locked or source.construction:
                 entities.append(source)
                 continue
@@ -185,8 +200,8 @@ class EditingService:
         return _snap_to_polyline_candidates(
             cx,
             cy,
-            [e.points for e in self._host._entities],
-            self._host._noninteractive_indices(),
+            {eid: e.points for eid, e in self._host._entities_by_id.items()},
+            self._host._noninteractive_ids(),
             self._host._scale,
             self._host._w2c,
             self._host._c2w,
@@ -229,9 +244,9 @@ class EditingService:
         allow_polyline: bool = True,
         allow_grid: bool = True,
         allow_vertex: bool = True,
-        exclude_vertices: set[tuple[int, int]] | None = None,
-        exclude_segments: set[tuple[int, int]] | None = None,
-        exclude_polys: set[int] | None = None,
+        exclude_vertices: set[tuple[str, int]] | None = None,
+        exclude_segments: set[tuple[str, int]] | None = None,
+        exclude_polys: set[str] | None = None,
         reference_point: tuple[float, float] | None = None,
     ) -> tuple[float, float, str] | None:
         return self._host._snap_engine.query(
@@ -255,7 +270,7 @@ class EditingService:
     # ---- Shape preview helpers (inlined from _DrawModeMixin) ----
 
     def _offset_selected(self, distance: float) -> int:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if not indices or abs(distance) <= 1e-9:
             self._host._last_operation_result = OperationResult.unchanged(
                 "Select editable geometry and use a non-zero offset"
@@ -263,12 +278,15 @@ class EditingService:
             return 0
 
         created: list[tuple[list[tuple[float, float]], bool]] = []
-        for idx in indices:
-            poly = self._host._entities[idx].points
+        for eid in indices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
+                continue
+            poly = entity.points
             offset_poly = self._host._offset_polyline(poly, distance)
             if offset_poly is None or len(offset_poly) < 2:
                 continue
-            created.append((offset_poly, self._host._entities[idx].construction))
+            created.append((offset_poly, entity.construction))
         if not created:
             self._host._apply_operation_result(
                 OperationResult.unchanged(
@@ -309,23 +327,23 @@ class EditingService:
         if callable(self._host._on_poly_change):
             self._host._on_poly_change()
 
-    def _ctx_delete_poly(self, idx: int) -> None:
-        if not 0 <= idx < len(self._host._entities):
+    def _ctx_delete_poly(self, entity_id: str) -> None:
+        if entity_id not in self._host._entities_by_id:
             return
-        result = self._host._canvas_service.delete_entities((self._host._entities[idx].id,))
+        result = self._host._canvas_service.delete_entities((entity_id,))
         if not result.changed:
             return
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
 
-    def _ctx_deselect(self, idx: int) -> None:
-        self._host._sel = self._host._sel - {idx}
+    def _ctx_deselect(self, entity_id: str) -> None:
+        self._host._sel = self._host._sel - {entity_id}
         self._host._redraw()
         self._host._notify()
 
-    def _ctx_select(self, idx: int) -> None:
-        self._host._sel = self._host._sel | {idx}
+    def _ctx_select(self, entity_id: str) -> None:
+        self._host._sel = self._host._sel | {entity_id}
         self._host._redraw()
         self._host._notify()
 
@@ -336,7 +354,7 @@ class EditingService:
         ``mode="center"`` spaces bounding-box centers (center-to-center).
         The shape lowest along the axis stays anchored.
         """
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) < 2 or spacing < 0 or mode not in ("gap", "center"):
             return False
         if axis == "horizontal":
@@ -347,21 +365,21 @@ class EditingService:
             return False
 
         keyed = [
-            (idx, self._host._poly_bounds(self._host._entities[idx].points)) for idx in indices
+            (eid, self._host._poly_bounds(self._host._entity_for_id(eid).points)) for eid in indices
         ]
         keyed.sort(key=lambda x: x[1][lo])
 
-        candidates = {index: deepcopy(self._host._entities[index]) for index in indices}
+        candidates = {eid: deepcopy(self._host._entity_for_id(eid)) for eid in indices}
         first_b = keyed[0][1]
         cur_edge = first_b[hi]
         cur_center = (first_b[lo] + first_b[hi]) / 2.0
-        for idx, b in keyed[1:]:
+        for eid, b in keyed[1:]:
             if mode == "center":
                 delta = (cur_center + spacing) - (b[lo] + b[hi]) / 2.0
             else:
                 delta = (cur_edge + spacing) - b[lo]
             dx, dy = (delta, 0.0) if axis == "horizontal" else (0.0, delta)
-            entity = candidates[idx]
+            entity = candidates[eid]
             entity.points = [(x + dx, y + dy) for x, y in entity.points]
             transform_entity_metadata(
                 entity,
@@ -381,14 +399,17 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
-    def _scale_single_line_extent(self, idx: int, axis: str, target: float) -> bool:
+    def _scale_single_line_extent(self, eid: str, axis: str, target: float) -> bool:
         """Uniformly scale a 2-point line about its start point so its extent
         along ``axis`` ("w"/"h") equals ``target``, preserving its angle.
 
         Axis-only scaling would shear the segment and change its angle, so a
         lone line gets proportional scaling instead.
         """
-        (ax, ay), (bx, by) = self._host._entities[idx].points
+        entity = self._host._entity_for_id(eid)
+        if entity is None:
+            return False
+        (ax, ay), (bx, by) = entity.points
         extent = abs(bx - ax) if axis == "w" else abs(by - ay)
         if extent <= 1e-6:
             self._host._show_flash(
@@ -399,7 +420,7 @@ class EditingService:
             )
             return False
         f = max(1e-4, min(1e4, target / extent))
-        entity = deepcopy(self._host._entities[idx])
+        entity = deepcopy(entity)
         entity.points[1] = (ax + (bx - ax) * f, ay + (by - ay) * f)
         if entity.kind == "line" and isinstance(entity.meta, dict):
             entity.meta["start"], entity.meta["end"] = entity.points
@@ -410,14 +431,14 @@ class EditingService:
         return True
 
     def _set_selected_height(self, height: float) -> bool:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None or height <= 0:
             return False
-        if len(indices) == 1 and len(self._host._entities[indices[0]].points) == 2:
+        if len(indices) == 1 and len(self._host._entities_by_id[indices[0]].points) == 2:
             return self._host._scale_single_line_extent(indices[0], "h", height)
         if len(indices) == 1:
-            entity = self._host._entities[indices[0]]
+            entity = self._host._entities_by_id[indices[0]]
             parameter = {
                 "rectangle": ("height", height),
                 "rounded_rectangle": ("height", height),
@@ -436,8 +457,10 @@ class EditingService:
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
         candidates = []
-        for idx in indices:
-            entity = deepcopy(self._host._entities[idx])
+        for eid in indices:
+            entity = deepcopy(self._host._entity_for_id(eid))
+            if entity is None:
+                continue
             entity.kind, entity.meta = "polyline", None
             entity.points = [(cx + (x - cx) * fx, cy + (y - cy) * fy) for x, y in entity.points]
             candidates.append(entity)
@@ -448,14 +471,14 @@ class EditingService:
         return True
 
     def _set_selected_width(self, width: float) -> bool:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None or width <= 0:
             return False
-        if len(indices) == 1 and len(self._host._entities[indices[0]].points) == 2:
+        if len(indices) == 1 and len(self._host._entities_by_id[indices[0]].points) == 2:
             return self._host._scale_single_line_extent(indices[0], "w", width)
         if len(indices) == 1:
-            entity = self._host._entities[indices[0]]
+            entity = self._host._entities_by_id[indices[0]]
             parameter = {
                 "rectangle": ("width", width),
                 "rounded_rectangle": ("width", width),
@@ -474,8 +497,10 @@ class EditingService:
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
         candidates = []
-        for idx in indices:
-            entity = deepcopy(self._host._entities[idx])
+        for eid in indices:
+            entity = deepcopy(self._host._entity_for_id(eid))
+            if entity is None:
+                continue
             entity.kind, entity.meta = "polyline", None
             entity.points = [(cx + (x - cx) * fx, cy + (y - cy) * fy) for x, y in entity.points]
             candidates.append(entity)
@@ -485,31 +510,31 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
-    def _other_linework(self, exclude_idx: int):
+    def _other_linework(self, exclude_entity_id: str):
         """Point lists for every other visible entity (for trim/extend)."""
         return [
             list(entity.points)
-            for index, entity in enumerate(self._host._entities)
-            if index != exclude_idx
-            and self._host._entity_selectable(index)
+            for entity_id, entity in self._host._entities_by_id.items()
+            if entity_id != exclude_entity_id
+            and self._host._entity_selectable(entity_id)
             and len(entity.points) >= 2
         ]
 
     def trim_at(self, cx: float, cy: float) -> bool:
         """Remove the clicked portion of a polyline up to its nearest
         intersections with other shapes."""
-        idx = self._host._find_poly_at(cx, cy)
-        if idx is None:
+        eid = self._host._find_poly_at(cx, cy)
+        if eid is None:
             self._host._apply_operation_result(OperationResult.unchanged("Click a segment to trim"))
             return False
-        if self._host._is_locked(idx):
+        if self._host._is_locked(eid):
             self._host._apply_operation_result(OperationResult.unchanged("Shape is locked"))
             return False
         wx, wy = self._host._c2w(cx, cy)
-        pts = self._host._entities[idx].points
+        pts = self._host._entities_by_id[eid].points
         if len(pts) < 2:
             return False
-        cutters = self._host._other_linework(idx)
+        cutters = self._host._other_linework(eid)
         if not cutters:
             self._host._apply_operation_result(
                 OperationResult.unchanged(
@@ -535,7 +560,7 @@ class EditingService:
             )
             return False
         first, *rest = out
-        source = self._host._entities[idx]
+        source = self._host._entities_by_id[eid]
         replacements = [deepcopy(source)]
         replacements[0].points = first
         replacements[0].kind = "polyline"
@@ -554,17 +579,17 @@ class EditingService:
 
     def preview_trim_at(self, cx: float, cy: float) -> None:
         """Preview the exact segment that a trim click would remove."""
-        idx = self._host._find_poly_at(cx, cy)
-        if idx is None:
+        eid = self._host._find_poly_at(cx, cy)
+        if eid is None:
             self._host._clear_operation_preview()
             return
-        cutters = self._host._other_linework(idx)
+        cutters = self._host._other_linework(eid)
         if not cutters:
             self._host._clear_operation_preview()
             return
         try:
             wx, wy = self._host._c2w(cx, cy)
-            removed = trim_preview(self._host._entities[idx].points, cutters, (wx, wy))
+            removed = trim_preview(self._host._entities_by_id[eid].points, cutters, (wx, wy))
         except (TypeError, ValueError):
             removed = None
         if removed is None:
@@ -574,22 +599,23 @@ class EditingService:
 
     def preview_extend_at(self, cx: float, cy: float) -> None:
         """Preview extension from the nearest open endpoint to its first target."""
-        best: tuple[int, int, float] | None = None
-        for index, entity in enumerate(self._host._entities):
+        best: tuple[str, int, float] | None = None
+        for entity_id, entity in self._host._entities_by_id.items():
             if len(entity.points) < 2 or self._host._is_poly_closed(entity.points):
                 continue
             for endsel in (0, -1):
                 ex, ey = self._host._w2c(*entity.points[endsel])
                 distance = math.hypot(cx - ex, cy - ey)
                 if distance < 18 and (best is None or distance < best[2]):
-                    best = (index, endsel, distance)
+                    best = (entity_id, endsel, distance)
         if best is None:
             self._host._clear_operation_preview()
             return
-        index, endsel, _distance = best
-        points = self._host._entities[index].points
+        entity_id, endsel, _distance = best
+        entity = self._host._entities_by_id[entity_id]
+        points = entity.points
         tip = points[endsel]
-        others = self._host._other_linework(index)
+        others = self._host._other_linework(entity_id)
         if not others:
             self._host._clear_operation_preview()
             return
@@ -614,12 +640,12 @@ class EditingService:
     def extend_at(self, cx: float, cy: float) -> bool:
         """Lengthen the nearest open polyline end to its first intersection
         with another shape."""
-        best: tuple[int, int] | None = None  # (entity idx, 0=start / -1=end)
+        best: tuple[str, int] | None = None  # (entity_id, 0=start / -1=end)
         best_d = 12.0
-        for i, e in enumerate(self._host._entities):
-            if not self._host._entity_selectable(i) or self._host._is_locked(i):
+        for entity_id, entity in self._host._entities_by_id.items():
+            if not self._host._entity_selectable(entity_id) or self._host._is_locked(entity_id):
                 continue
-            pts = e.points
+            pts = entity.points
             if len(pts) < 2 or self._host._is_poly_closed(pts):
                 continue
             for endsel in (0, -1):
@@ -627,7 +653,7 @@ class EditingService:
                 d = math.hypot(cx - ex, cy - ey)
                 if d < best_d:
                     best_d = d
-                    best = (i, endsel)
+                    best = (entity_id, endsel)
         if best is None:
             # Fall back to the polyline under the cursor: extend whichever
             # open end is closer to the click.
@@ -635,22 +661,22 @@ class EditingService:
             if (
                 poly_hit is not None
                 and not self._host._is_locked(poly_hit)
-                and len(self._host._entities[poly_hit].points) >= 2
-                and not self._host._is_poly_closed(self._host._entities[poly_hit].points)
+                and len(self._host._entities_by_id[poly_hit].points) >= 2
+                and not self._host._is_poly_closed(self._host._entities_by_id[poly_hit].points)
             ):
                 wx, wy = self._host._c2w(cx, cy)
-                pts_hit = self._host._entities[poly_hit].points
+                pts_hit = self._host._entities_by_id[poly_hit].points
                 d_start = math.hypot(pts_hit[0][0] - wx, pts_hit[0][1] - wy)
                 d_end = math.hypot(pts_hit[-1][0] - wx, pts_hit[-1][1] - wy)
                 best = (poly_hit, 0 if d_start <= d_end else -1)
         if best is None:
             self._host._show_flash("Click an open polyline to extend", 1100)
             return False
-        idx, endsel = best
-        pts = self._host._entities[idx].points
+        eid, endsel = best
+        pts = self._host._entities_by_id[eid].points
         bx0, by0, bx1, by1 = self._host._bbox()
         reach = max(bx1 - bx0, by1 - by0, 1.0) * 3.0
-        others = self._host._other_linework(idx)
+        others = self._host._other_linework(eid)
         if not others:
             self._host._show_flash("Nothing to extend to", 1100)
             return False
@@ -661,7 +687,7 @@ class EditingService:
         if hit is None:
             self._host._show_flash("No shape in that direction", 1100)
             return False
-        e = deepcopy(self._host._entities[idx])
+        e = deepcopy(self._host._entities_by_id[eid])
         if endsel == 0:
             e.points = [hit] + list(pts)
         else:
@@ -689,14 +715,15 @@ class EditingService:
         """
         indices = [
             i
-            for i in self._host._mutable_selected_indices()
-            if len(self._host._entities[i].points) >= 4
-            and self._host._is_poly_closed(self._host._entities[i].points)
+            for i in self._host._mutable_selected_ids()
+            if (ent := self._host._entity_for_id(i)) is not None
+            and len(ent.points) >= 4
+            and self._host._is_poly_closed(ent.points)
         ]
         if len(indices) < 2:
             self._host._apply_operation_result(OperationResult.unchanged("Select 2+ closed shapes"))
             return 0
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        entity_ids = tuple(indices)
         try:
             result = self._host._canvas_service.execute(
                 BooleanOpCommand(entity_ids=entity_ids, operation=op)
@@ -724,7 +751,7 @@ class EditingService:
 
     def selection_geometry(self) -> dict[str, Any] | None:
         """Bbox + single-entity parameters for the properties panel."""
-        indices = self._host._selected_indices()
+        indices = self._host._selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None:
             return None
@@ -737,8 +764,11 @@ class EditingService:
         }
         total_length = 0.0
         total_area = 0.0
-        for index in indices:
-            points = self._host._entities[index].points
+        for eid in indices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
+                continue
+            points = entity.points
             total_length += sum(math.dist(a, b) for a, b in zip(points, points[1:]))
             if self._host._is_poly_closed(points) and len(points) >= 4:
                 total_area += (
@@ -747,14 +777,23 @@ class EditingService:
         info["length"] = total_length
         info["area"] = total_area
         if 2 <= len(indices) <= 100:
-            clearance = minimum_clearance([self._host._entities[index].points for index in indices])
+            clearance = minimum_clearance(
+                [
+                    self._host._entity_for_id(eid).points
+                    for eid in indices
+                    if self._host._entity_for_id(eid) is not None
+                ]
+            )
             if clearance is not None:
                 info["clearance"] = clearance
         if len(indices) == 1:
-            e = self._host._entities[indices[0]]
+            eid = next(iter(indices))
+            e = self._host._entity_for_id(eid)
+            if e is None:
+                return None
             info["kind"] = e.kind
             info["meta"] = deepcopy(e.meta) if e.meta else {}
-            info["index"] = indices[0]
+            info["entity_id"] = eid
             display_kind = e.kind
             display_meta: dict[str, Any] = info["meta"]  # type: ignore[assignment]
             if e.kind == "polyline":
@@ -795,7 +834,7 @@ class EditingService:
 
     def move_selection_to(self, x: float | None, y: float | None) -> bool:
         """Place the selection bbox's bottom-left corner at (x, y)."""
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None:
             return False
@@ -803,7 +842,7 @@ class EditingService:
         dy = (y - bounds[1]) if y is not None else 0.0
         if abs(dx) < 1e-9 and abs(dy) < 1e-9:
             return False
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
         result = self._host._canvas_service.execute(
             MoveEntityCommand(entity_ids=entity_ids, dx=dx, dy=dy)
         )
@@ -815,13 +854,13 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
-    def set_shape_param(self, idx: int, key: str, value: float) -> bool:
+    def set_shape_param(self, entity_id: str, key: str, value: float) -> bool:
         """Edit a parametric entity's defining parameter and rebuild its
         geometry (circle radius, polygon radius/sides, ellipse rx/ry,
         arc radius). Returns False for non-parametric entities."""
-        if not (0 <= idx < len(self._host._entities)):
+        e = self._host._entity_for_id(entity_id)
+        if e is None:
             return False
-        e = self._host._entities[idx]
         candidate = deepcopy(e)
         if not update_entity_parameter(candidate, key, value):
             return False
@@ -840,7 +879,7 @@ class EditingService:
         together by their combined bbox) so aligning a single selected group
         is a no-op and aligning a group alongside other shapes keeps the
         group's internal layout intact."""
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if len(indices) < 2 or bounds is None:
             return False
@@ -848,17 +887,24 @@ class EditingService:
         center_x = (bx0 + bx1) / 2.0
         center_y = (by0 + by1) / 2.0
 
-        units: dict[object, list[int]] = {}
-        for idx in indices:
-            gid = self._host._entities[idx].group
-            key: object = ("group", gid) if gid is not None else ("shape", idx)
-            units.setdefault(key, []).append(idx)
+        units: dict[object, list[str]] = {}
+        for eid in indices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
+                continue
+            gid = entity.group
+            key: object = ("group", gid) if gid is not None else ("shape", eid)
+            units.setdefault(key, []).append(eid)
         if len(units) < 2:
             return False  # a single shape (or single group) has nothing to align to
         if mode not in ("left", "center-x", "right", "top", "center-y", "bottom"):
             return False
 
-        candidates = {index: deepcopy(self._host._entities[index]) for index in indices}
+        candidates = {
+            eid: deepcopy(self._host._entity_for_id(eid))
+            for eid in indices
+            if self._host._entity_for_id(eid) is not None
+        }
         for member_indices in units.values():
             unit_bounds = self._host._selection_bounds(member_indices)
             if unit_bounds is None:
@@ -879,8 +925,8 @@ class EditingService:
                 dy = by0 - py0
             if dx == 0.0 and dy == 0.0:
                 continue
-            for idx in member_indices:
-                entity = candidates[idx]
+            for eid in member_indices:
+                entity = candidates[eid]
                 entity.points = [(x + dx, y + dy) for x, y in entity.points]
                 transform_entity_metadata(
                     entity,
@@ -898,7 +944,7 @@ class EditingService:
         return True
 
     def mirror_selected(self, axis: str) -> bool:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None:
             return False
@@ -906,7 +952,7 @@ class EditingService:
         cy = (bounds[1] + bounds[3]) / 2.0
         if axis not in {"horizontal", "vertical"}:
             return False
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
         result = self._host._canvas_service.execute(
             TransformCommand(
                 entity_ids=entity_ids,
@@ -923,13 +969,13 @@ class EditingService:
         return True
 
     def rotate_selected(self, angle_deg: float) -> bool:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None:
             return False
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
         result = self._host._canvas_service.execute(
             TransformCommand(
                 entity_ids=entity_ids,
@@ -949,11 +995,11 @@ class EditingService:
         """Scale all polylines uniformly around their bounding box center."""
         if not self._host._entities:
             return
-        all_pts = [pt for p in (e.points for e in self._host._entities) for pt in p]
+        all_pts = [pt for p in (e.points for e in self._host._entities_by_id.values()) for pt in p]
         xs, ys = zip(*all_pts)
         cx = (min(xs) + max(xs)) / 2
         cy = (min(ys) + max(ys)) / 2
-        candidates = [deepcopy(entity) for entity in self._host._entities]
+        candidates = [deepcopy(entity) for entity in self._host._entities_by_id.values()]
         for entity in candidates:
             entity.points = scale(entity.points, (cx, cy), factor)
             transform_entity_metadata(
@@ -974,20 +1020,19 @@ class EditingService:
         CAD scale-by-reference behavior. Locked and hidden entities are never
         changed implicitly.
         """
-        selected = self._host._selected_indices()
-        indices = self._host._mutable_selected_indices()
+        selected = self._host._selected_ids()
+        indices = self._host._mutable_selected_ids()
         if not selected:
             indices = [
-                index
-                for index, entity in enumerate(self._host._entities)
+                entity.id
+                for entity in self._host._entities
                 if not entity.hidden and not entity.locked
             ]
         if not indices or not math.isfinite(factor) or factor <= 0:
             return False
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
         result = self._host._canvas_service.execute(
             TransformCommand(
-                entity_ids=entity_ids,
+                entity_ids=tuple(indices),
                 operation="scale",
                 origin=origin,
                 x=factor,
@@ -1026,14 +1071,15 @@ class EditingService:
 
     def _immediate_segments_for_vertices(
         self,
-        vertices: set[tuple[int, int]],
-    ) -> set[tuple[int, int]]:
-        """Return segment keys ``(poly_idx, seg_idx)`` touching the given vertices."""
-        excluded: set[tuple[int, int]] = set()
-        for pi, vi in vertices:
-            if not (0 <= pi < len(self._host._entities)):
+        vertices: set[tuple[str, int]],
+    ) -> set[tuple[str, int]]:
+        """Return segment keys ``(entity_id, seg_idx)`` touching the given vertices."""
+        excluded: set[tuple[str, int]] = set()
+        for eid, vi in vertices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
                 continue
-            poly = self._host._entities[pi].points
+            poly = entity.points
             n = len(poly)
             if n < 2:
                 continue
@@ -1042,13 +1088,13 @@ class EditingService:
             if seg_count <= 0:
                 continue
             if closed:
-                excluded.add((pi, vi % seg_count))
-                excluded.add((pi, (vi - 1) % seg_count))
+                excluded.add((eid, vi % seg_count))
+                excluded.add((eid, (vi - 1) % seg_count))
             else:
                 if 0 <= vi < seg_count:
-                    excluded.add((pi, vi))
+                    excluded.add((eid, vi))
                 if 0 <= (vi - 1) < seg_count:
-                    excluded.add((pi, vi - 1))
+                    excluded.add((eid, vi - 1))
         return excluded
 
     def _offset_polyline(
@@ -1062,18 +1108,19 @@ class EditingService:
     def _points_equal(a: tuple[float, float], b: tuple[float, float]) -> bool:
         return math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6
 
-    def _segments_for_polylines(self, poly_indices: set[int]) -> set[tuple[int, int]]:
-        segments: set[tuple[int, int]] = set()
-        for pi in poly_indices:
-            if not (0 <= pi < len(self._host._entities)):
+    def _segments_for_polylines(self, poly_ids: set[str]) -> set[tuple[str, int]]:
+        segments: set[tuple[str, int]] = set()
+        for eid in poly_ids:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
                 continue
-            poly = self._host._entities[pi].points
+            poly = entity.points
             n = len(poly)
             if n < 2:
                 continue
             closed = self._host._is_poly_closed(poly)
             seg_count = n if closed else n - 1
-            segments.update((pi, si) for si in range(max(0, seg_count)))
+            segments.update((eid, si) for si in range(max(0, seg_count)))
         return segments
 
     def _update_shape_size_fields_from_preview(self) -> None:
@@ -1095,25 +1142,27 @@ class EditingService:
         self._host._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
         self._host._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
 
-    def _vertices_for_polylines(self, poly_indices: set[int]) -> set[tuple[int, int]]:
-        vertices: set[tuple[int, int]] = set()
-        for pi in poly_indices:
-            if 0 <= pi < len(self._host._entities):
-                vertices.update((pi, vi) for vi in range(len(self._host._entities[pi].points)))
+    def _vertices_for_polylines(self, poly_ids: set[str]) -> set[tuple[str, int]]:
+        vertices: set[tuple[str, int]] = set()
+        for eid in poly_ids:
+            entity = self._host._entity_for_id(eid)
+            if entity is not None:
+                vertices.update((eid, vi) for vi in range(len(entity.points)))
         return vertices
 
     def offset_selected(self, distance: float) -> int:
         """Public command/API wrapper for the canonical offset operation."""
-        return self._host._offset_selected(distance)
+        return self._offset_selected(distance)
 
-    def _selected_single_line(self) -> int | None:
-        """Index of the sole selected 2-point line, or ``None``."""
+    def _selected_single_line(self) -> str | None:
+        """Entity ID of the sole selected 2-point line, or ``None``."""
         if len(self._host._sel) != 1:
             return None
-        idx = next(iter(self._host._sel))
-        if not (0 <= idx < len(self._host._entities)) or len(self._host._entities[idx].points) != 2:
+        entity_id = next(iter(self._host._sel))
+        entity = self._host._entity_for_id(entity_id)
+        if entity is None or len(entity.points) != 2:
             return None
-        return idx
+        return entity_id
 
     def _sel_badge_axes(self) -> list[tuple[str, QRectF]]:
         """Available selection badges as ordered (axis, hit-rect) pairs."""
@@ -1126,10 +1175,10 @@ class EditingService:
         return [(a, r) for a, r in pairs if r is not None]
 
     def _set_selected_line_length(self, length: float) -> bool:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) != 1 or length <= 0:
             return False
-        poly = self._host._entities[indices[0]].points
+        poly = self._host._entities_by_id[indices[0]].points
         if len(poly) != 2:
             return False
         ax, ay = poly[0]
@@ -1139,7 +1188,7 @@ class EditingService:
         if cur_len <= 1e-9:
             return False
         ux, uy = dx / cur_len, dy / cur_len
-        entity = deepcopy(self._host._entities[indices[0]])
+        entity = deepcopy(self._host._entities_by_id[indices[0]])
         entity.points[1] = (ax + ux * length, ay + uy * length)
         if entity.kind == "line" and isinstance(entity.meta, dict):
             entity.meta["start"], entity.meta["end"] = entity.points
@@ -1152,10 +1201,10 @@ class EditingService:
     def _set_selected_line_angle(self, angle_deg: float) -> bool:
         """Rotate the selected 2-point line about its start point to an
         absolute angle in degrees (CCW from +X), preserving its length."""
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) != 1:
             return False
-        poly = self._host._entities[indices[0]].points
+        poly = self._host._entities_by_id[indices[0]].points
         if len(poly) != 2:
             return False
         ax, ay = poly[0]
@@ -1164,7 +1213,7 @@ class EditingService:
         if cur_len <= 1e-9:
             return False
         ar = math.radians(angle_deg)
-        entity = deepcopy(self._host._entities[indices[0]])
+        entity = deepcopy(self._host._entities_by_id[indices[0]])
         entity.points[1] = (
             ax + cur_len * math.cos(ar),
             ay + cur_len * math.sin(ar),
@@ -1238,9 +1287,9 @@ class EditingService:
         from src.backend.cad.recognition import recognize_polyline
 
         matches: list[EntityRecord] = []
-        for index in self._host._mutable_selected_indices():
-            entity = self._host._entities[index]
-            if entity.kind != "polyline":
+        for eid in self._host._mutable_selected_ids():
+            entity = self._host._entity_for_id(eid)
+            if entity is None or entity.kind != "polyline":
                 continue
             recognized = recognize_polyline(entity.points)
             if recognized is not None:
@@ -1262,12 +1311,14 @@ class EditingService:
     def reverse_selected_paths(self) -> int:
         from src.backend.cad.path_ops import reverse_path
 
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if not indices:
             return 0
         candidates: list[EntityRecord] = []
-        for index in indices:
-            entity = deepcopy(self._host._entities[index])
+        for eid in indices:
+            entity = deepcopy(self._host._entity_for_id(eid))
+            if entity is None:
+                continue
             entity.points = reverse_path(entity.points)
             if entity.kind == "line" and len(entity.points) == 2:
                 entity.meta = {"start": entity.points[0], "end": entity.points[1]}
@@ -1296,16 +1347,19 @@ class EditingService:
     def set_selected_path_start(self) -> bool:
         from src.backend.cad.path_ops import set_closed_start
 
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) != 1:
             self._host._show_flash("Select exactly one closed path", 1000)
             return False
-        index = indices[0]
-        points = self._host._entities[index].points
+        eid = indices[0]
+        entity = self._host._entity_for_id(eid)
+        if entity is None:
+            return False
+        points = entity.points
         if not self._host._is_poly_closed(points):
             self._host._show_flash("Path is open", 800)
             return False
-        if self._host._hover_vert is not None and self._host._hover_vert[0] == index:
+        if self._host._hover_vert is not None and self._host._hover_vert[0] == eid:
             vertex = self._host._hover_vert[1]
         elif self._host._cursor_wx is not None and self._host._cursor_wy is not None:
             vertex = min(
@@ -1317,7 +1371,7 @@ class EditingService:
         else:
             self._host._show_flash("Hover the desired start vertex", 1000)
             return False
-        entity = deepcopy(self._host._entities[index])
+        entity = deepcopy(entity)
         entity.points = set_closed_start(points, vertex)
         entity.kind = "polyline"
         entity.meta = None
@@ -1329,10 +1383,10 @@ class EditingService:
         return True
 
     def resample_selected_paths(self, value: float, *, by_count: bool = False) -> int:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if not indices:
             return 0
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
         try:
             result = self._host._canvas_service.execute(
                 ResampleCommand(
@@ -1369,14 +1423,17 @@ class EditingService:
     def fit_selected_to_primitive(self, primitive: str) -> int:
         from src.backend.cad.path_ops import fit_circle, fit_line
 
-        indices = self._host._mutable_selected_indices()
-        replacements: dict[int, tuple[list[tuple[float, float]], str, dict[str, Any]]] = {}
-        for index in indices:
-            points = self._host._entities[index].points
+        indices = self._host._mutable_selected_ids()
+        replacements: dict[str, tuple[list[tuple[float, float]], str, dict[str, Any]]] = {}
+        for eid in indices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
+                continue
+            points = entity.points
             if primitive == "line":
                 line_result = fit_line(points)
                 if line_result is not None:
-                    replacements[index] = (
+                    replacements[eid] = (
                         list(line_result),
                         "line",
                         {"start": line_result[0], "end": line_result[1]},
@@ -1388,7 +1445,7 @@ class EditingService:
                 center, radius = circle_result
                 if primitive == "circle":
                     circle_shape = ShapeFactory.circle(center, radius)
-                    replacements[index] = (
+                    replacements[eid] = (
                         list(circle_shape.points),
                         "circle",
                         {"center": center, "radius": radius},
@@ -1416,7 +1473,7 @@ class EditingService:
                     if (middle - start) % 360 > (end - start) % 360:
                         start, end = end, start
                     arc_shape = ShapeFactory.arc(center, radius, start, end, segments=48)
-                    replacements[index] = (
+                    replacements[eid] = (
                         list(arc_shape.points),
                         "arc",
                         {
@@ -1430,8 +1487,10 @@ class EditingService:
             self._host._show_flash(f"Could not fit selection to {primitive}", 1100)
             return 0
         candidates: list[EntityRecord] = []
-        for index, (points, kind, metadata) in replacements.items():
-            entity = deepcopy(self._host._entities[index])
+        for eid, (points, kind, metadata) in replacements.items():
+            entity = deepcopy(self._host._entity_for_id(eid))
+            if entity is None:
+                continue
             entity.points, entity.kind, entity.meta = points, kind, metadata
             candidates.append(entity)
         self._host._canvas_service.update_entities(candidates)
@@ -1515,10 +1574,10 @@ class EditingService:
             before = self._host._canvas_service.begin_preview()
             carved, carved_count = self._carve_geometry_with_shapes(closed_paths)
             if carved:
-                self._host._entities.extend(entities)
-                self._host._document.selection = set(
-                    range(len(self._host._entities) - len(entities), len(self._host._entities))
-                )
+                for entity in entities:
+                    self._host._entities_by_id[entity.id] = entity
+                self._host._document.entities.extend(entities)
+                self._host._document.selection = {entity.id for entity in entities}
                 self._host._canvas_service.commit_preview(before)
                 self._host._redraw()
                 self._host._notify()
@@ -1540,14 +1599,14 @@ class EditingService:
         from src.backend.cad.primitives import regular_polygon_from_edge
 
         indices = [
-            index
-            for index in self._host._mutable_selected_indices()
-            if len(self._host._entities[index].points) == 2
+            eid
+            for eid in self._host._mutable_selected_ids()
+            if (ent := self._host._entity_for_id(eid)) is not None and len(ent.points) == 2
         ]
         if len(indices) != 1:
             self._host._show_flash("Select exactly one edge", 900)
             return 0
-        start, end = self._host._entities[indices[0]].points
+        start, end = self._host._entities_by_id[indices[0]].points
         points = regular_polygon_from_edge(start, end, int(round(sides)))
         vertices = points[:-1]
         center = (
@@ -1586,11 +1645,11 @@ class EditingService:
         )
 
     def explode_selected_to_segments(self) -> int:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         entity_ids = tuple(
-            self._host._entities[index].id
-            for index in indices
-            if len(self._host._entities[index].points) > 2
+            eid
+            for eid in indices
+            if (ent := self._host._entity_for_id(eid)) is not None and len(ent.points) > 2
         )
         if not entity_ids:
             return 0
@@ -1603,10 +1662,10 @@ class EditingService:
         return len(result.selected_ids)
 
     def merge_selected_segments_to_objects(self, *, record_undo: bool = True) -> int:
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) < 2:
             return 0
-        entity_ids = tuple(self._host._entities[index].id for index in indices)
+        entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
         result = self._host._canvas_service.execute(
             MergeCommand(entity_ids=entity_ids), record=record_undo
         )
@@ -1630,9 +1689,10 @@ class EditingService:
                 raise ValueError("Symbol name cannot be empty")
             points = [
                 point
-                for index in self._host._sel
-                if 0 <= index < len(self._host._entities)
-                for point in self._host._entities[index].points
+                for entity_id in self._host._sel
+                for entity in (self._host._entity_for_id(entity_id),)
+                if entity is not None
+                for point in entity.points
             ]
             if not points:
                 raise ValueError("Selection has no geometry")
@@ -1688,7 +1748,7 @@ class EditingService:
         y = self._host._cursor_wy if self._host._cursor_wy is not None else 0.0
         created = self._host._paste_records(x, y)
         self._host._clipboard = old_clipboard
-        created_ids = tuple(self._host._entities[index].id for index in created)
+        created_ids = tuple(created)
         self._host._apply_operation_result(
             OperationResult(
                 changed=bool(created),
@@ -1741,7 +1801,7 @@ class EditingService:
                 "Knife stroke is too short"
             )
             return False
-        entity_ids = tuple(entity.id for entity in self._host._entities)
+        entity_ids = tuple(entity.id for entity in self._host._entities_by_id.values())
         result = self._host._canvas_service.execute(
             SplitCommand(entity_ids=entity_ids, cutter=(start, end))
         )
@@ -1757,10 +1817,7 @@ class EditingService:
         """Publish one operation outcome and select its outputs by stable ID."""
         self._host._last_operation_result = result
         if result.selected_ids:
-            wanted = set(result.selected_ids)
-            self._host._sel = {
-                index for index, entity in enumerate(self._host._entities) if entity.id in wanted
-            }
+            self._host._sel = set(result.selected_ids)
         if result.changed:
             self._host._sync_shape_storage_from_entities()
             self._host._redraw()
@@ -1777,7 +1834,7 @@ class EditingService:
         return result
 
     def prompt_morph_selected_paths(self) -> None:
-        if len(self._host._mutable_selected_indices()) != 2:
+        if len(self._host._mutable_selected_ids()) != 2:
             self._host._show_flash("Select exactly two paths to morph", 1200)
             return
 
@@ -1796,14 +1853,14 @@ class EditingService:
     def _preview_morph_selected(self, percent: float) -> None:
         from src.backend.cad.path_ops import morph_paths
 
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) != 2:
             self._host._clear_operation_preview()
             return
         try:
             points = morph_paths(
-                self._host._entities[indices[0]].points,
-                self._host._entities[indices[1]].points,
+                self._host._entities_by_id[indices[0]].points,
+                self._host._entities_by_id[indices[1]].points,
                 percent / 100.0,
             )
         except ValueError:
@@ -1814,7 +1871,7 @@ class EditingService:
     def _morph_selected_paths(self, percent: float) -> bool:
         from src.backend.cad.path_ops import morph_paths
 
-        indices = self._host._mutable_selected_indices()
+        indices = self._host._mutable_selected_ids()
         if len(indices) != 2:
             self._host._apply_operation_result(
                 OperationResult.unchanged("Select exactly two paths to morph")
@@ -1822,8 +1879,8 @@ class EditingService:
             return False
         try:
             points = morph_paths(
-                self._host._entities[indices[0]].points,
-                self._host._entities[indices[1]].points,
+                self._host._entities_by_id[indices[0]].points,
+                self._host._entities_by_id[indices[1]].points,
                 percent / 100.0,
             )
         except ValueError as exc:

@@ -19,7 +19,7 @@ def _submit(v, text: str):
 
 def test_array_grid_creates_expected_copies_and_positions(qapp):
     v = make_view(qapp, [square(0, 0, 10.0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     assert v.poly_count == 1
 
     v.array_duplicate_grid()
@@ -43,7 +43,7 @@ def test_array_grid_creates_expected_copies_and_positions(qapp):
 
 def test_array_grid_1x1_is_a_noop(qapp):
     v = make_view(qapp, [square(0, 0, 10.0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.array_duplicate_grid()
     _submit(v, "1")
     _submit(v, "1")
@@ -54,7 +54,7 @@ def test_array_grid_1x1_is_a_noop(qapp):
 
 def test_array_radial_creates_expected_copies_and_positions(qapp):
     v = make_view(qapp, [square(0, 0, 10.0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
 
     v.array_duplicate_radial()
     _submit(v, "4")  # copies
@@ -74,7 +74,7 @@ def test_array_radial_creates_expected_copies_and_positions(qapp):
 
 def test_array_duplicate_undoes_as_one_step(qapp):
     v = make_view(qapp, [square(0, 0, 10.0)])
-    v.set_selection([0])
+    v.set_selection([v._entities[0].id])
     v.array_duplicate_grid()
     _submit(v, "2")
     _submit(v, "2")

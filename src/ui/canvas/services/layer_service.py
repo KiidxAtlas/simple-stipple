@@ -165,23 +165,22 @@ class LayerService:
         )
         self._host._redraw()
 
-    def move_entities(self, indices: list[int], layer: str) -> int:
+    def move_entities(self, entity_ids: list[str], layer: str) -> int:
         host = self._host
         layer = str(layer)
         moved = [
-            index
-            for index in indices
-            if 0 <= index < len(host._entities) and host._entities[index].layer != layer
+            eid
+            for eid in entity_ids
+            if (entity := host._entities_by_id.get(eid)) is not None and entity.layer != layer
         ]
         if not moved:
             return 0
-        moved_ids = {host._entities[index].id for index in moved}
 
         def mutate(document) -> None:
             if layer not in document.layer_order:
                 document.layer_order.append(layer)
             for entity in document.entities:
-                if entity.id in moved_ids:
+                if entity.id in moved:
                     entity.layer = layer
             document.drop_inactive_selection()
 
@@ -194,13 +193,16 @@ class LayerService:
     def on_active(self, entity) -> bool:
         return self._host._document.on_active_layer(entity)
 
-    def selectable(self, index: int) -> bool:
-        return self._host._document.entity_selectable(index)
+    def selectable(self, entity_id: str) -> bool:
+        return self._host._document.entity_selectable_by_id(entity_id)
 
-    def noninteractive_indices(self) -> set[int]:
+    def selectable_by_id(self, entity_id: str) -> bool:
+        return self._host._document.entity_selectable_by_id(entity_id)
+
+    def noninteractive_indices(self) -> set[str]:
         return {
-            index
-            for index, entity in enumerate(self._host._entities)
+            entity.id
+            for entity in self._host._entities
             if entity.hidden or not self.on_active(entity)
         }
 

@@ -220,7 +220,7 @@ class CanvasRenderer:
             painter.drawPath(path)
 
     def _paint_main_polys(self, painter: QPainter, visible: QRectF) -> None:
-        for idx, ent in enumerate(self._host._entities):
+        for ent in self._host._entities:
             poly = ent.points
             if ent.hidden:
                 continue
@@ -255,14 +255,14 @@ class CanvasRenderer:
                     gpath.closeSubpath()
                 painter.drawPath(gpath)
                 continue
-            sel = idx in self._host._sel
+            sel = ent.id in self._host._sel
             is_construction = ent.construction
             is_locked = ent.locked
             layer_color = self._host._layer_colors.get(ent.layer) if ent.layer is not None else None
             if sel:
                 color = QColor(SEL)
-            elif idx in self._host._accent_polys:
-                color = QColor(self._host._accent_polys[idx])
+            elif ent.id in self._host._accent_polys:
+                color = QColor(self._host._accent_polys[ent.id])
             elif is_construction:
                 color = QColor(_GUIDE_COLOR)
             elif layer_color:
@@ -271,7 +271,7 @@ class CanvasRenderer:
                 color = QColor(POLY)
             if is_locked:
                 color = QColor("#8b949e")
-            hovered = not sel and idx == self._host._hover_poly and self._host._mode == "select"
+            hovered = not sel and ent.id == self._host._hover_poly and self._host._mode == "select"
             if hovered:
                 color = QColor("#79c0ff")
             lw = 2.0 if sel or hovered else (1.2 if is_construction else 1.5)
@@ -280,7 +280,7 @@ class CanvasRenderer:
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            render_poly = self._host._flattened_points(idx)
+            render_poly = self._host._flattened_points_by_id(ent.id)
             if len(render_poly) < 2:
                 continue
             path = QPainterPath()
@@ -601,18 +601,19 @@ class CanvasRenderer:
             y += spacing
 
     def _paint_edit_handles(self, painter: QPainter) -> None:
-        for pi, poly in enumerate(e.points for e in self._host._entities):
-            if not self._host._entity_shows_point_handles(pi):
+        for entity in self._host._entities:
+            eid = entity.id
+            if not self._host._entity_shows_point_handles_by_id(eid):
                 continue
-            for vi, pt in enumerate(poly):
+            for vi, pt in enumerate(entity.points):
                 cx, cy = self._host._w2c(*pt)
-                is_hover = self._host._hover_vert == (pi, vi)
+                is_hover = self._host._hover_vert == (eid, vi)
                 is_active = (
                     self._host._edit_dragging
-                    and self._host._edit_poly == pi
+                    and self._host._edit_poly == eid
                     and self._host._edit_vert == vi
                 )
-                is_selected = (pi, vi) in self._host._edit_selected_verts
+                is_selected = (eid, vi) in self._host._edit_selected_verts
                 if is_active:
                     color = _HANDLE_ACTIVE
                     r = _HANDLE_R + 2
@@ -632,24 +633,27 @@ class CanvasRenderer:
                 else:
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(QPointF(cx, cy), r, r)
-        self._paint_bezier_handles(painter, range(len(self._host._entities)))
+        self._paint_bezier_handles(painter, [e.id for e in self._host._entities])
 
     def _paint_select_handles(self, painter: QPainter) -> None:
         """Show selected poly vertices in select mode for direct manipulation."""
         if not self._host._sel:
             return
-        for pi in sorted(self._host._sel):
-            if pi < 0 or pi >= len(self._host._entities):
+        sel_indices = []
+        for entity_id in self._host._sel:
+            entity = self._host._entity_for_id(entity_id)
+            if entity is None:
                 continue
-            if not self._host._entity_shows_point_handles(pi):
+            sel_indices.append(entity_id)
+            if not self._host._entity_shows_point_handles_by_id(entity_id):
                 continue
-            poly = self._host._entities[pi].points
-            for vi, pt in enumerate(poly):
+            eid = entity.id
+            for vi, pt in enumerate(entity.points):
                 cx, cy = self._host._w2c(*pt)
-                is_hover = self._host._hover_vert == (pi, vi)
+                is_hover = self._host._hover_vert == (eid, vi)
                 is_active = (
                     self._host._edit_dragging
-                    and self._host._edit_poly == pi
+                    and self._host._edit_poly == eid
                     and self._host._edit_vert == vi
                 )
                 if is_active:
@@ -664,24 +668,22 @@ class CanvasRenderer:
                 painter.setPen(QPen(color, 1.5))
                 painter.setBrush(QBrush(color))
                 painter.drawEllipse(QPointF(cx, cy), r, r)
-        self._paint_bezier_handles(painter, sorted(self._host._sel))
+        self._paint_bezier_handles(painter, sel_indices)
 
-    def _paint_bezier_handles(self, painter: QPainter, entity_indices) -> None:
+    def _paint_bezier_handles(self, painter: QPainter, entity_ids) -> None:
         """Draw independent Bézier handles without adding permanent canvas noise."""
-        for entity_index in entity_indices:
-            if not 0 <= entity_index < len(self._host._entities):
+        for entity_id in entity_ids:
+            entity = self._host._entity_for_id(entity_id)
+            if entity is None or entity.kind != "bezier":
                 continue
-            entity = self._host._entities[entity_index]
-            if entity.kind != "bezier":
-                continue
-            for anchor_index, side, tip in self._host._bezier_handles(entity_index):
+            for anchor_index, side, tip in self._host._bezier_handles(entity_id):
                 anchor = entity.points[anchor_index]
                 if math.dist(anchor, tip) <= 1e-9:
                     continue
                 ax, ay = self._host._w2c(*anchor)
                 hx, hy = self._host._w2c(*tip)
-                active = self._host._bezier_handle_drag == (entity_index, anchor_index, side)
-                hovered = self._host._hover_bezier_handle == (entity_index, anchor_index, side)
+                active = self._host._bezier_handle_drag == (entity_id, anchor_index, side)
+                hovered = self._host._hover_bezier_handle == (entity_id, anchor_index, side)
                 color = QColor("#f2cc60") if active else QColor("#56d4dd")
                 painter.setPen(QPen(QColor(color.red(), color.green(), color.blue(), 150), 1.0))
                 painter.drawLine(QPointF(ax, ay), QPointF(hx, hy))
@@ -1366,9 +1368,10 @@ class CanvasRenderer:
             return
         sel_pts = [
             pt
-            for i in self._host._sel
-            if 0 <= i < len(self._host._entities)
-            for pt in self._host._entities[i].points
+            for eid in self._host._sel
+            for entity in (self._host._entity_for_id(eid),)
+            if entity is not None
+            for pt in entity.points
         ]
         if not sel_pts:
             self._host._gizmo_scale_rect = None
@@ -1591,14 +1594,17 @@ class CanvasRenderer:
         """Color vertices by local turning curvature; blue is low, red is high."""
         if not getattr(self._host, "_curvature_visible", False):
             return
-        indices = self._host._sel or {
-            index for index, entity in enumerate(self._host._entities) if not entity.hidden
-        }
+        selected = self._host._sel
+        if not selected:
+            selected = {
+                index for index, entity in enumerate(self._host._entities) if not entity.hidden
+            }
         samples: list[tuple[float, float, float]] = []
-        for index in indices:
-            if not 0 <= index < len(self._host._entities):
+        for item in selected:
+            entity = self._host._entity_for_id(item)
+            if entity is None:
                 continue
-            points = self._host._entities[index].points
+            points = entity.points
             for previous, point, following in zip(points, points[1:], points[2:]):
                 ax, ay = point[0] - previous[0], point[1] - previous[1]
                 bx, by = following[0] - point[0], following[1] - point[1]
@@ -1626,9 +1632,9 @@ class CanvasRenderer:
         if not constraints or not self._host._sel:
             return
         selected_ids = {
-            self._host._entities[index].id
-            for index in self._host._sel
-            if 0 <= index < len(self._host._entities)
+            entity.id
+            for eid in self._host._sel
+            if (entity := self._host._entity_for_id(eid)) is not None
         }
         entity_by_id = {entity.id: entity for entity in self._host._entities}
         from src.backend.cad.constraints import constraint_residuals
@@ -1743,7 +1749,7 @@ class CanvasRenderer:
         painter.setFont(_FONT_HEL_11_BOLD)
         if self._host._measure_mode:
             title = "SCALE BY REFERENCE"
-            selected = len(self._host._mutable_selected_indices())
+            selected = len(self._host._selected_ids())
             scope = (
                 f"Affects {selected} selected object{'s' if selected != 1 else ''}"
                 if selected
@@ -1975,9 +1981,11 @@ class CanvasRenderer:
                 )
                 self._host._sel_badge_l_rect = None
                 self._host._sel_badge_a_rect = None
-                line_idx = self._host._selected_single_line()
-                if line_idx is not None:
-                    (ax, ay), (bx, by) = self._host._entities[line_idx].points
+                line_id = self._host._selected_single_line()
+                if line_id is not None:
+                    line_entity = self._host._entity_for_id(line_id)
+                    if line_entity is not None:
+                        (ax, ay), (bx, by) = line_entity.points
                     llen = math.hypot(bx - ax, by - ay)
                     ang = math.degrees(math.atan2(by - ay, bx - ax))
                     self._host._sel_badge_l_rect = self._draw_badge(

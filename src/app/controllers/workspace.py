@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+from src.backend.model.document import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
+from src.core.storage import (
+    MAX_WORKSPACE_FILE_BYTES,
+    read_json_file,
+    write_json_file_atomic,
+)
 from src.app.workspace_session import (
     apply_workspace_document,
     clear_workspace_state,
@@ -15,12 +21,6 @@ from src.app.workspace_session import (
     remember_workspace_path,
     workspace_default_dir,
     workspace_title,
-)
-from src.backend.model.document import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
-from src.backend.persistence import (
-    MAX_WORKSPACE_FILE_BYTES,
-    read_json_file,
-    write_json_file_atomic,
 )
 from src.core.paths import saved_workspaces_dir, user_data_dir
 from src.core.settings import save_settings
