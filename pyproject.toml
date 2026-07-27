@@ -41,19 +41,54 @@ cad = [
 ]
 
 [project.scripts]
-simple-stipple = "src.core.launcher:main"
+simple-stipple = "simple_stipple.app.launcher:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src"]
 
 [tool.ruff]
 target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "C901"]
 ignore = ["E501", "B007", "B905"]
+
+[tool.ruff.lint.mccabe]
+# Fifteen is the target ceiling for new and changed code. The files below hold
+# pre-existing functions above it and remain scoped exceptions; remove a file
+# once every function in it is back under the limit.
+# a file from this list once every function in it is back under 15.
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+"src/simple_stipple/document/service.py" = ["C901"]
+"src/simple_stipple/engine/cad/constraints.py" = ["C901"]
+"src/simple_stipple/engine/cad/preflight.py" = ["C901"]
+"src/simple_stipple/engine/cad/snapping.py" = ["C901"]
+"src/simple_stipple/engine/formats/dxf_fix.py" = ["C901"]
+"src/simple_stipple/engine/formats/dxf.py" = ["C901"]
+"src/simple_stipple/engine/formats/svg.py" = ["C901"]
+"src/simple_stipple/document/model.py" = ["C901"]
+"src/simple_stipple/engine/patterns/_shared.py" = ["C901"]
+"src/simple_stipple/engine/patterns/fill.py" = ["C901"]
+"src/simple_stipple/engine/patterns/processing.py" = ["C901"]
+"src/simple_stipple/canvas/widget.py" = ["C901"]
+"src/simple_stipple/canvas/renderer.py" = ["C901"]
+"src/simple_stipple/canvas/operations/editing.py" = ["C901"]
+"src/simple_stipple/canvas/operations/gizmo.py" = ["C901"]
+"src/simple_stipple/canvas/operations/snap_service.py" = ["C901"]
+"src/simple_stipple/canvas/tools/select.py" = ["C901"]
+"src/simple_stipple/canvas/tools/tools.py" = ["C901"]
+"src/simple_stipple/canvas/view/commands.py" = ["C901"]
+"src/simple_stipple/canvas/view/interactions.py" = ["C901"]
+"src/simple_stipple/canvas/view/main.py" = ["C901"]
+"src/simple_stipple/features/pattern/page.py" = ["C901"]
+"src/simple_stipple/canvas/widgets/properties_panel.py" = ["C901"]
+"src/simple_stipple/ui/dialogs/settings_dialog.py" = ["C901"]
+"src/simple_stipple/canvas/layers/widget.py" = ["C901"]
+"scripts/validate_codebase.py" = ["C901"]
 
 [tool.mypy]
 python_version = "3.10"
@@ -72,9 +107,8 @@ exclude = ["src/simple_stipple.egg-info"]
 # specific diagnostics — keep flow, type-arg, and return-type checks.
 [[tool.mypy.overrides]]
 module = [
-    "src.ui.canvas.view",
-    "src.ui.canvas.dxf_canvas",
-    "src.ui.canvas.mixins.*",
+    "simple_stipple.canvas.view",
+    "simple_stipple.canvas.widget",
 ]
 disable_error_code = [
     "abstract",
@@ -87,10 +121,10 @@ disable_error_code = [
 
 [[tool.mypy.overrides]]
 module = [
-    "src.ui.pages.convert",
-    "src.ui.pages.draft",
-    "src.ui.pages.pattern.tab",
-    "src.ui.pages.trace.tab",
+    "simple_stipple.features.convert.page",
+    "simple_stipple.features.draft.page",
+    "simple_stipple.features.pattern.page",
+    "simple_stipple.features.trace.page",
 ]
 disable_error_code = ["abstract", "attr-defined"]
 
@@ -99,3 +133,10 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+simple_stipple = [
+    "resources/tiles/*.dxf",
+    "ui/style/*.qss",
+    "ui/style/icons/*.svg",
+]

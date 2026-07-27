@@ -1,1 +1,0 @@
-"""Interactive canvas presentation subsystem."""

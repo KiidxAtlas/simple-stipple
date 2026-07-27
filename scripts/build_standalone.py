@@ -30,9 +30,20 @@ def main() -> int:
         "--noconfirm",
         "--windowed",
         "--add-data",
-        _add_data_arg(ROOT / "src" / "ui" / "style" / "theme.qss", "src/ui/style"),
+        _add_data_arg(
+            ROOT / "src" / "simple_stipple" / "ui" / "style" / "theme.qss",
+            "simple_stipple/ui/style",
+        ),
         "--add-data",
-        _add_data_arg(ROOT / "src" / "ui" / "style" / "icons", "src/ui/style/icons"),
+        _add_data_arg(
+            ROOT / "src" / "simple_stipple" / "ui" / "style" / "icons",
+            "simple_stipple/ui/style/icons",
+        ),
+        "--add-data",
+        _add_data_arg(
+            ROOT / "src" / "simple_stipple" / "resources" / "tiles",
+            "simple_stipple/resources/tiles",
+        ),
         "--add-data",
         _add_data_arg(ROOT / "assets" / "icon.png", "assets"),
         str(entry),

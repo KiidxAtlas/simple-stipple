@@ -22,8 +22,12 @@ with StarFX's red trace/profile preview before enabling the laser.
 ## Run locally
 
 ```bash
-python main.py
+python -m pip install -e .
+python -m simple_stipple
 ```
+
+The root `main.py` remains available as a compatibility launcher for existing
+development and packaging workflows.
 
 ## Install as app command
 

@@ -1,1 +1,0 @@
-"""Image-tracing page presentation."""

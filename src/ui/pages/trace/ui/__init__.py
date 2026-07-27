@@ -1,1 +1,0 @@
-"""Trace tab UI components."""

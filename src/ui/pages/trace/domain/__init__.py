@@ -1,1 +1,0 @@
-"""Trace tab domain logic."""
