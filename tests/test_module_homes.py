@@ -9,6 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "simple_stipple"
 
 DEPRECATED_MODULES = {
+    "simple_stipple.core",
+    "simple_stipple.backend",
+    "simple_stipple.app.controllers",
+    "simple_stipple.app.services",
+    "simple_stipple.ui.canvas",
+    "simple_stipple.ui.pages",
+    "simple_stipple.ui.widgets.controls",
     "simple_stipple.backend.jit",
     "simple_stipple.backend.laserstar_package",
     "simple_stipple.backend.raster_engraving",
@@ -44,10 +51,9 @@ def test_runtime_uses_only_canonical_module_homes() -> None:
 
 
 def test_compatibility_facades_are_removed() -> None:
-    module_paths = {
-        PACKAGE.joinpath(*module.removeprefix("simple_stipple.").split(".")).with_suffix(".py")
-        for module in DEPRECATED_MODULES
-    }
-    module_paths.add(PACKAGE / "ui" / "canvas" / "services")
+    module_paths = set()
+    for module in DEPRECATED_MODULES:
+        base = PACKAGE.joinpath(*module.removeprefix("simple_stipple.").split("."))
+        module_paths.update((base, base.with_suffix(".py")))
     leftovers = sorted(str(path.relative_to(ROOT)) for path in module_paths if path.exists())
     assert not leftovers, "\n".join(leftovers)
