@@ -26,21 +26,32 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .[build]
 
+      - name: Verify tag matches package metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: bash scripts/release.sh --check "${GITHUB_REF_NAME}"
+
       - name: Build EXE
-        run: |
-          pyinstaller --noconfirm --windowed --onefile --name SimpleStipple --add-data "src/simple_stipple/ui/style/theme.qss;simple_stipple/ui/style" --add-data "assets/icon.png;assets" main.py
+        run: python scripts/build_standalone.py
+
+      - name: Generate SHA-256 checksum
+        run: python scripts/build_standalone.py --checksum dist/SimpleStipple.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: SimpleStipple-windows
-          path: dist/SimpleStipple.exe
+          path: |
+            dist/SimpleStipple.exe
+            dist/SimpleStipple.exe.sha256
 
       - name: Attach EXE to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/SimpleStipple.exe
+          files: |
+            dist/SimpleStipple.exe
+            dist/SimpleStipple.exe.sha256
 
   build-macos:
     runs-on: macos-latest
@@ -58,12 +69,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .[build]
 
+      - name: Verify tag matches package metadata
+        if: startsWith(github.ref, 'refs/tags/')
+        run: bash scripts/release.sh --check "${GITHUB_REF_NAME}"
+
       - name: Build macOS app bundle
-        run: |
-          pyinstaller --noconfirm --windowed --name SimpleStipple \
-            --add-data "src/simple_stipple/ui/style/theme.qss:simple_stipple/ui/style" \
-            --add-data "assets/icon.png:assets" \
-            main.py
+        run: python scripts/build_standalone.py
 
       - name: Package DMG
         run: |
@@ -71,14 +82,21 @@ jobs:
             -srcfolder "dist/SimpleStipple.app" \
             -ov -format UDZO "dist/SimpleStipple-macOS.dmg"
 
+      - name: Generate SHA-256 checksum
+        run: python scripts/build_standalone.py --checksum dist/SimpleStipple-macOS.dmg
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: SimpleStipple-macos
-          path: dist/SimpleStipple-macOS.dmg
+          path: |
+            dist/SimpleStipple-macOS.dmg
+            dist/SimpleStipple-macOS.dmg.sha256
 
       - name: Attach DMG to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/SimpleStipple-macOS.dmg
+          files: |
+            dist/SimpleStipple-macOS.dmg
+            dist/SimpleStipple-macOS.dmg.sha256

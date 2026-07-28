@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """DxfCanvas — extended polyline view with quick shape tools and radial menu."""
 
 from __future__ import annotations
@@ -419,17 +420,13 @@ class DxfCanvas(CanvasView):
             menu,
             "arrange",
             section_enabled,
-            lambda: self._build_arrange_actions(
-                menu, _run_transform, _run_prompted_transform
-            ),
+            lambda: self._build_arrange_actions(menu, _run_transform, _run_prompted_transform),
         )
         self._add_context_section(
             menu,
             "transform",
             section_enabled,
-            lambda: self._build_transform_actions(
-                menu, _run_transform, _run_prompted_transform
-            ),
+            lambda: self._build_transform_actions(menu, _run_transform, _run_prompted_transform),
         )
         self._add_context_section(
             menu, "text", section_enabled, lambda: self._build_text_actions(menu, cx, cy)
@@ -922,7 +919,8 @@ class DxfCanvas(CanvasView):
         )
         style = (
             "background: #1a1f2e; color: #ffffff; border: 1px solid #4a9eff;"
-            "border-radius: 3px; font-size: 11px; font-family: 'Menlo';"
+            "border-radius: 3px; font-size: 11px;"
+            "font-family: Menlo, Consolas, 'DejaVu Sans Mono', monospace;"
             "padding: 2px 6px;"
         )
 
@@ -930,7 +928,7 @@ class DxfCanvas(CanvasView):
         self._size_w_edit.setFixedWidth(90)
         self._size_w_edit.setFixedHeight(24)
         self._size_w_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._size_w_edit.setText(f"{cur_w:.3f}")
+        self._size_w_edit.setText(f"{cur_w:.2f}")
         self._size_w_edit.setPlaceholderText("W")
         self._size_w_edit.setStyleSheet(style)
         self._size_w_edit.move(hud_x, hud_y)
@@ -942,7 +940,7 @@ class DxfCanvas(CanvasView):
         self._size_h_edit.setFixedWidth(90)
         self._size_h_edit.setFixedHeight(24)
         self._size_h_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._size_h_edit.setText(f"{cur_h:.3f}")
+        self._size_h_edit.setText(f"{cur_h:.2f}")
         self._size_h_edit.setPlaceholderText("H")
         self._size_h_edit.setStyleSheet(style)
         self._size_h_edit.move(hud_x + 106, hud_y)
@@ -988,8 +986,8 @@ class DxfCanvas(CanvasView):
         if changed_w or changed_h:
             self._show_flash("Dimensions updated", 900)
             # Keep HUD open with committed values for iterative edits.
-            self._size_w_edit.setText(f"{new_w:.3f}")
-            self._size_h_edit.setText(f"{new_h:.3f}")
+            self._size_w_edit.setText(f"{new_w:.2f}")
+            self._size_h_edit.setText(f"{new_h:.2f}")
 
     def _shape_mode_from_modifiers(self, mods) -> str:
         if mods & Qt.KeyboardModifier.AltModifier:

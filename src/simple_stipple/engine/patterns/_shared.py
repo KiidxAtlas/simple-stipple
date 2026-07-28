@@ -808,11 +808,7 @@ def _line_points(geometry: BaseGeometry) -> list[tuple[float, float]]:
     if geometry.geom_type == "LineString":
         return [(float(x), float(y)) for x, y in geometry.coords]  # type: ignore[attr-defined]
     if isinstance(geometry, MultiLineString):
-        return [
-            (float(x), float(y))
-            for part in geometry.geoms
-            for x, y in part.coords
-        ]
+        return [(float(x), float(y)) for part in geometry.geoms for x, y in part.coords]
     if isinstance(geometry, GeometryCollection):
         return [
             point
@@ -898,7 +894,7 @@ def apply_interlace(
                 odd_row = row_idx % 2 == 1
                 if odd_row:
                     seg = [(x + spacing / 2.0, y) for x, y in seg]
-                if odd_row and clip_to_outline:
+                if odd_row and clip_to_outline and outline_poly is not None:
                     new_poly.extend(_clip_interlaced_segment(seg, outline_poly))
                     continue
                 new_poly.extend(seg)

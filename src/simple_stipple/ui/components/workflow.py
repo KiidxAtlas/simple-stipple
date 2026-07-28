@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.ui.notifications import record_notification
 from simple_stipple.ui.style.theme import (
     STATUS_ERR,
     STATUS_NEUTRAL,
@@ -31,7 +32,6 @@ from .feedback import announce_accessible, refresh_style
 from .inputs import ActionButton
 
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
-
 
 
 class WorkflowStepper(QFrame):
@@ -65,9 +65,7 @@ class WorkflowStepper(QFrame):
             self._labels.append(button)
             if index < len(steps) - 1:
                 arrow = QLabel()
-                arrow.setPixmap(
-                    QIcon(str(icon_path("chevron_right.svg"))).pixmap(16, 16)
-                )
+                arrow.setPixmap(QIcon(str(icon_path("chevron_right.svg"))).pixmap(16, 16))
                 arrow.setAccessibleName("Next step")
                 arrow.setProperty("role", "workflow-arrow")
                 layout.addWidget(arrow)
@@ -113,11 +111,7 @@ class WorkflowStepper(QFrame):
                 if state in {"stale", "error"}
                 else ""
             )
-            label.setIcon(
-                QIcon(str(icon_path(icon_name)))
-                if icon_name
-                else QIcon()
-            )
+            label.setIcon(QIcon(str(icon_path(icon_name))) if icon_name else QIcon())
             label.setProperty("state", state)
             label.setEnabled(True)
             reason = reasons.get(item_index, "")
@@ -156,9 +150,7 @@ class StatusRegion(QFrame):
             "info": "info.svg",
             "neutral": "info.svg",
         }.get(tone, "info.svg")
-        self._icon.setPixmap(
-            QIcon(str(icon_path(icon_name))).pixmap(16, 16)
-        )
+        self._icon.setPixmap(QIcon(str(icon_path(icon_name))).pixmap(16, 16))
         self._icon.setAccessibleName(f"{tone.title()} status")
         self._message.setText(message or "Ready")
         self.setProperty("tone", tone)
@@ -166,6 +158,8 @@ class StatusRegion(QFrame):
         refresh_style(self)
         if self._message.text() != previous:
             announce_accessible(self, urgent=tone == "danger")
+            if tone in {"success", "warn", "danger"}:
+                record_notification(self._message.text())
 
 
 class OperationProgress(QFrame):
@@ -247,6 +241,7 @@ def set_status_label(
     refresh_style(label)
     if text != previous and role in {"status-ok", "status-err", "status-warn"}:
         announce_accessible(label, urgent=role == "status-err")
+        record_notification(text)
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.platform.error_reporting import report_error
+from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.tokens import (
     SPACE_LG,
     SPACE_MD,
@@ -65,7 +66,7 @@ class CommandPaletteDialog(QDialog):
         layout.addWidget(hint)
 
         self._refresh_list()
-        self._query.setFocus()
+        install_dialog_focus_lifecycle(self, self._query)
 
     def keyPressEvent(self, event) -> None:
         """Move the highlighted row with Up/Down.

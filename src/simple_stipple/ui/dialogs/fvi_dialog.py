@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.engine.formats.service import FVI_UNIT_MM, DxfService, FviExportOptions
+from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 
 
 class FviExportDialog(QDialog):
@@ -44,7 +45,7 @@ class FviExportDialog(QDialog):
             f"fixed {FVI_UNIT_MM:g} mm program units. Review the red trace in StarFX before marking."
         )
         intro.setWordWrap(True)
-        intro.setProperty("role", "muted")
+        intro.setProperty("role", "hint")
         root.addWidget(intro)
 
         geometry = QGroupBox("Geometry and coordinates")
@@ -94,7 +95,7 @@ class FviExportDialog(QDialog):
 
         self._summary = QLabel()
         self._summary.setWordWrap(True)
-        self._summary.setProperty("role", "status")
+        self._summary.setProperty("role", "status-neutral")
         root.addWidget(self._summary)
 
         buttons = QDialogButtonBox(
@@ -122,6 +123,7 @@ class FviExportDialog(QDialog):
         )
         self._margin.setEnabled(self._origin.currentData() == "lower_left")
         self._refresh_summary()
+        install_dialog_focus_lifecycle(self, self._origin)
 
     def options(self) -> FviExportOptions:
         return FviExportOptions(

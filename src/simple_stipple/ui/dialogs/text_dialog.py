@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -25,6 +25,7 @@ from simple_stipple.canvas.operations.hud_text import (
     load_user_fonts,
     user_fonts_dir,
 )
+from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.units import from_display, to_display
 from simple_stipple.ui.units import suffix as unit_suffix
 
@@ -96,6 +97,7 @@ class AddTextDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        self._ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
 
         for signal in (
             self._text_edit.textChanged,
@@ -104,15 +106,28 @@ class AddTextDialog(QDialog):
             self._italic_cb.toggled,
         ):
             signal.connect(self._update_preview)
+        self._text_edit.textChanged.connect(self._update_ok_enabled)
         self._update_preview()
-        self._text_edit.setFocus()
+        self._update_ok_enabled()
+        install_dialog_focus_lifecycle(self, self._text_edit)
+
+    def _update_ok_enabled(self) -> None:
+        # Both add and edit silently no-op on empty text otherwise (edit
+        # does so with no message at all) — block it at the source instead.
+        self._ok_btn.setEnabled(bool(self._text_edit.toPlainText().strip()))
 
     def _update_preview(self, *_args) -> None:
         family = self._font_combo.currentFont().family().replace('"', "")
         weight = "bold" if self._bold_cb.isChecked() else "normal"
         style = "italic" if self._italic_cb.isChecked() else "normal"
+        # font-family must be a per-widget stylesheet override (the app-wide
+        # QSS sets a global font-family that setFont() alone can't beat), so
+        # this can't just move into theme.qss — read the applied palette
+        # instead of hardcoding dark colors, so it still matches in Light mode.
+        is_light = self.palette().color(QPalette.ColorRole.Window).lightness() > 128
+        bg, border = ("#ffffff", "#d0d7de") if is_light else ("#10161d", "#2a3a44")
         self._preview.setStyleSheet(
-            "background: #10161d; border: 1px solid #2a3a44; border-radius: 4px;"
+            f"background: {bg}; border: 1px solid {border}; border-radius: 4px;"
             f'font-family: "{family}"; font-size: 28px; '
             f"font-weight: {weight}; font-style: {style};"
         )

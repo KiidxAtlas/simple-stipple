@@ -30,7 +30,6 @@ from .tokens import MOTION_DURATION_MS
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
-
 class CollapsibleSection(QFrame):
     """Expandable/collapsible content section for dense sidebars.
 
@@ -165,5 +164,3 @@ def collapsible_content_widget(*, spacing: int = 8) -> tuple[QWidget, QVBoxLayou
 # generic/wrong glyph (e.g. the settings gear rendering as a plain circle).
 # Drawing the icon ourselves guarantees it looks the same everywhere.
 # ══════════════════════════════════════════════════════════════════════════
-
-

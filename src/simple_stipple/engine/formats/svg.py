@@ -416,9 +416,7 @@ def _viewport_user_units(
 ) -> tuple[float, float]:
     if len(viewbox) != 4:
         return 1.0, 1.0
-    viewport_width_px = (
-        _length_mm(root.attrib.get("width", ""), default_px=viewbox[2]) * 96 / 25.4
-    )
+    viewport_width_px = _length_mm(root.attrib.get("width", ""), default_px=viewbox[2]) * 96 / 25.4
     viewport_height_px = (
         _length_mm(root.attrib.get("height", ""), default_px=viewbox[3]) * 96 / 25.4
     )

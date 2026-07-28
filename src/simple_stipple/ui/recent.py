@@ -106,4 +106,3 @@ def prune_missing(settings: dict, kinds: Iterable[str] = (KIND_DXF, KIND_IMAGE))
             changed = True
     if changed:
         save_settings(settings)
-

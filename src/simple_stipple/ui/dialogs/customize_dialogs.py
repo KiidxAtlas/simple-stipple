@@ -36,6 +36,7 @@ from simple_stipple.platform.config import (
     DRAW_SIDEBAR_SECTION_LABELS,
     DRAW_SIDEBAR_SHAPE_TOOL_LABELS,
 )
+from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.layout import sep
 from simple_stipple.ui.components.tokens import (
     SPACE_LG,
@@ -98,25 +99,51 @@ class RadialMenuDialog(QDialog):
 
         self._list = QListWidget()
         self._list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self._list.itemChanged.connect(self._validate)
         layout.addWidget(self._list, stretch=1)
+
+        self._hint = QLabel("")
+        self._hint.setProperty("role", "hint-sm")
+        layout.addWidget(self._hint)
+
         self._populate(current)
 
         sep(layout)
         btn_row = QHBoxLayout()
         reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setAutoDefault(False)
         reset_btn.clicked.connect(self._reset)
         btn_row.addWidget(reset_btn)
         btn_row.addStretch()
-        apply_btn = QPushButton("Save")
-        apply_btn.setMinimumWidth(90)
-        apply_btn.setProperty("role", "primary")
-        apply_btn.clicked.connect(self._apply)
+        self._apply_btn = QPushButton("Save")
+        self._apply_btn.setMinimumWidth(90)
+        self._apply_btn.setProperty("role", "primary")
+        self._apply_btn.setDefault(True)
+        self._apply_btn.clicked.connect(self._apply)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setMinimumWidth(80)
+        cancel_btn.setAutoDefault(False)
         cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(apply_btn)
+        btn_row.addWidget(self._apply_btn)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
+        self._validate()
+        install_dialog_focus_lifecycle(self, self._filter)
+
+    def _validate(self) -> None:
+        """Disable Save and explain why, instead of silently falling back
+        to defaults when too few commands stay checked."""
+        if not hasattr(self, "_apply_btn"):
+            return  # items are still being populated; nothing to validate yet
+        count = len(self._checked_tools())
+        short = self._MIN_TOOLS - count
+        self._apply_btn.setEnabled(count >= self._MIN_TOOLS)
+        self._hint.setText(
+            f"Check {short} more command{'s' if short != 1 else ''} "
+            f"(at least {self._MIN_TOOLS} required)."
+            if short > 0
+            else f"{count} commands selected."
+        )
 
     def _populate(self, checked: list[str]) -> None:
         self._list.clear()
@@ -265,6 +292,7 @@ class DrawSidebarCustomizeDialog(QDialog):
 
         self._list = QListWidget()
         self._list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self._list.itemChanged.connect(self._validate)
         layout.addWidget(self._list, stretch=2)
         self._populate(current)
 
@@ -276,6 +304,7 @@ class DrawSidebarCustomizeDialog(QDialog):
         self._path_list = _build_list(
             _PATH_LABELS, self._path_result, DEFAULT_DRAW_SIDEBAR_PATH_TOOLS
         )
+        self._path_list.itemChanged.connect(self._validate)
         layout.addWidget(self._path_list, stretch=1)
 
         shape_label = QLabel("Shape tools")
@@ -284,24 +313,35 @@ class DrawSidebarCustomizeDialog(QDialog):
         self._shape_list = _build_list(
             _SHAPE_LABELS, self._shape_result, DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS
         )
+        self._shape_list.itemChanged.connect(self._validate)
         layout.addWidget(self._shape_list, stretch=1)
+
+        self._hint = QLabel("")
+        self._hint.setProperty("role", "hint-sm")
+        self._hint.setWordWrap(True)
+        layout.addWidget(self._hint)
 
         sep(layout)
         btn_row = QHBoxLayout()
         reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setAutoDefault(False)
         reset_btn.clicked.connect(self._reset)
         btn_row.addWidget(reset_btn)
         btn_row.addStretch()
-        apply_btn = QPushButton("Save")
-        apply_btn.setMinimumWidth(90)
-        apply_btn.setProperty("role", "primary")
-        apply_btn.clicked.connect(self._apply)
+        self._apply_btn = QPushButton("Save")
+        self._apply_btn.setMinimumWidth(90)
+        self._apply_btn.setProperty("role", "primary")
+        self._apply_btn.setDefault(True)
+        self._apply_btn.clicked.connect(self._apply)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setMinimumWidth(80)
+        cancel_btn.setAutoDefault(False)
         cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(apply_btn)
+        btn_row.addWidget(self._apply_btn)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
+        self._validate()
+        install_dialog_focus_lifecycle(self, self._list)
 
     def _populate(self, checked: list[str]) -> None:
         _fill_list(self._list, _LABELS, checked)
@@ -313,6 +353,25 @@ class DrawSidebarCustomizeDialog(QDialog):
 
     def _checked_sections(self) -> list[str]:
         return _checked_keys(self._list)
+
+    def _validate(self) -> None:
+        """Disable Save and explain why, instead of silently falling back
+        to defaults when a required section/tool list is left empty."""
+        if not hasattr(self, "_apply_btn"):
+            return  # items are still being populated; nothing to validate yet
+        missing_required = self._REQUIRED - set(self._checked_sections())
+        path_empty = not _checked_keys(self._path_list)
+        shape_empty = not _checked_keys(self._shape_list)
+        problems = []
+        if missing_required:
+            names = ", ".join(sorted(_LABELS.get(k, k) for k in missing_required))
+            problems.append(f"{names} must stay checked")
+        if path_empty:
+            problems.append("at least one Path tool must stay checked")
+        if shape_empty:
+            problems.append("at least one Shape tool must stay checked")
+        self._apply_btn.setEnabled(not problems)
+        self._hint.setText("; ".join(problems).capitalize() + "." if problems else "")
 
     def _apply(self) -> None:
         checked = self._checked_sections()
@@ -371,12 +430,14 @@ class ContextMenuCustomizeDialog(QDialog):
         subtitle = QLabel(
             "The first list controls what appears. The second controls which visible "
             "sections are grouped under More actions. Drag either list to set order. "
-            "Direct Select, Delete, and Cutout actions remain immediately available."
+            "Direct Select, Delete, and Cutout actions remain immediately available. "
+            "View always stays visible."
         )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
         self._list = _build_list(labels, current, DEFAULT_CONTEXT_MENU_SECTIONS)
+        self._lock_view_item()
         layout.addWidget(self._list, stretch=1)
         overflow_label = QLabel("Place under More actions")
         overflow_label.setProperty("role", "section-title")
@@ -390,9 +451,11 @@ class ContextMenuCustomizeDialog(QDialog):
         sep(layout)
         buttons = QHBoxLayout()
         reset = QPushButton("Reset to defaults")
+        reset.setAutoDefault(False)
         reset.clicked.connect(
             lambda: _fill_list(self._list, labels, list(DEFAULT_CONTEXT_MENU_SECTIONS))
         )
+        reset.clicked.connect(self._lock_view_item)
         reset.clicked.connect(
             lambda: _fill_list(
                 self._overflow_list,
@@ -404,12 +467,30 @@ class ContextMenuCustomizeDialog(QDialog):
         buttons.addStretch()
         apply_button = QPushButton("Save")
         apply_button.setProperty("role", "primary")
+        apply_button.setDefault(True)
         apply_button.clicked.connect(self._apply)
         cancel = QPushButton("Cancel")
+        cancel.setAutoDefault(False)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(apply_button)
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
+        install_dialog_focus_lifecycle(self, self._list)
+
+    def _lock_view_item(self) -> None:
+        """Prevent unchecking "View" instead of silently re-adding it later.
+
+        View provides the only zoom/fit controls in the context menu; the
+        dialog used to let it be unchecked and then quietly restore it on
+        Save, which looked like the checkbox wasn't working.
+        """
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == "view":
+                item.setCheckState(Qt.CheckState.Checked)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                item.setToolTip("View always stays visible")
+                break
 
     def _apply(self) -> None:
         checked = _checked_keys(self._list)

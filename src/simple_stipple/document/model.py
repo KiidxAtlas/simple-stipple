@@ -288,7 +288,7 @@ class PatternTabState(TabStateBase):
     """Workspace state for PatternPage.
 
     Mirrors the keys read by ``get_pattern_workspace_state()`` and written by
-    ``apply_pattern_workspace_state()`` in ``src/simple_stipple/ui/pages/pattern/domain/session.py``.
+    ``apply_pattern_workspace_state()`` in ``src/simple_stipple/features/pattern/session.py``.
     """
 
     dxf_path: str = ""
@@ -327,7 +327,7 @@ class TraceTabState(TabStateBase):
     """Workspace state for TracePage.
 
     Mirrors the keys read by ``get_trace_workspace_state()`` and written by
-    ``apply_trace_workspace_state()`` in ``src/simple_stipple/ui/pages/trace/session.py``.
+    ``apply_trace_workspace_state()`` in ``src/simple_stipple/features/trace/session.py``.
     """
 
     image_path: str = ""
@@ -362,7 +362,7 @@ class DraftTabState(TabStateBase):
 
     Mirrors the keys read by ``get_draft_workspace_state()`` and written by
     ``apply_draft_workspace_state()`` in
-    ``src/simple_stipple/ui/pages/draft/domain/session.py``.
+    ``src/simple_stipple/features/draft/session.py``.
     """
 
     entities: list[dict[str, Any]] = Field(default_factory=list)

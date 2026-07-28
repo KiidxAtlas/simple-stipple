@@ -102,9 +102,7 @@ def load_custom_tiles_from_disk(page: Any) -> None:
             elif path.suffix.lower() == ".fvi":
                 polys = [list(poly) for poly in read_fvi(path).paths]
             else:
-                with tempfile.TemporaryDirectory(
-                    prefix="simple-stipple-tile-svg-"
-                ) as temp_folder:
+                with tempfile.TemporaryDirectory(prefix="simple-stipple-tile-svg-") as temp_folder:
                     converted = Path(temp_folder) / "tile.dxf"
                     svg_to_dxf(path, converted)
                     polys, _report = load_dxf_polylines_with_report(str(converted))
@@ -166,9 +164,7 @@ def save_tile_motif(page: Any) -> None:
         persist_tile_motifs(page)
         page._set_status(f"Updated custom tile settings: {name}", STATUS_OK)
         return
-    safe_name = "".join(
-        character for character in name if character not in '<>:"/\\|?*'
-    ).strip()
+    safe_name = "".join(character for character in name if character not in '<>:"/\\|?*').strip()
     if not safe_name:
         page._set_status("Choose a name that can be used as a file name.", STATUS_ERR)
         return
@@ -210,9 +206,7 @@ def delete_tile_motif(page: Any) -> None:
     del page._tile_motifs[name]
     page._tile_settings.pop(name, None)
     asset = page._tile_assets.pop(name, {})
-    safe_name = "".join(
-        character for character in name if character not in '<>:"/\\|?*'
-    ).strip()
+    safe_name = "".join(character for character in name if character not in '<>:"/\\|?*').strip()
     tile_folder = custom_tiles_dir(page._settings.get("custom_tiles_dir"))
     asset_path = Path(asset.get("path", "")) if asset.get("path") else None
     if asset_path is not None and asset_path.parent == tile_folder:
@@ -247,9 +241,7 @@ def locate_tile_asset(page: Any) -> None:
         elif source.suffix.lower() == ".fvi":
             polys = [list(poly) for poly in read_fvi(source).paths]
         elif source.suffix.lower() == ".svg":
-            with tempfile.TemporaryDirectory(
-                prefix="simple-stipple-locate-tile-"
-            ) as temp_folder:
+            with tempfile.TemporaryDirectory(prefix="simple-stipple-locate-tile-") as temp_folder:
                 converted = Path(temp_folder) / "tile.dxf"
                 svg_to_dxf(source, converted)
                 polys, _report = load_dxf_polylines_with_report(str(converted))

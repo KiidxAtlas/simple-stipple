@@ -69,6 +69,7 @@ class LaserStarExportDialog(QDialog):
         self.destination = QLineEdit(destination)
         self.destination.setAccessibleName("Package destination folder")
         browse = QPushButton("Browse…")
+        browse.setAutoDefault(False)
         browse.clicked.connect(self._browse)
         destination_layout.addWidget(self.destination, 1)
         destination_layout.addWidget(browse)
@@ -91,21 +92,31 @@ class LaserStarExportDialog(QDialog):
         root.addWidget(card)
 
         self.validation = QLabel("")
-        self.validation.setProperty("role", "validation-error")
+        self.validation.setProperty("role", "status-err")
         self.validation.setWordWrap(True)
         root.addWidget(self.validation)
         sep(root)
         buttons = QHBoxLayout()
         buttons.addStretch()
         cancel = QPushButton("Cancel")
+        cancel.setAutoDefault(False)
         cancel.clicked.connect(self.reject)
         create = QPushButton("Create Package")
         create.setProperty("role", "primary")
+        create.setDefault(True)
         create.clicked.connect(self._accept_if_valid)
         buttons.addWidget(cancel)
         buttons.addWidget(create)
         root.addLayout(buttons)
         install_dialog_focus_lifecycle(self, self.job_name)
+
+        self.job_name.textChanged.connect(self._clear_validation)
+        self.destination.textChanged.connect(self._clear_validation)
+
+    def _clear_validation(self) -> None:
+        if self.validation.text():
+            self.validation.setText("")
+            self.validation.setAccessibleDescription("")
 
     def _browse(self) -> None:
         selected = QFileDialog.getExistingDirectory(

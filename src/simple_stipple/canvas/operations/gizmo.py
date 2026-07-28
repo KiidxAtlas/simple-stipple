@@ -47,7 +47,7 @@ class GizmoService:
             frac_a, frac_h = self._HANDLE_ANCHORS[mode[6:]]
             if from_center:
                 frac_a = (0.5, 0.5)
-            indices = self._host._selected_ids()
+            indices = self._host._mutable_selected_ids()
             entity = self._host._entities_by_id[indices[0]] if len(indices) == 1 else None
             meta = entity.meta if entity is not None and isinstance(entity.meta, dict) else None
             dims = None
@@ -114,18 +114,20 @@ class GizmoService:
             self._host._gizmo_start_vec = vec
         self._host._gizmo_drag_mode = mode
         self._host._gizmo_center_w = (cx, cy)
+        # Locked entities stay in the selection but must not be transformed —
+        # match drag-move/nudge, which already skip them.
+        mutable_ids = self._host._mutable_selected_ids()
+        if len(mutable_ids) < len(self._host._selected_ids()):
+            self._host._show_flash("Locked shapes were not transformed", 1200)
         self._host._gizmo_snapshot = {
-            eid: list(self._host._entities_by_id[eid].points)
-            for eid in self._host._selected_ids()
+            eid: list(self._host._entities_by_id[eid].points) for eid in mutable_ids
         }
 
         def _meta_copy(eid: str) -> dict[str, Any] | None:
             meta = self._host._entities_by_id[eid].meta
             return dict(meta) if isinstance(meta, dict) else None
 
-        self._host._gizmo_meta_snapshot = {
-            eid: _meta_copy(eid) for eid in self._host._selected_ids()
-        }
+        self._host._gizmo_meta_snapshot = {eid: _meta_copy(eid) for eid in mutable_ids}
         self._host._gizmo_drag_moved = False
         self._host._gizmo_undo_pushed = False
         return bool(self._host._gizmo_snapshot)
@@ -370,6 +372,10 @@ class GizmoService:
         moved = self._host._gizmo_drag_moved
         if moved:
             self._host._canvas_service.commit_preview(self._host._gizmo_command_snapshot)
+        elif self._host._gizmo_undo_pushed:
+            # Sub-threshold drags still mutated live geometry; roll that back
+            # rather than leaving an unundoable micro-transform behind.
+            self._host._canvas_service.cancel_preview(self._host._gizmo_command_snapshot)
         self._host._gizmo_drag_mode = None
         self._host._gizmo_center_w = None
         self._host._gizmo_start_vec = None

@@ -64,7 +64,7 @@ class CanvasPropertiesPanel(QWidget):
         root.setSpacing(4)
 
         title = QLabel("Properties")
-        title.setProperty("role", "panel-title")
+        title.setProperty("role", "section-label")
         root.addWidget(title)
 
         self._scroll = QScrollArea()
@@ -210,7 +210,6 @@ class CanvasPropertiesPanel(QWidget):
         actions_layout.setHorizontalSpacing(6)
         actions_layout.setVerticalSpacing(6)
         self._actions_layout = actions_layout
-        self._action_buttons: list[QPushButton] = []
         self._context_buttons: dict[str, QPushButton] = {}
         for key, text, tip, callback in (
             (
@@ -237,6 +236,48 @@ class CanvasPropertiesPanel(QWidget):
                 "Delete selected geometry",
                 canvas.delete_selected,
             ),
+            (
+                "offset",
+                "Offset…",
+                "Create an offset copy of the selected path",
+                lambda: self._run_command("path.offset"),
+            ),
+            (
+                "parallel",
+                "Parallel",
+                "Constrain two selected line segments to remain parallel",
+                lambda: self._run_command("constraint.parallel"),
+            ),
+            (
+                "perpendicular",
+                "Perpendicular",
+                "Constrain two selected line segments to remain perpendicular",
+                lambda: self._run_command("constraint.perpendicular"),
+            ),
+            (
+                "equal_length",
+                "Equal length",
+                "Constrain two selected line segments to the same length",
+                lambda: self._run_command("constraint.equal_length"),
+            ),
+            (
+                "union",
+                "Union",
+                "Combine overlapping selected closed shapes",
+                lambda: self._run_command("boolean.union"),
+            ),
+            (
+                "subtract",
+                "Subtract",
+                "Subtract later selected shapes from the first shape",
+                lambda: self._run_command("boolean.subtract"),
+            ),
+            (
+                "intersect",
+                "Intersect",
+                "Keep only the overlap between selected closed shapes",
+                lambda: self._run_command("boolean.intersect"),
+            ),
         ):
             button = QPushButton(text)
             button.setMinimumHeight(28)
@@ -245,11 +286,15 @@ class CanvasPropertiesPanel(QWidget):
             self._context_buttons[key] = button
         constraints_layout.addWidget(self._context_buttons["constraints"], 0, 0)
         constraints_layout.addWidget(self._context_buttons["close"], 0, 1)
+        constraints_layout.addWidget(self._context_buttons["parallel"], 1, 0)
+        constraints_layout.addWidget(self._context_buttons["perpendicular"], 1, 1)
+        constraints_layout.addWidget(self._context_buttons["equal_length"], 2, 0, 1, 2)
         actions_layout.addWidget(self._context_buttons["duplicate"], 0, 0)
         actions_layout.addWidget(self._context_buttons["delete"], 0, 1)
-        self._action_buttons.extend(
-            (self._context_buttons["duplicate"], self._context_buttons["delete"])
-        )
+        actions_layout.addWidget(self._context_buttons["offset"], 1, 0, 1, 2)
+        actions_layout.addWidget(self._context_buttons["union"], 2, 0)
+        actions_layout.addWidget(self._context_buttons["subtract"], 2, 1)
+        actions_layout.addWidget(self._context_buttons["intersect"], 3, 0, 1, 2)
         for column, (text, tip, callback) in enumerate(
             (
                 ("Smooth", "Smooth jagged corners (Chaikin)", self._smooth),
@@ -260,8 +305,7 @@ class CanvasPropertiesPanel(QWidget):
             button.setMinimumHeight(28)
             button.setToolTip(tip)
             button.clicked.connect(callback)
-            actions_layout.addWidget(button, 1, column)
-            self._action_buttons.append(button)
+            actions_layout.addWidget(button, 4, column)
 
         # Shape-parameter rows (built per selection kind)
         self._param_grid = QGridLayout()
@@ -423,9 +467,18 @@ class CanvasPropertiesPanel(QWidget):
                     f"{' · ' + str(conflict_count) + ' conflicting' if conflict_count else ''}"
                 )
             has_open = any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
+            closed = [e for e in selected if len(e.points) >= 4 and e.points[0] == e.points[-1]]
+            line_like = [e for e in selected if len(e.points) == 2]
             self._context_buttons["constraints"].setVisible(constraint_count > 0)
             self._context_buttons["close"].setVisible(has_open)
-            self._selection_constraints_section.setVisible(constraint_count > 0 or has_open)
+            for key in ("parallel", "perpendicular", "equal_length"):
+                self._context_buttons[key].setVisible(len(line_like) == 2)
+            self._context_buttons["offset"].setVisible(count == 1 and bool(selected))
+            for key in ("union", "subtract", "intersect"):
+                self._context_buttons[key].setVisible(len(closed) >= 2)
+            self._selection_constraints_section.setVisible(
+                constraint_count > 0 or has_open or len(line_like) == 2
+            )
         finally:
             self._updating = False
 
@@ -456,7 +509,10 @@ class CanvasPropertiesPanel(QWidget):
         self._param_entity_id = entity_id
         if not wanted:
             return
-        # Fill values
+        # Fill values in display units — _value() parses these back through
+        # the unit-aware expression parser, so mm-raw text here would drift
+        # by 25.4× per commit in inch mode.
+        unit = self._unit()
         if kind == "line":
             pts = None
             if entity_id is not None:
@@ -467,22 +523,26 @@ class CanvasPropertiesPanel(QWidget):
                 dx = pts[-1][0] - pts[0][0]
                 dy = pts[-1][1] - pts[0][1]
                 if "length" in self._param_edits:
-                    self._param_edits["length"].setText(f"{math.hypot(dx, dy):.2f}")
+                    self._param_edits["length"].setText(
+                        f"{to_display(math.hypot(dx, dy), unit):.2f}"
+                    )
                 if "angle" in self._param_edits:
                     self._param_edits["angle"].setText(f"{math.degrees(math.atan2(dy, dx)):.1f}")
             return
         for key, edit in self._param_edits.items():
             value = meta.get(key)
-            if value is not None:
+            if value is None:
+                continue
+            if key in {"rotation", "angle", "sides", "points", "inner_ratio"}:
                 edit.setText(f"{float(value):g}")
+            else:
+                edit.setText(f"{to_display(float(value), unit):g}")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         columns = 1 if event.size().width() < 260 else 2
         for index, button in enumerate(self._transform_buttons):
             self._transform_layout.addWidget(button, index // columns, index % columns)
-        for index, button in enumerate(self._action_buttons):
-            self._actions_layout.addWidget(button, index // columns, index % columns)
 
     # ── Commits ───────────────────────────────────────────────────────────
 
@@ -512,8 +572,16 @@ class CanvasPropertiesPanel(QWidget):
             return
         x = self._value(self._x)
         y = self._value(self._y)
-        if self._canvas.move_selection_to(x, y):
+        if x is None and y is None:
+            self._canvas._show_flash("Enter a valid number or expression", 1200)
             self.refresh()
+            return
+        moved = self._canvas.move_selection_to(x, y)
+        if not moved and self._canvas._selected_ids() and not self._canvas._mutable_selected_ids():
+            self._canvas._show_flash("Selection is locked", 1200)
+        # Always refresh so a failed move can't leave phantom coordinates
+        # in the fields.
+        self.refresh()
 
     def _commit_dimension_value(self) -> None:
         if self._updating:
@@ -569,6 +637,17 @@ class CanvasPropertiesPanel(QWidget):
         self._canvas.rotate_selected(angle)
         self.refresh()
 
+    def _run_command(self, command_id: str) -> None:
+        """Run a registry command so inspector and keyboard behavior stay identical."""
+        from simple_stipple.canvas.commands import get
+
+        command = get(command_id)
+        if command.when is not None and not command.when(self._canvas):
+            self._canvas._show_flash(f"{command.label} is not available for this selection", 1400)
+            return
+        command.run(self._canvas)
+        self.refresh()
+
     def _mirror(self, axis: str) -> None:
         self._canvas.mirror_selected(axis)
         self.refresh()
@@ -587,6 +666,10 @@ class CanvasPropertiesPanel(QWidget):
         edit = self._param_edits.get(key)
         value = self._value(edit) if edit else None
         if value is None:
+            # Restore the real value — leaving the rejected text in place
+            # made it look committed.
+            self._canvas._show_flash("Enter a valid number or expression", 1200)
+            self.refresh()
             return
         if self._param_kind == "line":
             if key == "length":

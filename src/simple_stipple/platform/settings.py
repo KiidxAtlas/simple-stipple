@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import platform as _platform
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -37,7 +36,7 @@ settings_bus = SettingsBus()
 #
 # Every OTHER rebindable action (undo/redo, selection, path/boolean ops, tool
 # modes, view/grid controls, draw-primitive shortcuts, ...) is a canvas
-# Command in src/simple_stipple/ui/canvas/interaction/commands.py — its default lives on Command.shortcut,
+# Command in src/simple_stipple/canvas/interaction/commands.py — its default lives on Command.shortcut,
 # not here, so there is exactly one place that owns each shortcut's default.
 # simple_stipple.canvas.interaction.commands.apply_keybindings() reads the "keybindings" dict
 # (this table merged with the user's overrides) to make those live too.
@@ -55,7 +54,7 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
     "workspace.save_as": "Ctrl+Shift+S",
     # ── Application ───────────────────────────────────────────────────────────────
     "app.settings": "Ctrl+,",
-    "app.command_palette": "Meta+K",
+    "app.command_palette": "Ctrl+K",
     "window.fullscreen": "F11",
     # ── Canvas modes (single-key shortcuts; also drive the equivalent
     # commands.py Command when the canvas itself has focus) ───────────────────────
@@ -74,12 +73,9 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
 }
 
 
-# Platform-adjusted default keybindings: on macOS prefer 'Meta' (Command)
-if _platform.system() == "Darwin":
-    # Copy and replace Ctrl with Meta where appropriate
-    for k, v in list(DEFAULT_KEYBINDINGS.items()):
-        if v.startswith("Ctrl"):
-            DEFAULT_KEYBINDINGS[k] = v.replace("Ctrl", "Meta", 1)
+# No per-platform rewriting: Qt maps "Ctrl" to Command on macOS already
+# (AA_MacDontSwapCtrlAndMeta is never set), so "Ctrl+S" is ⌘S there and
+# Control+S everywhere else. "Meta" would bind the physical Control key.
 
 
 # =============================================================================
@@ -234,8 +230,12 @@ DEFAULT_SIMPLIFY_TOLERANCE = 0.2
 # and simple_stipple.canvas.view.
 # =============================================================================
 
-DEFAULT_DRAW_SIDEBAR_WIDTH = 144
-MIN_DRAW_SIDEBAR_WIDTH = 144
+# Two 44 px tool targets, their 6 px gap, section/content gutters, the
+# always-available 24 px resize target, and the 8 px vertical scrollbar need
+# 172 px before borders/style rounding. Keep a small safety gutter so the
+# second column can never render beneath the scrollbar.
+DEFAULT_DRAW_SIDEBAR_WIDTH = 176
+MIN_DRAW_SIDEBAR_WIDTH = 176
 MAX_DRAW_SIDEBAR_WIDTH = 220
 MIN_DRAW_SIDEBAR_HEIGHT = 200
 MAX_DRAW_SIDEBAR_HEIGHT = 900

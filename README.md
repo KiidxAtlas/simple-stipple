@@ -47,12 +47,17 @@ pip install .[cad]
 From your Mac, create and push a version tag to trigger the GitHub Actions release workflow for both platforms:
 
 ```bash
-./scripts/release.sh v0.3.4
+./scripts/release.sh v0.3.5
 ```
 
 That single tag push builds and publishes:
 
 - Windows executable: `SimpleStipple.exe`
 - macOS disk image: `SimpleStipple-macOS.dmg`
+
+Windows users can install verified releases directly from **Help → Check for Updates**.
+After download, the app closes, replaces the current one-file executable through a detached
+rollback-safe helper, and relaunches. macOS currently opens the verified disk image for the
+standard app-bundle replacement flow.
 
 If you prefer manual steps, do the equivalent:

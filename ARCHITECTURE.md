@@ -1,3 +1,5 @@
+c
+
 # Architecture
 
 Simple Stipple is a capability-first modular monolith and installed `src`-layout
@@ -48,16 +50,16 @@ executable rules in `tests/test_dependency_boundaries.py` are authoritative:
 
 ## Where changes go
 
-| Change | Home |
-|---|---|
-| startup, window, navigation, global menu/task coordination | `app/` |
-| entities, selection, commands, undo, workspace serialization | `document/` |
-| pure geometry, CAD, image/pattern processing, import/export formats | `engine/` |
-| behavior exclusive to one user workflow | `features/<workflow>/` |
-| shared vector editing gestures, rendering, tools, canvas chrome | `canvas/` |
-| shared Qt control, dialog, visual token, notification, or unit display | `ui/` |
-| operating-system path, settings, storage, update, or reporting concern | `platform/` |
-| packaged runtime data | `resources/` or the owning packaged style directory |
+| Change                                                                 | Home                                                  |
+| ---------------------------------------------------------------------- | ----------------------------------------------------- |
+| startup, window, navigation, global menu/task coordination             | `app/`                                              |
+| entities, selection, commands, undo, workspace serialization           | `document/`                                         |
+| pure geometry, CAD, image/pattern processing, import/export formats    | `engine/`                                           |
+| behavior exclusive to one user workflow                                | `features/<workflow>/`                              |
+| shared vector editing gestures, rendering, tools, canvas chrome        | `canvas/`                                           |
+| shared Qt control, dialog, visual token, notification, or unit display | `ui/`                                               |
+| operating-system path, settings, storage, update, or reporting concern | `platform/`                                         |
+| packaged runtime data                                                  | `resources/` or the owning packaged style directory |
 
 Do not add `common`, `misc`, `helpers`, or `utils`. Promote code out of a feature only after
 two independent consumers exist or when it represents an explicit shared aggregate.

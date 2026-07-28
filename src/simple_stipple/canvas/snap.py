@@ -2,7 +2,7 @@
 
 One entry point (``query``) merges every snap source — polyline vertices,
 midpoints, edges, intersections (via the pure candidate functions in
-src/simple_stipple/backend/cad/snapping.py), parametric-shape points (circle centers, arc
+src/simple_stipple/engine/cad/snapping.py), parametric-shape points (circle centers, arc
 endpoints, …), the grid, and guide lines — and returns the best candidate in
 screen space. Previously this logic was split across three modules plus four
 glue methods on the view, and drag vs. hover snapping threaded 13+ parameters
@@ -41,15 +41,22 @@ if TYPE_CHECKING:
     from simple_stipple.engine.cad.shapes import Shape
 
 SnapResult = tuple[float, float, str]
+RelationshipReference = tuple[str, int, tuple[float, float], tuple[float, float]]
+_ACTIVE_DRAW_REFERENCE = "__active_draw__"
 
 
 class SnapEngine:
     """Snap resolution bound to one canvas view."""
 
     GUIDE_SNAP_PX = 8.0
+    RELATIONSHIP_REFERENCE_PX = 96.0
 
     def __init__(self, view: CanvasView) -> None:
         self.v = view
+        self.last_relationship_reference: (
+            tuple[str, int, tuple[float, float], tuple[float, float]] | None
+        ) = None
+        self.last_relationship_type: str | None = None
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -72,6 +79,7 @@ class SnapEngine:
     ) -> SnapResult | None:
         v = self.v
         if not getattr(v, "_snap_master_enabled", True):
+            self.clear_relationship_reference()
             return None
         polylines = {e.id: e.points for e in v._entities}
         # Locked and non-active-layer entities remain useful references, but
@@ -182,6 +190,8 @@ class SnapEngine:
                 self._extension_candidate(cx, cy, exclude=exclude_polys),
             )
         best = self._pick_better(cx, cy, best, self._guide_candidate(cx, cy, wx, wy))
+        if best is None or best[2] not in {"parallel", "perpendicular", "equal_length"}:
+            self.clear_relationship_reference()
         return best
 
     def _relationship_candidate(
@@ -196,10 +206,11 @@ class SnapEngine:
     ) -> SnapResult | None:
         """Infer parallel, perpendicular, and equal-length line endpoints.
 
-        Candidates must be genuinely close to the pointer in screen space.
-        This gives CAD-style intent hints without forcing the cursor onto a
-        remote construction line.
+        Only nearby source segments participate, and the selected source is
+        retained so feedback can identify the exact referenced geometry.
         """
+        locked_reference = self.last_relationship_reference
+        locked_type = self.last_relationship_type
         ax, ay = reference
         radius = ShapeSnapEngine.SNAP_RADIUS
         pointer_angle = math.atan2(wy - ay, wx - ax)
@@ -207,60 +218,155 @@ class SnapEngine:
         if pointer_length <= 1e-12:
             return None
         hidden_ids = self.v._flagged("hidden")
-        relationship_candidates: list[SnapResult] = []
-        lengths: set[float] = set()
-        angles: set[float] = set()
-        for entity in self.v._entities:
-            if entity.id in (exclude or ()) or entity.id in hidden_ids:
+        candidates: list[tuple[SnapResult, RelationshipReference]] = []
+        equal_candidates: list[tuple[SnapResult, RelationshipReference]] = []
+        sources = [
+            (entity.id, entity.points, False)
+            for entity in self.v._entities
+            if entity.id not in (exclude or ()) and entity.id not in hidden_ids
+        ]
+        draw_points = list(getattr(self.v, "_draw_pts", []))
+        if len(draw_points) >= 2:
+            # Committed segments of the in-progress polyline are always
+            # relevant to the next segment, even though the unfinished shape
+            # is not yet present in the document entity list.
+            sources.append((_ACTIVE_DRAW_REFERENCE, draw_points, True))
+        for entity_id, points, is_active_draw in sources:
+            if len(points) < 2:
                 continue
-            for start, end in zip(entity.points, entity.points[1:]):
+            for segment_index, (start, end) in enumerate(zip(points, points[1:])):
                 dx, dy = end[0] - start[0], end[1] - start[1]
                 length = math.hypot(dx, dy)
                 if length <= 1e-9:
                     continue
-                lengths.add(round(length, 9))
-                angles.add(round(math.atan2(dy, dx) % math.pi, 9))
-        if getattr(self.v, "_snap_angle_enabled", True):
-            for angle in angles:
-                for target_angle, role in (
-                    (angle, "parallel"),
-                    (angle + math.pi / 2, "perpendicular"),
+                start_c, end_c = self.v._w2c(*start), self.v._w2c(*end)
+                # Once acquired, keep evaluating only that source regardless
+                # of pointer distance. It releases when its geometric
+                # relationship no longer falls within the snap tolerance.
+                if not self._relationship_source_is_eligible(
+                    cx,
+                    cy,
+                    entity_id,
+                    segment_index,
+                    start_c,
+                    end_c,
+                    locked_reference,
+                    always_available=is_active_draw,
                 ):
-                    # Use the sign closest to the pointer direction.
-                    if math.cos(pointer_angle - target_angle) < 0:
-                        target_angle += math.pi
-                    relationship_candidates.append(
+                    continue
+                source: RelationshipReference = (entity_id, segment_index, start, end)
+                angle = math.atan2(dy, dx) % math.pi
+                if getattr(self.v, "_snap_angle_enabled", True):
+                    for target_angle, role in (
+                        (angle, "parallel"),
+                        (angle + math.pi / 2, "perpendicular"),
+                    ):
+                        if locked_type is not None and role != locked_type:
+                            continue
+                        if math.cos(pointer_angle - target_angle) < 0:
+                            target_angle += math.pi
+                        candidates.append(
+                            (
+                                (
+                                    ax + pointer_length * math.cos(target_angle),
+                                    ay + pointer_length * math.sin(target_angle),
+                                    role,
+                                ),
+                                source,
+                            )
+                        )
+                if getattr(self.v, "_snap_equal_length_enabled", True) and locked_type in {
+                    None,
+                    "equal_length",
+                }:
+                    ux, uy = (wx - ax) / pointer_length, (wy - ay) / pointer_length
+                    equal_candidates.append(
                         (
-                            ax + pointer_length * math.cos(target_angle),
-                            ay + pointer_length * math.sin(target_angle),
-                            role,
+                            (ax + length * ux, ay + length * uy, "equal_length"),
+                            source,
                         )
                     )
-        ux, uy = (wx - ax) / pointer_length, (wy - ay) / pointer_length
-        equal_candidates = (
-            [(ax + length * ux, ay + length * uy, "equal_length") for length in lengths]
-            if getattr(self.v, "_snap_equal_length_enabled", True)
-            else []
+
+        equal = self._nearest_relationship_candidate(cx, cy, radius, equal_candidates)
+        result = (
+            equal
+            if equal is not None
+            else self._nearest_relationship_candidate(cx, cy, radius, candidates)
+        )
+        if result is not None:
+            return result
+        if locked_reference is not None:
+            # The locked edge disappeared, became hidden, or ceased matching.
+            # Release it and allow a nearby source to acquire in this query.
+            self.clear_relationship_reference()
+            return self._relationship_candidate(cx, cy, wx, wy, reference, exclude=exclude)
+        self.clear_relationship_reference()
+        return None
+
+    def _nearest_relationship_candidate(
+        self,
+        cx: float,
+        cy: float,
+        radius: float,
+        options: list[tuple[SnapResult, RelationshipReference]],
+    ) -> SnapResult | None:
+        best: SnapResult | None = None
+        best_reference: RelationshipReference | None = None
+        best_distance = radius
+        for candidate, source in options:
+            pcx, pcy = self.v._w2c(candidate[0], candidate[1])
+            distance = math.hypot(cx - pcx, cy - pcy)
+            if distance < best_distance:
+                best, best_reference, best_distance = candidate, source, distance
+        if best is not None:
+            self.last_relationship_reference = best_reference
+            self.last_relationship_type = best[2]
+        return best
+
+    def clear_relationship_reference(self) -> None:
+        """Release relationship hysteresis after commit/cancel or invalidation."""
+        self.last_relationship_reference = None
+        self.last_relationship_type = None
+
+    def _relationship_source_is_eligible(
+        self,
+        cx: float,
+        cy: float,
+        entity_id: str,
+        segment_index: int,
+        start_c: tuple[float, float],
+        end_c: tuple[float, float],
+        locked: tuple[str, int, tuple[float, float], tuple[float, float]] | None,
+        *,
+        always_available: bool,
+    ) -> bool:
+        """Apply acquisition proximity while preserving an existing lock."""
+        is_locked = locked is not None and locked[0] == entity_id and locked[1] == segment_index
+        if locked is not None:
+            return is_locked
+        if always_available:
+            return True
+        return (
+            self._screen_distance_to_segment(cx, cy, start_c, end_c)
+            <= self.RELATIONSHIP_REFERENCE_PX
         )
 
-        def nearest(candidates: list[SnapResult]) -> SnapResult | None:
-            best: SnapResult | None = None
-            best_distance = radius
-            for candidate in candidates:
-                pcx, pcy = self.v._w2c(candidate[0], candidate[1])
-                distance = math.hypot(cx - pcx, cy - pcy)
-                if distance < best_distance:
-                    best, best_distance = candidate, distance
-            return best
-
-        # When the cursor is within acquisition tolerance of an existing
-        # segment length, length is the more specific constraint. A parallel
-        # candidate lies exactly under the raw pointer and otherwise always
-        # masks the tiny radial correction needed to make lengths equal.
-        equal = nearest(equal_candidates)
-        if equal is not None:
-            return equal
-        return nearest(relationship_candidates)
+    @staticmethod
+    def _screen_distance_to_segment(
+        px: float,
+        py: float,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        """Return the shortest screen-space distance to a finite segment."""
+        ax, ay = start
+        bx, by = end
+        dx, dy = bx - ax, by - ay
+        denominator = dx * dx + dy * dy
+        if denominator <= 1e-12:
+            return math.hypot(px - ax, py - ay)
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denominator))
+        return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
 
     def _axis_alignment_candidate(
         self,
@@ -441,11 +547,7 @@ class SnapEngine:
         best_dist = ShapeSnapEngine.SNAP_RADIUS
         hidden_ids = self.v._flagged("hidden")
         for eid, shape in self.v._snap_shapes().items():
-            if (
-                eid in (exclude or ())
-                or eid in hidden_ids
-                or not isinstance(shape, CircleShape)
-            ):
+            if eid in (exclude or ()) or eid in hidden_ids or not isinstance(shape, CircleShape):
                 continue
             dx, dy = ax - shape.center[0], ay - shape.center[1]
             distance_sq = dx * dx + dy * dy

@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QToolButton
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.layout import info_chip
 from simple_stipple.ui.style.theme import icon_path
+from simple_stipple.ui.units import suffix as _unit_suffix
+from simple_stipple.ui.units import to_display as _to_display
 
 
 class CanvasStatusStrip(QFrame):
@@ -106,6 +108,7 @@ class CanvasStatusStrip(QFrame):
         readiness_tone: str = "neutral",
         zoom_percent: int = 100,
         cursor_pos: tuple[float, float] | None = None,
+        unit: str = "mm",
     ) -> None:
         normalized_mode = mode.replace("_", " ").title()
         self._mode_label.setText(
@@ -127,7 +130,7 @@ class CanvasStatusStrip(QFrame):
         self._precision_label.setText(combined_precision)
         self._zoom_label.setText(f"{zoom_percent}%")
         if cursor_pos:
-            self._cursor_label.setText(f"X {cursor_pos[0]:.2f}  Y {cursor_pos[1]:.2f}")
+            self._cursor_label.setText(self._format_cursor(cursor_pos, unit))
         else:
             self._cursor_label.setText("")
         self._readiness_chip.setText(readiness_text)
@@ -178,7 +181,19 @@ class CanvasStatusStrip(QFrame):
             menu.addAction(f"{pct}%", lambda _p=pct: callback(_p))
         menu.popup(self._zoom_label.mapToGlobal(self._zoom_label.rect().bottomLeft()))
 
-    def set_zoom(self, zoom_percent: int, cursor_pos: tuple[float, float] | None = None) -> None:
+    @staticmethod
+    def _format_cursor(cursor_pos: tuple[float, float], unit: str) -> str:
+        return (
+            f"X {_to_display(cursor_pos[0], unit):.2f}  "
+            f"Y {_to_display(cursor_pos[1], unit):.2f} {_unit_suffix(unit)}"
+        )
+
+    def set_zoom(
+        self,
+        zoom_percent: int,
+        cursor_pos: tuple[float, float] | None = None,
+        unit: str = "mm",
+    ) -> None:
         """Lightweight view update — refresh only zoom (and cursor) labels.
 
         Called on every wheel/pinch zoom, so it must avoid the full snapshot
@@ -186,7 +201,7 @@ class CanvasStatusStrip(QFrame):
         """
         self._zoom_label.setText(f"{zoom_percent}%")
         if cursor_pos is not None:
-            self._cursor_label.setText(f"X {cursor_pos[0]:.2f}  Y {cursor_pos[1]:.2f}")
+            self._cursor_label.setText(self._format_cursor(cursor_pos, unit))
 
     def set_selection_count(self, count: int) -> None:
         """Lightweight update — change only the selection label without a full snapshot."""

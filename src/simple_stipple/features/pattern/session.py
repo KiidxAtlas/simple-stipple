@@ -120,7 +120,11 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._preview_btn.setProperty("active", True)
         refresh_style(page._preview_btn)
     else:
-        page._canvas.set_polylines_state(page._edit_polys, fit=bool(page._edit_polys))
+        page._canvas.set_polylines_state(
+            page._edit_polys,
+            fit=bool(page._edit_polys),
+            entity_ids=list(page._outline_ids),
+        )
         page._showing_preview = False
         page._preview_btn.setChecked(False)
         page._preview_btn.setProperty("active", False)

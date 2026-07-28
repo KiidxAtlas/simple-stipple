@@ -23,10 +23,7 @@ def _equal(first: Point, second: Point, tolerance: float) -> bool:
 def explode_path(points: list[Point]) -> list[list[Point]]:
     """Decompose a multi-vertex path into non-degenerate segments."""
     vertices = list(points)
-    closed = (
-        len(vertices) >= 3
-        and math.dist(vertices[0], vertices[-1]) < PATH_CLOSURE_TOLERANCE
-    )
+    closed = len(vertices) >= 3 and math.dist(vertices[0], vertices[-1]) < PATH_CLOSURE_TOLERANCE
     if closed:
         vertices.pop()
     count = len(vertices) if closed else len(vertices) - 1
@@ -60,14 +57,9 @@ def _attach_segment(
 def _normalize_chain(chain: list[Point]) -> list[Point]:
     normalized = [chain[0]]
     normalized.extend(
-        point
-        for point in chain[1:]
-        if math.dist(normalized[-1], point) >= PATH_CLOSURE_TOLERANCE
+        point for point in chain[1:] if math.dist(normalized[-1], point) >= PATH_CLOSURE_TOLERANCE
     )
-    if (
-        len(normalized) >= 3
-        and _equal(normalized[0], normalized[-1], PATH_CLOSURE_TOLERANCE)
-    ):
+    if len(normalized) >= 3 and _equal(normalized[0], normalized[-1], PATH_CLOSURE_TOLERANCE):
         normalized[-1] = normalized[0]
     return normalized
 

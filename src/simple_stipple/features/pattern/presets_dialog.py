@@ -30,6 +30,7 @@ from simple_stipple.engine.workflows import (
     merge_presets,
     reset_to_builtins,
 )
+from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.files import pick_open_file, pick_save_file
 
@@ -308,7 +309,7 @@ class PresetManagerDialog(QDialog):
         try:
             export_to_file({name: self._presets[name]}, path)
         except OSError as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            show_error(self, "Export Failed", exc)
             return
         self._set_status(f"Exported 1 preset → {Path(path).name}")
 
@@ -328,7 +329,7 @@ class PresetManagerDialog(QDialog):
         try:
             export_to_file(self._presets, path)
         except OSError as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            show_error(self, "Export Failed", exc)
             return
         self._set_status(f"Exported {len(self._presets)} preset(s) → {Path(path).name}")
 
@@ -345,7 +346,7 @@ class PresetManagerDialog(QDialog):
         try:
             incoming = import_from_file(path)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Import Failed", str(exc))
+            show_error(self, "Import Failed", exc)
             return
         if not incoming:
             QMessageBox.warning(

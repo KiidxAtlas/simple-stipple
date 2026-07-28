@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import platform as _platform
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,9 +14,25 @@ from simple_stipple.ui.recent import record_recent
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
+
 def _settings_key(slot: str) -> str:
     """Return the canonical settings key used to remember a dialog directory."""
     return f"dialog_dir.{slot}"
+
+
+def reveal_label() -> str:
+    """Platform-correct wording for "open this path in the OS file manager".
+
+    Every call site uses ``QDesktopServices.openUrl`` (cross-platform), but
+    several used to say "Show in Finder" unconditionally — correct on
+    macOS, wrong on Windows/Linux.
+    """
+    system = _platform.system()
+    if system == "Darwin":
+        return "Show in Finder"
+    if system == "Windows":
+        return "Show in Explorer"
+    return "Show in Files"
 
 
 def remembered_dir(settings: dict, slot: str, *, fallback: str = "") -> str:
@@ -107,4 +124,3 @@ def pick_directory(
             settings[_settings_key(slot)] = path
             save_settings(settings)
     return path
-

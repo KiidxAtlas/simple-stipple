@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.canvas import commands as canvas_commands
+
 # Platform modifier for human-readable shortcut hints
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
@@ -113,10 +115,16 @@ def canvas_toolbar(
     shell_layout.setSpacing(4)
 
     mode_buttons: dict[str, QPushButton] = {}
+    # Draw/Edit read their live, rebindable shortcut from the canvas Command
+    # registry (native_shortcut() already resolves the user's override and
+    # renders it platform-correctly, e.g. no more literal "Meta+..." on
+    # macOS) — hardcoded literals here went stale after a rebind. Select has
+    # no matching Command entry (it's the default mode, not an action), so
+    # it keeps its default-only fallback.
     mode_hints = {
         "Select": "Shortcut: S",
-        "Draw": "Shortcut: D",
-        "Edit": "Shortcut: E",
+        "Draw": f"Shortcut: {canvas_commands.native_shortcut('mode.draw') or 'D'}",
+        "Edit": f"Shortcut: {canvas_commands.native_shortcut('mode.edit') or 'E'}",
     }
     for mode in modes:
         btn = QPushButton(mode)
@@ -135,7 +143,8 @@ def canvas_toolbar(
         fit_btn = QPushButton("Fit")
         fit_btn.setProperty("role", "secondary")
         fit_btn.setMinimumHeight(30)
-        fit_btn.setToolTip("Fit view to content (Shortcut: F)")
+        fit_keys = canvas_commands.native_shortcut("view.fit") or "F"
+        fit_btn.setToolTip(f"Fit view to content (Shortcut: {fit_keys})")
         fit_btn.clicked.connect(on_fit)
         shell_layout.addWidget(fit_btn)
         shell.register_secondary(fit_btn)

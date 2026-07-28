@@ -48,6 +48,10 @@ QLabel[role="shell-subtitle"] {
     color: #8b949e;
     font-size: 12px;
 }
+QLabel[role="shell-sep"] {
+    color: #30363d;
+    font-size: 18px;
+}
 QLabel[role="shell-meta"] {
     color: #c9d1d9;
     font-size: 12px;
@@ -230,6 +234,38 @@ QPushButton[active="true"]:hover {
 QPushButton[role="icon-sm"] {
     padding: 0px;
     font-size: 14px;
+}
+
+/* Hairline separator (ui.components.layout.sep()). Was a per-widget
+   setStyleSheet with a hardcoded color, so it stayed dark in Light mode. */
+QFrame[role="hairline"] {
+    color: #21262d;
+}
+
+/* Draw-sidebar cycle/state buttons (tool family, snap, arc, constraint
+   pickers). Previously a per-widget setStyleSheet, which outranks both this
+   file and the light/high-contrast substitution passes below — the sidebar
+   stayed dark-on-light regardless of theme. */
+QPushButton[role="cycle-icon"] {
+    border-radius: 6px;
+    background: #161b22;
+    border: 1px solid #30363d;
+}
+QPushButton[role="cycle-icon"]:hover {
+    background: #1c2128;
+    border-color: #58a6ff;
+}
+QPushButton[role="cycle-icon"]:checked {
+    background: #1f3a6e;
+    border-color: #2f81f7;
+}
+QPushButton[role="cycle-icon"]:pressed {
+    background: #21262d;
+    border-color: #79c0ff;
+}
+QPushButton[role="cycle-icon"]:disabled {
+    background: #0d1117;
+    border-color: #21262d;
 }
 
 QPushButton[role="primary"] {
@@ -736,7 +772,7 @@ QLabel[role="hint"] {
 QLabel[role="hint-sm"] {
     color: #8b949e;
     background: transparent;
-    font-size: 9px;
+    font-size: 11px;
 }
 QLabel[role="dim"] {
     color: #8b949e;

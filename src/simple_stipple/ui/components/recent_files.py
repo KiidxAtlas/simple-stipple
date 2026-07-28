@@ -24,7 +24,6 @@ from simple_stipple.ui.style.theme import (
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
-
 class RecentFilesButton(QPushButton):
     """Drop-down button exposing the recent-files MRU for one file kind."""
 
@@ -73,4 +72,3 @@ class RecentFilesButton(QPushButton):
 # ══════════════════════════════════════════════════════════════════════════
 # Keyboard-focus policy (generic Qt utility, not page-specific)
 # ══════════════════════════════════════════════════════════════════════════
-

@@ -5,7 +5,7 @@ Merged from the former ``defaults.py`` — small and tightly related to the
 form fields it configures. The defaults are the values a freshly-opened
 image (or a cleared workspace) starts with — e.g. "Max resolution" or
 "Simplify tolerance" — as opposed to per-workspace saved state
-(``src/simple_stipple/ui/pages/trace/session.py``), which restores whatever was last used
+(``src/simple_stipple/features/trace/session.py``), which restores whatever was last used
 on a specific, already-traced workspace file. Editable from the Settings
 dialog under "Trace Defaults"; stored in ``settings["trace_defaults"]`` as
 the same string a ``QLineEdit`` holds.
@@ -71,9 +71,7 @@ class TextField(QWidget):
         super().resizeEvent(event)
         stacked = event.size().width() < 310  # 340 px sidebar minus card margins
         self._layout.setDirection(
-            QBoxLayout.Direction.TopToBottom
-            if stacked
-            else QBoxLayout.Direction.LeftToRight
+            QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
         )
 
 
@@ -99,7 +97,9 @@ class SliderField(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(TextField(label, entry=entry, required=not empty_at_minimum, tooltip=tooltip))
+        layout.addWidget(
+            TextField(label, entry=entry, required=not empty_at_minimum, tooltip=tooltip)
+        )
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setAccessibleName(label)
         self.slider.setRange(0, round((maximum - minimum) / step))

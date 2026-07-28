@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
-
 def install_dialog_focus_lifecycle(
     dialog: QWidget,
     initial_focus: QWidget | None = None,

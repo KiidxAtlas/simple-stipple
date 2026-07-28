@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QCoreApplication, QEvent, QSize
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -52,6 +52,19 @@ def app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def close_test_windows(app: QApplication):
+    """Run every top-level widget's real shutdown path after each UI test."""
+    existing = set(app.topLevelWidgets())
+    yield
+    for widget in set(app.topLevelWidgets()) - existing:
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+
 @pytest.mark.parametrize("width,height", [(1280, 820), (1050, 700), (900, 600)])
 def test_every_top_level_page_fits_and_visible_buttons_meet_minimum_target(
     app: QApplication,
@@ -88,8 +101,7 @@ def test_every_top_level_page_fits_and_visible_buttons_meet_minimum_target(
         # makes any future, explicitly justified WCAG exception reviewable.
         assert not undersized, f"{name}: {undersized}"
         page.hide()
-    window.hide()
-    window.deleteLater()
+    window.close()
 
 
 def test_reduced_motion_uses_direct_final_states(app: QApplication) -> None:
@@ -211,26 +223,19 @@ def test_top_level_pages_have_working_focus_order_and_focus_state(
         app.processEvents()
         assert app.focusWidget() is not first, name
         page.hide()
-    window.hide()
+    window.close()
 
 
 def test_primary_and_secondary_theme_text_meet_wcag_aa_contrast() -> None:
     qss = (
-        Path(__file__).parents[1]
-        / "src"
-        / "simple_stipple"
-        / "ui"
-        / "style"
-        / "theme.qss"
+        Path(__file__).parents[1] / "src" / "simple_stipple" / "ui" / "style" / "theme.qss"
     ).read_text(encoding="utf-8")
     assert "#0d1117" in qss and "#e6edf3" in qss and "#8b949e" in qss
 
     def luminance(hex_color: str) -> float:
         channels = [int(hex_color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
         linear = [
-            value / 12.92
-            if value <= 0.04045
-            else ((value + 0.055) / 1.055) ** 2.4
+            value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
             for value in channels
         ]
         return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
@@ -366,9 +371,7 @@ def test_representative_backend_export_and_image_flows(tmp_path: Path) -> None:
         image_path, tmp_path / "engraving.png", raster_spec
     )
     assert png.is_file() and metadata.is_file() and positioned_svg.is_file()
-    assert json.loads(metadata.read_text())["schema"] == (
-        "simple-stipple-raster-engraving-v1"
-    )
+    assert json.loads(metadata.read_text())["schema"] == ("simple-stipple-raster-engraving-v1")
 
     package = export_laserstar_package(tmp_path, "Smoke Job", square)
     assert (package / "01_pattern-and-outline.fvi").is_file()
@@ -416,11 +419,7 @@ def test_frozen_jit_module_import_disables_file_cache() -> None:
         [
             sys.executable,
             "-c",
-            (
-                "import sys; "
-                "sys.frozen = True; "
-                "import simple_stipple.engine.geometry.jit"
-            ),
+            ("import sys; sys.frozen = True; import simple_stipple.engine.geometry.jit"),
         ],
         check=False,
         capture_output=True,

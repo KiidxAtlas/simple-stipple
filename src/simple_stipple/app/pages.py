@@ -151,6 +151,18 @@ class PageRuntime:
     def get(self, page_id: str) -> QWidget | None:
         return self._page_by_id.get(page_id)
 
+    def content_canvas_for(self, page: QWidget | None) -> Any | None:
+        """First live content canvas declared for this page widget, if any."""
+        if page is None:
+            return None
+        for spec in self._specs:
+            if self._page_by_id.get(spec.page_id) is page:
+                for canvas_attr in spec.content_canvas_attrs:
+                    canvas = getattr(page, canvas_attr, None)
+                    if canvas is not None:
+                        return canvas
+        return None
+
     def switch_to(self, page_id: str) -> None:
         page = self.get(page_id)
         if page is None:

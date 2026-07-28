@@ -875,6 +875,11 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
+    def _warn_if_locked_selection(self, mutable_indices: list[str]) -> None:
+        """Flash when an operation no-ops purely because the selection is locked."""
+        if not mutable_indices and self._host._selected_ids():
+            self._host._show_flash("Shape is locked", 1200)
+
     def align_selected(self, mode: str) -> bool:
         """Align each selected alignment "unit" to the selection's overall
         bounds. Grouped shapes are treated as a single rigid unit (aligned
@@ -884,6 +889,7 @@ class EditingService:
         indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if len(indices) < 2 or bounds is None:
+            self._warn_if_locked_selection(indices)
             return False
         bx0, by0, bx1, by1 = bounds
         center_x = (bx0 + bx1) / 2.0
@@ -949,6 +955,7 @@ class EditingService:
         indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None:
+            self._warn_if_locked_selection(indices)
             return False
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0
@@ -974,6 +981,7 @@ class EditingService:
         indices = self._host._mutable_selected_ids()
         bounds = self._host._selection_bounds(indices)
         if not indices or bounds is None:
+            self._warn_if_locked_selection(indices)
             return False
         cx = (bounds[0] + bounds[2]) / 2.0
         cy = (bounds[1] + bounds[3]) / 2.0

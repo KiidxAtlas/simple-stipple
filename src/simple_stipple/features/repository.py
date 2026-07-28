@@ -7,7 +7,7 @@ import threading
 from html import escape
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -30,6 +30,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.workflow import set_status_label
+from simple_stipple.ui.files import reveal_label
 from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
 
 
@@ -61,7 +62,14 @@ class RepoPage(BasePage):
         self._dir_edit = QLineEdit(self._settings.get("repo_dir", ""))
         self._dir_edit.setPlaceholderText("Select a git repository folder")
         self._dir_edit.textChanged.connect(self._emit_state_changed)
-        self._dir_edit.textChanged.connect(self._refresh_repo_state)
+        # Debounced: each keystroke otherwise stat'd the filesystem twice
+        # and flipped four buttons' enabled state, visibly flickering while
+        # typing a path.
+        self._refresh_repo_state_timer = QTimer(self)
+        self._refresh_repo_state_timer.setSingleShot(True)
+        self._refresh_repo_state_timer.setInterval(250)
+        self._refresh_repo_state_timer.timeout.connect(self._refresh_repo_state)
+        self._dir_edit.textChanged.connect(self._refresh_repo_state_timer.start)
         dir_row.addWidget(self._dir_edit, stretch=1)
         browse_btn = QPushButton("Browse…")
         browse_btn.clicked.connect(self._browse_repo_dir)
@@ -149,8 +157,14 @@ class RepoPage(BasePage):
         self._status_btn.setToolTip("Show current repository status")
         self._status_btn.clicked.connect(self._git_status)
         secondary.addWidget(self._status_btn)
-        self._open_btn = QPushButton("Open Folder")
-        self._open_btn.setToolTip("Open the repository folder in Finder")
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setToolTip("Cancel the pull/commit/push in progress")
+        self._cancel_btn.setProperty("role", "danger")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._cancel_git_op)
+        secondary.addWidget(self._cancel_btn)
+        self._open_btn = QPushButton(reveal_label())
+        self._open_btn.setToolTip("Open the repository folder")
         self._open_btn.clicked.connect(self._open_repo_dir)
         secondary.addWidget(self._open_btn)
         secondary.addStretch()
@@ -241,6 +255,7 @@ class RepoPage(BasePage):
             self._push_btn,
         ):
             button.setEnabled(git_enabled)
+        self._cancel_btn.setEnabled(self._git_busy)
 
     @staticmethod
     def _set_step_status(label: QLabel, text: str, color: str) -> None:
@@ -255,7 +270,9 @@ class RepoPage(BasePage):
         else:
             color = "#c9d1d9"
         self._log.append(
-            f'<span style="color:{color}; font-family: Menlo, Courier; font-size: 11px;">'
+            f'<span style="color:{color}; '
+            "font-family: Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace; "
+            f'font-size: 11px;">'
             f"{escape(text)}</span>"
         )
 
@@ -443,6 +460,22 @@ class RepoPage(BasePage):
             lambda _results: None,
             show_dialogs=False,
         )
+
+    def _cancel_git_op(self) -> None:
+        if not self._git_busy:
+            return
+        self._git_cancel.set()
+        process = self._git_process
+        if process is not None and process.poll() is None:
+            # Terminate the in-flight subprocess immediately — the cancel
+            # flag alone is only checked between steps, so without this the
+            # user waits out the full 30s per-command timeout regardless.
+            try:
+                process.terminate()
+            except OSError:
+                pass
+        self._set_step_status(self._repo_status, "Cancelling…", STATUS_ERR)
+        self._cancel_btn.setEnabled(False)
 
     def shutdown(self) -> None:
         self._shutting_down = True

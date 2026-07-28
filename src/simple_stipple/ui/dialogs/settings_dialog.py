@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator, QValidator
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -64,10 +65,16 @@ from simple_stipple.ui.units import DEFAULT_UNIT_SYSTEM
 class SettingsDialog(QDialog):
     """Settings dialog with folder paths and behavioral toggles."""
 
+    # Emitted after Apply writes settings to disk (Save uses the dialog's
+    # normal accept()/exec() result instead). Previously Apply only saved to
+    # disk — the running app kept its stale in-memory settings until the
+    # dialog was later accepted or the app restarted.
+    applied = Signal()
+
     _FOLDER_FIELDS = [
         ("workspace_dir", "Workspace folder"),
         ("outline_dxf_dir", "Pattern outline folder"),
-        ("custom_tiles_dir", "Custom Tiles folder"),
+        ("custom_tiles_dir", "Custom tiles folder"),
         ("pattern_output_dir", "Pattern fill output folder"),
         ("draft_output_dir", "Draft output folder"),
         ("fvi_source_dir", "FVI conversion source folder"),
@@ -115,27 +122,33 @@ class SettingsDialog(QDialog):
     _GAP = SPACE_MD
     _SPACE = SPACE_SM
     _CATEGORIES = (
-        "General",
+        "All settings",
+        "Appearance",
         "Files & Folders",
         "Canvas & Snapping",
-        "Drawing",
-        "Pattern",
+        "Accessibility",
+        "Customization",
         "Trace",
-        "Export & Machines",
-        "Interface",
-        "Shortcuts & Menus",
         "Updates",
     )
     _CATEGORY_CARDS = {
-        "General": ("Appearance & Units",),
+        "All settings": (
+            "Workspace & Source",
+            "Outputs & Conversion",
+            "Repository",
+            "Appearance & Units",
+            "Updates & Sync",
+            "Canvas & Snapping",
+            "Accessibility",
+            "Customization",
+            "Trace Defaults",
+        ),
+        "Appearance": ("Appearance & Units",),
         "Files & Folders": ("Workspace & Source", "Outputs & Conversion", "Repository"),
         "Canvas & Snapping": ("Canvas & Snapping",),
-        "Drawing": ("Canvas & Snapping",),
-        "Pattern": ("Outputs & Conversion",),
+        "Accessibility": ("Accessibility",),
+        "Customization": ("Customization",),
         "Trace": ("Trace Defaults",),
-        "Export & Machines": ("Outputs & Conversion",),
-        "Interface": ("Appearance & Units", "Accessibility"),
-        "Shortcuts & Menus": ("Customization",),
         "Updates": ("Updates & Sync",),
     }
 
@@ -175,7 +188,9 @@ class SettingsDialog(QDialog):
         title.setProperty("role", "page-title")
         layout.addWidget(title)
 
-        subtitle = QLabel("Configure workspace paths, folder locations, and application behavior.")
+        subtitle = QLabel(
+            "All settings are shown below. Choose a section to jump to it, or search every setting."
+        )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
@@ -183,11 +198,11 @@ class SettingsDialog(QDialog):
         find_row = QHBoxLayout()
         find_row.setSpacing(self._SPACE)
         self._category_combo = QComboBox()
-        self._category_combo.setAccessibleName("Settings category")
+        self._category_combo.setAccessibleName("Show settings section")
         self._category_combo.setMinimumWidth(190)
         self._category_combo.addItems(self._CATEGORIES)
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Search settings…")
+        self._search_edit.setPlaceholderText("Search all settings…")
         self._search_edit.setClearButtonEnabled(True)
         self._search_edit.setAccessibleName("Search settings")
         find_row.addWidget(self._category_combo)
@@ -204,6 +219,14 @@ class SettingsDialog(QDialog):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(self._GAP)
         self._scroll.setWidget(content)
+
+        # A search with no matches used to leave every card hidden with no
+        # explanation — just a blank scroll area.
+        self._no_match_label = QLabel("No settings match your search.")
+        self._no_match_label.setProperty("role", "hint")
+        self._no_match_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._no_match_label.setVisible(False)
+        content_layout.addWidget(self._no_match_label)
 
         _, form = self._form_card(content_layout, "Workspace & Source")
         for key, label in self._FOLDER_FIELDS[:2]:
@@ -354,14 +377,15 @@ class SettingsDialog(QDialog):
             self._trace_default_entries[key] = entry
 
         content_layout.addStretch()
-        self._category_combo.currentTextChanged.connect(self._jump_to_category)
+        self._category_combo.currentTextChanged.connect(self._show_category)
         self._search_edit.textChanged.connect(self._filter_settings)
         sep(layout)
 
         btn_row = QHBoxLayout()
         reset_btn = QPushButton("Reset")
         reset_btn.setToolTip("Reset all settings fields to application defaults")
-        reset_btn.clicked.connect(self._reset_fields)
+        reset_btn.setAutoDefault(False)
+        reset_btn.clicked.connect(self._confirm_reset_fields)
         btn_row.addWidget(reset_btn)
         btn_row.addStretch()
         cancel_btn = QPushButton("Cancel")
@@ -381,7 +405,7 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(apply_btn)
         btn_row.addWidget(save_btn)
         layout.addLayout(btn_row)
-        self._jump_to_category(self._category_combo.currentText())
+        self._show_category(self._category_combo.currentText())
         install_dialog_focus_lifecycle(self, self._search_edit)
 
     # ── Layout helpers ────────────────────────────────────────────────────
@@ -397,7 +421,7 @@ class SettingsDialog(QDialog):
         self._settings_cards[title] = card
         return card, body
 
-    def _jump_to_category(self, title: str) -> None:
+    def _show_category(self, title: str) -> None:
         if self._search_edit.text():
             self._search_edit.clear()
         visible_titles = set(self._CATEGORY_CARDS.get(title, ()))
@@ -418,19 +442,16 @@ class SettingsDialog(QDialog):
             searchable.extend(label.text() for label in card.findChildren(QLabel))
             searchable.extend(button.text() for button in card.findChildren(QPushButton))
             searchable.extend(check.text() for check in card.findChildren(QCheckBox))
-            category_cards = set(
-                self._CATEGORY_CARDS.get(self._category_combo.currentText(), ())
-            )
+            category_cards = set(self._CATEGORY_CARDS.get(self._category_combo.currentText(), ()))
             matches = (
-                needle in " ".join(searchable).casefold()
-                if needle
-                else title in category_cards
+                needle in " ".join(searchable).casefold() if needle else title in category_cards
             )
             card.setVisible(matches)
             if matches and first_match is None:
                 first_match = card
         if needle and first_match is not None:
             self._scroll.ensureWidgetVisible(first_match, 0, self._SPACE)
+        self._no_match_label.setVisible(bool(needle) and first_match is None)
 
     def _form_card(self, parent_layout: QVBoxLayout, title: str) -> tuple[QWidget, QFormLayout]:
         card, body = self._card(parent_layout, title)
@@ -440,7 +461,7 @@ class SettingsDialog(QDialog):
         form.setVerticalSpacing(self._SPACE)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         body.addLayout(form)
         return card, form
 
@@ -454,8 +475,8 @@ class SettingsDialog(QDialog):
         field.setContentsMargins(0, 0, 0, 0)
         field.setSpacing(self._SPACE)
         field.addWidget(entry, 1)
-        browse = QPushButton("Browse")
-        browse.setFixedSize(64, 28)
+        browse = QPushButton("Browse…")
+        browse.setFixedSize(72, 28)
         browse.setProperty("role", "browse-btn")
         browse.setToolTip("Choose a folder")
         browse.setAutoDefault(False)
@@ -684,6 +705,19 @@ class SettingsDialog(QDialog):
         save_settings(self._settings)
         if close:
             self.accept()
+        else:
+            self.applied.emit()
+
+    def _confirm_reset_fields(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Reset Settings",
+            "Reset every setting on this page to its default value? This cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._reset_fields()
 
     def _reset_fields(self) -> None:
         defaults = SettingsSchema().model_dump()
@@ -709,3 +743,18 @@ class SettingsDialog(QDialog):
             self._ui_scale_combo.setCurrentIndex(
                 max(0, self._ui_scale_combo.findData(defaults["ui_scale"]))
             )
+        # These six were missing despite the tooltip promising "all"
+        # settings fields — Reset silently left them untouched.
+        if self._fetch_interval_edit is not None:
+            self._fetch_interval_edit.setText(str(defaults["auto_fetch_interval_minutes"]))
+        if self._grid_spacing_edit is not None:
+            self._grid_spacing_edit.setText(str(defaults["grid_spacing"]))
+        if self._rotation_snap_edit is not None:
+            self._rotation_snap_edit.setText(str(defaults["rotation_snap_increment"]))
+        if self._smoothing_combo is not None:
+            idx = self._smoothing_combo.findData(defaults["smoothing_method"])
+            self._smoothing_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        if self._smooth_iterations_edit is not None:
+            self._smooth_iterations_edit.setText(str(defaults["smooth_iterations"]))
+        if self._simplify_tolerance_edit is not None:
+            self._simplify_tolerance_edit.setText(str(defaults["simplify_tolerance"]))

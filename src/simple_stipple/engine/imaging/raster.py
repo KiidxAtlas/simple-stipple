@@ -85,13 +85,21 @@ def prepare_engraving_image(
             pixels = [
                 (
                     (
-                        center_x + (x - center_x) * math.cos(angle)
-                        - (y - center_y) * math.sin(angle) - spec.x_mm
-                    ) / spec.width_mm * columns,
+                        center_x
+                        + (x - center_x) * math.cos(angle)
+                        - (y - center_y) * math.sin(angle)
+                        - spec.x_mm
+                    )
+                    / spec.width_mm
+                    * columns,
                     (
-                        center_y + (x - center_x) * math.sin(angle)
-                        + (y - center_y) * math.cos(angle) - spec.y_mm
-                    ) / spec.height_mm * rows,
+                        center_y
+                        + (x - center_x) * math.sin(angle)
+                        + (y - center_y) * math.cos(angle)
+                        - spec.y_mm
+                    )
+                    / spec.height_mm
+                    * rows,
                 )
                 for x, y in poly
             ]
@@ -148,10 +156,12 @@ def export_raster_job(
         (spec.x_mm, spec.y_mm + spec.height_mm),
     ):
         dx, dy = x - center_x, y - center_y
-        rotated_corners.append((
-            center_x + dx * math.cos(angle) - dy * math.sin(angle),
-            center_y + dx * math.sin(angle) + dy * math.cos(angle),
-        ))
+        rotated_corners.append(
+            (
+                center_x + dx * math.cos(angle) - dy * math.sin(angle),
+                center_y + dx * math.sin(angle) + dy * math.cos(angle),
+            )
+        )
     page_x = min(0.0, *(point[0] for point in rotated_corners))
     page_y = min(0.0, *(point[1] for point in rotated_corners))
     page_w = max(0.0, *(point[0] for point in rotated_corners)) - page_x

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 import tempfile
 from importlib import resources
@@ -27,12 +26,11 @@ def _style_resource_root() -> Path:
     global _STYLE_TEMP_DIR
 
     resource_root = resources.files(__package__)
-    try:
-        direct_root = Path(os.fspath(resource_root))
-    except TypeError:
-        direct_root = None
-    if direct_root is not None and direct_root.is_dir():
-        return direct_root
+    # ``Traversable`` deliberately does not promise ``os.PathLike``. The
+    # normal filesystem loader returns a concrete Path; archive-backed
+    # loaders fall through to the persistent extraction below.
+    if isinstance(resource_root, Path) and resource_root.is_dir():
+        return resource_root
 
     # Qt requires real filesystem paths for QSS url() references. Materialize
     # resources once when the package comes from a non-filesystem importer.
@@ -183,6 +181,16 @@ def load_app_qss(
                     "#c9d1d9": "#24292f",
                     "#e6edf3": "#1f2328",
                     "#f0f6fc": "#1f2328",
+                    # Status-chip / cutout-callout backgrounds (status-ok,
+                    # status-err, status-warn, #cutoutCallout[active]) were
+                    # dark-tinted near-black boxes even in Light mode — swap
+                    # for pale tints so the chip reads as a badge, not a hole.
+                    "#0f2a17": "#dafbe1",
+                    "#1f6f3a": "#4ac26b",
+                    "#2a0f0f": "#ffebe9",
+                    "#6f1f1f": "#ff8182",
+                    "#2a1e0a": "#fff8c5",
+                    "#7d4f00": "#d4a72c",
                 }.items():
                     qss = qss.replace(source, target)
                 qss += """
@@ -205,8 +213,20 @@ QToolButton[role="drawer-toggle"] {
 QToolButton[role="workflow-step"][state="current"] {
     color: #0969da;
 }
-QFrame#conversion-preview QLabel[role="empty-title"] { color: #f0f6fc; }
-QFrame#conversion-preview QLabel[role="empty-hint"] { color: #b7c3d0; }
+/* role="empty-state"/"preview-surface" keep their dark #0b0f14 backdrop in
+   every theme (same reasoning as the CAD canvas above — these surfaces
+   preview drawing geometry) — so unlike ordinary panels, their title/hint
+   text must stay light-on-dark rather than follow the general light-mode
+   text remap. Scoped by role rather than the Convert page's specific
+   #conversion-preview id so any future consumer of these roles is covered. */
+QWidget[role="empty-state"] QLabel[role="empty-title"],
+QFrame[role="preview-surface"] QLabel[role="empty-title"] {
+    color: #f0f6fc;
+}
+QWidget[role="empty-state"] QLabel[role="empty-hint"],
+QFrame[role="preview-surface"] QLabel[role="empty-hint"] {
+    color: #b7c3d0;
+}
 """
             if density == "comfortable":
                 qss += """

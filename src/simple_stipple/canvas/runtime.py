@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
+from copy import deepcopy
 from typing import Any
 
 from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
@@ -196,10 +197,16 @@ class CanvasRuntime:
         if e is None:
             return
         label = str(new_label).strip()
+        # Commit through the document boundary (like group labels above) so
+        # the rename lands on the undo stack instead of mutating in place.
+        candidate = deepcopy(e)
         if label:
-            e.meta = {**(e.meta or {}), "label": label}
-        elif e.meta:
-            e.meta.pop("label", None)
+            candidate.meta = {**(candidate.meta or {}), "label": label}
+        elif candidate.meta:
+            candidate.meta = {k: v for k, v in candidate.meta.items() if k != "label"}
+        else:
+            return
+        self._canvas._canvas_service.update_entities([candidate])
 
     # ── Layer tree rows ───────────────────────────────────────────────────
 
@@ -441,6 +448,7 @@ class TraceCanvasPageRuntime(CanvasPageRuntimeBase):
             readiness_tone=readiness_tone,
             zoom_percent=zoom,
             cursor_pos=cursor,
+            unit=str(getattr(self._canvas, "_unit_system", "mm")),
         )
         self._precision_bar.refresh()
         self._layer_sidebar.refresh_tree()
@@ -490,12 +498,20 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             return
         self._shape_labels.setdefault(layer_name, {})[shape_key] = new_label
 
-    def _shape_label_builder(self, layer_name: str):
+    def _shape_label_builder(self, layer_name: str, *, prefix: str = ""):
         """Return a label function that uses custom names if set."""
         labels = self._shape_labels.get(layer_name, {})
+        counter = 0
 
         def _label(entity_id: str, poly: list[tuple[float, float]]) -> str:
+            nonlocal counter
             custom = labels.get(entity_id)
+            counter += 1
+            if prefix and not custom:
+                point_count = len(poly)
+                if point_count > 1 and poly[0] == poly[-1]:
+                    point_count -= 1
+                return f"{prefix} {counter}  ·  {point_count} pts"
             geo = describe_polyline(entity_id, poly)
             if not custom:
                 return geo
@@ -516,7 +532,11 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         # Outline layer (not preview) is editable/draggable so users get the
         # same rename and selection features as the Draft tab.
         is_outline = layer_name == "pattern_active"
-        label_fn = self._shape_label_builder(layer_name) if is_outline else describe_polyline
+        label_fn = (
+            self._shape_label_builder(layer_name, prefix="Outline")
+            if is_outline
+            else describe_polyline
+        )
         groups = self._canvas._group_map() if is_outline else None
         return build_shape_rows(
             entity_ids,
@@ -527,6 +547,44 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             draggable=is_outline,
             groups=groups,
             group_labels=dict(getattr(self._canvas, "_group_labels", {})),
+        )
+
+    @staticmethod
+    def _preview_label_builder(prefix: str):
+        counter = 0
+
+        def _label(_entity_id: str, poly: list[tuple[float, float]]) -> str:
+            nonlocal counter
+            counter += 1
+            point_count = len(poly)
+            if point_count > 1 and poly[0] == poly[-1]:
+                point_count -= 1
+            return f"{prefix} {counter}  ·  {point_count} pts"
+
+        return _label
+
+    def _build_preview_tree_shape_rows(
+        self,
+        layer_name: str,
+        prefix: str,
+        entity_ids: list[str],
+        polylines: list[list[tuple[float, float]]],
+        layer_view_state: dict[str, dict[str, set[str]]],
+    ) -> list[dict[str, Any]]:
+        """Build preview rows using the canvas' actual runtime IDs.
+
+        Preview geometry is reloaded into the same canvas as the source
+        outlines. Synthetic ``preview_0``/``fill_0`` keys looked plausible but
+        could never be selected because CanvasView only accepts its entity IDs.
+        """
+        hidden = layer_view_state.setdefault(layer_name, {}).setdefault("hidden", set())
+        return build_shape_rows(
+            entity_ids,
+            polylines,
+            hidden,
+            self._preview_label_builder(prefix),
+            editable=False,
+            draggable=False,
         )
 
     def build_layer_tree_rows(
@@ -550,9 +608,16 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             outline_polys = categories.get("outline") or self._get_orig_polys()
             pattern_polys = categories.get("pattern", [])
             fill_polys = categories.get("fill", [])
+            canvas_entity_ids = self._canvas.get_entity_ids()
+            outline_entity_ids = canvas_entity_ids[: len(outline_polys)]
+            pattern_start = len(outline_polys)
+            pattern_entity_ids = canvas_entity_ids[
+                pattern_start : pattern_start + len(pattern_polys)
+            ]
+            fill_start = pattern_start + len(pattern_polys)
+            fill_entity_ids = canvas_entity_ids[fill_start : fill_start + len(fill_polys)]
 
             if outline_polys:
-                outline_entity_ids = [f"outline_{i}" for i in range(len(outline_polys))]
                 rows.append(
                     build_layer_row(
                         name="pattern_outline",
@@ -560,8 +625,9 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                         active=False,
                         visible=True,
                         editable=False,
-                        shapes=self._build_tree_shape_rows(
+                        shapes=self._build_preview_tree_shape_rows(
                             "pattern_outline",
+                            "Outline",
                             outline_entity_ids,
                             outline_polys,
                             layer_view_state,
@@ -575,25 +641,16 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                     active=True,
                     visible=True,
                     editable=False,
-                    shapes=self._build_tree_shape_rows(
+                    shapes=self._build_preview_tree_shape_rows(
                         "pattern_preview",
-                        [
-                            f"preview_{i}"
-                            for i in range(
-                                len(
-                                    pattern_polys
-                                    if categories
-                                    else self._canvas.get_polylines_state()
-                                )
-                            )
-                        ],
+                        "Pattern",
+                        pattern_entity_ids,
                         pattern_polys if categories else self._canvas.get_polylines_state(),
                         layer_view_state,
                     ),
                 )
             )
             if fill_polys:
-                fill_entity_ids = [f"fill_{i}" for i in range(len(fill_polys))]
                 rows.append(
                     build_layer_row(
                         name="pattern_fill",
@@ -601,8 +658,9 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                         active=False,
                         visible=True,
                         editable=False,
-                        shapes=self._build_tree_shape_rows(
+                        shapes=self._build_preview_tree_shape_rows(
                             "pattern_fill",
+                            "Fill",
                             fill_entity_ids,
                             fill_polys,
                             layer_view_state,
@@ -680,6 +738,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             readiness_tone=readiness_tone,
             zoom_percent=zoom,
             cursor_pos=cursor,
+            unit=str(getattr(self._canvas, "_unit_system", "mm")),
         )
         self._precision_bar.refresh()
         self._layer_sidebar.refresh_tree()

@@ -47,6 +47,7 @@ from simple_stipple.engine.workflows import (
     export_raster_job,
 )
 from simple_stipple.canvas.constants import DIM
+from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.features.base import BasePage
 from simple_stipple.ui.components.collapsible import CollapsibleSection
 from simple_stipple.ui.components.feedback import (
@@ -72,6 +73,7 @@ from simple_stipple.features.pattern.session import (
     get_pattern_workspace_state,
 )
 from simple_stipple.ui.dialogs.laserstar_export_dialog import LaserStarExportDialog
+from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.features.pattern.params import (
     collect_pattern_params,
     restore_form_state,
@@ -88,7 +90,11 @@ from simple_stipple.features.pattern.defaults import (
     PREVIEW_DEBOUNCE_MS,
     SCALE_MIN_MM,
 )
-from simple_stipple.features.pattern.layout import build_left, build_right, refresh_pattern_properties_panel
+from simple_stipple.features.pattern.layout import (
+    build_left,
+    build_right,
+    refresh_pattern_properties_panel,
+)
 from simple_stipple.features.pattern.zones import (
     apply_selected_zone_edits,
     assign_zone,
@@ -261,6 +267,7 @@ class PatternPage(BasePage):
 
         build_left(self, left)
         build_right(self, right)
+        self._set_advanced_mode(self._advanced_mode_cb.isChecked())
         self._refresh_zone_list()
         refresh_pattern_properties_panel(self)
         self._left_esc_filter = EscapeBlurFilter(self._canvas, within=left_w)
@@ -334,12 +341,30 @@ class PatternPage(BasePage):
                 if url.toLocalFile().lower().endswith((".dxf", ".fvi", ".svg")):
                     event.acceptProposedAction()
                     return
+        # Qt withholds dropEvent entirely once dragEnterEvent rejects, so
+        # this is the only chance to say why.
+        if event.mimeData().hasUrls():
+            self._set_status("Pattern accepts DXF, FVI, or SVG outline files", STATUS_WARN)
         event.ignore()
 
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
             if path.lower().endswith((".dxf", ".fvi", ".svg")):
+                # Loading an outline always replaces the current one (and its
+                # zones/cutouts); a stray drop shouldn't do that silently.
+                if self._orig_polys:
+                    answer = QMessageBox.question(
+                        self,
+                        "Replace Outline",
+                        f"Replace the current outline with {Path(path).name}? "
+                        "Zones and cutouts will be reset.",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                        QMessageBox.StandardButton.Cancel,
+                    )
+                    if answer != QMessageBox.StandardButton.Yes:
+                        event.ignore()
+                        return
                 self._dxf_edit.setText(path)
                 self._load_outline_file(path)
                 event.acceptProposedAction()
@@ -371,11 +396,21 @@ class PatternPage(BasePage):
 
     def _on_preview_toggled(self, checked: bool) -> None:
         """Toggle between outline editing and pattern preview display."""
+        # Preview and Edit share one tree, but their category rows are
+        # different projections. Clear only the sidebar's virtual visibility
+        # state and canvas selection before replacing the projection; durable
+        # outline IDs/zones remain on the page.
+        if hasattr(self, "_layer_sidebar"):
+            self._layer_sidebar.clear()
+        self._canvas.deselect_all()
+        self._canvas.set_layer_model([], None)
         if checked and self._preview_polys_cache:
             selected_zone = self._zone_list.currentRow()
             # Switch to preview view
             self._showing_preview = True
+            self._canvas.set_dense_preview_render(True)
             self._canvas.load(self._preview_polys_cache, fit=False)
+            self._canvas.set_layer_model([], None)
             # Show the source outline as a faded ghost overlay so the user can
             # see both the outline and the generated pattern at the same time.
             if self._edit_polys:
@@ -394,15 +429,27 @@ class PatternPage(BasePage):
         else:
             # Switch back to outline editing
             self._showing_preview = False
+            self._canvas.set_dense_preview_render(False)
             self._canvas.set_pattern_cell_context(set())
             self._canvas.set_ghost_polylines(None)
             if self._edit_polys:
-                self._canvas.load(self._edit_polys, fit=False)
+                self._canvas.load(
+                    self._edit_polys,
+                    fit=False,
+                    entity_ids=list(self._outline_ids),
+                )
+            self._canvas.set_layer_model([], None)
             if self._preview_polys_cache:
                 self._set_preview_status("Editing outline — preview cached")
             else:
                 self._set_preview_status("Adjust settings to build a preview")
             self._sync_canvas_cutout_highlight()
+        # The tree is a projection of the currently-loaded canvas entities.
+        # Mode switches replace those entities, so refresh the existing tree
+        # after the load; otherwise stale preview-cell rows remain visible in
+        # Edit Outline mode even though their entities no longer exist.
+        if hasattr(self, "_layer_sidebar"):
+            self._layer_sidebar.refresh_tree()
         self._preview_btn.setProperty("active", self._showing_preview)
         refresh_style(self._preview_btn)
         self._update_preview_controls()
@@ -423,8 +470,11 @@ class PatternPage(BasePage):
             for poly in self._pattern_cell_instance_cutouts
         }
         cutout_entity_ids = {
-            f"preview_{outline_count + index}"
+            entity_id
             for index, poly in enumerate(pattern_polys)
+            for entity_id in self._canvas.get_entity_ids()[
+                outline_count + index : outline_count + index + 1
+            ]
             if self._pattern_service._poly_repeat_signature(poly) in cutout_signatures
             or self._pattern_service._poly_signature(poly) in instance_signatures
         }
@@ -584,13 +634,34 @@ class PatternPage(BasePage):
 
             # Shapes drawn while previewing have no prior generated signature;
             # promote them to source outlines so they survive regeneration.
-            previous_sig_set = set(previous_sigs)
-            added = [
-                poly for poly, sig in zip(current, current_sigs) if sig not in previous_sig_set
-            ]
+            # Compare signature multiplicities, not just sets: a user may
+            # draw a shape that is geometrically identical to a generated
+            # preview cell, and that still must be promoted independently.
+            previous_sig_counts: dict[tuple, int] = {}
+            for sig in previous_sigs:
+                previous_sig_counts[sig] = previous_sig_counts.get(sig, 0) + 1
+            seen_sig_counts: dict[tuple, int] = {}
+            added_indices: list[int] = []
+            for index, sig in enumerate(current_sigs):
+                seen_sig_counts[sig] = seen_sig_counts.get(sig, 0) + 1
+                if seen_sig_counts[sig] > previous_sig_counts.get(sig, 0):
+                    added_indices.append(index)
+            added = [current[index] for index in added_indices]
             if added:
+                current_entity_ids = self._canvas.get_entity_ids()
+                added_ids = [
+                    current_entity_ids[index]
+                    for index in added_indices
+                    if index < len(current_entity_ids)
+                ]
                 self._edit_polys.extend([list(poly) for poly in added])
-                self._outline_ids.extend(self._fresh_outline_ids(len(added)))
+                # Shapes drawn while previewing already have canvas entity
+                # ids. Reusing them prevents a second Pattern-only id from
+                # making the promoted outline unselectable after exit.
+                if len(added_ids) == len(added):
+                    self._outline_ids.extend(added_ids)
+                else:
+                    self._outline_ids.extend(self._fresh_outline_ids(len(added)))
                 self._set_status(f"Added {len(added)} outline(s) from preview.", STATUS_OK)
 
             if removed_cells or removed_outline_count or added:
@@ -598,7 +669,32 @@ class PatternPage(BasePage):
                 self._emit_state_changed()
             return
         new_polys = self._canvas.get_polylines_state()
-        new_outline_ids = self._sync_outline_ids(new_polys)
+        # Keep the canvas entity ids for newly drawn outlines.  The canvas
+        # creates those ids at draw time; generating independent Pattern ids
+        # here makes the shape visible but impossible to assign to a zone.
+        new_outline_ids = self._sync_outline_ids(
+            new_polys,
+            entity_ids=self._canvas.get_entity_ids(),
+        )
+        # The canvas is the interactive source of truth. If an external load
+        # or operation replaced its runtime ids, reconcile the canvas back to
+        # the durable Pattern ids (and preserve selection by position) before
+        # any zone/reference filtering runs.
+        canvas_ids = self._canvas.get_entity_ids()
+        if canvas_ids != new_outline_ids:
+            selected_indices = {
+                index
+                for index, entity_id in enumerate(canvas_ids)
+                if entity_id in set(self._canvas.get_selected_ids())
+            }
+            self._canvas.load(new_polys, fit=False, entity_ids=list(new_outline_ids))
+            self._canvas.set_selection(
+                [
+                    new_outline_ids[index]
+                    for index in selected_indices
+                    if index < len(new_outline_ids)
+                ]
+            )
         if self._zones:
             self._invalidate_zones_for_geometry_change(set(new_outline_ids))
         self._edit_polys = new_polys
@@ -611,10 +707,16 @@ class PatternPage(BasePage):
         # Select shapes on canvas without toggling preview mode — the user
         # should be able to highlight shapes in the layer tree while reviewing
         # the generated pattern.
-        self._canvas_runtime.on_tree_selection_requested(indices)
+        # Pattern tree layers are virtual categories; normalize any stale
+        # active-layer state before applying the canonical entity selection.
+        selected_ids = flatten_shape_keys(indices)
+        if hasattr(self._canvas, "set_layer_model"):
+            self._canvas.set_layer_model([], None)
+        valid_ids = [eid for eid in selected_ids if eid in self._canvas._entities_by_id]
+        self._canvas.set_selection(valid_ids)
         # Update toolbar and status strip without rebuilding the tree —
         # rebuilding would immediately clear the visual selection just made.
-        self._canvas_runtime.on_selection_change(len(indices))
+        self._canvas_runtime.on_selection_change(len(valid_ids))
         if hasattr(self, "_canvas_status"):
             self._canvas_status.set_selection_count(len(indices))
 
@@ -765,11 +867,17 @@ class PatternPage(BasePage):
     def _fresh_outline_ids(self, count: int) -> list[str]:
         return self._pattern_service.fresh_outline_ids(count)
 
-    def _sync_outline_ids(self, new_polys: list[list[tuple[float, float]]]) -> list[str]:
+    def _sync_outline_ids(
+        self,
+        new_polys: list[list[tuple[float, float]]],
+        *,
+        entity_ids: list[str] | None = None,
+    ) -> list[str]:
         return self._pattern_service.sync_outline_ids(
             new_polys,
             list(self._edit_polys),
             list(self._outline_ids),
+            new_entity_ids=entity_ids,
         )
 
     def _resolve_outline_ids(self, ids: list[str]) -> list[list[tuple[float, float]]]:
@@ -1306,9 +1414,25 @@ class PatternPage(BasePage):
 
     def _install_pattern_shortcuts(self) -> None:
         modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
+        QShortcut(QKeySequence(f"{modifier}+Z"), self, self._undo_pattern)
+        QShortcut(QKeySequence(f"{modifier}+Shift+Z"), self, self._redo_pattern)
         QShortcut(QKeySequence(f"{modifier}+E"), self, self._generate)
         QShortcut(QKeySequence(f"{modifier}+R"), self, self._reload_dxf)
         QShortcut(QKeySequence(f"{modifier}+P"), self, self._apply_selected_preset)
+
+    def _undo_pattern(self) -> None:
+        """Undo the latest Pattern canvas mutation, regardless of focus."""
+        if self._canvas.undo():
+            self._refresh_canvas_panels()
+            self._schedule_preview()
+            self._emit_state_changed()
+
+    def _redo_pattern(self) -> None:
+        """Redo the latest Pattern canvas mutation, regardless of focus."""
+        if self._canvas.redo():
+            self._refresh_canvas_panels()
+            self._schedule_preview()
+            self._emit_state_changed()
 
     def command_palette_commands(self) -> list[dict]:
         """Commands contributed to the application's single global palette."""
@@ -1381,7 +1505,7 @@ class PatternPage(BasePage):
             w = float(self._scale_w.text())
             h = w * self._orig_h / self._orig_w
             self._updating_dims = True
-            self._scale_h.setText(f"{h:.3f}")
+            self._scale_h.setText(f"{h:.2f}")
         except ValueError:
             return
         finally:
@@ -1394,7 +1518,7 @@ class PatternPage(BasePage):
             h = float(self._scale_h.text())
             w = h * self._orig_w / self._orig_h
             self._updating_dims = True
-            self._scale_w.setText(f"{w:.3f}")
+            self._scale_w.setText(f"{w:.2f}")
         except ValueError:
             return
         finally:
@@ -1551,7 +1675,11 @@ class PatternPage(BasePage):
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._zones.clear()
         self._refresh_zone_list()
-        self._canvas.set_polylines_state(self._edit_polys, fit=True)
+        self._canvas.set_polylines_state(
+            self._edit_polys,
+            fit=True,
+            entity_ids=list(self._outline_ids),
+        )
         self._sync_canvas_cutout_highlight()
         self._refresh_cutout_status()
         self._canvas.set_mode("select")
@@ -1588,8 +1716,8 @@ class PatternPage(BasePage):
             self._orig_dims_label.setText(f"{self._orig_w:.2f} × {self._orig_h:.2f} mm")
             self._scale_w.blockSignals(True)
             self._scale_h.blockSignals(True)
-            self._scale_w.setText(f"{self._orig_w:.3f}")
-            self._scale_h.setText(f"{self._orig_h:.3f}")
+            self._scale_w.setText(f"{self._orig_w:.2f}")
+            self._scale_h.setText(f"{self._orig_h:.2f}")
             self._scale_w.blockSignals(False)
             self._scale_h.blockSignals(False)
         else:
@@ -1611,7 +1739,7 @@ class PatternPage(BasePage):
             self._exclusion_ids.clear()
             self._zones.clear()
             self._refresh_zone_list()
-            self._canvas.load(polys)
+            self._canvas.load(polys, entity_ids=list(self._outline_ids))
             self._sync_canvas_cutout_highlight()
             self._refresh_cutout_status()
             self._update_dims_from_polys(polys)
@@ -1639,7 +1767,10 @@ class PatternPage(BasePage):
         changed = self._canvas.close_selected_polylines()
         if changed:
             self._edit_polys = list(self._canvas.get_polylines_state())
-            self._outline_ids = self._sync_outline_ids(self._edit_polys)
+            self._outline_ids = self._sync_outline_ids(
+                self._edit_polys,
+                entity_ids=self._canvas.get_entity_ids(),
+            )
             self._zones.clear()
             self._refresh_zone_list()
             self._set_status(f"Closed {changed} outline(s).", STATUS_OK)
@@ -1656,7 +1787,10 @@ class PatternPage(BasePage):
         changed = self._canvas.open_selected_polylines()
         if changed:
             self._edit_polys = list(self._canvas.get_polylines_state())
-            self._outline_ids = self._sync_outline_ids(self._edit_polys)
+            self._outline_ids = self._sync_outline_ids(
+                self._edit_polys,
+                entity_ids=self._canvas.get_entity_ids(),
+            )
             self._zones.clear()
             self._refresh_zone_list()
             self._set_status(f"Opened {changed} outline(s).", STATUS_OK)
@@ -1966,6 +2100,7 @@ class PatternPage(BasePage):
             f" · {diagnostics.travel_length:.1f} mm travel"
         )
         if self._showing_preview:
+            self._canvas.set_dense_preview_render(True)
             selected_zone = self._zone_list.currentRow()
             self._canvas.load(display_polys, fit=False)
             self._configure_pattern_cell_context()
@@ -2162,13 +2297,33 @@ class PatternPage(BasePage):
             refresh_style(self._summary_chip)
         # Keep the core Pattern controls discoverable in the empty state.
         # They serve as editable defaults before an outline or zone exists.
-        if hasattr(self, "_zones_section"):
-            self._zones_section.setVisible(True)
+        # Zones are a core workflow step, not an expert-only panel. Keep the
+        # section mounted so users always have a visible recovery path even if
+        # Advanced controls are disabled; only secondary fabrication controls
+        # belong behind the advanced toggle.
+        if hasattr(self, "_zone_scroll"):
+            self._zone_scroll.setVisible(True)
         if hasattr(self, "_pattern_properties_scroll"):
             self._pattern_properties_scroll.setVisible(True)
 
     def _update_zone_actions(self) -> None:
         return update_zone_actions(self)
+
+    def _set_advanced_mode(self, enabled: bool) -> None:
+        """Keep the default workflow compact while preserving expert controls."""
+        enabled = bool(enabled)
+        self._settings["pattern_advanced_mode"] = enabled
+        for name in ("_fill_section", "_engraving_section"):
+            section = getattr(self, name, None)
+            if section is not None:
+                section.setVisible(enabled)
+        if hasattr(self, "_zone_scroll"):
+            self._zone_scroll.setVisible(True)
+        self._set_status(
+            "Advanced pattern controls shown"
+            if enabled
+            else "Basic mode · outline, pattern, preview, and export",
+        )
 
     # ── Generation ────────────────────────────────────────────────────────────
 
@@ -2194,6 +2349,17 @@ class PatternPage(BasePage):
         except ValueError as exc:
             self._set_status(str(exc), STATUS_ERR)
             return
+        open_paths = self._export_open_paths_cb.isChecked()
+        proceed, _report = export_preflight(
+            self,
+            [list(poly) for poly in self._edit_polys],
+            action="Export",
+            allow_open_paths=open_paths,
+        )
+        if not proceed:
+            self._canvas.set_geometry_health_visible(True, announce=True)
+            self._set_status("Export paused — review highlighted geometry.", STATUS_WARN)
+            return
         out_path = pick_save_file(
             self,
             self._settings,
@@ -2206,7 +2372,6 @@ class PatternPage(BasePage):
         if not out_path:
             return
         include_border = self._include_border_cb.isChecked()
-        open_paths = self._export_open_paths_cb.isChecked()
         invert_fill = mirror_v = mirror_h = False
         try:
             border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))

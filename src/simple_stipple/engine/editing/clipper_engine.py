@@ -54,7 +54,9 @@ def _fallback_boolean(subjects: list[Path], clips: list[Path], operation: str) -
             return []
         if isinstance(geometry, Polygon):
             result = [[(float(x), float(y)) for x, y in geometry.exterior.coords]]
-            result.extend([[(float(x), float(y)) for x, y in ring.coords] for ring in geometry.interiors])
+            result.extend(
+                [[(float(x), float(y)) for x, y in ring.coords] for ring in geometry.interiors]
+            )
             return result
         if isinstance(geometry, (MultiPolygon, GeometryCollection)):
             return [ring for child in geometry.geoms for ring in rings(child)]
@@ -71,7 +73,9 @@ def _fallback_boolean(subjects: list[Path], clips: list[Path], operation: str) -
     return rings(geometry)
 
 
-def _boolean(subjects: Iterable[Sequence[Point]], clips: Iterable[Sequence[Point]], operation: str) -> list[Path]:
+def _boolean(
+    subjects: Iterable[Sequence[Point]], clips: Iterable[Sequence[Point]], operation: str
+) -> list[Path]:
     subject_paths, clip_paths = _paths(subjects), _paths(clips)
     if not subject_paths:
         return []
@@ -89,11 +93,15 @@ def clipper_union(paths: Iterable[Sequence[Point]]) -> list[Path]:
     return _boolean(paths, (), "union")
 
 
-def clipper_difference(subjects: Iterable[Sequence[Point]], clips: Iterable[Sequence[Point]]) -> list[Path]:
+def clipper_difference(
+    subjects: Iterable[Sequence[Point]], clips: Iterable[Sequence[Point]]
+) -> list[Path]:
     return _boolean(subjects, clips, "difference")
 
 
-def clipper_intersection(subjects: Iterable[Sequence[Point]], clips: Iterable[Sequence[Point]]) -> list[Path]:
+def clipper_intersection(
+    subjects: Iterable[Sequence[Point]], clips: Iterable[Sequence[Point]]
+) -> list[Path]:
     return _boolean(subjects, clips, "intersection")
 
 
@@ -107,8 +115,18 @@ def clipper_offset(path: Sequence[Point], distance: float, *, closed: bool = Tru
         return _unscaled(engine.Execute(distance * _SCALE))
     from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
-    geometry = Polygon(points[0]).buffer(distance, join_style="round") if closed else LineString(points[0]).parallel_offset(abs(distance), "left" if distance >= 0 else "right", join_style="round")
-    geometries = list(geometry.geoms) if isinstance(geometry, (MultiPolygon, MultiLineString)) else [geometry]
+    geometry = (
+        Polygon(points[0]).buffer(distance, join_style="round")
+        if closed
+        else LineString(points[0]).parallel_offset(
+            abs(distance), "left" if distance >= 0 else "right", join_style="round"
+        )
+    )
+    geometries = (
+        list(geometry.geoms)
+        if isinstance(geometry, (MultiPolygon, MultiLineString))
+        else [geometry]
+    )
     result: list[Path] = []
     for item in geometries:
         if item.is_empty:
@@ -118,4 +136,10 @@ def clipper_offset(path: Sequence[Point], distance: float, *, closed: bool = Tru
     return result
 
 
-__all__ = ["clipper_difference", "clipper_intersection", "clipper_offset", "clipper_union", "native_available"]
+__all__ = [
+    "clipper_difference",
+    "clipper_intersection",
+    "clipper_offset",
+    "clipper_union",
+    "native_available",
+]

@@ -21,7 +21,6 @@ from .feedback import refresh_style
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
-
 class ActionButton(QPushButton):
     """One semantic action hierarchy shared across all application surfaces."""
 
@@ -113,4 +112,3 @@ def make_resettable_line_edit(edit: QLineEdit, default: str) -> QLineEdit:
 
         clear_button.clicked.connect(restore_default)
     return edit
-

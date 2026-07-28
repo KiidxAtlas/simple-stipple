@@ -25,9 +25,7 @@ from typing import Any, Literal
 NULL_PATTERN = "— None —"
 
 FillMode = Literal["none", "lines", "zigzag", "crosshatch", "concentric"]
-_VALID_MODES: frozenset[str] = frozenset(
-    {"none", "lines", "zigzag", "crosshatch", "concentric"}
-)
+_VALID_MODES: frozenset[str] = frozenset({"none", "lines", "zigzag", "crosshatch", "concentric"})
 
 
 @dataclass(frozen=True)
@@ -152,13 +150,25 @@ def apply_fill(
     try:
         if region_geom.is_empty:
             return []
-    except AttributeError:
+    except (AttributeError, TypeError):
+        return []
+
+    # Imported/drawn rings can be self-touching or numerically invalid even
+    # when they look closed on the canvas. GEOS overlay operations raise
+    # TopologyException for those inputs; repair once at the boundary so all
+    # fill modes receive a valid polygonal region.
+    region_geom = _repair_fill_geometry(region_geom)
+    if region_geom is None or region_geom.is_empty:
         return []
 
     # Optional inset — shrink the fill region. ``buffer(-d)`` may collapse
     # narrow shapes to empty; that's the user's signal to lower the inset.
     if spec.inset > 0:
-        region_geom = region_geom.buffer(-spec.inset)
+        try:
+            region_geom = region_geom.buffer(-spec.inset)
+        except Exception:
+            return []
+        region_geom = _repair_fill_geometry(region_geom)
         if region_geom is None or region_geom.is_empty:
             return []
 
@@ -171,6 +181,28 @@ def apply_fill(
     if spec.mode == "concentric":
         return _fill_concentric(region_geom, spec.spacing)
     return []
+
+
+def _repair_fill_geometry(geometry: Any) -> Any | None:
+    """Return a valid overlay-safe geometry, or ``None`` if it cannot heal."""
+    try:
+        if geometry.is_empty or geometry.is_valid:
+            return geometry
+    except (AttributeError, TypeError):
+        return None
+    try:
+        from shapely import make_valid  # type: ignore[import-untyped]
+
+        repaired = make_valid(geometry)
+        if not repaired.is_empty:
+            return repaired
+    except Exception:
+        pass
+    try:
+        repaired = geometry.buffer(0)
+        return None if repaired.is_empty else repaired
+    except Exception:
+        return None
 
 
 def _fill_lines(
@@ -218,7 +250,7 @@ def _fill_lines(
         sweep = _LS([(minx - pad, y), (maxx + pad, y)])
         try:
             clipped = rotated.intersection(sweep)
-        except (ValueError, TypeError):
+        except Exception:
             y += spacing
             continue
         if clipped.is_empty:

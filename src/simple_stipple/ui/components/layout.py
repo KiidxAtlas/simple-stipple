@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
-
 def section_label(parent_layout, text: str) -> QLabel:
     """Compact muted section header with letter-spacing."""
     lb = QLabel(text.upper())
@@ -35,7 +34,7 @@ def sep(parent_layout) -> QFrame:
     """Hairline horizontal separator."""
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: #21262d;")
+    line.setProperty("role", "hairline")
     line.setFixedHeight(1)
     parent_layout.addWidget(line)
     return line
@@ -111,8 +110,9 @@ class ResponsiveContentSplitter(QSplitter):
         self._drawer_label = label
         if 0 <= index < self.count():
             secondary = self.widget(index)
-            self._secondary_size_policy = secondary.sizePolicy()
-            self._secondary_minimum_width = secondary.minimumWidth()
+            if secondary is not None:
+                self._secondary_size_policy = secondary.sizePolicy()
+                self._secondary_minimum_width = secondary.minimumWidth()
         primary_index = 0 if index != 0 else 1
         if 0 <= primary_index < self.count():
             self._drawer_toggle.setParent(self.widget(primary_index))
@@ -152,6 +152,8 @@ class ResponsiveContentSplitter(QSplitter):
             return
         compact = self.width() < self.COMPACT_WIDTH
         secondary = self.widget(self._responsive_secondary)
+        if secondary is None:
+            return
         if compact:
             policy = secondary.sizePolicy()
             policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
@@ -179,7 +181,9 @@ class ResponsiveContentSplitter(QSplitter):
         self._update_responsive_state()
 
 
-def content_splitter(left: QWidget, right: QWidget, *, sizes: tuple[int, int]) -> QSplitter:
+def content_splitter(
+    left: QWidget, right: QWidget, *, sizes: tuple[int, int]
+) -> ResponsiveContentSplitter:
     """Create a collapsible horizontal splitter with sensible defaults.
 
     The left pane (canvas) absorbs all extra space on resize/fullscreen;

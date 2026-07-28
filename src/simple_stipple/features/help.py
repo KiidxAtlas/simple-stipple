@@ -13,10 +13,12 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 from html import escape as _html_escape
+from html import unescape as _html_unescape
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont, QPalette, QTextCursor
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -65,25 +67,24 @@ def _build_getting_started() -> str:
 <h3 class="subheading">What is Simple Stipple?</h3>
 <p>Simple Stipple is a desktop application that generates intricate laser-engraving patterns inside user-defined outlines. You draw or import an outline, choose a pattern and its parameters, and the software fills the area with mathematically precise vector geometry ready for your laser cutter.</p>
 
-<h3 class="subheading">System Requirements</h3>
+<h3 class="subheading">Before You Start</h3>
 <ul>
-    <li><strong>Python 3.10+</strong> (if running from source)</li>
-    <li><strong>Shapely</strong> for computational geometry operations</li>
-    <li><strong>PySide6</strong> (Qt6 bindings) for the graphical interface</li>
-    <li>A laser cutter that accepts DXF output (most modern controllers do)</li>
+    <li>Use <strong>Draft</strong> to draw or clean geometry, <strong>Pattern</strong> to fill an outline, <strong>Trace</strong> to turn an image into paths, and <strong>Convert</strong> for file-format utilities.</li>
+    <li>Save a workspace when you want to return to the same pages, geometry, and settings later.</li>
+    <li>Simple Stipple prepares geometry; it does not control laser hardware. Always preview and verify exported files in your machine software before enabling the laser.</li>
 </ul>
 
 <h3 class="subheading">Quick Start — Your First Pattern</h3>
 <ol>
     <li><strong>Open the Pattern page</strong> from the tab bar at the top (or press <kbd>Alt+2</kbd>).</li>
-    <li><strong>Load an outline</strong> — either draw one using the drawing tools (press <kbd>D</kbd>) or import an existing DXF file via the <strong>Open DXF</strong> button.</li>
+    <li><strong>Load an outline</strong> — either draw one using the drawing tools (press <kbd>D</kbd>) or import a DXF, FVI, or SVG file via the <strong>Browse…</strong> button.</li>
     <li><strong>Select a pattern</strong> from the dropdown (e.g., "Honeycomb").</li>
     <li><strong>Adjust parameters</strong> — size, gap, spacing — using the sidebar controls.</li>
     <li><strong>Click "Generate"</strong> to create the pattern. Use the preview toggle to compare before/after.</li>
     <li><strong>Export</strong> the result as a DXF file for your laser cutter.</li>
 </ol>
 
-<h3 class="subheading">The Five Pages</h3>
+<h3 class="subheading">The Four Pages</h3>
 <table style="width:100%; border-collapse:collapse; margin:12px 0;">
     <tr style="background-color:#1c2e4a;">
         <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Page</th>
@@ -102,43 +103,100 @@ def _build_getting_started() -> str:
 """
 
 
-def _build_whats_new_031() -> str:
-    """Release-level coverage for features added since the previous manual pass."""
+def _build_common_tasks() -> str:
+    """Goal-first routes for users who do not know the feature names."""
     return """
-<h2 id="whats-new-031" class="section-heading">What’s New in 0.3.1</h2>
+<h2 id="common-tasks" class="section-heading">What Do You Want to Do?</h2>
+<p>Start with the result you want. The control names are included so you can
+also find them with the command palette (<kbd>Ctrl+K</kbd>/<kbd>⌘K</kbd>).</p>
+<table style="width:100%; border-collapse:collapse; margin:12px 0;">
+  <tr style="background-color:#1c2e4a;">
+    <th style="padding:8px;text-align:left;">Goal</th>
+    <th style="padding:8px;text-align:left;">Where to start</th>
+  </tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Draw a precise part</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Draft</strong> → Draw, then use Grid, Snap, Constraints, and Dimensions.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Round or bevel a corner</td><td style="padding:7px;border-bottom:1px solid #30363d;">Hover the vertex in Draft → <strong>Round Corner</strong> or <strong>Chamfer Corner</strong>.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Fill a shape for engraving</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Pattern</strong> → load an outline → choose a pattern → Generate.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Keep lettering or holes clear</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Pattern</strong> → add the inner geometry as a cutout/exclusion.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Turn an image into vectors</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Trace</strong> → load image → tune threshold → Send to Draft or Pattern.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Repair or change a file format</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Convert</strong> for FVI, DXF, and SVG conversion or repair.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Recover lost work</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>File → Recover Unsaved Work…</strong></td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Change units or controls</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Settings</strong> → Display &amp; Interaction or Keybindings.</td></tr>
+</table>
+"""
 
-<h3 class="subheading">Guided precision drafting</h3>
+
+def _build_files_and_recovery() -> str:
+    """Explain the complete file lifecycle and recovery choices."""
+    return """
+<h2 id="files-recovery" class="section-heading">Files, Workspaces &amp; Recovery</h2>
+<h3 class="subheading">Workspace or export file?</h3>
 <ul>
-    <li><strong>Persistent command guidance:</strong> the bottom status chip identifies the active command, the next point or selection it expects, and the keys that finish or cancel it.</li>
-    <li><strong>Sketch palette:</strong> Grid, object snaps, Construction mode, and geometric constraints now share one persistent precision bar. The Constrain menu supports Horizontal, Vertical, Parallel, Perpendicular, Equal Length, Coincident, Fix, and removal.</li>
-    <li><strong>Relationship inference:</strong> new segments acquire exact parallel or perpendicular directions when the pointer approaches an existing edge direction. Disable Angle Constraints in Snap to bypass this behavior.</li>
-    <li><strong>Expression entry:</strong> dimensional fields accept arithmetic, parentheses, and mixed units, including <code>25/2</code>, <code>(10+5)*2</code>, and <code>1in + 3mm</code>. Bare lengths use the active display unit.</li>
+  <li><strong>Workspace:</strong> preserves pages, editable geometry, parameters, and app state so you can continue later.</li>
+  <li><strong>DXF/SVG/FVI export:</strong> creates an interchange or production file. It is not a complete editable workspace.</li>
 </ul>
+<h3 class="subheading">Safe working routine</h3>
+<ol>
+  <li>Use <strong>File → Save Workspace</strong> early and give the job a recognizable name.</li>
+  <li>Use <strong>File → Workspaces and Recovery…</strong> to browse and reopen named jobs.</li>
+  <li>Export only after fitting the view, checking layers, closed outlines, cutouts, and dimensions.</li>
+  <li>Open the exported file in your machine software and verify scale, units, layers, and operation order.</li>
+</ol>
+<h3 class="subheading">Autosave and crash recovery</h3>
+<p>Named workspaces autosave periodically. Unsaved work receives rolling recovery
+snapshots. Choose <strong>File → Recover Unsaved Work…</strong> after a crash or accidental
+close; inspect a snapshot before restoring or permanently deleting it.</p>
+<h3 class="subheading">Importing and moving work</h3>
+<p>Draft accepts vector geometry for editing. Trace accepts bitmap images. Use
+<strong>Send to Draft</strong> or <strong>Send to Pattern</strong> when the next step is in
+another page; this keeps the geometry inside the current workspace.</p>
+<p>StarFX FVI conversion supports geometry commands including <code>MOVEDIST</code>,
+<code>DRAWLINE</code>, and <code>DRAWARC</code>. Machine-control commands are reported
+as unsupported rather than silently converted.</p>
+"""
 
-<h3 class="subheading">Direct and contextual editing</h3>
+
+def _build_precision_editing() -> str:
+    """Task-focused drafting and editing reference."""
+    return """
+<h2 id="precision-editing" class="section-heading">Select, Edit &amp; Draw Precisely</h2>
+<h3 class="subheading">Selection</h3>
 <ul>
-    <li><strong>Contextual Properties actions:</strong> selection-aware Edit Vertices, Duplicate, Open/Close Path, and Delete actions appear only when applicable.</li>
-    <li><strong>Property highlighting:</strong> hover or focus a position, size, radius, or rotation field to highlight the corresponding geometry on the canvas.</li>
-    <li><strong>Local transform frames:</strong> rotated rectangles, rounded rectangles, ellipses, circles, and slots resize along their own axes. Width/height edits preserve their parametric shape data instead of silently converting them to generic paths.</li>
-    <li><strong>Shape controls:</strong> circles and ellipses retain editable radius controls; arcs and rectangles retain their defining controls. Double-clicking a path edge in Edit mode inserts a vertex.</li>
-    <li><strong>Reliable gizmos:</strong> rotation, edge/corner resize, move, and enlarged invisible hit targets work across parametric shapes, including slots.</li>
+  <li><strong>Click</strong> selects one entity; <strong>Shift+click</strong> adds or removes one.</li>
+  <li>A left-to-right window selects fully enclosed objects. A crossing window selects touched objects.</li>
+  <li>Lock reference geometry when it must remain visible but uneditable; hide layers to reduce selection clutter.</li>
 </ul>
-
-<h3 class="subheading">Safer operations and clearer previews</h3>
+<h3 class="subheading">Corners, paths, and shapes</h3>
 <ul>
-    <li><strong>Trim and Extend previews:</strong> hovering shows the exact segment to remove or extension to create before a click commits it.</li>
-    <li><strong>Geometry health:</strong> preflight reports open paths, invalid or duplicate geometry, tiny/zero-length segments, and the minimum segment before fabrication.</li>
-    <li><strong>Curve fidelity:</strong> spline and parametric geometry is re-tessellated for export and cross-page transfer rather than using stale low-resolution points.</li>
-    <li><strong>Responsive cancellation:</strong> long Pattern, Trace, Convert, and batch operations expose cancellation and avoid applying stale worker results.</li>
+  <li><strong>Round / fillet:</strong> hover the target corner, run <strong>Round Corner</strong>, then enter the radius.</li>
+  <li><strong>Chamfer / bevel:</strong> hover the target corner, run <strong>Chamfer Corner</strong>, then enter the setback.</li>
+  <li><strong>Offset:</strong> select a path and run <strong>Offset Path</strong>; use a positive or negative distance for the required side.</li>
+  <li><strong>Boolean operations:</strong> select overlapping closed shapes, then Union, Subtract, Intersect, or Divide.</li>
+  <li><strong>Edit vertices:</strong> enter Edit mode; drag nodes and handles, or double-click an edge to insert a vertex.</li>
 </ul>
-
-<h3 class="subheading">Interoperability and workflow</h3>
+<h3 class="subheading">Accuracy tools</h3>
 <ul>
-    <li><strong>Unified vector import:</strong> Draft opens, adds, or accepts dropped DXF, SVG, and FVI files through Import Vector.</li>
-    <li><strong>StarFX FVI:</strong> geometry-only import/export supports MOVEDIST, DRAWLINE, and DRAWARC, configurable origin/margins/precision/Y orientation, travel optimization, path reversal, native arc preservation, comments, and explicit reports for unsupported machine commands.</li>
-    <li><strong>Improved SVG/DXF handling:</strong> transforms, curves, view boxes, nested groups, bulges/arcs, and layer-aware export retain substantially more source fidelity.</li>
-    <li><strong>Pattern presets:</strong> presets can be renamed, duplicated, imported/exported as JSON, and restored from built-ins. Pattern output roles and layers remain distinct during export.</li>
-    <li><strong>Architecture and recovery:</strong> consolidated settings, notifications, units, page runtime, and operation handling reduce duplicated state while preserving multi-window workspace recovery.</li>
+  <li><strong>Grid</strong> gives regular increments; <strong>object snaps</strong> acquire endpoints, midpoints, and edges.</li>
+  <li><strong>Constraints</strong> preserve relationships such as horizontal, vertical, parallel, perpendicular, equal length, coincident, and fixed.</li>
+  <li><strong>Dimensions</strong> make lengths, angles, and radii explicit. Numeric fields accept arithmetic and mixed units such as <code>25/2</code> or <code>1in + 3mm</code>.</li>
+  <li><strong>Construction geometry</strong> supports alignment and is excluded from production export.</li>
+</ul>
+"""
+
+
+def _build_settings_updates() -> str:
+    """Explain navigation and operational settings in user language."""
+    return """
+<h2 id="settings-updates" class="section-heading">Settings, Shortcuts &amp; Updates</h2>
+<p>Settings opens with <strong>All settings</strong> visible. Use the section selector
+to jump to one category without losing access to the complete list.</p>
+<ul>
+  <li><strong>Files &amp; folders:</strong> workspace, pattern library, export, trace, and repository locations.</li>
+  <li><strong>Display &amp; interaction:</strong> millimeters/inches and canvas behavior. Changing display units never rescales geometry.</li>
+  <li><strong>Draft and Trace defaults:</strong> initial tool, smoothing, and tracing behavior for new work.</li>
+  <li><strong>Keybindings:</strong> search commands, reassign shortcuts, or reset defaults.</li>
+  <li><strong>Radial menu:</strong> choose and reorder the commands shown by <kbd>Q</kbd>.</li>
+  <li><strong>Updates:</strong> enable startup checks or use <strong>Help → Check for Updates</strong>. Windows downloads, verifies, replaces, and reopens the app automatically; macOS opens the verified disk image.</li>
 </ul>
 """
 
@@ -799,7 +857,7 @@ def _build_troubleshooting() -> str:
     <li><strong>Save custom presets:</strong> Once you find a combination you love, save it as a preset for one-click recall.</li>
     <li><strong>Use exclusions for lettering:</strong> Mark text outlines as exclusion cutouts to have patterns flow around them.</li>
     <li><strong>Command palette (⌘K):</strong> Search for any command by name, page, or shortcut — the fastest way to navigate.</li>
-    <li><strong>Workspace auto-save:</strong> The app saves named workspaces every 60 seconds and keeps rolling crash-recovery snapshots for unsaved work. Use <strong>File → Recover Workspace…</strong> to restore or permanently delete snapshots; <strong>File → Saved Workspaces…</strong> opens the normal workspace library.</li>
+    <li><strong>Workspace auto-save:</strong> The app saves named workspaces every 60 seconds and keeps rolling crash-recovery snapshots for unsaved work. Use <strong>File → Recover Unsaved Work…</strong> to restore or permanently delete snapshots; <strong>File → Workspaces and Recovery…</strong> opens the normal workspace library.</li>
     <li><strong>Send between pages:</strong> Use the "Send to Pattern" button on Draft, or "Send to Draft" / "Send to Pattern" on Trace pages to move geometry between workflows.</li>
 </ul>
 
@@ -862,6 +920,13 @@ def _build_support() -> str:
     <li><strong>Customize radial menu…</strong> — choose which commands appear as wedges in the <kbd>Q</kbd> quick menu (see Draft Page → Quick Radial Menu) and drag to reorder them.</li>
 </ul>
 
+<h3 class="subheading">Installing App Updates</h3>
+<p>Choose <strong>Help → Check for Updates</strong>. Downloads are verified against the
+release's SHA-256 digest before installation. On Windows, choose <strong>Download &amp;
+Install</strong>, then <strong>Yes</strong> when asked to restart; Simple Stipple closes,
+replaces the installed EXE with a rollback-safe handoff, and reopens automatically. On
+macOS, the verified disk image opens so you can replace the app bundle.</p>
+
 <h3 class="subheading">Multiple Windows</h3>
 <p>Open a second, fully independent workspace window with <strong>File → New Window</strong> (<kbd>Ctrl+Shift+N</kbd> / <kbd>⌘⇧N</kbd>). Each window has its own open workspace, undo history, and page state — settings, keybindings, and the radial menu configuration are shared across all open windows.</p>
 
@@ -877,7 +942,9 @@ def build_help_html() -> str:
     """Build the complete help HTML from all sections."""
     sections = [
         _build_getting_started(),
-        _build_whats_new_031(),
+        _build_common_tasks(),
+        _build_files_and_recovery(),
+        _build_precision_editing(),
         _build_draft_page(),
         _build_bezier_pen_tool(),
         _build_dimension_tool(),
@@ -893,6 +960,7 @@ def build_help_html() -> str:
         _build_canvas_commands(),
         _build_shortcuts(),
         _build_troubleshooting(),
+        _build_settings_updates(),
         _build_support(),
     ]
 
@@ -947,7 +1015,7 @@ def build_help_html() -> str:
 </style>
 
 <h1 style="text-align:center;color:#f0f6fc;">Simple Stipple — User Manual</h1>
-<p style="text-align:center;color:#8b949e;">A powerful laser-engraving pattern generator for DXF files.</p>
+<p style="text-align:center;color:#8b949e;">Draw, trace, pattern, convert, and prepare vector work with confidence.</p>
 
 <hr style="border:none;border-top:2px solid #2f81f7;margin:20px 0;">
 
@@ -958,25 +1026,93 @@ def build_help_html() -> str:
 # ── TOC entries (section id → display label) ───────────────────────────────
 
 TOC_ENTRIES: list[tuple[str, str]] = [
-    _toc_entry("getting-started", "Getting Started"),
-    _toc_entry("whats-new-031", "What’s New in 0.3.1"),
-    _toc_entry("draft-page", "Draft Page"),
-    _toc_entry("bezier-pen-tool", "Bezier Pen Tool"),
-    _toc_entry("dimension-tool", "Dimension Tool"),
-    _toc_entry("radial-menu", "Quick Radial Menu"),
-    _toc_entry("path-cleanup", "Path Cleanup Tools"),
-    _toc_entry("text-tools", "Text & Typography"),
-    _toc_entry("layers", "Layers"),
-    _toc_entry("pattern-page", "Pattern Page"),
-    _toc_entry("pattern-types", "Pattern Types (20+)"),
-    _toc_entry("trace-page", "Trace Page"),
-    _toc_entry("convert-page", "Convert / Utilities"),
-    _toc_entry("repo-page", "Repository Sync (Git)"),
-    _toc_entry("canvas-commands", "Canvas Commands"),
-    _toc_entry("keyboard-shortcuts", "Keyboard Shortcuts"),
-    _toc_entry("troubleshooting", "Troubleshooting & Tips"),
-    _toc_entry("support", "Support & Settings"),
+    _toc_entry("getting-started", "Start here · Getting Started"),
+    _toc_entry("common-tasks", "Start here · I Want To…"),
+    _toc_entry("files-recovery", "Files · Save, Import & Recover"),
+    _toc_entry("precision-editing", "Edit · Select, Round & Align"),
+    _toc_entry("draft-page", "Create · Draft Page"),
+    _toc_entry("bezier-pen-tool", "Create · Bezier Pen"),
+    _toc_entry("dimension-tool", "Create · Dimensions"),
+    _toc_entry("text-tools", "Create · Text & Typography"),
+    _toc_entry("pattern-page", "Create · Pattern Page"),
+    _toc_entry("pattern-types", "Create · Pattern Types"),
+    _toc_entry("trace-page", "Create · Trace Images"),
+    _toc_entry("layers", "Organize · Layers"),
+    _toc_entry("radial-menu", "Navigate · Quick Radial Menu"),
+    _toc_entry("canvas-commands", "Navigate · Canvas Commands"),
+    _toc_entry("keyboard-shortcuts", "Navigate · Keyboard Shortcuts"),
+    _toc_entry("path-cleanup", "Edit · Path Cleanup"),
+    _toc_entry("convert-page", "Files · Convert & Repair"),
+    _toc_entry("repo-page", "Files · Repository Sync"),
+    _toc_entry("troubleshooting", "Solve · Troubleshooting"),
+    _toc_entry("settings-updates", "Configure · Settings & Updates"),
+    _toc_entry("support", "Solve · Support & Diagnostics"),
 ]
+
+# User vocabulary does not always match the exact control label. These aliases
+# intentionally map common goals and CAD terms to the section that explains
+# how to complete them.
+TOC_SEARCH_TERMS: dict[str, tuple[str, ...]] = {
+    "getting-started": ("begin", "first project", "new user", "overview", "workflow"),
+    "common-tasks": ("how do i", "what can i do", "workflow", "quick start", "goal"),
+    "files-recovery": (
+        "save",
+        "open",
+        "workspace",
+        "autosave",
+        "recover",
+        "recovery",
+        "import",
+        "export",
+        "lost work",
+        "recover lost work",
+        "movedist",
+    ),
+    "precision-editing": (
+        "select",
+        "round",
+        "rounded corner",
+        "rounded corners",
+        "fillet",
+        "chamfer",
+        "bevel",
+        "offset",
+        "boolean",
+        "union",
+        "subtract",
+        "align",
+        "snap",
+        "constraint",
+        "construction",
+    ),
+    "draft-page": ("draw", "shape", "edit", "resize"),
+    "bezier-pen-tool": ("curve", "handles", "pen", "smooth curve"),
+    "dimension-tool": ("measure", "measurement", "length", "angle", "radius"),
+    "radial-menu": ("quick menu", "tool wheel", "q menu"),
+    "path-cleanup": ("smooth", "simplify", "cleanup", "repair path", "fit curve"),
+    "text-tools": ("font", "lettering", "type", "text on path"),
+    "layers": ("hide", "lock", "organize", "color", "group"),
+    "pattern-page": ("engrave", "engraving", "fill", "generate", "zone", "cutout"),
+    "pattern-types": ("honeycomb", "voronoi", "hatch", "tile", "motif"),
+    "trace-page": ("image", "photo", "bitmap", "outline", "vectorize", "threshold"),
+    "convert-page": ("convert", "repair", "fix dxf", "svg", "fvi"),
+    "repo-page": ("git", "pull", "push", "commit", "repository"),
+    "canvas-commands": ("pan", "zoom", "select", "undo", "grid", "snap"),
+    "keyboard-shortcuts": ("hotkey", "key binding", "shortcut"),
+    "troubleshooting": ("problem", "error", "failed", "not working", "missing"),
+    "settings-updates": (
+        "settings",
+        "preferences",
+        "units",
+        "keybindings",
+        "shortcut",
+        "update",
+        "update app",
+        "install",
+        "change units",
+    ),
+    "support": ("settings", "preferences", "update", "logs", "help"),
+}
 
 
 # ── Help Dialog ───────────────────────────────────────────────────────────
@@ -1057,12 +1193,20 @@ class HelpDialog(QDialog):
         toc_layout.addWidget(search_label)
 
         self._search_box = QLineEdit()
-        self._search_box.setPlaceholderText("Search topics… (Enter finds text on the page)")
+        self._search_box.setPlaceholderText("Search help…")
+        self._search_box.setToolTip(
+            "Type to filter topics. Press Enter repeatedly to find each occurrence."
+        )
         self._search_box.setObjectName("tocSearch")
         self._search_box.setClearButtonEnabled(True)
         self._search_box.textChanged.connect(self._filter_toc)
         self._search_box.returnPressed.connect(self._find_in_content)
         toc_layout.addWidget(self._search_box)
+
+        self._search_status = QLabel(f"{len(self._toc_entries)} topics")
+        self._search_status.setObjectName("tocSearchStatus")
+        self._search_status.setAccessibleName("Help search results")
+        toc_layout.addWidget(self._search_status)
 
         self._toc_list = QListWidget()
         self._toc_list.setObjectName("tocList")
@@ -1093,7 +1237,7 @@ class HelpDialog(QDialog):
         splitter.addWidget(self._content)
 
         # Set initial splitter sizes (TOC : Content ≈ 1 : 3)
-        splitter.setSizes([280, 670])
+        splitter.setSizes([310, 640])
         # Without an explicit stretch factor here, Qt had no basis to keep
         # the header compact — it and the splitter both defaulted to
         # stretch 0, and the header ballooned to fill most of the dialog
@@ -1104,97 +1248,189 @@ class HelpDialog(QDialog):
     # ── Styling ────────────────────────────────────────────────────────
 
     def _apply_stylesheet(self) -> None:
-        self.setStyleSheet("""
-            QDialog {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 rgba(30, 35, 45, 1),
-                    stop:1 rgba(25, 30, 40, 1));
-            }
-            #helpHeader {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 rgba(0, 150, 255, 0.2),
-                    stop:1 rgba(0, 100, 200, 0.1));
-                border-bottom: 2px solid rgba(0, 150, 255, 0.4);
-            }
-            #helpTitle {
-                color: #ffffff;
+        # Read the applied app palette rather than a settings lookup — this
+        # dialog previously had a hardcoded dark gradient with its own
+        # one-off accent (#0096ff) that matched neither app theme, so it
+        # stayed dark under Light mode. Palette lookup keeps it correct
+        # regardless of how theming was applied upstream.
+        is_light = self.palette().color(QPalette.ColorRole.Window).lightness() > 128
+        accent = "#0969da" if is_light else "#2f81f7"
+        if is_light:
+            bg_grad = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffffff, stop:1 #f6f8fa)"
+            header_grad = (
+                "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                "stop:0 rgba(9, 105, 218, 0.12), stop:1 rgba(9, 105, 218, 0.05))"
+            )
+            header_border = "rgba(9, 105, 218, 0.35)"
+            title_color = "#1f2328"
+            close_color = "rgba(31, 35, 40, 0.65)"
+            close_hover = "#1f2328"
+            close_hover_bg = "rgba(31, 35, 40, 0.08)"
+            toc_bg = "rgba(246, 248, 250, 0.9)"
+            toc_border = "rgba(31, 35, 40, 0.1)"
+            label_color = "rgba(31, 35, 40, 0.6)"
+            search_bg = "#ffffff"
+            search_text = "#1f2328"
+            search_border = "rgba(31, 35, 40, 0.2)"
+            search_placeholder = "rgba(31, 35, 40, 0.4)"
+            status_color = "rgba(31, 35, 40, 0.55)"
+            item_color = "#24292f"
+            selected_bg = "rgba(9, 105, 218, 0.12)"
+            selected_color = "#0969da"
+        else:
+            bg_grad = (
+                "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+                "stop:0 rgba(30, 35, 45, 1), stop:1 rgba(25, 30, 40, 1))"
+            )
+            header_grad = (
+                "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+                "stop:0 rgba(47, 129, 247, 0.2), stop:1 rgba(31, 111, 235, 0.1))"
+            )
+            header_border = "rgba(47, 129, 247, 0.4)"
+            title_color = "#ffffff"
+            close_color = "rgba(255, 255, 255, 0.7)"
+            close_hover = "#ffffff"
+            close_hover_bg = "rgba(255, 255, 255, 0.1)"
+            toc_bg = "rgba(25, 30, 40, 0.9)"
+            toc_border = "rgba(255, 255, 255, 0.08)"
+            label_color = "rgba(255, 255, 255, 0.6)"
+            search_bg = "rgba(30, 35, 45, 0.9)"
+            search_text = "rgba(255, 255, 255, 0.88)"
+            search_border = "rgba(255, 255, 255, 0.15)"
+            search_placeholder = "rgba(255, 255, 255, 0.4)"
+            status_color = "rgba(255, 255, 255, 0.55)"
+            item_color = "#c9d1d9"
+            selected_bg = "rgba(47, 129, 247, 0.15)"
+            selected_color = "#ffffff"
+        self.setStyleSheet(f"""
+            QDialog {{
+                background: {bg_grad};
+            }}
+            #helpHeader {{
+                background: {header_grad};
+                border-bottom: 2px solid {header_border};
+            }}
+            #helpTitle {{
+                color: {title_color};
                 font-size: 18px;
                 font-weight: bold;
                 padding: 4px 0;
-            }
-            #helpCloseButton {
+            }}
+            #helpCloseButton {{
                 background: transparent;
-                color: rgba(255, 255, 255, 0.7);
+                color: {close_color};
                 border: none;
                 font-size: 16px;
-            }
-            #helpCloseButton:hover {
-                color: #ffffff;
-                background: rgba(255, 255, 255, 0.1);
-            }
-            #tocPanel {
-                background: rgba(25, 30, 40, 0.9);
-                border-right: 1px solid rgba(255, 255, 255, 0.08);
-            }
-            #tocLabel {
-                color: rgba(255, 255, 255, 0.6);
+            }}
+            #helpCloseButton:hover {{
+                color: {close_hover};
+                background: {close_hover_bg};
+            }}
+            #tocPanel {{
+                background: {toc_bg};
+                border-right: 1px solid {toc_border};
+            }}
+            #tocLabel {{
+                color: {label_color};
                 font-size: 11px;
-                text-transform: uppercase;
                 letter-spacing: 1px;
                 padding: 4px 16px;
-            }
-            #tocSearch {
-                background: rgba(30, 35, 45, 0.9);
-                color: rgba(255, 255, 255, 0.88);
-                border: 1px solid rgba(255, 255, 255, 0.15);
+            }}
+            #tocSearch {{
+                background: {search_bg};
+                color: {search_text};
+                border: 1px solid {search_border};
                 border-radius: 6px;
                 padding: 6px 10px;
                 font-size: 13px;
                 margin: 0 8px 4px 8px;
-            }
-            #tocSearch:focus {
-                border-color: rgba(0, 150, 255, 0.5);
-            }
-            #tocSearch[error="true"] {
+            }}
+            #tocSearch:focus {{
+                border-color: {accent};
+            }}
+            #tocSearch[error="true"] {{
                 border-color: #f85149;
                 background: rgba(248, 81, 73, 0.08);
-            }
-            #tocSearch::placeholder {
-                color: rgba(255, 255, 255, 0.4);
-            }
-            #tocList {
+            }}
+            #tocSearch::placeholder {{
+                color: {search_placeholder};
+            }}
+            #tocSearchStatus {{
+                color: {status_color};
+                font-size: 11px;
+                padding: 0 16px 4px 16px;
+            }}
+            #tocList {{
                 background: transparent;
-            }
-            QListWidget::item:selected {
-                background: rgba(0, 150, 255, 0.15);
-            }
-            #helpContent {
-                background: transparent;
+                color: {item_color};
+                border: none;
+                padding: 4px;
+            }}
+            #tocList::item {{
+                color: {item_color};
+                min-height: 24px;
+                padding: 3px 8px;
+                border-radius: 4px;
+            }}
+            QListWidget::item:selected {{
+                background: {selected_bg};
+                color: {selected_color};
+            }}
+            #helpContent {{
+                /* The generated manual HTML (build_help_html()) hardcodes
+                   its own light-gray-on-dark <style> block, independent of
+                   this dialog's chrome — same "always-dark reading surface"
+                   pattern as the CAD canvas and Convert's preview pane, so
+                   this stays fixed rather than following Light/Dark. */
+                background: #0d1117;
                 color: rgba(255, 255, 255, 0.88);
                 border: none;
+                border-radius: 6px;
                 line-height: 1.7;
-            }
+            }}
         """)
 
     # ── Search / Filter ────────────────────────────────────────────────
 
-    def _section_contains(self, section_id: str, query: str) -> bool:
+    def _section_text(self, section_id: str) -> str:
         if not self._html_content:
-            return False
+            return ""
         try:
             section_marker = f'id="{section_id}"'
             section_start = self._html_content.find(section_marker)
             if section_start < 0:
-                return False
+                return ""
             tag_end = self._html_content.find(">", section_start)
-            search_from = (
-                tag_end + 1 if tag_end >= 0 else section_start + len(section_marker)
-            )
+            search_from = tag_end + 1 if tag_end >= 0 else section_start + len(section_marker)
             next_section = self._html_content.find('class="section-heading"', search_from)
             section_end = next_section if next_section >= 0 else len(self._html_content)
-            return query in self._html_content[section_start:section_end].lower()
+            section_html = self._html_content[section_start:section_end]
+            plain_text = _html_unescape(re.sub(r"<[^>]+>", " ", section_html))
+            return " ".join(plain_text.casefold().split())
         except Exception:  # noqa: BLE001 - malformed help content should not break filtering
-            return False
+            return ""
+
+    def _section_score(self, section_id: str, query: str) -> int:
+        """Rank a topic using labels, user-language aliases, then body text."""
+        normalized = " ".join(query.casefold().split())
+        if not normalized:
+            return 1
+        label = next(
+            (text.casefold() for entry_id, text in self._toc_entries if entry_id == section_id),
+            "",
+        )
+        aliases = TOC_SEARCH_TERMS.get(section_id, ())
+        if normalized in label:
+            return 300
+        if any(normalized == alias or normalized in alias for alias in aliases):
+            return 240
+
+        text = self._section_text(section_id)
+        if " " in normalized or len(normalized) > 5:
+            return 80 if normalized in text else 0
+        # Short CAD terms such as "round" must not match "background" or
+        # "around"; those false positives previously buried the useful topic.
+        return 80 if re.search(rf"\b{re.escape(normalized)}\b", text) else 0
 
     def _select_first_visible_toc_item(self) -> None:
         for index in range(self._toc_list.count()):
@@ -1212,22 +1448,39 @@ class HelpDialog(QDialog):
         # stale search left the cursor.
         self._last_find_query = None
         query = text.strip().lower()
+        visible_count = 0
 
+        best_item: QListWidgetItem | None = None
+        best_score = 0
         for index in range(self._toc_list.count()):
             item = self._toc_list.item(index)
             if not query:
                 item.setHidden(False)
                 continue
-            label = item.text().lower()
-            section_id = item.data(Qt.ItemDataRole.UserRole).lower()
-            found = (
-                query in label
-                or query in section_id
-                or self._section_contains(section_id, query)
-            )
+            section_id = str(item.data(Qt.ItemDataRole.UserRole)).casefold()
+            score = self._section_score(section_id, query)
+            found = score > 0
             item.setHidden(not found)
+            visible_count += int(found)
+            if score > best_score:
+                best_score = score
+                best_item = item
 
-        self._select_first_visible_toc_item()
+        if not query:
+            visible_count = self._toc_list.count()
+        if best_item is not None:
+            self._toc_list.setCurrentItem(best_item)
+            self._toc_list.scrollToItem(best_item)
+        elif visible_count:
+            self._select_first_visible_toc_item()
+        else:
+            self._toc_list.clearSelection()
+            self._toc_list.setCurrentRow(-1)
+        noun = "topic" if visible_count == 1 else "topics"
+        best_text = f" · best: {best_item.text()}" if best_item is not None else ""
+        self._search_status.setText(f"{visible_count} {noun}{best_text}")
+        self._search_box.setProperty("error", bool(query) and visible_count == 0)
+        refresh_style(self._search_box)
 
     def _find_in_content(self) -> None:
         """Enter in the search box jumps to, selects (highlighted via the
@@ -1245,8 +1498,9 @@ class HelpDialog(QDialog):
         if not query:
             return
         if query != self._last_find_query:
-            cursor = self._content.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.Start)
+            current = self._toc_list.currentItem()
+            section_id = str(current.data(Qt.ItemDataRole.UserRole)) if current is not None else ""
+            cursor = self._cursor_for_anchor(section_id)
             self._content.setTextCursor(cursor)
             self._last_find_query = query
         found = self._content.find(query)
@@ -1259,6 +1513,24 @@ class HelpDialog(QDialog):
             found = self._content.find(query)
         self._search_box.setProperty("error", not found)
         refresh_style(self._search_box)
+
+    def _cursor_for_anchor(self, anchor: str) -> QTextCursor:
+        """Return a cursor at an HTML anchor, falling back to document start."""
+        document = self._content.document()
+        block = document.begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid() and anchor in fragment.charFormat().anchorNames():
+                    cursor = QTextCursor(document)
+                    cursor.setPosition(fragment.position())
+                    return cursor
+                iterator += 1
+            block = block.next()
+        cursor = QTextCursor(document)
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        return cursor
 
     # ── TOC interaction ────────────────────────────────────────────────
 

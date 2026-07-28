@@ -413,7 +413,7 @@ deleted legacy tests. No destructive cleanup occurs until the new paths pass val
 
 ## Completion record
 
-Implemented after explicit approval. The final structure uses 178 runtime modules and
+Implemented after explicit approval. The final structure uses 176 runtime modules and
 removes the old `core`, `backend`, `ui.pages`, `ui.canvas`, `app.services`, and
 `app.controllers` trees. A few proposed placements were corrected during executable
 boundary validation:

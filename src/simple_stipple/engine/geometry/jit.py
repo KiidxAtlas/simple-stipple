@@ -97,8 +97,12 @@ def resample_path(points, targets):
             segment += 1
         span = cumulative[segment + 1] - cumulative[segment]
         ratio = 0.0 if span <= 1e-12 else (target - cumulative[segment]) / span
-        output[sample, 0] = points[segment, 0] + (points[segment + 1, 0] - points[segment, 0]) * ratio
-        output[sample, 1] = points[segment, 1] + (points[segment + 1, 1] - points[segment, 1]) * ratio
+        output[sample, 0] = (
+            points[segment, 0] + (points[segment + 1, 0] - points[segment, 0]) * ratio
+        )
+        output[sample, 1] = (
+            points[segment, 1] + (points[segment + 1, 1] - points[segment, 1]) * ratio
+        )
     return output, cumulative[-1]
 
 

@@ -261,10 +261,10 @@ def init_sentry(dsn: str | None = None, enabled: bool = True) -> None:
         environment=_resolve_environment(dsn),
         traces_sample_rate=0.0,  # we don't track performance, only errors
         before_send=_before_send,
-        integrations=[
-            _QtIntegration(),
-        ],
     )
+    # This is an application hook, not a sentry-sdk Integration subclass.
+    # Install it directly after Sentry so its excepthook can forward failures.
+    _QtIntegration().install()
 
     # Hook into the existing error bus so every reported error reaches Sentry.
     from simple_stipple.platform.error_reporting import error_bus
@@ -332,7 +332,7 @@ def _resolve_environment(dsn: str) -> str:
     return "development"
 
 
-def _before_send(event: dict, hint: dict) -> dict | None:
+def _before_send(event: Any, hint: dict[str, Any]) -> Any:
     """Filter events before sending to Sentry."""
     # Skip keyboard-interrupt style events.
     exc = hint.get("exc_info")

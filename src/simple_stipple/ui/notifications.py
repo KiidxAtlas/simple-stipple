@@ -15,4 +15,3 @@ def record_notification(text: str) -> None:
 
 def notification_history() -> list[tuple[str, str]]:
     return list(_notification_history)
-

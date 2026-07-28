@@ -63,6 +63,9 @@ class _ConversionSubTab(QWidget):
     def _browse_src(self) -> None:
         raise NotImplementedError
 
+    def _run(self) -> None:
+        raise NotImplementedError
+
     def _bind_readiness(self, source_edit: QLineEdit) -> None:
         """Keep the Convert button disabled until a source path is entered.
 
@@ -89,7 +92,7 @@ class _ConversionSubTab(QWidget):
         app = QCoreApplication.instance()
         if app is not None and QThread.currentThread() is not app.thread():
             QMetaObject.invokeMethod(
-                self, "_refresh_readiness", Qt.ConnectionType.QueuedConnection
+                self, b"_refresh_readiness", Qt.ConnectionType.QueuedConnection
             )
             return
         self._btn_state.emit(self.is_ready())
@@ -537,6 +540,7 @@ class FixerSubTab(_ConversionSubTab):
     def _folder_dxf_files(folder: str, *, recursive: bool = True) -> list[Path]:
         """Return DXF files in *folder* using the legacy helper contract."""
         return _ConversionSubTab._collect_files(folder, ".dxf", include_subfolders=recursive)
+
     preview_path = Signal(str)
     _btn_state = Signal(bool)
     _reveal_state = Signal(bool)
@@ -1330,4 +1334,3 @@ __all__ = [
 # ════════════════════════════════════════════════════════════════════════════
 # Page shell
 # ════════════════════════════════════════════════════════════════════════════
-

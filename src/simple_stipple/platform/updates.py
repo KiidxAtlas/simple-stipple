@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import re
+import subprocess
+import sys
+import tempfile
 import urllib.error
 import urllib.request
 from importlib import metadata
@@ -16,6 +20,7 @@ _LOG = logging.getLogger(__name__)
 
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
+_SHA256_PATTERN = re.compile(r"\A([0-9a-fA-F]{64})(?:\s+[*]?(\S+))?\s*\Z")
 
 
 def _read_version_from_pyproject() -> str:
@@ -65,6 +70,119 @@ def get_releases_page_url() -> str:
     return f"https://github.com/{_REPO_OWNER}/{_REPO_NAME}/releases"
 
 
+def can_self_update_windows() -> bool:
+    """Return whether this process is a replaceable frozen Windows executable."""
+    executable = Path(sys.executable)
+    return (
+        platform.system() == "Windows"
+        and bool(getattr(sys, "frozen", False))
+        and executable.suffix.casefold() == ".exe"
+        and executable.is_file()
+    )
+
+
+def update_staging_path(version: str, system: str | None = None) -> Path:
+    """Return a private temporary path for a downloaded update artifact."""
+    safe_version = re.sub(r"[^0-9A-Za-z._-]+", "-", version)
+    safe_version = re.sub(r"\.{2,}", ".", safe_version).strip("-.") or "update"
+    current_system = system or platform.system()
+    suffix = {
+        "Windows": ".exe",
+        "Darwin": ".dmg",
+        "Linux": ".tar.gz",
+    }.get(current_system, ".download")
+    root = Path(tempfile.gettempdir()) / "simple-stipple-updates"
+    return root / f"SimpleStipple-{safe_version}{suffix}"
+
+
+def _windows_updater_script() -> str:
+    """PowerShell handoff that atomically swaps the EXE after this process exits."""
+    return r"""param(
+    [Parameter(Mandatory=$true)][int]$ProcessId,
+    [Parameter(Mandatory=$true)][string]$NewFile,
+    [Parameter(Mandatory=$true)][string]$Target,
+    [Parameter(Mandatory=$true)][string]$LogFile
+)
+$ErrorActionPreference = "Stop"
+$Backup = "$Target.previous"
+try {
+    $Deadline = [DateTime]::UtcNow.AddMinutes(10)
+    while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and
+           ([DateTime]::UtcNow -lt $Deadline)) {
+        Start-Sleep -Milliseconds 500
+    }
+    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+        throw "Simple Stipple did not close within ten minutes."
+    }
+    if (-not (Test-Path -LiteralPath $NewFile)) {
+        throw "The staged update is missing."
+    }
+    if (Test-Path -LiteralPath $Backup) {
+        Remove-Item -LiteralPath $Backup -Force
+    }
+    Move-Item -LiteralPath $Target -Destination $Backup -Force
+    try {
+        Move-Item -LiteralPath $NewFile -Destination $Target -Force
+    } catch {
+        Move-Item -LiteralPath $Backup -Destination $Target -Force
+        throw
+    }
+    Start-Process -FilePath $Target
+    Remove-Item -LiteralPath $Backup -Force -ErrorAction SilentlyContinue
+} catch {
+    Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format o) $($_.Exception.Message)"
+}
+"""
+
+
+def launch_windows_self_update(staged_executable: Path) -> bool:
+    """Launch a detached updater that replaces and restarts this frozen EXE.
+
+    The caller must quit the application after this returns ``True``. The
+    helper waits for the current process to release the executable, preserves
+    one rollback copy during replacement, and only then starts the new build.
+    """
+    if not can_self_update_windows() or not staged_executable.is_file():
+        return False
+
+    staging_dir = staged_executable.parent
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    helper = staging_dir / "install-update.ps1"
+    log_path = staging_dir / "install-update.log"
+    try:
+        helper.write_text(_windows_updater_script(), encoding="utf-8")
+        creation_flags = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        )
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(helper),
+                "-ProcessId",
+                str(os.getpid()),
+                "-NewFile",
+                str(staged_executable),
+                "-Target",
+                str(Path(sys.executable).resolve()),
+                "-LogFile",
+                str(log_path),
+            ],
+            close_fds=True,
+            creationflags=creation_flags,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _LOG.exception("Could not launch the Windows update handoff")
+        return False
+    return True
+
+
 def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
     """Check GitHub releases for a newer version.
 
@@ -104,7 +222,13 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
             (asset for asset in assets if asset.get("browser_download_url") == download_url), {}
         )
         digest = str(selected.get("digest") or "")
-        sha256 = digest.split(":", 1)[1] if digest.lower().startswith("sha256:") else None
+        sha256 = (
+            _normalize_sha256(digest.split(":", 1)[1])
+            if digest.lower().startswith("sha256:")
+            else None
+        )
+        if not sha256:
+            sha256 = _sha256_from_sidecar(selected, assets, timeout)
         return UpdateInfo(
             version=latest_version,
             url=download_url,
@@ -121,6 +245,53 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
     except (TypeError, ValueError) as exc:
         _LOG.error("Unexpected error checking for updates: %s", exc)
         return None
+
+
+def _normalize_sha256(value: str) -> str | None:
+    """Return a normalized SHA-256 hex digest, or None for malformed input."""
+    normalized = value.strip().lower()
+    return normalized if re.fullmatch(r"[0-9a-f]{64}", normalized) else None
+
+
+def _sha256_from_sidecar(
+    artifact: dict[str, Any], assets: list[dict[str, Any]], timeout: int
+) -> str | None:
+    """Fetch and validate the release checksum paired with an artifact."""
+    artifact_name = str(artifact.get("name") or "")
+    if not artifact_name:
+        return None
+    sidecar_name = f"{artifact_name}.sha256"
+    sidecar_url = next(
+        (
+            str(asset.get("browser_download_url") or "")
+            for asset in assets
+            if str(asset.get("name") or "") == sidecar_name
+        ),
+        "",
+    )
+    if not sidecar_url:
+        return None
+
+    try:
+        request = urllib.request.Request(
+            sidecar_url,
+            headers={"User-Agent": "SimpleStipple/update-checker"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            text = response.read(1024).decode("ascii").strip()
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError, UnicodeError) as exc:
+        _LOG.warning("Could not read update checksum sidecar: %s", exc)
+        return None
+
+    match = _SHA256_PATTERN.fullmatch(text)
+    if not match:
+        _LOG.warning("Invalid SHA-256 sidecar for %s", artifact_name)
+        return None
+    listed_name = match.group(2)
+    if listed_name and Path(listed_name).name != artifact_name:
+        _LOG.warning("SHA-256 sidecar names a different artifact: %s", listed_name)
+        return None
+    return _normalize_sha256(match.group(1))
 
 
 def _compare_versions(v1: str, v2: str) -> int:

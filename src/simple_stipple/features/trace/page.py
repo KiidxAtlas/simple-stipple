@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Image to Outline page."""
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ from simple_stipple.features.trace.session import (
 )
 from simple_stipple.platform.config import save_settings
 from simple_stipple.ui.components.collapsible import CollapsibleSection
-from simple_stipple.ui.components.feedback import parse_float_field_with_feedback
+from simple_stipple.ui.components.feedback import parse_float_field_with_feedback, show_error
 from simple_stipple.ui.components.inputs import make_resettable_line_edit
 from simple_stipple.ui.components.layout import (
     content_splitter,
@@ -76,7 +77,8 @@ from simple_stipple.ui.components.workflow import (
     set_status_label,
     workflow_strip,
 )
-from simple_stipple.ui.files import pick_open_file, pick_save_file
+from simple_stipple.ui.dialogs.export_preflight import export_preflight
+from simple_stipple.ui.files import pick_open_file, pick_save_file, reveal_label
 from simple_stipple.ui.recent import KIND_IMAGE, record_recent
 from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 
@@ -209,6 +211,10 @@ class TracePage(BasePage):
                 if url.toLocalFile().lower().endswith(self._IMAGE_EXTENSIONS):
                     event.acceptProposedAction()
                     return
+        # Qt withholds dropEvent entirely once dragEnterEvent rejects, so
+        # this is the only chance to say why.
+        if event.mimeData().hasUrls():
+            self._set_status("Trace accepts image files (PNG, JPG, etc.)", STATUS_WARN)
         event.ignore()
 
     def dropEvent(self, event):
@@ -363,7 +369,7 @@ class TracePage(BasePage):
         export_layout = QVBoxLayout(export_content)
         export_layout.setContentsMargins(0, 0, 0, 0)
         export_layout.setSpacing(4)
-        self._export_all_btn = QPushButton("Export Traced Outlines DXF")
+        self._export_all_btn = QPushButton("Export Traced Outlines DXF…")
         self._export_all_btn.setMinimumHeight(36)
         self._export_all_btn.setProperty("role", "primary")
         self._export_all_btn.setToolTip("Save all traced outlines as a DXF file")
@@ -384,7 +390,7 @@ class TracePage(BasePage):
         self._export_sel_action.setEnabled(False)
         _overflow_menu.addAction("Export Raster Engraving…", self._export_raster_engraving)
         _overflow_menu.addSeparator()
-        self._reveal_action = _overflow_menu.addAction("Show in Finder", self._reveal_in_finder)
+        self._reveal_action = _overflow_menu.addAction(reveal_label(), self._reveal_in_finder)
         self._reveal_action.setEnabled(False)
         _export_overflow_btn.setMenu(_overflow_menu)
         export_row = QHBoxLayout()
@@ -708,7 +714,10 @@ class TracePage(BasePage):
             on_use_selected_as_custom_tile=self.customTileRequested.emit,
             draft_profile=True,
         )
-        self._canvas.set_empty_message("No image loaded\nOpen or drop an image to trace")
+        self._canvas.set_empty_message(
+            "Start a trace\n1  Open or drop an image\n"
+            "2  Adjust threshold and cleanup\n3  Export or send the result"
+        )
         self._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
@@ -1484,6 +1493,15 @@ class TracePage(BasePage):
         if not records:
             QMessageBox.critical(self, "Export", "No polylines to export.")
             return
+        proceed, _report = export_preflight(
+            self,
+            [list(record["polyline"]) for record in records],
+            action="Export",
+            allow_open_paths=True,
+        )
+        if not proceed:
+            self._canvas.set_geometry_health_visible(True, announce=True)
+            return
         out = self._get_save_path("Export all outlines as DXF")
         if not out:
             return
@@ -1500,13 +1518,22 @@ class TracePage(BasePage):
             self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", STATUS_OK)
             self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
+            show_error(self, "Export Error", exc)
 
     def _export_selected(self) -> None:
         selected = set(self._canvas.get_selected_ids())
         records = [r for r in self._canvas.get_export_dxf_state() if r.get("entity_id") in selected]
         if not records:
             QMessageBox.information(self, "Export Selected", "Nothing is selected.")
+            return
+        proceed, _report = export_preflight(
+            self,
+            [list(record["polyline"]) for record in records],
+            action="Export Selected",
+            allow_open_paths=True,
+        )
+        if not proceed:
+            self._canvas.set_geometry_health_visible(True, announce=True)
             return
         out = self._get_save_path("Export selected outlines as DXF")
         if not out:
@@ -1527,7 +1554,7 @@ class TracePage(BasePage):
             )
             self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Export Error", str(exc))
+            show_error(self, "Export Error", exc)
 
     def _export_raster_engraving(self) -> None:
         if not self._img_path or not Path(self._img_path).exists():
@@ -1589,7 +1616,7 @@ class TracePage(BasePage):
             "passes on scrap material before engraving the final workpiece."
         )
         warning.setWordWrap(True)
-        warning.setProperty("role", "warning")
+        warning.setProperty("role", "status-warn")
         layout.addWidget(warning)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -1633,7 +1660,7 @@ class TracePage(BasePage):
                 STATUS_OK,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Raster Export Error", str(exc))
+            show_error(self, "Raster Export Error", exc)
 
     def _reveal_in_finder(self) -> None:
         if self._last_out:

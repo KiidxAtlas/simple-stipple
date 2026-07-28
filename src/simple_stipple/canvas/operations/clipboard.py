@@ -126,7 +126,7 @@ class ClipboardService:
 
         from simple_stipple.ui.dialogs.multi_paste_dialog import MultiPasteDialog
 
-        dialog = MultiPasteDialog(self._host)
+        dialog = MultiPasteDialog(self._host, unit=str(getattr(self._host, "_unit_system", "mm")))
         if dialog.exec() == QDialog.DialogCode.Accepted:
             distance, count, direction = dialog.values()
             self.paste_multiple(distance, count, direction)
@@ -278,6 +278,8 @@ class ClipboardService:
         host = self._host
         dropped_ids = [eid for eid in host._sel if not host._entity_for_id(eid).locked]
         if not dropped_ids:
+            if host._sel:
+                host._show_flash("Shape is locked", 1200)
             return
         self.copy_selected()
         host._canvas_service.delete_entities(tuple(dropped_ids))
@@ -287,6 +289,8 @@ class ClipboardService:
         host = self._host
         selected_ids = [eid for eid in host._sel if not host._entity_for_id(eid).locked]
         if not selected_ids:
+            if host._sel:
+                host._show_flash("Shape is locked", 1200)
             return
         host._canvas_service.execute(
             MoveEntityCommand(entity_ids=tuple(selected_ids), dx=dx, dy=dy)

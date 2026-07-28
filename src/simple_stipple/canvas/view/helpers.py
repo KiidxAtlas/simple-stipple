@@ -316,6 +316,8 @@ def get_command_guidance(self) -> tuple[str, str]:
         return "Trim: hover a segment to preview removal · click to apply · Esc exits", "accent"
     if self._mode == "extend":
         return "Extend: hover an open end to preview · click to apply · Esc exits", "accent"
+    if self._mode == "knife":
+        return "Knife: drag across shapes to cut them · Esc exits", "accent"
     if self._sel:
         return (
             f"{len(self._sel)} selected · use contextual actions or drag the gizmo",
@@ -383,6 +385,7 @@ def _update_cursor(self) -> None:
             "edit",
             "trim",
             "extend",
+            "knife",
         )
     ):
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -622,7 +625,9 @@ def set_ghost_polylines(
 def get_status_summary(self) -> dict[str, object]:
     precision = []
     if self._grid_visible:
-        precision.append(f"Grid {self._grid_spacing:g}mm")
+        from simple_stipple.ui.units import format_length
+
+        precision.append(f"Grid {format_length(self._grid_spacing, self._unit_system)}")
     if self._grid_snap:
         precision.append("Snap")
     if self._measure_mode:

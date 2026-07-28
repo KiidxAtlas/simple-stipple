@@ -336,6 +336,31 @@ def _cancel_active_drag(self) -> bool:
         self._band_additive = False
         self._redraw()
         return True
+    if self._bg_drag is not None:
+        _mode, _sx, _sy, ox, oy, ow, oh, rotation = self._bg_drag
+        self._bg_x_mm, self._bg_y_mm = ox, oy
+        self._bg_w_mm, self._bg_h_mm = ow, oh
+        self._bg_rotation_deg = rotation
+        if callable(self._bg_edit_callback):
+            self._bg_edit_callback(ox, oy, ow, oh, rotation)
+        self._bg_pixmap = None
+        self._bg_drag = None
+        self._redraw()
+        return True
+    if self._guide_drag is not None:
+        self._canvas_service.cancel_preview(self._guide_preview)
+        self._guide_preview = None
+        self._guide_drag = None
+        self._guide_drag_moved = False
+        self._selected_guide = None
+        self._redraw()
+        return True
+    if self._dimension_drag is not None:
+        self._canvas_service.cancel_preview(self._dimension_drag_preview)
+        self._dimension_drag_preview = None
+        self._dimension_drag = None
+        self._redraw()
+        return True
     if self._move_dragging:
         if self._move_undo_pushed:
             self._canvas_service.cancel_preview(self._move_command_snapshot)
@@ -569,6 +594,45 @@ def get_export_dxf_state(self, *, include_hidden: bool = False) -> list[dict[str
 # so an empty document's rulers show a meaningless 0-800mm span instead
 # of a plausible small work area.
 _EMPTY_BBOX = (0.0, 0.0, 100.0, 100.0)
+
+
+def _cancel_draw_in_progress(self) -> bool:
+    """Cancel the current in-progress path/shape without leaving Draw mode.
+
+    Standard CAD behavior (and what the status hint "Esc cancels" promises):
+    the first Escape drops the unfinished geometry but keeps the tool armed;
+    a second Escape then exits to Select via _escape_cb.
+    """
+    if self._mode != "draw":
+        return False
+    in_progress = bool(
+        self._draw_pts
+        or self._draw_arc_pts
+        or self._pen_pts
+        or self._draw_shape_preview_active
+        or self._draw_shape_anchor_w is not None
+    )
+    if not in_progress:
+        return False
+    self._draw_pts.clear()
+    self._draw_point_snap_types.clear()
+    self._dismiss_shape_dim_inputs()
+    self._dismiss_dim_inputs()
+    self._draw_constraint = None
+    self._draw_snap = None
+    self._draw_snap_type = None
+    self._angle_snap_active = False
+    self._draw_shape_preview_active = False
+    self._draw_shape_anchor_w = None
+    self._draw_shape_cursor_w = None
+    self._draw_arc_pts.clear()
+    self._pen_pts.clear()
+    self._pen_tangents.clear()
+    self._pen_dragging = False
+    self._pen_press_screen = None
+    self._show_flash("Path cancelled — Esc again to exit Draw", 1200)
+    self._redraw()
+    return True
 
 
 def _escape_cb(self) -> None:

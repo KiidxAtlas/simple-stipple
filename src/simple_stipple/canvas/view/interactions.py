@@ -106,6 +106,10 @@ def keyPressEvent(self, event: QKeyEvent):
         # under it, freezing the shape at its half-dragged position.
         if self._cancel_active_drag():
             return
+        # First Escape mid-draw drops the unfinished path but keeps the
+        # tool armed; the fall-through below exits the tool entirely.
+        if self._cancel_draw_in_progress():
+            return
         if self._bg_selected:
             self.select_background_image(False)
             return
@@ -285,7 +289,7 @@ def keyPressEvent(self, event: QKeyEvent):
         event.accept()
         return
 
-    # Declarative command shortcuts — see src/simple_stipple/ui/canvas/interaction/commands.py.
+    # Declarative command shortcuts — see src/simple_stipple/canvas/interaction/commands.py.
     cmd = canvas_commands.match_key(key, mods)
     if cmd is not None and canvas_commands.can_run(self, cmd):
         cmd.run(self)
@@ -424,11 +428,13 @@ def mousePressEvent(self, event: QMouseEvent):
             self._selected_dimension = di
             self._all_dimensions_selected = False
             self._sel.clear()
-            self._dimension_drag = (
-                di
-                if self._mode == "select" and self._dimensions[di].get("type") != "angle"
-                else None
-            )
+            if self._mode == "select" and self._dimensions[di].get("type") != "angle":
+                # Offset dragging mutates the live document; snapshot first so
+                # the whole gesture commits as one undoable command on release.
+                self._dimension_drag_preview = self._canvas_service.begin_preview()
+                self._dimension_drag = di
+            else:
+                self._dimension_drag = None
             self._notify()
             self._redraw()
             return
@@ -596,6 +602,9 @@ def mouseReleaseEvent(self, event: QMouseEvent):
 
     if self._dimension_drag is not None:
         self._dimension_drag = None
+        # A click that changed nothing commits as a no-op.
+        self._canvas_service.commit_preview(self._dimension_drag_preview)
+        self._dimension_drag_preview = None
         self._redraw()
         self._notify()
         return

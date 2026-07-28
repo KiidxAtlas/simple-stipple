@@ -20,6 +20,8 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 
+from simple_stipple.ui.units import format_length as _format_length
+
 
 @dataclass(frozen=True)
 class Command:
@@ -87,12 +89,12 @@ def _toggle_grid_snap(v: Any) -> None:
 
 def _grid_coarser(v: Any) -> None:
     v.set_grid_spacing(min(100.0, v._grid_spacing * 2.0))
-    v._show_flash(f"Grid: {v._grid_spacing:g} mm")
+    v._show_flash(f"Grid: {_format_length(v._grid_spacing, v._unit_system)}")
 
 
 def _grid_finer(v: Any) -> None:
     v.set_grid_spacing(max(0.1, v._grid_spacing / 2.0))
-    v._show_flash(f"Grid: {v._grid_spacing:g} mm")
+    v._show_flash(f"Grid: {_format_length(v._grid_spacing, v._unit_system)}")
 
 
 def _toggle_trim(v: Any) -> None:
@@ -110,6 +112,14 @@ def _toggle_extend(v: Any) -> None:
             "Extend: click an open shape to lengthen it to the next one · Esc exits",
             2000,
         )
+    else:
+        v.set_mode("select")
+
+
+def _toggle_knife(v: Any) -> None:
+    if v.get_mode() != "knife":
+        v.set_mode("knife")
+        v._show_flash("Knife: drag across shapes to cut them · Esc exits", 2000)
     else:
         v.set_mode("select")
 
@@ -555,7 +565,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         "mode.knife",
         "Knife Tool",
-        lambda v: v.set_mode("knife"),
+        _toggle_knife,
         category="Modes",
     ),
     Command(

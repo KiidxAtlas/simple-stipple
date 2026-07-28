@@ -24,6 +24,7 @@ from simple_stipple.platform.storage import (
     read_json_file,
     write_json_file_atomic,
 )
+from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.dialogs.workspace_library import WorkspaceLibraryDialog
 
 if TYPE_CHECKING:
@@ -187,7 +188,7 @@ class WorkspaceController(_WorkspaceStateController):
             document = self._collect_workspace_document()
             write_json_file_atomic(candidate, document)
         except (OSError, TypeError, ValueError) as exc:
-            QMessageBox.critical(self._app, "Workspace Error", str(exc))
+            show_error(self._app, "Workspace Error", exc)
             return False
         self._app._workspace_path = candidate
         self._app._last_saved_document = self._collect_workspace_document()
@@ -214,14 +215,22 @@ class WorkspaceController(_WorkspaceStateController):
             return
         self._load_workspace_file(Path(str(path_str)))
 
-    def _confirm_discard_if_dirty(self) -> bool:
+    def _confirm_discard_if_dirty(self, *, quitting: bool = False) -> bool:
         self._update_workspace_dirty()
-        if not self._app._workspace_dirty or not self._app._has_workspace_content():
+        # Dirty alone triggers the prompt: non-geometry state (trace
+        # parameters, convert setup, presets) is worth saving even when no
+        # page reports canvas content.
+        if not self._app._workspace_dirty:
             return True
+        message = (
+            "The current workspace has unsaved changes. Save before quitting?"
+            if quitting
+            else "The current workspace has unsaved changes. Save before continuing?"
+        )
         choice = QMessageBox.question(
             self._app,
             "Unsaved Workspace",
-            "The current workspace has unsaved changes. Save before continuing?",
+            message,
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
@@ -289,7 +298,7 @@ class WorkspaceController(_WorkspaceStateController):
             self._remember_workspace_path(path)
             self._update_title()
         except (OSError, TypeError, ValueError) as exc:
-            QMessageBox.critical(self._app, "Workspace Error", str(exc))
+            show_error(self._app, "Workspace Error", exc)
 
     def _open_workspace(self) -> None:
         if not self._confirm_discard_if_dirty():
@@ -375,7 +384,7 @@ class WorkspaceController(_WorkspaceStateController):
             self._app._autosave_controller._discard_restored_snapshot()
             return True
         except (OSError, TypeError, ValueError) as exc:
-            QMessageBox.critical(self._app, "Workspace Error", str(exc))
+            show_error(self._app, "Workspace Error", exc)
             return False
 
     def _new_workspace(self) -> None:

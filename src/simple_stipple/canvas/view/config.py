@@ -17,7 +17,7 @@ from simple_stipple.canvas.operations.layer_service import LayerService
 from simple_stipple.canvas.operations.smoothing import SmoothingService
 from simple_stipple.canvas.operations.snap_service import SnapService
 from simple_stipple.canvas.renderer import CanvasRenderer
-from simple_stipple.canvas.service import CanvasService
+from simple_stipple.canvas.service import CanvasModelPort, CanvasService
 from simple_stipple.canvas.snap import SnapEngine
 from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
@@ -52,13 +52,14 @@ def _initialize_view(
     end of CanvasView.__init__ after super().__init__().
     """
     self._model = CanvasModel(parent=self)
-    self._canvas_service = CanvasService(self._model)
+    self._canvas_service = CanvasService(cast(CanvasModelPort, self._model))
     self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     self._selectable = selectable
     self._empty_message = "No polylines loaded"
     self._show_selection_bbox = False
     self._selection_follows_geometry = False
+    self._selection_drag_edits = True
     self._on_poly_change = on_poly_change
     if on_change:
         self.selectionChanged.connect(on_change)
@@ -91,6 +92,9 @@ def _initialize_view(
     # putting them into the editable poly list.
     self._ghost_polys = []
     self._ghost_visible = True
+    # Dense preview fills are visually identical when their strokes are
+    # submitted to Qt in batches instead of one draw call per segment.
+    self._dense_preview_render = False
 
     self._scale = 1.0
     self._ox = 0.0
@@ -130,14 +134,14 @@ def _initialize_view(
     # fed through the same robust splitter used by draw-time splitting.
     self._knife_start_w = None
     self._knife_end_w = None
-    self._last_split_result_ids: set[str] = set()
+    self._last_split_result_ids = set()
     self._last_operation_result = OperationResult.unchanged("")
     self._last_repeat_action = None
     self._operation_preview_polys = []
 
-    # Undo / redo history (delta-based; see src/simple_stipple/backend/model/editor_history.py)
+    # Undo / redo history (delta-based; see src/simple_stipple/document/history.py)
 
-    # Unified snap engine (src/simple_stipple/ui/canvas/snap.py) and guide lines
+    # Unified snap engine (src/simple_stipple/canvas/snap.py) and guide lines
     # (("h", y_world) or ("v", x_world)); guides participate in snapping.
     self._snap_engine = SnapEngine(self)
     # _guides / _dimensions are document-backed properties (defined above);
@@ -206,11 +210,12 @@ def _initialize_view(
     self._selected_dimension = None
     self._all_dimensions_selected = False
     self._dimension_drag = None
+    self._dimension_drag_preview = None
 
     # Mode: "select" | "draw" | "edit"
     self._mode = "select"
 
-    # Interaction tools (src/simple_stipple/ui/canvas/interaction/tools.py): per-mode strategy
+    # Interaction tools (src/simple_stipple/canvas/interaction/tools.py): per-mode strategy
     # objects dispatched by the mouse event handlers. All interaction
     # state stays on the view; tools are stateless.
     trim_tool = canvas_tools.TrimExtendTool(self)

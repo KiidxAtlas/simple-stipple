@@ -16,7 +16,6 @@ commands pick it up too.
 from __future__ import annotations
 
 import json
-import platform
 from pathlib import Path
 
 from PySide6.QtGui import QKeySequence
@@ -47,7 +46,6 @@ from simple_stipple.ui.components.tokens import (
     SPACE_SM,
 )
 
-_KBD_MOD = "Meta" if platform.system() == "Darwin" else "Ctrl"
 _ESSENTIAL_BINDINGS = {
     "workspace.open": "Open Workspace",
     "app.settings": "Open Settings",
@@ -155,8 +153,8 @@ class KeybindingsDialog(QDialog):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            f"Use Qt shortcut syntax (e.g. {_KBD_MOD}+K, Shift+R, "
-            f"{_KBD_MOD}+Shift+D). Leave blank to disable."
+            "Use Qt shortcut syntax (e.g. Ctrl+K, Shift+R, Ctrl+Shift+D). "
+            "On macOS, Ctrl means the Command (⌘) key. Leave blank to disable."
         )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)

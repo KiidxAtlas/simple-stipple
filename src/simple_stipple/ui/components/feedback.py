@@ -9,6 +9,7 @@ from collections.abc import Callable
 from PySide6.QtGui import QAccessible, QAccessibleEvent
 from PySide6.QtWidgets import (
     QLineEdit,
+    QMessageBox,
     QWidget,
 )
 
@@ -21,11 +22,26 @@ _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 def announce_accessible(widget: QWidget, *, urgent: bool = False) -> None:
     """Notify assistive technology after a user-visible status change."""
-    event_type = (
-        QAccessible.Event.Alert if urgent else QAccessible.Event.DescriptionChanged
-    )
+    event_type = QAccessible.Event.Alert if urgent else QAccessible.Event.DescriptionChanged
     QAccessible.updateAccessibility(QAccessibleEvent(widget, event_type))
 
+
+def show_error(
+    parent: QWidget | None, title: str, exc: BaseException, *, message: str | None = None
+) -> None:
+    """Show a failure dialog with a short human message; the exception text
+    goes in the collapsed "Show Details" section rather than the main body.
+
+    ``QMessageBox.critical(parent, title, str(exc))`` put raw library
+    exception text (stack-trace-adjacent messages, file paths, internal
+    error codes) directly in front of the user with no explanation.
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Critical)
+    box.setWindowTitle(title)
+    box.setText(message or f"{title}. See details for what went wrong.")
+    box.setDetailedText(str(exc))
+    box.exec()
 
 
 def parse_float_field(
@@ -94,4 +110,3 @@ def clear_line_edit_error(widget) -> None:
     widget.setProperty("error", False)
     refresh_style(widget)
     widget.setToolTip("")
-

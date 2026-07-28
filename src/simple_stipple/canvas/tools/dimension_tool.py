@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Coherent target → preview → placement workflow for sketch dimensions."""
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from shapely.ops import nearest_points
 
 from simple_stipple.canvas.tools.tools import DimensionTool as DimensionBackend
 from simple_stipple.document.model import EntityRecord
+from simple_stipple.ui.units import format_length as _format_length
 
 
 class DimensionTool(DimensionBackend):
@@ -339,7 +341,9 @@ class DimensionTool(DimensionBackend):
         self.v._refresh_driving_dimensions()
         self.v._redraw()
         self.v._notify()
-        self.v._show_flash(f"Driving dimension updated to {target:g}", 1500)
+        self.v._show_flash(
+            f"Driving dimension updated to {_format_length(target, self.v._unit_system)}", 1500
+        )
         return True
 
     def press(self, event: QMouseEvent) -> bool:

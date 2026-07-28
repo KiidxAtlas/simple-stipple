@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar, cast
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QByteArray, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -92,6 +92,22 @@ class App(QMainWindow):
     _workspace_state_chip: QLabel
     _shortcut_tooltip_specs: list[tuple[QWidget, str, str]]
 
+    def _restore_window_geometry(self) -> None:
+        """Restore size/position saved by ``_save_window_geometry`` — window
+        geometry was never persisted, unlike splitter and sidebar widths, so
+        the window reset to a fixed 1280x820 on every launch."""
+        raw = self._settings.get("window_geometry")
+        if not isinstance(raw, str) or not raw:
+            return
+        try:
+            geometry = QByteArray.fromHex(raw.encode("ascii"))
+        except (TypeError, ValueError):
+            return
+        self.restoreGeometry(geometry)
+
+    def _save_window_geometry(self) -> None:
+        self._settings["window_geometry"] = bytes(self.saveGeometry().toHex()).decode("ascii")
+
     def _autosave_path(self) -> Path:
         return user_data_dir() / "recovery" / f"{self._recovery_id}.workspace.json"
 
@@ -117,6 +133,7 @@ class App(QMainWindow):
         self.setMinimumSize(900, 600)
 
         self._settings = load_settings()
+        self._restore_window_geometry()
         self._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
         canvas_commands.apply_keybindings(self._settings.get("keybindings"))
         self._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
@@ -271,8 +288,8 @@ class App(QMainWindow):
     def _update_title(self) -> None:
         self._workspace_controller._update_title()
 
-    def _confirm_discard_if_dirty(self) -> bool:
-        return self._workspace_controller._confirm_discard_if_dirty()
+    def _confirm_discard_if_dirty(self, *, quitting: bool = False) -> bool:
+        return self._workspace_controller._confirm_discard_if_dirty(quitting=quitting)
 
     def _new_workspace(self) -> None:
         self._workspace_controller._new_workspace()
@@ -550,13 +567,14 @@ class App(QMainWindow):
     # ── Edit / View / Help menus ──────────────────────────────────────────
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._confirm_discard_if_dirty():
+        if not self._confirm_discard_if_dirty(quitting=True):
             event.ignore()
             return
         # Stop timers before children destroyed to avoid late callbacks.
         self._task_controller.shutdown()
         settings_bus.changed.disconnect(self._on_external_setting_changed)
         # Persist settings on exit so any in-memory changes survive.
+        self._save_window_geometry()
         try:
             save_settings(self._settings)
         except Exception as exc:  # noqa: BLE001
@@ -576,7 +594,10 @@ class App(QMainWindow):
             self._repo_page.shutdown()
         except Exception as exc:  # noqa: BLE001
             report_error("Repo page shutdown failed", exc)
-        self._autosave_controller._discard_autosave()
+        # Keep the autosave snapshot when unsaved changes were discarded —
+        # it is the only path back to that work. Saving already discards it.
+        if not self._workspace_dirty:
+            self._autosave_controller._discard_autosave()
         if self in App._open_windows:
             App._open_windows.remove(self)
         event.accept()

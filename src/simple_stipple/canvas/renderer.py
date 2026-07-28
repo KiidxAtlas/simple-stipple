@@ -220,6 +220,9 @@ class CanvasRenderer:
             painter.drawPath(path)
 
     def _paint_main_polys(self, painter: QPainter, visible: QRectF) -> None:
+        if self._host._dense_preview_render and len(self._host._entities) >= 500:
+            self._paint_dense_preview_polys(painter, visible)
+            return
         for ent in self._host._entities:
             poly = ent.points
             if ent.hidden:
@@ -294,6 +297,55 @@ class CanvasRenderer:
                 and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
             ):
                 path.closeSubpath()
+            painter.drawPath(path)
+
+    def _paint_dense_preview_polys(self, painter: QPainter, visible: QRectF) -> None:
+        """Render dense preview linework in a handful of batched paths.
+
+        Preview entities remain individually selectable and unchanged; only
+        the QPainter submission strategy changes. Selection/accented strokes
+        retain their own pens so feedback remains visible.
+        """
+        batches: dict[tuple[str, float, int], QPainterPath] = {}
+        for ent in self._host._entities:
+            poly = ent.points
+            if ent.hidden or len(poly) < 2:
+                continue
+            if not visible.intersects(self._host._poly_rect_for_culling(poly)):
+                continue
+            if not self._host._on_active_layer(ent):
+                color = QColor(POLY)
+                color.setAlpha(140)
+                width = 1.2
+                # PySide6 enum wrappers are not directly int-castable on
+                # newer Qt bindings; store the primitive value in the batch
+                # key and reconstruct the enum when applying the pen.
+                style = Qt.PenStyle.DashLine.value
+            else:
+                selected = ent.id in self._host._sel
+                if selected:
+                    color = QColor(SEL)
+                elif ent.id in self._host._accent_polys:
+                    color = QColor(self._host._accent_polys[ent.id])
+                else:
+                    color = QColor(POLY)
+                width = 2.0 if selected else 1.5
+                style = Qt.PenStyle.SolidLine.value
+            key = (color.name(QColor.NameFormat.HexArgb), width, style)
+            path = batches.setdefault(key, QPainterPath())
+            render_poly = self._host._flattened_points_by_id(ent.id)
+            if len(render_poly) < 2:
+                continue
+            x, y = self._host._w2c(*render_poly[0])
+            path.moveTo(x, y)
+            for point in render_poly[1:]:
+                x, y = self._host._w2c(*point)
+                path.lineTo(x, y)
+        for (color_name, width, style), path in batches.items():
+            pen = QPen(QColor(color_name), width)
+            pen.setStyle(Qt.PenStyle(style))
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
 
     _RULER_STEPS = (
@@ -804,7 +856,7 @@ class CanvasRenderer:
                 cur_c2 = self._host._w2c(eff_wx2, eff_wy2)
                 mid_x = (last_c[0] + cur_c2[0]) / 2
                 mid_y = (last_c[1] + cur_c2[1]) / 2
-                seg_text = f"{seg_len:.2f}"
+                seg_text = _fmt_len(seg_len, self._host._unit_system)
                 self._draw_badge(painter, mid_x, mid_y - 12, seg_text, 10)
 
         # ── Cumulative polyline length and point count (top-right badge) ──
@@ -925,7 +977,7 @@ class CanvasRenderer:
                 )
             # "R: X.XX" badge near cursor (not near anchor), skip if HUD showing
             if not has_hud:
-                r_text = f"R  {radius:.2f}"
+                r_text = f"R  {_fmt_len(radius, self._host._unit_system)}"
                 painter.setFont(_FONT_HEL_9)
                 fm = QFontMetrics(painter.font())
                 tw = fm.horizontalAdvance(r_text)
@@ -943,8 +995,8 @@ class CanvasRenderer:
             mid_rgt_y = (by0c + by1c) / 2
             painter.setFont(_FONT_HEL_9)
             fm = QFontMetrics(painter.font())
-            w_text = f"{w:.2f}"
-            h_text = f"{h:.2f}"
+            w_text = _fmt_len(w, self._host._unit_system)
+            h_text = _fmt_len(h, self._host._unit_system)
             tw_w = fm.horizontalAdvance(w_text)
             tw_h = fm.horizontalAdvance(h_text)
             painter.setPen(Qt.PenStyle.NoPen)
@@ -1156,6 +1208,10 @@ class CanvasRenderer:
             _label = "Extension"
         elif snap_t == "equal_length":
             _label = "Equal Length"
+        elif snap_t == "parallel":
+            _label = "Parallel"
+        elif snap_t == "perpendicular":
+            _label = "Perpendicular"
         elif snap_t == "axis_x":
             _label = "Align X"
         elif snap_t == "axis_y":
@@ -1494,43 +1550,42 @@ class CanvasRenderer:
                 painter.drawLine(QPointF(ecx, ecy), QPointF(ecx, cur_cy))
                 shown += 1
 
-        # Parallel/perpendicular inference against existing straight edges.
-        last_x, last_y = self._host._draw_pts[-1]
-        drag_angle = math.atan2(cur_wy - last_y, cur_wx - last_x)
-        drag_length = math.hypot(cur_wx - last_x, cur_wy - last_y)
-        if drag_length > 1e-6:
-            best_relation: tuple[float, float, str] | None = None
-            for entity in self._host._entities:
-                for first, second in zip(entity.points, entity.points[1:]):
-                    edge_angle = math.atan2(second[1] - first[1], second[0] - first[0])
-                    for candidate_angle, symbol in (
-                        (edge_angle, "Parallel"),
-                        (edge_angle + math.pi / 2.0, "Perpendicular"),
-                    ):
-                        delta = abs(
-                            (drag_angle - candidate_angle + math.pi / 2.0) % math.pi - math.pi / 2.0
-                        )
-                        if delta <= math.radians(3.0) and (
-                            best_relation is None or delta < best_relation[0]
-                        ):
-                            best_relation = (delta, candidate_angle, symbol)
-            if best_relation is not None:
-                _delta, inferred_angle, label = best_relation
-                end = (
-                    last_x + math.cos(inferred_angle) * drag_length,
-                    last_y + math.sin(inferred_angle) * drag_length,
-                )
-                start_c = self._host._w2c(last_x, last_y)
-                end_c = self._host._w2c(*end)
-                painter.setPen(QPen(QColor("#79c0ff"), 1.0, Qt.PenStyle.DashLine))
-                painter.drawLine(QPointF(*start_c), QPointF(*end_c))
-                self._draw_badge(
-                    painter,
-                    (start_c[0] + end_c[0]) / 2.0,
-                    (start_c[1] + end_c[1]) / 2.0 - 14.0,
-                    label,
-                    9,
-                )
+        # Highlight the exact entity and segment retained by SnapEngine.
+        # A separate renderer-side scan could select a different same-angle
+        # edge and lie about which relationship would be committed.
+        relationship_type = getattr(self._host, "_draw_snap_type", None)
+        reference = self._host._snap_engine.last_relationship_reference
+        if relationship_type in {"parallel", "perpendicular", "equal_length"} and reference:
+            entity_id, _segment_index, first, second = reference
+            entity = next((e for e in self._host._entities if e.id == entity_id), None)
+            reference_points = (
+                list(self._host._draw_pts)
+                if entity_id == "__active_draw__"
+                else entity.points
+                if entity is not None
+                else []
+            )
+            if len(reference_points) > 1:
+                path = QPainterPath()
+                path.moveTo(QPointF(*self._host._w2c(*reference_points[0])))
+                for point in reference_points[1:]:
+                    path.lineTo(QPointF(*self._host._w2c(*point)))
+                painter.setPen(QPen(QColor("#f2cc6055"), 5.0))
+                painter.drawPath(path)
+            first_c, second_c = self._host._w2c(*first), self._host._w2c(*second)
+            painter.setPen(QPen(QColor("#f2cc60"), 3.0))
+            painter.drawLine(QPointF(*first_c), QPointF(*second_c))
+            self._draw_badge(
+                painter,
+                (first_c[0] + second_c[0]) / 2.0,
+                (first_c[1] + second_c[1]) / 2.0 - 14.0,
+                {
+                    "parallel": "Parallel reference",
+                    "perpendicular": "Perpendicular reference",
+                    "equal_length": "Equal-length reference",
+                }[relationship_type],
+                9,
+            )
 
     def _paint_geometry_health(self, painter: QPainter) -> None:
         """Overlay locatable topology findings without modifying geometry."""
@@ -1895,9 +1950,7 @@ class CanvasRenderer:
             return
         if self._host._cursor_wx is None or self._host._cursor_wy is None:
             return
-        cursor_x, cursor_y = self._host._w2c(
-            self._host._cursor_wx, self._host._cursor_wy
-        )
+        cursor_x, cursor_y = self._host._w2c(self._host._cursor_wx, self._host._cursor_wy)
         painter.setPen(QPen(QColor("#2a3a4a"), 0.5))
         painter.drawLine(QPointF(cursor_x, 0.0), QPointF(cursor_x, float(height)))
         painter.drawLine(QPointF(0.0, cursor_y), QPointF(float(width), cursor_y))
@@ -1930,10 +1983,18 @@ class CanvasRenderer:
         midpoint_x = (canvas_x0 + canvas_x1) / 2.0
         midpoint_y = (canvas_y0 + canvas_y1) / 2.0
         self._host._sel_badge_w_rect = self._draw_badge(
-            painter, midpoint_x, min(canvas_y0, canvas_y1) - 18, f"W {x1 - x0:.2f}", 10
+            painter,
+            midpoint_x,
+            min(canvas_y0, canvas_y1) - 18,
+            f"W {_fmt_len(x1 - x0, self._host._unit_system)}",
+            10,
         )
         self._host._sel_badge_h_rect = self._draw_badge(
-            painter, max(canvas_x0, canvas_x1) + 34, midpoint_y, f"H {y1 - y0:.2f}", 10
+            painter,
+            max(canvas_x0, canvas_x1) + 34,
+            midpoint_y,
+            f"H {_fmt_len(y1 - y0, self._host._unit_system)}",
+            10,
         )
         self._host._sel_badge_l_rect = None
         self._host._sel_badge_a_rect = None
@@ -1946,7 +2007,7 @@ class CanvasRenderer:
         angle = math.degrees(math.atan2(by - ay, bx - ax))
         badge_y = max(canvas_y0, canvas_y1) + 20
         self._host._sel_badge_l_rect = self._draw_badge(
-            painter, midpoint_x - 42, badge_y, f"L {length:.2f}", 10
+            painter, midpoint_x - 42, badge_y, f"L {_fmt_len(length, self._host._unit_system)}", 10
         )
         self._host._sel_badge_a_rect = self._draw_badge(
             painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 10

@@ -87,4 +87,3 @@ def suffix(unit: str) -> str:
 
 def format_length(value_mm: float, unit: str, *, decimals: int = 2) -> str:
     return f"{to_display(value_mm, unit):.{decimals}f} {suffix(unit)}"
-

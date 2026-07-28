@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Convert feature page shell and shared preview."""
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -45,6 +47,7 @@ from simple_stipple.ui.components.layout import (
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
 from simple_stipple.ui.components.workflow import set_status_label
+from simple_stipple.ui.files import reveal_label
 from simple_stipple.ui.recent import KIND_VECTOR, record_recent
 from simple_stipple.ui.style.theme import STATUS_NEUTRAL, STATUS_WARN
 
@@ -202,6 +205,15 @@ class ConvertPage(BasePage):
         self._footer_status.setVisible(False)
         footer_layout.addWidget(self._footer_status)
 
+        # Convert was the only page with a long-running job and no progress
+        # affordance (Trace/Pattern both show one) — just static "Working…" text.
+        self._footer_progress = QProgressBar()
+        self._footer_progress.setRange(0, 0)  # indeterminate
+        self._footer_progress.setTextVisible(False)
+        self._footer_progress.setFixedHeight(4)
+        self._footer_progress.setVisible(False)
+        footer_layout.addWidget(self._footer_progress)
+
         self._footer_widget = footer_w
         self._left_panel = sidebar_frame
 
@@ -227,7 +239,11 @@ class ConvertPage(BasePage):
         _ev_title = QLabel("No preview")
         _ev_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         _ev_title.setProperty("role", "empty-title")
-        _ev_hint = QLabel("Load a file and run a conversion\nto see the preview here.")
+        _ev_hint = QLabel(
+            "1  Choose a conversion task\n"
+            "2  Select an input file\n"
+            "3  Run it and review the result here"
+        )
         _ev_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         _ev_hint.setWordWrap(True)
         _ev_hint.setProperty("role", "empty-hint")
@@ -404,7 +420,7 @@ class ConvertPage(BasePage):
         )
         recent.fileSelected.connect(self._set_shared_source)
         layout.addWidget(recent)
-        browse = QPushButton("Choose…")
+        browse = QPushButton("Browse…")
         browse.clicked.connect(self._browse_current_source)
         layout.addWidget(browse)
         self._shared_input_hint = QLabel("FVI file or folder")
@@ -465,8 +481,12 @@ class ConvertPage(BasePage):
             event.ignore()
             return
         path = paths[0]
-        expected = (".fvi", ".dxf", ".dxf", ".svg")[self._tool_stack.currentIndex()]
-        if Path(path).is_file() and Path(path).suffix.casefold() != expected:
+        # Indexed by tool_stack position (Convert/Fix DXF/Convert to SVG/
+        # Convert to DXF) — .get() so a future added task degrades to "no
+        # extension check" instead of an IndexError inside a drop handler.
+        expected_by_index = {0: ".fvi", 1: ".dxf", 2: ".dxf", 3: ".svg"}
+        expected = expected_by_index.get(self._tool_stack.currentIndex())
+        if expected and Path(path).is_file() and Path(path).suffix.casefold() != expected:
             self._set_footer_status(
                 f"This task expects {expected.upper()} input; choose another task or file.",
                 STATUS_WARN,
@@ -514,11 +534,11 @@ class ConvertPage(BasePage):
         )
         if self._active_tab_idx is not None:
             prev = _all[self._active_tab_idx]
-            prev._btn_state.disconnect(self._footer_btn.setEnabled)
+            prev._btn_state.disconnect(self._on_subtab_ready)
             prev._status_sig.disconnect(self._set_footer_status)
         self._active_tab_idx = idx
         subtab = _all[idx]
-        subtab._btn_state.connect(self._footer_btn.setEnabled)
+        subtab._btn_state.connect(self._on_subtab_ready)
         subtab._status_sig.connect(self._set_footer_status)
         # Reflect the INCOMING tab's actual state — both whether its own
         # conversion is still in flight from before the user switched away
@@ -528,6 +548,7 @@ class ConvertPage(BasePage):
         # source path chosen yet — a dead-end click.
         still_running = bool(getattr(subtab, "_running", False))
         self._footer_btn.setEnabled(subtab.is_ready())
+        self._footer_progress.setVisible(still_running)
         if still_running:
             self._set_footer_status("Working…", STATUS_NEUTRAL)
         else:
@@ -541,12 +562,12 @@ class ConvertPage(BasePage):
             sec.setEnabled(bool(self._fvi_subtab._last_out_dir))
         else:
             sec = self._footer_overflow_menu.addAction(
-                "Show in Finder",
+                reveal_label(),
                 subtab._reveal,  # type: ignore[union-attr]
             )
             sec.setEnabled(bool(subtab._last_out))  # type: ignore[union-attr]
         self._footer_overflow_menu.addSeparator()
-        cancel_action = self._footer_overflow_menu.addAction("Cancel active job", subtab.cancel)
+        cancel_action = self._footer_overflow_menu.addAction("Cancel Active Job", subtab.cancel)
         cancel_action.setEnabled(still_running)
 
     def _trigger_active_subtab(self) -> None:
@@ -563,10 +584,23 @@ class ConvertPage(BasePage):
         self._log.clear()
         self._footer_btn.setEnabled(False)
         self._set_footer_status("Working…", STATUS_NEUTRAL)
+        self._footer_progress.setVisible(True)
         subtab.run()
         actions = self._footer_overflow_menu.actions()
         if actions:
             actions[-1].setEnabled(bool(getattr(subtab, "_running", False)))
+
+    def _on_subtab_ready(self, enabled: bool) -> None:
+        """Re-enable the footer CTA and, if the job is done, hide progress.
+
+        ``_btn_state`` fires with the subtab's readiness both mid-session
+        (e.g. a source path was chosen) and at job completion; only the
+        latter case also clears ``_running``, so that's what gates the bar.
+        """
+        self._footer_btn.setEnabled(enabled)
+        subtab = self._tool_stack.currentWidget()
+        if not bool(getattr(subtab, "_running", False)):
+            self._footer_progress.setVisible(False)
 
     def _update_sec_action_if_active(self, tab_idx: int, enabled: bool) -> None:
         """Update the secondary overflow action when its tab is active."""
@@ -730,5 +764,12 @@ class ConvertPage(BasePage):
                 self._right_stack.setCurrentIndex(1)
                 self._preview_canvas.load(polys)
                 self._refresh_preview_ui()
+            else:
+                self._set_footer_status(
+                    f"Converted, but {Path(dxf_path).name} has no preview geometry", STATUS_WARN
+                )
         except (OSError, ValueError) as exc:
             LOGGER.debug("Preview load failed for '%s': %s", dxf_path, exc)
+            self._set_footer_status(
+                f"Converted, but the preview could not be loaded: {exc}", STATUS_WARN
+            )

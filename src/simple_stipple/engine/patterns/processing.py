@@ -63,6 +63,29 @@ from simple_stipple.engine.patterns.tiling import (
     gen_mesh,
 )
 
+
+def _repair_overlay_geometry(geometry: Any) -> Any | None:
+    """Return a valid geometry for Shapely overlay operations."""
+    if geometry is None:
+        return None
+    try:
+        if geometry.is_empty or geometry.is_valid:
+            return geometry
+    except (AttributeError, TypeError):
+        return None
+    try:
+        from shapely import make_valid  # type: ignore[import-untyped]
+
+        repaired = make_valid(geometry)
+        if not repaired.is_empty:
+            return repaired
+    except Exception:
+        pass
+    try:
+        repaired = geometry.buffer(0)
+        return None if repaired.is_empty else repaired
+    except Exception:
+        return None
 PATTERNS = (
     NULL_PATTERN,
     "Custom Tile",
@@ -288,9 +311,10 @@ class PatternProcessor:
         Clipped edge fragments intentionally do not match a complete cell.
         """
         points = list(poly)
-        if len(points) >= 2 and math.hypot(
-            points[0][0] - points[-1][0], points[0][1] - points[-1][1]
-        ) <= 1e-6:
+        if (
+            len(points) >= 2
+            and math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1]) <= 1e-6
+        ):
             points.pop()
         if len(points) < 3:
             return ("open", PatternProcessor._poly_signature(poly))
@@ -348,6 +372,7 @@ class PatternProcessor:
         new_polys: list[list[tuple[float, float]]],
         old_polys: list[list[tuple[float, float]]],
         old_ids: list[str],
+        new_entity_ids: list[str] | None = None,
     ) -> list[str]:
         # Fast-path: identical length and matching signatures in the same
         # order — reuse the existing ids unchanged.
@@ -368,13 +393,19 @@ class PatternProcessor:
             sig = PatternProcessor._poly_signature(poly)
             sig_to_ids.setdefault(sig, []).append(oid)
         resolved: list[str] = []
-        for poly in new_polys:
+        for index, poly in enumerate(new_polys):
             sig = PatternProcessor._poly_signature(poly)
             ids = sig_to_ids.get(sig, [])
             if ids:
                 resolved.append(ids.pop(0))
             else:
-                resolved.append(uuid4().hex)
+                # Geometry drawn directly on the canvas already has a stable
+                # entity id. Reuse it so selection/zone assignment can resolve
+                # the selected canvas entity instead of inventing a second id.
+                if new_entity_ids is not None and index < len(new_entity_ids):
+                    resolved.append(new_entity_ids[index])
+                else:
+                    resolved.append(uuid4().hex)
         return resolved
 
     @staticmethod
@@ -672,6 +703,9 @@ class PatternProcessor:
         # hole instead of being silently merged into a solid.
         nested_fill_region = build_fill_region(scaled)
         fill_outline = nested_fill_region if nested_fill_region is not None else orig_outline
+        fill_outline = _repair_overlay_geometry(fill_outline)
+        if fill_outline is None or fill_outline.is_empty:
+            return []
         all_exclusion_polys = list(exclusion_polys or [])
         if all_exclusion_polys:
             excl_scaled = self.apply_scale(
@@ -687,7 +721,22 @@ class PatternProcessor:
             # polylines_to_outline's lenient few-mm "closed enough" check.
             excl_outline = build_fill_region(excl_scaled)
             if excl_outline is not None:
-                fill_outline = fill_outline.difference(excl_outline)
+                excl_outline = _repair_overlay_geometry(excl_outline)
+                if excl_outline is not None and not excl_outline.is_empty:
+                    try:
+                        fill_outline = fill_outline.difference(excl_outline)
+                    except Exception as exc:
+                        # Retry once with both operands normalized. If GEOS
+                        # still rejects the cutout, retain the valid fill
+                        # region instead of failing the entire zone preview.
+                        LOGGER.warning("Skipping invalid exclusion overlay: %s", exc)
+                        repaired_fill = _repair_overlay_geometry(fill_outline)
+                        repaired_excl = _repair_overlay_geometry(excl_outline)
+                        if repaired_fill is not None and repaired_excl is not None:
+                            try:
+                                fill_outline = repaired_fill.difference(repaired_excl)
+                            except Exception:
+                                pass
 
         # Always generate pattern elements inside the fill region (never
         # outside the outline). When ``invert_fill`` is requested we compute
@@ -913,6 +962,9 @@ class PatternProcessor:
             return []
         if target_region is None or target_region.is_empty:
             return []
+        target_region = _repair_overlay_geometry(target_region)
+        if target_region is None or target_region.is_empty:
+            return []
         prep = _shp_prepared.prep(target_region)
 
         from shapely.geometry import Polygon as _Poly
@@ -936,7 +988,11 @@ class PatternProcessor:
                     # representative point happens to land inside a small
                     # nested zone (e.g. the outer outline's own centroid
                     # sitting inside a small inner zone near the middle).
-                    if not prep.contains(shp):
+                    # ``contains`` excludes a shape that touches the parent
+                    # boundary. Preview cells are often clipped at that
+                    # boundary, so use covers (after repair) to keep the
+                    # parent treatment from bleeding into a child zone.
+                    if not prep.covers(shp):
                         continue
                 except (ValueError, TypeError):
                     continue

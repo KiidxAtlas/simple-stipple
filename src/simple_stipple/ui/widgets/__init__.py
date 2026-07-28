@@ -1,1 +1,0 @@
-"""Shared UI widgets package."""

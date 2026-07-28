@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Canvas interaction tools.
 
 Each mode's mouse behavior lives in a Tool object with press/move/release/
@@ -969,6 +970,7 @@ class EditTool(CanvasTool):
         if entity is None:
             return True
         if entity.locked:
+            v._show_flash("Shape is locked", 1200)
             return True
         if vi < 0 or vi >= len(entity.points):
             return True
@@ -1064,6 +1066,7 @@ class EditTool(CanvasTool):
             if entity is None:
                 return True
             if entity.locked:
+                v._show_flash("Shape is locked", 1200)
                 return True
             entity = deepcopy(entity)
             if entity.kind != "polyline" or entity.meta is not None:
@@ -1203,6 +1206,10 @@ class DrawTool(CanvasTool):
                 v._draw_snap_type = "vertex"
         v._draw_pts.append((wx, wy))
         v._draw_point_snap_types.append(v._draw_snap_type or None)
+        # A click commits the relationship for this segment. The next segment
+        # starts a fresh acquisition instead of inheriting a stale source/type
+        # lock from the segment that just finished.
+        v._snap_engine.clear_relationship_reference()
         # B. Show dim inputs after first point is placed
         if len(v._draw_pts) == 1:
             v._show_dim_inputs()
@@ -1263,37 +1270,6 @@ class DrawTool(CanvasTool):
         # 2. Determine effective position (snap or raw cursor)
         eff_x = v._draw_snap[0] if v._draw_snap else wx
         eff_y = v._draw_snap[1] if v._draw_snap else wy
-
-        # Stable parallel/perpendicular inference: when the pointer is close
-        # to an existing edge direction, acquire that relationship exactly.
-        if allow_snap and v._draw_snap is None and v._draw_pts and v._snap_angle_enabled:
-            anchor_x, anchor_y = v._draw_pts[-1]
-            drag_angle = math.atan2(eff_y - anchor_y, eff_x - anchor_x)
-            drag_length = math.hypot(eff_x - anchor_x, eff_y - anchor_y)
-            best_relation = None
-            for entity in v._entities:
-                for first, second in zip(entity.points, entity.points[1:]):
-                    edge_angle = math.atan2(second[1] - first[1], second[0] - first[0])
-                    for inferred_angle, snap_type in (
-                        (edge_angle, "parallel"),
-                        (edge_angle + math.pi / 2.0, "perpendicular"),
-                    ):
-                        delta = abs(
-                            (drag_angle - inferred_angle + math.pi / 2) % math.pi - math.pi / 2
-                        )
-                        if delta <= math.radians(3) and (
-                            best_relation is None or delta < best_relation[0]
-                        ):
-                            best_relation = (delta, inferred_angle, snap_type)
-            if best_relation is not None and drag_length > 1e-9:
-                _delta, inferred_angle, snap_type = best_relation
-                # Choose the equivalent ray pointing toward the cursor.
-                if math.cos(drag_angle - inferred_angle) < 0:
-                    inferred_angle += math.pi
-                eff_x = anchor_x + math.cos(inferred_angle) * drag_length
-                eff_y = anchor_y + math.sin(inferred_angle) * drag_length
-                v._draw_snap = (eff_x, eff_y)
-                v._draw_snap_type = snap_type
 
         # 3. Angle snap with Shift
         shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -1663,7 +1639,12 @@ class SelectTool(CanvasTool):
                     v._sel = members
                 # else: already selected — preserve current selection for group move
             elif ctrl or shift_toggle:
-                v._sel = v._sel | {target_entity.id}
+                # Toggle, matching the grouped branch above: a modifier-click
+                # on an already-selected shape removes it from the selection.
+                if target_entity.id in v._sel:
+                    v._sel = v._sel - {target_entity.id}
+                else:
+                    v._sel = v._sel | {target_entity.id}
             elif target_entity.id not in v._sel:
                 v._sel = {target_entity.id}
             v._notify()
@@ -1673,7 +1654,7 @@ class SelectTool(CanvasTool):
             # point of a circle/ellipse is a "vertex", which made plain
             # drag-to-move nearly impossible. Resize via the frame handles
             # or the properties panel; vertex editing lives in Edit mode.
-            skip_vertex_drag = (
+            skip_vertex_drag = not v._selection_drag_edits or (
                 hit is not None
                 and hit[0] == target
                 and was_selected_before
@@ -1698,7 +1679,7 @@ class SelectTool(CanvasTool):
                 v._redraw()
                 return True
         # Prepare for move if clicking on an already-selected poly
-        if target is not None:
+        if target is not None and v._selection_drag_edits:
             target_entity = v._document.entity_for_id(target)
             if target_entity is not None and target_entity.id in v._sel:
                 wx, wy = v._c2w(pos.x(), pos.y())
@@ -1887,6 +1868,10 @@ class SelectTool(CanvasTool):
             v._lasso_points.clear()
             v._lasso_additive = False
             v._lmb_prev = None
+            # Lasso is a one-shot arm (like a modal tool), not a persistent
+            # mode switch — say so, since the next drag silently reverts to
+            # the ordinary box marquee.
+            v._show_flash(f"Selected {len(picked)} · back to box selection", 1200)
             v._redraw()
             v._notify()
             return True

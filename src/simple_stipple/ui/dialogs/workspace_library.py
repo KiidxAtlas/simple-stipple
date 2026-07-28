@@ -31,7 +31,9 @@ from simple_stipple.platform.storage import (
     read_json_file,
     write_json_file_atomic,
 )
+from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
+from simple_stipple.ui.files import reveal_label
 
 
 class WorkspaceLibraryDialog(QDialog):
@@ -86,9 +88,12 @@ class WorkspaceLibraryDialog(QDialog):
         self._rename_edit.setPlaceholderText("Workspace name")
         self._rename_edit.setAccessibleName("New workspace name")
         self._rename_edit.returnPressed.connect(self._commit_rename)
+        self._rename_edit.installEventFilter(self)
         self._rename_apply_btn = QPushButton("Apply rename")
+        self._rename_apply_btn.setAutoDefault(False)
         self._rename_apply_btn.clicked.connect(self._commit_rename)
         self._rename_cancel_btn = QPushButton("Cancel")
+        self._rename_cancel_btn.setAutoDefault(False)
         self._rename_cancel_btn.clicked.connect(self._cancel_rename)
         self._rename_row.addWidget(QLabel("Rename workspace"))
         self._rename_row.addWidget(self._rename_edit, stretch=1)
@@ -104,20 +109,27 @@ class WorkspaceLibraryDialog(QDialog):
         buttons = QHBoxLayout()
         self._open_btn = QPushButton("Open")
         self._open_btn.setProperty("role", "primary")
+        self._open_btn.setDefault(True)
         self._open_btn.clicked.connect(self._open_selected)
         self._rename_btn = QPushButton("Rename")
+        self._rename_btn.setAutoDefault(False)
         self._rename_btn.clicked.connect(self._rename_selected)
         self._duplicate_btn = QPushButton("Duplicate")
+        self._duplicate_btn.setAutoDefault(False)
         self._duplicate_btn.clicked.connect(self._duplicate_selected)
         self._delete_btn = QPushButton("Delete")
         self._delete_btn.setProperty("role", "danger")
+        self._delete_btn.setAutoDefault(False)
         self._delete_btn.clicked.connect(self._delete_selected)
         self._delete_all_btn = QPushButton("Delete All Snapshots")
         self._delete_all_btn.setProperty("role", "danger")
+        self._delete_all_btn.setAutoDefault(False)
         self._delete_all_btn.clicked.connect(self._delete_all_recovery)
-        folder_btn = QPushButton("Show Folder")
+        folder_btn = QPushButton(reveal_label())
+        folder_btn.setAutoDefault(False)
         folder_btn.clicked.connect(self._show_folder)
         close_btn = QPushButton("Close")
+        close_btn.setAutoDefault(False)
         close_btn.clicked.connect(self.reject)
         for button in (
             self._rename_btn,
@@ -134,6 +146,19 @@ class WorkspaceLibraryDialog(QDialog):
 
         self.refresh()
         install_dialog_focus_lifecycle(self, self._category)
+
+    def eventFilter(self, watched, event) -> bool:
+        if (
+            watched is self._rename_edit
+            and event.type() == event.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+            and self._rename_edit.isVisible()
+        ):
+            # Cancel just the rename, not the whole dialog — otherwise Esc
+            # discards the workspace list state along with the edit.
+            self._cancel_rename()
+            return True
+        return super().eventFilter(watched, event)
 
     def refresh(self, select: Path | None = None) -> None:
         self.saves_dir.mkdir(parents=True, exist_ok=True)
@@ -296,12 +321,15 @@ class WorkspaceLibraryDialog(QDialog):
         if not name:
             self._rename_edit.setProperty("invalid", True)
             self._rename_edit.setToolTip("Workspace name cannot be empty")
+            refresh_style(self._rename_edit)
             return
         self._rename_edit.setProperty("invalid", False)
+        refresh_style(self._rename_edit)
         candidate = normalize_workspace_path(self.saves_dir / name)
         if candidate.exists() and candidate != path:
             self._rename_edit.setProperty("invalid", True)
             self._rename_edit.setToolTip("A workspace with that name already exists")
+            refresh_style(self._rename_edit)
             return
         try:
             path.rename(candidate)

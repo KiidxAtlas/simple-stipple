@@ -82,7 +82,7 @@ def delete_selected_preset(page: Any) -> None:
         return
     answer = QMessageBox.question(
         page,
-        "Delete preset?",
+        "Delete Preset",
         f'Delete the preset "{name}"? This cannot be undone.',
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         QMessageBox.StandardButton.Cancel,

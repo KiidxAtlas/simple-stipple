@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QIcon, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QDoubleValidator, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -72,8 +71,27 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
+from simple_stipple.ui.files import reveal_label
 from simple_stipple.ui.recent import KIND_DXF
 from simple_stipple.ui.style.theme import icon_path
+
+
+class ZoneListWidget(QListWidget):
+    """Zone list with a deterministic keyboard delete affordance.
+
+    QShortcut can lose precedence when focus is inside an editor or a native
+    list viewport. Handling the key at the list boundary guarantees Delete
+    acts on the selected zone and never falls through to canvas deletion.
+    """
+
+    deletePressed = Signal()
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.currentRow() >= 0:
+            self.deletePressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 def build_right(page: Any, layout: QVBoxLayout) -> None:
@@ -116,13 +134,19 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         on_create_zone_from_selection=page._assign_zone,
         draft_profile=True,
     )
+    # Pattern's Outline/Pattern/Fill rows are virtual presentation categories,
+    # not document layers. Keep the canvas in single-layer mode so switching
+    # or renaming a category can never make valid geometry unselectable.
+    page._canvas.set_layer_model([], None)
     page._canvas.set_empty_message(
-        "Start a pattern\nImport an outline on the left, drop a DXF here, or send shapes from Draft"
+        "Start a pattern\n1  Import or drop a closed outline\n"
+        "2  Choose a pattern\n3  Check Preview, then Export"
     )
     page._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
     page._canvas.set_grid_snap(False)
     page._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
     page._canvas.set_selection_follows_geometry(True)
+    page._canvas.set_selection_drag_edits(False)
     page._canvas.backgroundSelectionChanged.connect(page._on_engraving_selection_changed)
 
     page._toolbar_module = CanvasToolbarModule(
@@ -164,14 +188,11 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     # Keep sticky footer controls clear of the splitter and window edge.
     side_layout.setContentsMargins(8, 0, 8, 8)
     side_layout.setSpacing(8)
-    zone_scroll = QScrollArea()
-    zone_scroll.setWidgetResizable(True)
-    zone_scroll.setFrameShape(QFrame.Shape.NoFrame)
-    zone_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    zone_scroll.setWidget(page._zones_section)
+    # Compatibility alias: the Zone Manager is mounted in the left workflow
+    # panel, so the right inspector no longer spends space on a second copy.
+    page._zone_scroll = page._zones_section
     page._zone_layers_splitter = QSplitter(Qt.Orientation.Vertical)
     page._zone_layers_splitter.setChildrenCollapsible(False)
-    page._zone_layers_splitter.addWidget(zone_scroll)
 
     page._layer_module = CanvasLayerTreeModule(
         canvas=page._canvas,
@@ -190,9 +211,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     # Wire outline-mode shape rename to the runtime's label store.
     page._layers_tree.shapeRenamed.connect(page._on_shape_renamed)
     page._zone_layers_splitter.addWidget(page._layer_module)
-    page._zone_layers_splitter.setStretchFactor(0, 3)
-    page._zone_layers_splitter.setStretchFactor(1, 2)
-    page._zone_layers_splitter.setSizes([390, 220])
+    page._zone_layers_splitter.setStretchFactor(0, 1)
     side_layout.addWidget(page._zone_layers_splitter, stretch=1)
     build_export_section(page, side_layout)
 
@@ -275,13 +294,20 @@ def refresh_pattern_properties_panel(page: Any) -> None:
 
 
 def build_left(page: Any, layout: QVBoxLayout) -> None:
+    page._advanced_mode_cb = QCheckBox("Advanced controls")
+    page._advanced_mode_cb.setChecked(bool(page._settings.get("pattern_advanced_mode", False)))
+    page._advanced_mode_cb.setToolTip(
+        "Show zones, supplemental fills, engraving placement, and fabrication controls"
+    )
+    layout.addWidget(page._advanced_mode_cb)
     build_shape_section(page, layout)
-    # Construct Zones before Pattern signal wiring; _build_right reparents
-    # the completed card into the right inspector above Layers.
-    build_zones_section(page, layout)
     build_pattern_section(page, layout)
     build_fill_section(page, layout)
     build_image_engraving_section(page, layout)
+    # Keep Zone Manager last in the workflow sidebar and collapsed at startup;
+    # it is an optional refinement after the primary pattern/fill setup.
+    build_zones_section(page, layout)
+    page._advanced_mode_cb.toggled.connect(page._set_advanced_mode)
     layout.addStretch()
     page._install_pattern_shortcuts()
     page._refresh_section_subtitles()
@@ -303,7 +329,7 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     page._recent_btn.setToolTip("Pick from recently opened vector files")
     page._recent_btn.fileSelected.connect(page._quick_load)
     file_row.addWidget(page._recent_btn)
-    browse_btn = QPushButton("Browse")
+    browse_btn = QPushButton("Browse…")
     browse_btn.setFixedWidth(72)
     browse_btn.setToolTip("Browse for a DXF, FVI, or SVG outline")
     browse_btn.clicked.connect(page._browse_dxf)
@@ -335,9 +361,7 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     page._scale_w.textChanged.connect(page._schedule_preview)
     dims_row.addWidget(page._scale_w)
     page._ar_lock_btn = QToolButton()
-    page._ar_lock_btn.setIcon(
-        QIcon(str(icon_path("lock.svg")))
-    )
+    page._ar_lock_btn.setIcon(QIcon(str(icon_path("lock.svg"))))
     page._ar_lock_btn.setAccessibleName("Lock outline aspect ratio")
     page._ar_lock_btn.setFixedWidth(28)
     page._ar_lock_btn.setCheckable(True)
@@ -421,7 +445,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
         "Voronoi",
         "Topographic",
     ]
-    page._pattern_widgets: dict[str, QWidget] = {}
+    page._pattern_widgets = {}
     for name in _named_patterns:
         w = build_param_widget(page, name, _sp)
         page._pattern_widgets[name] = w
@@ -545,7 +569,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     page._assign_zone_btn.clicked.connect(page._assign_zone)
     assign_row.addWidget(page._assign_zone_btn, stretch=1)
     zones_layout.addLayout(assign_row)
-    page._zone_list = QListWidget()
+    page._zone_list = ZoneListWidget()
     page._zone_list.setMinimumHeight(120)
     page._zone_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     page._zone_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -553,9 +577,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     page._zone_list.currentRowChanged.connect(page._on_zone_selected)
     page._zone_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     page._zone_list.customContextMenuRequested.connect(page._show_zone_context_menu)
-    page._delete_zone_shortcut = QShortcut(QKeySequence.StandardKey.Delete, page._zone_list)
-    page._delete_zone_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
-    page._delete_zone_shortcut.activated.connect(page._remove_selected_zone)
+    page._zone_list.deletePressed.connect(page._remove_selected_zone)
     zones_layout.addWidget(page._zone_list)
 
     section_label(zones_layout, "Selected zone settings")
@@ -588,7 +610,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     page._zone_params_grid = QGridLayout(page._zone_params_widget)
     page._zone_params_grid.setContentsMargins(0, 0, 0, 0)
     page._zone_params_grid.setSpacing(4)
-    page._zone_param_inputs: dict[str, QWidget] = {}
+    page._zone_param_inputs = {}
     zones_layout.addWidget(page._zone_params_widget)
     fill_grid = QGridLayout()
     fill_grid.addWidget(QLabel("Fill"), 0, 0)
@@ -633,7 +655,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     output_row.addWidget(page._zone_output_combo, stretch=1)
     zones_layout.addLayout(output_row)
     page._zones_section = CollapsibleSection(
-        "Zone Manager", zones_content, expanded=True, subtitle="No zones assigned"
+        "Zone Manager", zones_content, expanded=False, subtitle="No zones assigned"
     )
     layout.addWidget(page._zones_section)
     page._rebuild_zone_parameter_editor()
@@ -722,9 +744,7 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
     cutout_callout_layout.setSpacing(8)
     page._cutout_icon = QLabel()
     page._cutout_icon.setFixedWidth(18)
-    page._cutout_icon.setPixmap(
-        QIcon(str(icon_path("info.svg"))).pixmap(16, 16)
-    )
+    page._cutout_icon.setPixmap(QIcon(str(icon_path("info.svg"))).pixmap(16, 16))
     page._cutout_icon.setProperty("role", "cutout-icon")
     cutout_callout_layout.addWidget(page._cutout_icon)
     page._cutout_status_label = QLabel("Right-click a shape on canvas to mark as cutout")
@@ -892,7 +912,7 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
         "Machine and material settings are starting points only. Review settings before output."
     )
     safety_callout.setWordWrap(True)
-    safety_callout.setProperty("role", "warning")
+    safety_callout.setProperty("role", "status-warn")
     process.addWidget(safety_callout)
     safety_detail_content, safety_detail = collapsible_content_widget(spacing=8)
     safety = QLabel(
@@ -1074,9 +1094,9 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     page._undo_transfer_btn.setVisible(False)
     page._undo_transfer_btn.clicked.connect(page._undo_outline_transfer)
     layout.addWidget(page._undo_transfer_btn)
-    page._reveal_btn = QPushButton("Show in Finder")
+    page._reveal_btn = QPushButton(reveal_label())
     page._reveal_btn.setMinimumHeight(26)
-    page._reveal_btn.setToolTip("Open the exported file location in Finder")
+    page._reveal_btn.setToolTip("Open the exported file's location")
     # Hidden until an export exists — a permanently disabled button is
     # just sidebar noise before the first export.
     page._reveal_btn.setVisible(False)

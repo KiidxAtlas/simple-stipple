@@ -105,15 +105,12 @@ def mark_selection_as_cutout(page: Any) -> None:
     if page._showing_preview:
         outline_count = len(page._preview_categories.get("outline", []))
         pattern_polys = page._preview_categories.get("pattern", [])
-        # Convert entity IDs to preview cell indices
-        cell_indices = set()
-        for eid in entity_ids:
-            if eid.startswith("preview_"):
-                try:
-                    cell_idx = int(eid.split("_")[1])
-                    cell_indices.add(cell_idx)
-                except (ValueError, IndexError):
-                    pass
+        # Preview geometry receives normal runtime entity IDs. Resolve those
+        # IDs back to display indices instead of assuming synthetic names.
+        entity_indices = {
+            entity_id: index for index, entity_id in enumerate(page._canvas.get_entity_ids())
+        }
+        cell_indices = {entity_indices[eid] for eid in entity_ids if eid in entity_indices}
         selected_cells = [
             list(pattern_polys[idx - outline_count])
             for idx in cell_indices
@@ -165,9 +162,9 @@ def sync_canvas_cutout_highlight(page: Any) -> None:
     id_to_idx = {oid: i for i, oid in enumerate(page._outline_ids)}
     page._ensure_outline_roles()
     roles = {
-        id_to_idx[outline_id]: role
+        page._canvas.get_entity_ids()[id_to_idx[outline_id]]: role
         for outline_id, role in page._outline_roles.items()
-        if outline_id in id_to_idx
+        if outline_id in id_to_idx and id_to_idx[outline_id] < len(page._canvas.get_entity_ids())
     }
     page._canvas.set_outline_roles(roles)
 
@@ -189,16 +186,12 @@ def refresh_cutout_status(page: Any) -> None:
     cell_count = len(page._pattern_cell_cutouts) + len(page._pattern_cell_instance_cutouts)
     n = outline_count + cell_count
     if n == 0:
-        page._cutout_icon.setPixmap(
-            QIcon(str(icon_path("info.svg"))).pixmap(16, 16)
-        )
+        page._cutout_icon.setPixmap(QIcon(str(icon_path("info.svg"))).pixmap(16, 16))
         page._cutout_status_label.setText("Right-click a shape on canvas to mark as cutout")
         page._cutout_clear_btn.setVisible(False)
         apply_cutout_callout_style(page, active=False)
     else:
-        page._cutout_icon.setPixmap(
-            QIcon(str(icon_path("check.svg"))).pixmap(16, 16)
-        )
+        page._cutout_icon.setPixmap(QIcon(str(icon_path("check.svg"))).pixmap(16, 16))
         parts = []
         if outline_count:
             parts.append(f"{outline_count} outline")

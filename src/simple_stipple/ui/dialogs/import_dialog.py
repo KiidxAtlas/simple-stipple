@@ -68,7 +68,7 @@ class DxfImportPreviewDialog(BaseDialog):
         issue_text = summarize_dxf_import_report(self._report) if self._report.has_issues else None
         if issue_text:
             notice = QLabel(f"Import notes: {issue_text}")
-            notice.setProperty("role", "warning")
+            notice.setProperty("role", "status-warn")
             notice.setWordWrap(True)
             root.addWidget(notice)
 
@@ -89,7 +89,10 @@ class DxfImportPreviewDialog(BaseDialog):
         self._replace = QRadioButton("Replace drawing")
         self._append = QRadioButton("Add to drawing")
         self._append.setEnabled(self._has_existing_geometry)
-        choose_append = self._has_existing_geometry or self._default_append
+        # "Add" only makes sense when there's an existing drawing to add to —
+        # otherwise there is nothing to append and the radio is disabled, so
+        # it must not also be checked.
+        choose_append = self._has_existing_geometry and self._default_append
         self._append.setChecked(choose_append)
         self._replace.setChecked(not choose_append)
         mode_row.addWidget(self._replace)
@@ -106,6 +109,11 @@ class DxfImportPreviewDialog(BaseDialog):
             root.addWidget(safety)
 
         install_dialog_focus_lifecycle(self, self._layers)
+
+    def validate(self) -> str | None:
+        if not self.selected_layers():
+            return "Select at least one layer to import."
+        return None
 
     def selected_layers(self) -> list[str]:
         return [

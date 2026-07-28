@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
 # ── Type aliases ──────────────────────────────────────────────────────────────
@@ -187,6 +188,7 @@ class CanvasLayerSidebarController:
         self._layers_tree.fitRequested.connect(on_fit_requested)
         self._layers_tree.layerVisibilityChanged.connect(self.on_layer_visibility_changed)
         self._layers_tree.shapeVisibilityChanged.connect(self.on_shape_visibility_changed)
+        self._connect_mutation_signals()
         # New optional signals — guarded with hasattr so older trees still work.
         if hasattr(self._layers_tree, "bulkVisibilityRequested"):
             self._layers_tree.bulkVisibilityRequested.connect(self.on_bulk_visibility_requested)
@@ -209,6 +211,28 @@ class CanvasLayerSidebarController:
             self._layers_tree.shapesCopyRequested.connect(
                 lambda layer, keys: self._handle_shape_operation("copy", layer, keys)
             )
+
+    def _connect_mutation_signals(self) -> None:
+        """Connect optional tree mutation signals to document operations."""
+        tree = self._layers_tree
+        connections = {
+            "shapesDeleteRequested": self.on_shapes_delete_requested,
+            "layersDeleteRequested": self.on_layers_delete_requested,
+            "layerDeleted": self.on_layer_deleted,
+            "layerActivated": self.on_layer_activated,
+            "layerRenamed": self.on_layer_renamed,
+            "layerMoved": self.on_layer_moved,
+            "shapeMoveRequested": self.on_shape_move_requested,
+            "shapesMoveRequested": self.on_shapes_move_requested,
+            "moveSelectedRequested": self.on_move_selected_requested,
+            "shapeRenamed": self.on_shape_renamed,
+            "layerColorChangeRequested": self.on_layer_color_changed,
+            "layersConsolidateRequested": self.on_layers_consolidate,
+        }
+        for signal_name, handler in connections.items():
+            signal = getattr(tree, signal_name, None)
+            if signal is not None:
+                signal.connect(handler)
 
     def _handle_shape_operation(self, op: str, layer: str, keys: list) -> None:
         """Dispatch shape operations from the layer tree to the canvas."""
@@ -238,6 +262,91 @@ class CanvasLayerSidebarController:
                 if eid in canvas._entities_by_id
             ]
             canvas._clipboard = clip_items
+        self.refresh_tree()
+
+    def _after_mutation(self) -> None:
+        self.refresh_tree()
+        self._on_visibility_changed()
+
+    def on_shapes_delete_requested(self, _layer: str, keys: list) -> None:
+        entity_ids = flatten_shape_keys(keys)
+        if entity_ids and hasattr(self._canvas, "delete_entities"):
+            self._canvas.delete_entities(entity_ids)
+            self._after_mutation()
+
+    def on_layers_delete_requested(self, layers: list) -> None:
+        for layer in layers:
+            if str(layer) != "geometry":
+                self._canvas.delete_layer(str(layer))
+        self._after_mutation()
+
+    def on_layer_deleted(self, layer: str) -> None:
+        if str(layer) != "geometry":
+            self._canvas.delete_layer(str(layer))
+            self._after_mutation()
+
+    def on_layer_activated(self, layer: str) -> None:
+        # Some pages expose virtual layers (for example Pattern's preview
+        # categories) that are not document layers. Activating one would add
+        # it to the canvas model and rebuild the tree before its child-shape
+        # selection is dispatched, making a layer click appear ineffective.
+        if hasattr(self._canvas, "layer_names"):
+            names = self._canvas.layer_names
+            available = names() if callable(names) else names
+            if str(layer) not in available:
+                return
+        self._canvas.set_active_layer(str(layer))
+        self._after_mutation()
+
+    def on_layer_renamed(self, old: str, new: str) -> None:
+        self._canvas.rename_layer(str(old), str(new))
+        self._after_mutation()
+
+    def on_layer_moved(self, layer: str, index: int) -> None:
+        self._canvas.move_layer(str(layer), int(index))
+        self._after_mutation()
+
+    def on_shape_move_requested(self, source: str, key: object, target: str) -> None:
+        self.on_shapes_move_requested(source, [key], target)
+
+    def on_shapes_move_requested(self, source: str, keys: list, target: str) -> None:
+        ids = flatten_shape_keys(keys)
+        if ids and self._canvas.move_indices_to_layer(ids, str(target)):
+            self._after_mutation()
+
+    def on_move_selected_requested(self, target: str) -> None:
+        ids = self._canvas.get_selected_ids()
+        if ids and self._canvas.move_indices_to_layer(ids, str(target)):
+            self._after_mutation()
+
+    def on_shape_renamed(self, _layer: str, key: object, label: str) -> None:
+        if hasattr(self._canvas, "rename_shape"):
+            self._canvas.rename_shape(str(_layer), key, str(label))
+        elif isinstance(key, (tuple, list)) and key:
+            first = key[0]
+            entity = self._canvas._entity_for_id(first) if isinstance(first, str) else None
+            if entity is not None and entity.group is not None:
+                self._canvas.set_group_label(entity.group, str(label))
+        elif isinstance(key, str):
+            entity = self._canvas._entity_for_id(key)
+            if entity is not None:
+                updated = deepcopy(entity)
+                meta = dict(updated.meta or {})
+                if str(label).strip():
+                    meta["label"] = str(label).strip()
+                else:
+                    meta.pop("label", None)
+                updated.meta = meta or None
+                self._canvas._canvas_service.update_entities([updated])
+        self._after_mutation()
+
+    def on_layer_color_changed(self, layer: str, color: object) -> None:
+        self._canvas.set_layer_color(str(layer), str(color) if color else None)
+        self._after_mutation()
+
+    def on_layers_consolidate(self, sources: list, target: str) -> None:
+        if self._canvas.consolidate_layers([str(s) for s in sources], str(target)):
+            self._after_mutation()
 
     @property
     def state(self) -> LayerTreeState:

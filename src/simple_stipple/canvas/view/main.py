@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """CanvasView — interactive pan/zoom canvas widget with polyline selection, measure, draw, and edit tools."""
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.select import SelectionService
 from simple_stipple.canvas.view.commands import (
     _cancel_active_drag,
+    _cancel_draw_in_progress,
     _escape_cb,
     _find_dimension_at,
     _rightclick_cb,
@@ -749,8 +751,20 @@ class CanvasView(
         super().__init__(parent)
         _initialize_view(self, parent, selectable, on_change, on_mode_change, on_poly_change)
 
-    def load(self, polys: list[list[tuple[float, float]]], *, fit: bool = True) -> None:
-        self._entities = [EntityRecord(points=list(p), layer=self._active_layer) for p in polys]
+    def load(
+        self,
+        polys: list[list[tuple[float, float]]],
+        *,
+        fit: bool = True,
+        entity_ids: list[str] | None = None,
+    ) -> None:
+        ids = entity_ids if entity_ids is not None and len(entity_ids) == len(polys) else None
+        self._entities = []
+        for index, poly in enumerate(polys):
+            entity = EntityRecord(points=list(poly), layer=self._active_layer)
+            if ids is not None:
+                entity.id = ids[index]
+            self._entities.append(entity)
         self._sel = set()
         self._group_labels.clear()
 
@@ -776,6 +790,10 @@ class CanvasView(
         self._selection_follows_geometry = bool(enabled)
         self._redraw()
 
+    def set_selection_drag_edits(self, enabled: bool) -> None:
+        """Allow/disallow geometry edits caused by dragging in Select mode."""
+        self._selection_drag_edits = bool(enabled)
+
     def _flattened_points_by_id(self, entity_id: str) -> list[tuple[float, float]]:
         """Entity ID version of _flattened_points."""
         if entity_id not in self._entities_by_id:
@@ -793,9 +811,18 @@ class CanvasView(
         return [self._flattened_points_by_id(eid) for eid in self._entities_by_id]
 
     def set_polylines_state(
-        self, polys: list[list[tuple[float, float]]], fit: bool = False
+        self,
+        polys: list[list[tuple[float, float]]],
+        fit: bool = False,
+        entity_ids: list[str] | None = None,
     ) -> None:
-        self._entities = [EntityRecord(points=list(p), layer=self._active_layer) for p in polys]
+        ids = entity_ids if entity_ids is not None and len(entity_ids) == len(polys) else None
+        self._entities = []
+        for index, poly in enumerate(polys):
+            entity = EntityRecord(points=list(poly), layer=self._active_layer)
+            if ids is not None:
+                entity.id = ids[index]
+            self._entities.append(entity)
         self._sel = set()
         self._group_labels.clear()
 
@@ -857,10 +884,15 @@ class CanvasView(
             self._snap_shapes_cache = {
                 entity.id: shape_for_entity(entity) for entity in self._entities
             }
+        assert self._snap_shapes_cache is not None
         return self._snap_shapes_cache
 
     def get_selected_ids(self) -> list[str]:
         return list(self._sel)
+
+    def get_entity_ids(self) -> list[str]:
+        """Return entity IDs in the same order as the displayed geometry."""
+        return list(self._entities_by_id)
 
     def set_selection(self, entity_ids: list[str]) -> None:
         new_sel = {eid for eid in entity_ids if self._entity_selectable(eid)}
@@ -894,6 +926,14 @@ class CanvasView(
         visible: bool | None = None,
     ) -> None:
         set_ghost_polylines(self, polys, visible=None)
+
+    def set_dense_preview_render(self, enabled: bool) -> None:
+        """Batch dense preview strokes without changing stored geometry."""
+        enabled = bool(enabled)
+        if enabled == self._dense_preview_render:
+            return
+        self._dense_preview_render = enabled
+        self._redraw()
 
     def get_precision_state(self) -> dict[str, object]:
         """Public snapshot consumed by the shared precision bar."""
@@ -2236,6 +2276,7 @@ class CanvasView(
 
 
 CanvasView._cancel_active_drag = _cancel_active_drag
+CanvasView._cancel_draw_in_progress = _cancel_draw_in_progress
 CanvasView._escape_cb = _escape_cb
 CanvasView._find_dimension_at = _find_dimension_at
 CanvasView._rightclick_cb = _rightclick_cb

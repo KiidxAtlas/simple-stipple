@@ -64,7 +64,12 @@ class CanvasPrecisionBar(QFrame):
         self._spacing = QLineEdit()
         self._spacing.setFixedWidth(64)
         self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self._spacing.setToolTip("Grid spacing (mm) — accepts expressions like 25/2")
+        self._spacing.setAccessibleName("Grid spacing")
         self._spacing.returnPressed.connect(self._apply_spacing)
+        # Also commit on focus-out — typing a value and clicking elsewhere
+        # used to discard it silently.
+        self._spacing.editingFinished.connect(self._apply_spacing)
         layout.addWidget(self._spacing)
 
         self._spacing_dec = QPushButton("\u2212")

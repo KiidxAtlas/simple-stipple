@@ -6,16 +6,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QSize
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -41,6 +43,13 @@ if TYPE_CHECKING:
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _native_keys(shortcut: str) -> str:
+    """Platform-native display text for a Qt shortcut string (⌘K on macOS)."""
+    if not shortcut:
+        return ""
+    return QKeySequence(shortcut).toString(QKeySequence.SequenceFormat.NativeText)
 
 
 @dataclass(frozen=True)
@@ -128,11 +137,25 @@ class MenuController:
         self._app._snap_action.triggered.connect(
             lambda checked: self._app._canvas_call("set_grid_snap", checked)
         )
+        view_menu.addAction(self._app._snap_action)
         view_menu.aboutToShow.connect(self._sync_view_menu_state)
 
         help_menu = self._app.menuBar().addMenu("Help")
+        add(help_menu, "User Manual…", self._app._show_help)
         add(help_menu, "Keyboard Shortcuts…", self._show_shortcuts_reference)
         add(help_menu, "Notification History…", self._show_notification_history)
+        help_menu.addSeparator()
+        add(help_menu, "Check for Updates…", self._app._open_update_check)
+        add(help_menu, "About Simple Stipple", self._show_about)
+
+    def _show_about(self) -> None:
+        from simple_stipple.platform.updates import get_current_version
+
+        QMessageBox.about(
+            self._app,
+            "About Simple Stipple",
+            f"<b>Simple Stipple</b><br>Version {get_current_version()}",
+        )
 
     def _show_notification_history(self) -> None:
         from simple_stipple.ui.notifications import notification_history
@@ -150,6 +173,10 @@ class MenuController:
             else "No notifications yet."
         )
         layout.addWidget(log)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
         dialog.exec()
 
     def _refresh_shortcut_tooltips(self) -> None:
@@ -161,16 +188,17 @@ class MenuController:
         kept showing the OLD/default shortcut text forever after a rebind.
         """
         for btn, base_text, shortcut_id in self._app._shortcut_tooltip_specs:
-            btn.setToolTip(f"{base_text} ({self._app._shortcut(shortcut_id)})")
+            keys = _native_keys(self._app._shortcut(shortcut_id))
+            btn.setToolTip(f"{base_text} ({keys})" if keys else base_text)
 
     def _show_shortcuts_reference(self) -> None:
         rows = [
             ("Workspace", ""),
             ("New / Open / Save / Save As", "per File menu"),
-            ("Command palette", self._app._shortcut("app.command_palette")),
-            ("Settings", self._app._shortcut("app.settings")),
+            ("Command palette", _native_keys(self._app._shortcut("app.command_palette"))),
+            ("Settings", _native_keys(self._app._shortcut("app.settings"))),
             ("Switch tabs", "Alt+1 … Alt+4"),
-            ("Repository sync", "tab.repo"),
+            ("Repository sync", _native_keys(self._app._shortcut("tab.repo"))),
             ("", ""),
         ]
         # Canvas commands come straight from the registry so this dialog
@@ -184,6 +212,18 @@ class MenuController:
             ("Delete selected", "Backspace / Del"),
             ("Quick shape (select mode)", "Q radial menu · ⇧R/⇧C/⇧S/⇧P"),
         ]
+        dialog = QDialog(self._app)
+        dialog.setWindowTitle("Keyboard Shortcuts")
+        dialog.resize(480, 620)
+        layout = QVBoxLayout(dialog)
+        # ~30 rows didn't fit a fixed-size QMessageBox on smaller screens
+        # and it wasn't resizable — a scrollable, resizable dialog instead.
+        # Muted key-hint color read from the applied palette rather than a
+        # hardcoded dark-only hex, so it stays legible in Light mode.
+        is_light = dialog.palette().color(QPalette.ColorRole.Window).lightness() > 128
+        muted = "#57606a" if is_light else "#8b949e"
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(False)
         lines = []
         for label, keys in rows:
             if not label:
@@ -193,13 +233,15 @@ class MenuController:
             else:
                 lines.append(
                     f"{label}&nbsp;&nbsp;&mdash;&nbsp;&nbsp;"
-                    f"<span style='color:#8b949e'>{keys}</span>"
+                    f"<span style='color:{muted}'>{keys}</span>"
                 )
-        QMessageBox.information(
-            self._app,
-            "Keyboard Shortcuts",
-            "<br>".join(lines),
-        )
+        browser.setHtml("<br>".join(lines))
+        layout.addWidget(browser)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _sync_view_menu_state(self) -> None:
         canvas = self._app._active_canvas()
@@ -253,7 +295,7 @@ class MenuController:
 
         # Separator
         sep = QLabel("·")
-        sep.setStyleSheet("color: #30363d; font-size: 18px;")
+        sep.setProperty("role", "shell-sep")
         layout.addWidget(sep)
 
         # Workspace name
@@ -290,10 +332,13 @@ class MenuController:
                 "New": "workspace.new",
                 "Open": "workspace.open",
                 "Save": "workspace.save",
-                "Save As": "workspace.save_as",
             }.get(text)
             if shortcut_hint:
                 self._app._shortcut_tooltip_specs.append((btn, text, shortcut_hint))
+            elif text == "Workspaces":
+                # No rebindable shortcut backs this button — a plain
+                # tooltip, since it previously had none at all.
+                btn.setToolTip("Browse saved workspaces and recovery snapshots")
             layout.addWidget(btn)
 
         action_sep = QLabel("│")
@@ -311,8 +356,11 @@ class MenuController:
         update_btn.clicked.connect(self._app._open_update_check)
         layout.addWidget(update_btn)
 
-        palette_btn = QPushButton("⌘K")
-        palette_btn.setFixedSize(44, 30)
+        palette_btn = QPushButton(
+            _native_keys(self._app._shortcut("app.command_palette")) or "Commands"
+        )
+        palette_btn.setFixedHeight(30)
+        palette_btn.setMinimumWidth(44)
         self._app._shortcut_tooltip_specs.append(
             (palette_btn, "Command palette", "app.command_palette")
         )
@@ -565,38 +613,39 @@ class CommandController:
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self._app, self._app._settings)
+        # Apply used to only save to disk — the running app kept its stale
+        # in-memory settings until the dialog was later accepted (or the app
+        # restarted). Route Apply through the same propagation as Save/OK.
+        dlg.applied.connect(lambda: self._apply_settings_dialog_result(dlg))
         if dlg.exec() == SettingsDialog.DialogCode.Accepted:
-            # Propagate changed settings to tabs that cache paths at init time.
-            self._app._settings = dlg._settings
-            self._app._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
-            canvas_commands.apply_keybindings(self._app._settings.get("keybindings"))
-            self._app._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
-            self._app._settings_controller.replace(self._app._settings)
-            self._app._apply_accessibility_settings()
-            self._app._repo_page.sync_from_settings()
+            self._apply_settings_dialog_result(dlg)
 
-            for action_id, action in self._app._global_actions.items():
-                shortcut = self._shortcut(action_id)
-                action.setShortcut(QKeySequence(shortcut) if shortcut else QKeySequence())
+    def _apply_settings_dialog_result(self, dlg: SettingsDialog) -> None:
+        # Propagate changed settings to tabs that cache paths at init time.
+        self._app._settings = dlg._settings
+        self._app._settings.setdefault("keybindings", dict(DEFAULT_KEYBINDINGS))
+        canvas_commands.apply_keybindings(self._app._settings.get("keybindings"))
+        self._app._settings.setdefault("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
+        self._app._settings_controller.replace(self._app._settings)
+        self._app._apply_accessibility_settings()
+        self._app._repo_page.sync_from_settings()
 
-            self._app._new_workspace_action.setShortcut(
-                QKeySequence(self._shortcut("workspace.new"))
-            )
-            self._app._new_window_action.setShortcut(
-                QKeySequence(self._shortcut("workspace.new_window"))
-            )
-            self._app._open_workspace_action.setShortcut(
-                QKeySequence(self._shortcut("workspace.open"))
-            )
-            self._app._save_workspace_action.setShortcut(
-                QKeySequence(self._shortcut("workspace.save"))
-            )
-            self._app._save_workspace_as_action.setShortcut(
-                QKeySequence(self._shortcut("workspace.save_as"))
-            )
-            self._app._refresh_shortcut_tooltips()
+        for action_id, action in self._app._global_actions.items():
+            shortcut = self._shortcut(action_id)
+            action.setShortcut(QKeySequence(shortcut) if shortcut else QKeySequence())
 
-            self._app._update_checker._configure_auto_fetch_timer()
+        self._app._new_workspace_action.setShortcut(QKeySequence(self._shortcut("workspace.new")))
+        self._app._new_window_action.setShortcut(
+            QKeySequence(self._shortcut("workspace.new_window"))
+        )
+        self._app._open_workspace_action.setShortcut(QKeySequence(self._shortcut("workspace.open")))
+        self._app._save_workspace_action.setShortcut(QKeySequence(self._shortcut("workspace.save")))
+        self._app._save_workspace_as_action.setShortcut(
+            QKeySequence(self._shortcut("workspace.save_as"))
+        )
+        self._app._refresh_shortcut_tooltips()
+
+        self._app._update_checker._configure_auto_fetch_timer()
 
     def _build_command_palette_commands(self) -> list[dict[str, object]]:
         """Return every shell and canvas command from their live registries."""
@@ -605,7 +654,7 @@ class CommandController:
             {
                 "id": spec.action_id,
                 "title": spec.title,
-                "shortcut": self._shortcut(spec.action_id),
+                "shortcut": _native_keys(self._shortcut(spec.action_id)),
                 "keywords": spec.keywords,
                 "enabled": not spec.action_id.startswith("canvas.") or active_canvas is not None,
                 "disabled_reason": (
@@ -709,6 +758,9 @@ class CommandController:
         if tabs is None:
             return None
         current = tabs.currentWidget()
+        runtime = getattr(self._app, "_page_runtime", None)
+        if runtime is not None:
+            return runtime.content_canvas_for(current)
         return getattr(current, "_canvas", None)
 
     def _menu_copy(self) -> None:

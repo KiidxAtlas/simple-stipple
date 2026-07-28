@@ -75,12 +75,14 @@ class HudTextService:
 
     _DIM_STYLE = (
         "background: #161b22; color: #f0f6fc; border: 1px solid #30363d;"
-        "border-radius: 6px; font-size: 12px; font-family: Menlo, Courier;"
+        "border-radius: 6px; font-size: 12px;"
+        "font-family: Menlo, Consolas, 'DejaVu Sans Mono', monospace;"
         "padding: 3px 6px;"
     )
     _DIM_STYLE_HOVER = (
         "background: #1c2128; color: #f0f6fc; border: 1px solid #58a6ff;"
-        "border-radius: 6px; font-size: 12px; font-family: Menlo, Courier;"
+        "border-radius: 6px; font-size: 12px;"
+        "font-family: Menlo, Consolas, 'DejaVu Sans Mono', monospace;"
         "padding: 3px 6px;"
     )
 
@@ -189,17 +191,30 @@ class HudTextService:
             edit.textChanged.connect(_preview)
             _preview(edit.text())
 
+        def _reject(message: str) -> None:
+            # Keep the prompt open and flag it — silently vanishing made bad
+            # input indistinguishable from success.
+            edit.setProperty("invalid", True)
+            edit.setToolTip(message)
+            refresh_style(edit)
+            self._host._show_flash(message, 1400)
+            edit.selectAll()
+
         def _commit() -> None:
             try:
                 value = _parse_expression(edit.text(), unit or "mm", is_length=is_length)
             except (TypeError, ValueError):
-                self._dismiss_hud_prompt()
+                _reject("Enter a valid number or expression")
                 return
             if minimum is not None and value < minimum:
-                self._dismiss_hud_prompt()
+                _reject(
+                    f"Value must be at least {_to_display(minimum, unit) if unit else minimum:g}"
+                )
                 return
             if maximum is not None and value > maximum:
-                self._dismiss_hud_prompt()
+                _reject(
+                    f"Value must be at most {_to_display(maximum, unit) if unit else maximum:g}"
+                )
                 return
             self._dismiss_hud_prompt()
             callback(value)
@@ -300,6 +315,12 @@ class HudTextService:
         self._host._dim_angle_edit = angle_edit
         self._host._dim_angle_dirty = False
 
+        # Position immediately at the current cursor — otherwise the fields
+        # flash at the canvas origin (0, 0) until the next mouse-move event.
+        if self._host._cursor_wx is not None and self._host._cursor_wy is not None:
+            cx, cy = self._host._w2c(self._host._cursor_wx, self._host._cursor_wy)
+            self._update_dim_positions(cx, cy)
+
     def _dismiss_dim_inputs(self) -> None:
         """Remove the auto-dimension HUD widgets."""
         if self._host._dim_distance_edit is not None:
@@ -344,7 +365,10 @@ class HudTextService:
             height=32,
             align=Qt.AlignmentFlag.AlignCenter,
         )
-        edit.setText(f"{cur_val:.3f}")
+        if axis == "a":
+            edit.setText(f"{cur_val:.2f}")
+        else:
+            edit.setText(f"{_to_display(cur_val, self._host._unit_system):.2f}")
         edit.selectAll()
         # Keep the editor registered with the badge it replaces, but never
         # force the user to chase a clipped field beyond the canvas edge.
@@ -370,9 +394,12 @@ class HudTextService:
             # teardown; dismissal is still safe and must continue.
             LOGGER.debug("Selection editor was already disconnected: %s", exc)
         self._dismiss_sel_dim_editor()
+        if not text:
+            return
         try:
-            val = float(text)
+            val = _parse_expression(text, self._host._unit_system, is_length=axis != "a")
         except ValueError:
+            self._host._show_flash("Enter a valid number or expression", 1200)
             return
         if axis == "a":
             # Absolute angle: any value is valid (normalized by trig)
@@ -380,6 +407,7 @@ class HudTextService:
             self._host._show_flash("Angle updated", 900)
             return
         if val <= 0:
+            self._host._show_flash("Value must be greater than zero", 1200)
             return
         if axis == "w":
             self._host._set_selected_width(val)
@@ -425,7 +453,12 @@ class HudTextService:
         next keystroke replaces the live value instead of appending to it.
         """
         if self._host._dim_distance_edit is not None and not self._host._dim_distance_dirty:
-            self._host._dim_distance_edit.setText(f"{distance:.2f}")
+            # Display units: _apply_dim_input parses this text back with the
+            # unit-aware parser, so raw mm here would commit 25.4× too far
+            # in inch mode.
+            self._host._dim_distance_edit.setText(
+                f"{_to_display(distance, self._host._unit_system):.2f}"
+            )
             if self._host._dim_distance_edit.hasFocus():
                 self._host._dim_distance_edit.selectAll()
         if self._host._dim_angle_edit is not None and not self._host._dim_angle_dirty:
@@ -447,12 +480,16 @@ class HudTextService:
         if not text:
             return None
         try:
-            return float(text)
+            return _parse_expression(text, is_length=False)
         except ValueError:
             return None
 
     def _typed_draw_distance(self) -> float | None:
-        """Return the user-typed segment length if the distance field is dirty."""
+        """Return the user-typed segment length (mm) if the distance field is dirty.
+
+        Uses the same unit-aware parser as the commit path so the live
+        rubber-band preview matches where Enter will actually place the point.
+        """
         if not getattr(self._host, "_dim_distance_dirty", False):
             return None
         if self._host._dim_distance_edit is None:
@@ -461,7 +498,7 @@ class HudTextService:
         if not text:
             return None
         try:
-            return float(text)
+            return _parse_expression(text, self._host._unit_system, is_length=True)
         except ValueError:
             return None
 
@@ -854,13 +891,12 @@ class TextService:
             return False
 
         # If this text was attached to a path, remember which one so it can
-        # be re-flowed after the rebuild (indices shift once the old
-        # contours are compacted out, so remap it through that removal).
+        # be re-flowed after the rebuild replaces the glyph contours.
         existing_params = self.text_params_at(entity_id) or {}
-        raw_path_idx = existing_params.get("attached_path_idx")
+        raw_path_id = existing_params.get("attached_path_id")
         attached_path_id: str | None = None
-        if isinstance(raw_path_idx, int) and 0 <= raw_path_idx < len(self._host._entities):
-            attached_path_id = self._host._entities_by_id[raw_path_idx].id
+        if isinstance(raw_path_id, str) and raw_path_id in self._host._entities_by_id:
+            attached_path_id = raw_path_id
 
         member_entity = next((e for e in self._host._entities if e.id == entity_id), None)
         group_id = member_entity.group if member_entity else None

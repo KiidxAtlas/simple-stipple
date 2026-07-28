@@ -52,11 +52,12 @@ def highlight_zone_on_canvas(page: Any, zone_row: int) -> None:
     else:
         zone_ids = set(page._zones[zone_row].get("outline_ids", []))
         indices = [
-            index
-            for index, outline_id in enumerate(page._outline_ids)
-            if outline_id in zone_ids
+            index for index, outline_id in enumerate(page._outline_ids) if outline_id in zone_ids
         ]
-    page._canvas.set_accent_polys({index: "#f5a623" for index in indices})
+    entity_ids = page._canvas.get_entity_ids()
+    page._canvas.set_accent_polys(
+        {entity_ids[index]: "#f5a623" for index in indices if index < len(entity_ids)}
+    )
 
 
 def select_zone_for_canvas_selection(page: Any, *, preview: bool) -> None:
@@ -65,11 +66,17 @@ def select_zone_for_canvas_selection(page: Any, *, preview: bool) -> None:
         return
     zone_rows: list[int] = []
     if preview:
-        zone_rows = [
-            owner
-            for idx, owner in enumerate(page._preview_zone_owners[: len(entity_ids)])
-            if idx < len(entity_ids) and owner is not None
-        ]
+        entity_index = {
+            entity_id: index for index, entity_id in enumerate(page._canvas.get_entity_ids())
+        }
+        zone_rows = []
+        for entity_id in entity_ids:
+            index = entity_index.get(entity_id)
+            if index is None or index >= len(page._preview_zone_owners):
+                continue
+            owner = page._preview_zone_owners[index]
+            if owner is not None and owner not in zone_rows:
+                zone_rows.append(owner)
     else:
         selected_ids = set(entity_ids)
         zone_rows = [
@@ -78,7 +85,24 @@ def select_zone_for_canvas_selection(page: Any, *, preview: bool) -> None:
             if selected_ids.intersection(zone.get("outline_ids", []))
         ]
     if zone_rows:
-        page._zone_list.setCurrentRow(zone_rows[0])
+        # A canvas marquee/Shift-click can span multiple zones. Keep the
+        # current editor when it is part of that selection; otherwise choose
+        # the zone with the strongest overlap instead of depending on set
+        # iteration order.
+        current_row = page._zone_list.currentRow()
+        if current_row in zone_rows:
+            return
+        if preview:
+            page._zone_list.setCurrentRow(zone_rows[0])
+        else:
+            selected_ids = set(entity_ids)
+            best_row = max(
+                zone_rows,
+                key=lambda row: len(
+                    selected_ids.intersection(page._zones[row].get("outline_ids", []))
+                ),
+            )
+            page._zone_list.setCurrentRow(best_row)
 
 
 def snapshot_zone_jobs(page: Any) -> list[dict]:
@@ -294,9 +318,7 @@ def collect_zone_editor(page: Any) -> tuple[str, dict, dict | None]:
             "target_outline": page._zone_fill_target_outline.isChecked(),
             "target_pattern": page._zone_fill_target_pattern.isChecked(),
             "cell_cutouts": [list(poly) for poly in page._pattern_cell_cutouts],
-            "cell_instance_cutouts": [
-                list(poly) for poly in page._pattern_cell_instance_cutouts
-            ],
+            "cell_instance_cutouts": [list(poly) for poly in page._pattern_cell_instance_cutouts],
         }
     return pattern, params, fill
 
@@ -385,18 +407,100 @@ def on_zone_selected(page: Any, row: int) -> None:
     refresh_pattern_properties_panel(page)
 
 
+def _resolve_preview_zone_selection(
+    page: Any,
+    sel_polys: list[list[tuple[float, float]]],
+) -> tuple[list[str], list[list[tuple[float, float]]], list[str]]:
+    """Map preview selection to durable IDs and promote generated cells only."""
+    entity_index = {
+        entity_id: index for index, entity_id in enumerate(page._canvas.get_entity_ids())
+    }
+    outline_count = len(page._preview_categories.get("outline", []))
+    source_by_signature: dict[tuple, list[str]] = {}
+    for source_id, source_poly in zip(page._outline_ids, page._edit_polys):
+        source_by_signature.setdefault(page._pattern_service._poly_signature(source_poly), []).append(
+            source_id
+        )
+    selected_ids: list[str] = []
+    promoted: list[list[tuple[float, float]]] = []
+    promoted_ids: list[str] = []
+    for entity_id, poly in zip(sorted(page._canvas.get_selected_ids()), sel_polys):
+        # Generated preview geometry lives in the zone's scaled coordinate
+        # space.  Promoted outlines must return to document/source space or
+        # later zone containment checks see the child outside its parent and
+        # the parent's pattern bleeds through it.
+        source_poly = _restore_preview_poly_to_source(page, entity_id, poly, entity_index)
+        signature = page._pattern_service._poly_signature(poly)
+        reusable = source_by_signature.get(signature, []) if entity_index.get(entity_id, -1) < outline_count else []
+        if reusable:
+            selected_ids.append(reusable.pop(0))
+            continue
+        promoted_id = page._fresh_outline_ids(1)[0]
+        selected_ids.append(promoted_id)
+        promoted_ids.append(promoted_id)
+        promoted.append(source_poly)
+    return selected_ids, promoted, promoted_ids
+
+
+def _restore_preview_poly_to_source(
+    page: Any,
+    entity_id: str,
+    poly: list[tuple[float, float]],
+    entity_index: dict[str, int],
+) -> list[tuple[float, float]]:
+    """Undo the owning zone's scale for a cell promoted from Preview.
+
+    ``PatternProcessor.apply_scale`` scales around the bounding box of all
+    outlines in that zone.  Reversing that same affine transform preserves
+    the cell's position and makes it compatible with ``_edit_polys`` and
+    durable zone IDs.
+    """
+    index = entity_index.get(entity_id, -1)
+    outline_count = len(page._preview_categories.get("outline", []))
+    if index < outline_count:
+        return [(float(x), float(y)) for x, y in poly]
+    owners = page._preview_categories.get("zone_owners", [])
+    owner = owners[index] if isinstance(owners, list) and index < len(owners) else None
+    if not isinstance(owner, int) or not 0 <= owner < len(page._zones):
+        return [(float(x), float(y)) for x, y in poly]
+    zone = page._zones[owner]
+    try:
+        sw, sh = (float(zone["scale"][0]), float(zone["scale"][1]))
+        ow, oh = float(page._orig_w), float(page._orig_h)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return [(float(x), float(y)) for x, y in poly]
+    if ow <= 0 or oh <= 0 or sw <= 0 or sh <= 0:
+        return [(float(x), float(y)) for x, y in poly]
+    sx, sy = sw / ow, sh / oh
+    if abs(sx - 1.0) < 1e-9 and abs(sy - 1.0) < 1e-9:
+        return [(float(x), float(y)) for x, y in poly]
+    source_ids = {str(v) for v in zone.get("outline_ids", [])}
+    source_polys = [
+        source_poly
+        for source_id, source_poly in zip(page._outline_ids, page._edit_polys)
+        if str(source_id) in source_ids
+    ]
+    points = [point for source_poly in source_polys for point in source_poly]
+    if not points:
+        return [(float(x), float(y)) for x, y in poly]
+    ox = min(point[0] for point in points)
+    oy = min(point[1] for point in points)
+    return [
+        (ox + (float(x) - ox) / sx, oy + (float(y) - oy) / sy)
+        for x, y in poly
+    ]
+
+
 def assign_zone(page: Any) -> None:
     sel_polys = page._canvas.get_selected()
-    promoted: list[list[tuple[float, float]]] = []
+    source_outline_ids = list(page._outline_ids)
     if page._showing_preview:
-        # A generated cell can itself become a zone boundary. Promote the
-        # selected preview geometry to durable source outlines first.
-        promoted = [[(float(x), float(y)) for x, y in poly] for poly in sel_polys]
-        sel_ids = page._fresh_outline_ids(len(promoted))
+        # Reuse source IDs for Outline rows; promote generated cells only.
+        sel_ids, promoted, promoted_ids = _resolve_preview_zone_selection(page, sel_polys)
     else:
-        sel_ids = [
-            eid for eid in page._canvas.get_selected_ids() if eid in page._outline_ids
-        ]
+        promoted = []
+        promoted_ids = []
+        sel_ids = [eid for eid in page._canvas.get_selected_ids() if eid in page._outline_ids]
     if not sel_polys:
         QMessageBox.information(
             page,
@@ -413,7 +517,7 @@ def assign_zone(page: Any) -> None:
         return
     if promoted:
         page._edit_polys.extend(promoted)
-        page._outline_ids.extend(sel_ids)
+        page._outline_ids.extend(promoted_ids)
     if set(sel_ids).intersection(page._exclusion_ids):
         page._set_status(
             "Remove Cutout from the selected shape before assigning a zone.",
@@ -421,7 +525,7 @@ def assign_zone(page: Any) -> None:
         )
         return
     if any(
-        zone.get("outline_ids", []) == sel_ids
+        set(zone.get("outline_ids", [])) == set(sel_ids)
         and zone["pattern"] == pattern
         and zone["params"] == params
         and zone["scale"] == scale
@@ -441,6 +545,24 @@ def assign_zone(page: Any) -> None:
         output_mode = "pattern_fill"
     else:
         output_mode = "pattern"
+    # A mode that requires a missing treatment is not a meaningful zone. The
+    # combo defaults to Pattern + Fill, so normalize the common "fill-only"
+    # and "outline-only" cases instead of silently generating an empty result.
+    if pattern == "— None —" and output_mode in {"pattern_fill", "pattern"}:
+        output_mode = "fill" if fill_snapshot else "outline"
+    elif pattern != "— None —" and output_mode == "fill" and fill_snapshot is None:
+        output_mode = "pattern"
+
+    _materialize_preview_base_zone(
+        page,
+        source_outline_ids,
+        pattern,
+        params,
+        fill_snapshot,
+        scale,
+        output_mode,
+        enabled=bool(promoted and not page._zones and source_outline_ids),
+    )
     # An outline belongs to at most one zone. Reassignment moves selected
     # outlines out of older zones instead of producing overlapping output.
     selected_ids = set(sel_ids)
@@ -448,7 +570,8 @@ def assign_zone(page: Any) -> None:
     for existing in page._zones:
         remaining = [oid for oid in existing.get("outline_ids", []) if oid not in selected_ids]
         if remaining:
-            retained_zones.append({**existing, "outline_ids": remaining})
+            existing["outline_ids"] = remaining
+            retained_zones.append(existing)
     page._zones = retained_zones
     zone = {
         "outline_ids": list(sel_ids),
@@ -469,11 +592,41 @@ def assign_zone(page: Any) -> None:
     page._emit_state_changed()
 
 
+def _materialize_preview_base_zone(
+    page: Any,
+    outline_ids: list[str],
+    pattern: str,
+    params: dict,
+    fill: dict | None,
+    scale: tuple[float, float],
+    output_mode: str,
+    *,
+    enabled: bool,
+) -> None:
+    """Materialize the implicit global preview treatment before an exception."""
+    if not enabled:
+        return
+    base_zone = {
+        "outline_ids": list(outline_ids),
+        "pattern": pattern,
+        "pattern_label": page._zone_pattern_combo.currentText(),
+        "params": dict(params),
+        "scale": scale,
+        "fill": fill,
+        "output_mode": output_mode,
+        "form_state": collect_form_state(page),
+    }
+    base_zone["label"] = page._zone_label(base_zone, 0)
+    page._zones.append(base_zone)
+
+
 def remove_selected_zone(page: Any) -> None:
     row = page._zone_list.currentRow()
     if 0 <= row < len(page._zones):
         del page._zones[row]
         page._refresh_zone_list()
+        if page._zones:
+            page._zone_list.setCurrentRow(min(row, len(page._zones) - 1))
         page._schedule_preview()
         page._emit_state_changed()
 
@@ -499,6 +652,8 @@ def clear_zones(page: Any) -> None:
 def refresh_zone_list(page: Any) -> None:
     if not hasattr(page, "_zone_list"):
         return
+    selected_row = page._zone_list.currentRow()
+    selected_zone = page._zones[selected_row] if 0 <= selected_row < len(page._zones) else None
     page._zone_list.blockSignals(True)
     page._zone_list.clear()
     if page._zones:
@@ -516,6 +671,13 @@ def refresh_zone_list(page: Any) -> None:
         item = page._zone_list.item(0)
         if item is not None:
             item.setFlags(Qt.ItemFlag.NoItemFlags)
+    elif selected_zone is not None:
+        selected_index = next(
+            (index for index, zone in enumerate(page._zones) if zone is selected_zone),
+            -1,
+        )
+        if selected_index >= 0:
+            page._zone_list.setCurrentRow(selected_index)
     page._update_zone_actions()
     page._refresh_section_subtitles()
     refresh_pattern_properties_panel(page)
@@ -531,7 +693,8 @@ def invalidate_zones_for_geometry_change(page: Any, valid_outline_ids: set[str])
         remaining_ids = [oid for oid in previous_ids if oid in valid_outline_ids]
         removed_assignments += len(previous_ids) - len(remaining_ids)
         if remaining_ids:
-            retained.append({**zone, "outline_ids": remaining_ids})
+            zone["outline_ids"] = remaining_ids
+            retained.append(zone)
     if not removed_assignments:
         return
     page._zones = retained
@@ -550,12 +713,25 @@ def update_zone_actions(page: Any) -> None:
         if hasattr(page, "_zone_pattern_combo")
         else "— None —"
     )
-    can_assign = has_selection and zone_pattern != "— None —"
+    fill_mode = (
+        str(page._zone_fill_mode.currentData() or "none")
+        if hasattr(page, "_zone_fill_mode")
+        else "none"
+    )
+    output_mode = (
+        str(page._zone_output_combo.currentData() or "pattern_fill")
+        if hasattr(page, "_zone_output_combo")
+        else "pattern_fill"
+    )
+    treatment_is_valid = (
+        zone_pattern != "— None —" or fill_mode != "none" or output_mode in {"outline", "none"}
+    )
+    can_assign = has_selection and treatment_is_valid
     page._assign_zone_btn.setEnabled(can_assign)
     page._assign_zone_btn.setToolTip(
-        "Select one or more outlines to assign this pattern"
+        "Select outlines and choose a pattern, fill, outline-only, or disabled output"
         if not can_assign
-        else "Save the current pattern and parameters for the selected outlines"
+        else "Create a zone from the selected outlines using these settings"
     )
     if hasattr(page, "_mark_cutout_btn"):
         page._mark_cutout_btn.setEnabled(

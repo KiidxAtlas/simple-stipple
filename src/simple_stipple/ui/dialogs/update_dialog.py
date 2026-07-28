@@ -7,12 +7,13 @@ import subprocess
 import webbrowser
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QCoreApplication, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
@@ -21,10 +22,13 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.platform.updates import (
     UpdateInfo,
+    can_self_update_windows,
     check_for_updates,
     download_update,
     get_current_version,
     get_releases_page_url,
+    launch_windows_self_update,
+    update_staging_path,
 )
 from simple_stipple.ui.components.layout import (
     section_label,
@@ -62,6 +66,7 @@ class UpdateDownloadThread(QThread):
     """Background thread for downloading update artifacts."""
 
     downloadComplete = Signal(bool, str, str)  # success, path, system
+    downloadProgress = Signal(int, int)  # downloaded bytes, total bytes or 0
 
     def __init__(self, url: str, dest_path: Path, system: str, sha256: str, parent=None) -> None:
         super().__init__(parent)
@@ -72,7 +77,12 @@ class UpdateDownloadThread(QThread):
 
     def run(self) -> None:
         try:
-            success = download_update(self._url, self._dest_path, expected_sha256=self._sha256)
+            success = download_update(
+                self._url,
+                self._dest_path,
+                expected_sha256=self._sha256,
+                progress_cb=lambda done, total: self.downloadProgress.emit(done, total or 0),
+            )
             self.downloadComplete.emit(success, str(self._dest_path), self._system)
         except (OSError, RuntimeError, ValueError) as exc:
             _LOG.error("Update download thread error: %s", exc)
@@ -92,7 +102,7 @@ class UpdateDialog(QDialog):
         self._update_info = update_info
         self._check_thread: UpdateCheckThread | None = None
         self._download_thread: UpdateDownloadThread | None = None
-        self._download_progress: QMessageBox | None = None
+        self._download_progress: QProgressDialog | None = None
         self._close_btn: QPushButton | None = None
         self._download_btn: QPushButton | None = None
 
@@ -111,13 +121,19 @@ class UpdateDialog(QDialog):
 
         sep(layout)
 
-        # Build content based on state
+        content = QWidget()
+        self._content_layout = QVBoxLayout(content)
+        self._content_layout.setContentsMargins(0, 0, 0, 0)
+        self._content_layout.setSpacing(SPACE_MD)
+        layout.addWidget(content, stretch=1)
+
+        # Build content based on state without replacing persistent dialog chrome.
         if update_info is None:
-            self._build_checking_ui(layout)
+            self._build_checking_ui(self._content_layout)
         elif update_info.is_newer:
-            self._build_update_available_ui(layout, update_info)
+            self._build_update_available_ui(self._content_layout, update_info)
         else:
-            self._build_up_to_date_ui(layout, update_info)
+            self._build_up_to_date_ui(self._content_layout, update_info)
 
         sep(layout)
 
@@ -149,13 +165,17 @@ class UpdateDialog(QDialog):
 
     def _on_check_complete(self, info: UpdateInfo | None, layout: QVBoxLayout) -> None:
         """Handle update check completion."""
-        # Clear current layout
+        self._update_info = info
+        # Clear only the replaceable content region.
         while layout.count() > 0:
             item = layout.takeAt(0)
             if item is not None:
                 widget = item.widget()
                 if widget is not None:
                     widget.deleteLater()
+                child_layout = item.layout()
+                if child_layout is not None:
+                    child_layout.deleteLater()
 
         if info is None:
             error_label = QLabel()
@@ -264,26 +284,20 @@ class UpdateDialog(QDialog):
         if reply != QMessageBox.StandardButton.Ok:
             return
 
-        # Determine file extension based on platform
         import platform
 
         system = platform.system()
-        if system == "Darwin":
-            filename = f"SimpleStipple-{info.version}.dmg"
-        elif system == "Windows":
-            filename = f"SimpleStipple-{info.version}.exe"
-        else:
-            filename = f"SimpleStipple-{info.version}.tar.gz"
-
-        download_path = Path.home() / "Downloads" / filename
+        download_path = update_staging_path(info.version, system)
         self._set_download_busy(True)
 
-        # Show non-blocking progress message and run download in background.
+        # Show non-blocking progress and run download in the background.
         if self._download_progress is None:
-            self._download_progress = QMessageBox(self)
-        self._download_progress.setWindowTitle("Downloading")
-        self._download_progress.setText(f"Downloading update to:\n{download_path}")
-        self._download_progress.setStandardButtons(QMessageBox.StandardButton.NoButton)
+            self._download_progress = QProgressDialog(self)
+        self._download_progress.setWindowTitle("Downloading Update")
+        self._download_progress.setLabelText(f"Downloading Simple Stipple {info.version}…")
+        self._download_progress.setCancelButton(None)
+        self._download_progress.setRange(0, 0)
+        self._download_progress.setMinimumDuration(0)
         self._download_progress.setModal(True)
         self._download_progress.show()
 
@@ -294,8 +308,20 @@ class UpdateDialog(QDialog):
             info.sha256,
             parent=self,
         )
+        self._download_thread.downloadProgress.connect(self._on_download_progress)
         self._download_thread.downloadComplete.connect(self._on_download_complete)
         self._download_thread.start()
+
+    def _on_download_progress(self, bytes_done: int, total: int) -> None:
+        if self._download_progress is None:
+            return
+        if total <= 0:
+            self._download_progress.setRange(0, 0)
+            return
+        self._download_progress.setRange(0, total)
+        self._download_progress.setValue(min(bytes_done, total))
+        percent = int(bytes_done * 100 / total)
+        self._download_progress.setLabelText(f"Downloading update… {percent}%")
 
     def _on_download_complete(self, success: bool, path: str, system: str) -> None:
         """Handle completion of background update download."""
@@ -315,20 +341,40 @@ class UpdateDialog(QDialog):
             )
             return
 
+        if system == "Windows" and can_self_update_windows():
+            reply = QMessageBox.question(
+                self,
+                "Ready to Restart",
+                "The verified update is ready. Restart Simple Stipple now to finish installing?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                if launch_windows_self_update(download_path):
+                    self.accept()
+                    QCoreApplication.quit()
+                    return
+                QMessageBox.critical(
+                    self,
+                    "Could Not Start Installer",
+                    "The update was downloaded and verified, but the installer could not start. "
+                    "Try again or install it manually from the staged file.",
+                )
+
         QMessageBox.information(
             self,
-            "Download Complete",
-            f"Update downloaded to:\n{download_path}\n\nPlease close the app and install the new version.",
+            "Update Ready",
+            f"The verified update was downloaded to:\n{download_path}\n\n"
+            "Open it to finish installing this platform's update.",
         )
 
-        # Try to open the Downloads folder
+        # Platforms without an in-place updater still open the verified artifact.
         try:
             if system == "Darwin":
-                subprocess.run(["open", str(Path.home() / "Downloads")])
+                subprocess.Popen(["open", str(download_path)])
             elif system == "Windows":
-                subprocess.run(["explorer", str(Path.home() / "Downloads")])
+                subprocess.Popen(["explorer", f"/select,{download_path}"])
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
-            _LOG.warning("Could not open Downloads folder: %s", exc)
+            _LOG.warning("Could not open the staged update: %s", exc)
 
     def _set_download_busy(self, busy: bool) -> None:
         """Keep update dialog actions coherent while a download is active."""
@@ -338,7 +384,17 @@ class UpdateDialog(QDialog):
         if self._close_btn is not None:
             self._close_btn.setEnabled(not busy)
 
+    def done(self, result: int) -> None:
+        # accept()/reject() (Close button, Esc) hide the dialog without a
+        # QCloseEvent, so the thread detach below must run here too.
+        self._detach_network_threads()
+        super().done(result)
+
     def closeEvent(self, event) -> None:
+        self._detach_network_threads()
+        super().closeEvent(event)
+
+    def _detach_network_threads(self) -> None:
         """Detach in-flight network threads before the dialog is destroyed.
 
         ``quit()`` cannot stop a QThread whose ``run`` method is blocked in a
@@ -355,14 +411,12 @@ class UpdateDialog(QDialog):
                     if isinstance(thread, UpdateCheckThread):
                         thread.checkComplete.disconnect()
                     else:
+                        thread.downloadProgress.disconnect()
                         thread.downloadComplete.disconnect()
                     thread.setParent(None)
                     _DETACHED_THREADS.add(thread)
-                    thread.finished.connect(
-                        lambda active=thread: _DETACHED_THREADS.discard(active)
-                    )
+                    thread.finished.connect(lambda active=thread: _DETACHED_THREADS.discard(active))
             except RuntimeError:
                 # Thread already deleted by Qt
                 pass
             setattr(self, attr, None)
-        super().closeEvent(event)

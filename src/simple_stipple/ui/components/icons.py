@@ -16,7 +16,6 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
-
 def icon_from_painter(
     draw_fn: Callable[[QPainter, float, QColor], None],
     *,

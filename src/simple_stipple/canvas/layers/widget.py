@@ -388,6 +388,10 @@ class DxfLayersTree(QFrame):
             return
         name = self._item_internal_name(target)
         if not name or name == "geometry":
+            # The context menu already disables Delete for the default
+            # layer; the Delete/Backspace key path had no equivalent
+            # explanation and just silently did nothing.
+            QToolTip.showText(QCursor.pos(), "The default layer can't be deleted", self._tree)
             return
         self.layerDeleted.emit(name)
 
@@ -414,7 +418,56 @@ class DxfLayersTree(QFrame):
                 continue
             layer_item.setHidden(needle not in layer_text and not any_child_match)
 
+    def _patch_existing_layers(self, layers: Sequence[tuple[Any, ...] | dict[str, Any]]) -> bool:
+        """Update labels/visibility in place when row identity is unchanged."""
+        if self._tree.topLevelItemCount() != len(layers):
+            return False
+        for index, row in enumerate(layers):
+            if not isinstance(row, dict):
+                return False
+            name = str(row.get("internal_name", row.get("name", "")))
+            item = self._tree.topLevelItem(index)
+            if item is None or self._item_internal_name(item) != name:
+                return False
+            shapes = list(row.get("shapes", []))
+            if item.childCount() != len(shapes):
+                return False
+            for child_index, shape in enumerate(shapes):
+                key = shape.get("key") if isinstance(shape, dict) else shape[0]
+                child = item.child(child_index)
+                if child is None or child.data(0, self._ROLE_SHAPE_KEY) != key:
+                    return False
+
+        self._syncing = True
+        try:
+            for index, row in enumerate(layers):
+                item = self._tree.topLevelItem(index)
+                assert item is not None
+                display = str(row.get("display_name", row.get("name", "")))
+                shapes = list(row.get("shapes", []))
+                item.setText(0, f"{display}{f'  ·  {len(shapes)}' if shapes else ''}")
+                item.setCheckState(
+                    0,
+                    Qt.CheckState.Checked if bool(row.get("visible", True)) else Qt.CheckState.Unchecked,
+                )
+                for child, shape in zip(
+                    (item.child(i) for i in range(item.childCount())), shapes
+                ):
+                    child.setText(0, str(shape.get("label", "Shape")))
+                    child.setCheckState(
+                        0,
+                        Qt.CheckState.Checked
+                        if bool(shape.get("visible", True))
+                        else Qt.CheckState.Unchecked,
+                    )
+            self._apply_filter()
+        finally:
+            self._syncing = False
+        return True
+
     def set_layers(self, layers: Sequence[tuple[Any, ...] | dict[str, Any]]) -> None:
+        if self._patch_existing_layers(layers):
+            return
         self._syncing = True
         # Remember which layers are currently collapsed BEFORE the rebuild —
         # `_tree.clear()` destroys all QTreeWidgetItems (and their expand
@@ -767,6 +820,9 @@ class DxfLayersTree(QFrame):
                     self._syncing = True
                     item.setText(0, old_display)
                     self._syncing = False
+                    # Explain the revert, matching the layer-rename branch
+                    # above — a silent snap-back gave no clue why.
+                    QToolTip.showText(QCursor.pos(), "Shape name cannot be blank", self._tree)
                 else:
                     self._syncing = True
                     item.setData(0, self._ROLE_DISPLAY_NAME, new_text)
@@ -795,6 +851,10 @@ class DxfLayersTree(QFrame):
             return
         item = self._tree.itemAt(pos)
         menu = QMenu(self)
+        # QAction tooltips are hidden by default in Qt — Consolidate/Group/
+        # Merge/Delete/Copy all set explanatory tooltips below that never
+        # rendered without this.
+        menu.setToolTipsVisible(True)
 
         if item is None:
             menu.addAction("New layer", self._prompt_add_layer)

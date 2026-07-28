@@ -226,7 +226,6 @@ class DrawSidebar(QFrame):
                 font-size: 10px;
                 font-weight: 700;
                 letter-spacing: 1px;
-                text-transform: uppercase;
             }
             QFrame#draw-side-panel QScrollBar:vertical {
                 width: 8px;
@@ -251,7 +250,7 @@ class DrawSidebar(QFrame):
         self._apply_width(width if width is not None else MIN_DRAW_SIDEBAR_WIDTH + 12)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 4, 8)
+        outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(4)
 
         scroll = QScrollArea(self)
@@ -263,7 +262,11 @@ class DrawSidebar(QFrame):
         content = QWidget(scroll)
         self._content = content
         col = QVBoxLayout(content)
-        col.setContentsMargins(4, 4, 4, 4)
+        # The scroll area reserves its own 8 px scrollbar. This content gutter
+        # keeps controls visually separate without pretending padding can
+        # compensate for an undersized viewport (the minimum-width contract
+        # below guarantees both 44 px tool columns actually fit).
+        col.setContentsMargins(4, 4, 8, 4)
         col.setSpacing(16)
 
         title = QLabel("Draw")
@@ -446,7 +449,10 @@ class DrawSidebar(QFrame):
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(8)
 
-        label = QLabel(caption)
+        # Qt QSS doesn't support text-transform, so the uppercase small-caps
+        # look this role's letter-spacing implies has to come from the text
+        # itself, not the stylesheet.
+        label = QLabel(caption.upper())
         label.setProperty("role", "section-title")
         label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         # Word-wrap defensively: a caption that renders wider than the

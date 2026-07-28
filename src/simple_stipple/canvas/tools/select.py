@@ -38,7 +38,7 @@ class SelectionService:
         """Transform an entity's parametric metadata via its Shape class.
 
         All per-kind transform math lives on the Shape subclasses in
-        src/simple_stipple/backend/cad/shapes.py — this is a thin delegation shim kept for
+        src/simple_stipple/engine/cad/shapes.py — this is a thin delegation shim kept for
         the legacy kind+meta storage until the canvas migrates to shapes.
         """
         entity = self._host._entity_for_id(entity_id)
@@ -348,6 +348,8 @@ class SelectionService:
             self._host._edit_selected_verts.clear()
         added = 0
         for entity in self._host._entities:
+            if not self._host._entity_selectable_by_id(entity.id):
+                continue
             for vi, (vx, vy) in enumerate(entity.points):
                 cx, cy = self._host._w2c(vx, vy)
                 if x1c <= cx <= x2c and y1c <= cy <= y2c:

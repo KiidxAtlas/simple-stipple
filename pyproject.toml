@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simple-stipple"
-version = "0.3.4"
-description = ""
+version = "0.3.5"
+description = "Desktop app for drafting, tracing, and generating pattern fills for laser and vector workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -107,17 +107,28 @@ exclude = ["src/simple_stipple.egg-info"]
 # specific diagnostics — keep flow, type-arg, and return-type checks.
 [[tool.mypy.overrides]]
 module = [
-    "simple_stipple.canvas.view",
+    "simple_stipple.canvas.tools.dimension_tool",
+    "simple_stipple.canvas.tools.tools",
+    "simple_stipple.canvas.view.config",
+    "simple_stipple.canvas.view.main",
     "simple_stipple.canvas.widget",
 ]
 disable_error_code = [
     "abstract",
     "attr-defined",
+    "assignment",
     "has-type",
+    "method-assign",
+    "misc",
     "no-redef",
     "override",
     "union-attr",
+    "var-annotated",
 ]
+
+[[tool.mypy.overrides]]
+module = ["simple_stipple.engine.cad.shapes"]
+disable_error_code = ["has-type", "misc"]
 
 [[tool.mypy.overrides]]
 module = [

@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Draft page — interaction-first 2D drafting.
 
 Design goals:
@@ -49,11 +50,13 @@ from simple_stipple.features.draft.session import (
     clear_draft_workspace_state,
     get_draft_workspace_state,
 )
+from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.layout import (
     content_splitter,
     surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
+from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
 from simple_stipple.ui.dialogs.import_dialog import DxfImportPreviewDialog
 from simple_stipple.ui.files import pick_open_file, pick_save_file
@@ -202,7 +205,8 @@ class DraftPage(BasePage):
         )
         self._canvas.set_selection_follows_geometry(True)
         self._canvas.set_empty_message(
-            "Start a drawing\nUse Import Vector above, drop a file here, or choose Draw"
+            "Start a drawing\n1  Import or drop a vector\n"
+            "2  Press D to draw\n3  Select geometry to see relevant actions"
         )
         self._canvas.quickShapeChanged.connect(self._on_quick_shape_changed)
         self._canvas.quickShapeEnabledChanged.connect(self._on_quick_shape_enabled_changed)
@@ -272,7 +276,7 @@ class DraftPage(BasePage):
         row = QHBoxLayout(container)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        self._export_btn = QPushButton("Export Drawing DXF")
+        self._export_btn = QPushButton("Export Drawing DXF…")
         self._export_btn.setMinimumHeight(38)
         self._export_btn.setProperty("role", "primary")
         self._export_btn.setToolTip(
@@ -313,6 +317,7 @@ class DraftPage(BasePage):
             self._canvas_status.set_zoom(
                 self._canvas.get_zoom_percent(),
                 self._canvas.get_cursor_world_pos(),
+                unit=str(getattr(self._canvas, "_unit_system", "mm")),
             )
 
     def _on_quick_shape_changed(self, mode: str) -> None:
@@ -578,6 +583,15 @@ class DraftPage(BasePage):
                 "The canvas is empty — draw or drag-create shapes first.",
             )
             return
+        proceed, _report = export_preflight(
+            self,
+            [list(record["polyline"]) for record in records],
+            action="Export",
+            allow_open_paths=True,
+        )
+        if not proceed:
+            self._canvas.set_geometry_health_visible(True, announce=True)
+            return
 
         out_path = pick_save_file(
             self,
@@ -621,7 +635,7 @@ class DraftPage(BasePage):
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            show_error(self, "Export Failed", exc)
 
     # ── Status ────────────────────────────────────────────────────────────
 
@@ -712,6 +726,11 @@ class DraftPage(BasePage):
                 if url.toLocalFile().lower().endswith(VECTOR_IMPORT_EXTENSIONS):
                     event.acceptProposedAction()
                     return
+        # Qt withholds dropEvent entirely once dragEnterEvent rejects, so
+        # this is the only chance to say why — otherwise the OS "no drop"
+        # cursor is the only feedback the user gets.
+        if event.mimeData().hasUrls():
+            self._canvas._show_flash("Draft accepts DXF, FVI, or SVG files", 1400)
         event.ignore()
 
     def dropEvent(self, event) -> None:
@@ -745,6 +764,14 @@ class DraftPage(BasePage):
 
     def _load_vector(self, path: str, *, append: bool = False) -> None:
         suffix = Path(path).suffix.lower()
+        # DXF imports get a Replace/Add choice in their preview dialog; FVI
+        # and SVG have no preview step, so ask before replacing a non-empty
+        # drawing (drops and Open both route through here).
+        if suffix in (".fvi", ".svg") and not append and self._canvas._entities:
+            choice = self._confirm_replace_or_add(path)
+            if choice is None:
+                return
+            append = choice
         if suffix == ".dxf":
             if append:
                 self._import_dxf_add(path)
@@ -761,6 +788,27 @@ class DraftPage(BasePage):
                 "Choose a DXF, FVI, or SVG vector file.",
             )
 
+    def _confirm_replace_or_add(self, path: str) -> bool | None:
+        """Ask what to do with an import when the drawing already has shapes.
+
+        Returns True to add, False to replace, None to cancel.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Import Vector")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"The drawing already has shapes. How should {Path(path).name} be imported?")
+        add_btn = box.addButton("Add to Drawing", QMessageBox.ButtonRole.AcceptRole)
+        replace_btn = box.addButton("Replace Drawing", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(add_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is add_btn:
+            return True
+        if clicked is replace_btn:
+            return False
+        return None
+
     def _import_dxf_add(self, path: str) -> None:
         """Add a DXF's shapes to the existing drawing (instead of replacing)."""
         try:
@@ -773,7 +821,7 @@ class DraftPage(BasePage):
                 selected, append = decision
                 self._apply_dxf_import(path, selected, append=append)
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Import DXF Failed", str(exc))
+            show_error(self, "Import DXF Failed", exc)
 
     def _export_svg(self) -> None:
         records = self._canvas.get_export_dxf_state()
@@ -803,7 +851,7 @@ class DraftPage(BasePage):
                 1200,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            show_error(self, "Export Failed", exc)
 
     def _export_fvi(self) -> None:
         records = self._canvas.get_export_dxf_state()
@@ -844,7 +892,7 @@ class DraftPage(BasePage):
                     + "\n\nUse StarFX's red trace/profile preview before enabling the laser.",
                 )
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "FVI Export Failed", str(exc))
+            show_error(self, "FVI Export Failed", exc)
 
     def _load_dxf(self, path: str) -> None:
         try:
@@ -857,7 +905,7 @@ class DraftPage(BasePage):
                 selected, append = decision
                 self._apply_dxf_import(path, selected, append=append)
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Open DXF Failed", str(exc))
+            show_error(self, "Open DXF Failed", exc)
 
     def _load_fvi(self, path: str, *, append: bool = False) -> None:
         try:
@@ -886,7 +934,7 @@ class DraftPage(BasePage):
             self._refresh_status()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Import FVI Failed", str(exc))
+            show_error(self, "Import FVI Failed", exc)
 
     def _load_svg(self, path: str, *, append: bool = False) -> None:
         """Import supported SVG primitives through the audited DXF geometry boundary."""
@@ -920,7 +968,7 @@ class DraftPage(BasePage):
                 self._canvas.setToolTip(f"SVG import notes:\n{details}")
                 self._canvas._show_flash("Imported with notes — hover the canvas for details", 4000)
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Import SVG Failed", str(exc))
+            show_error(self, "Import SVG Failed", exc)
 
     def _review_dxf_import(self, path, by_layer, report, *, default_append: bool):
         dialog = DxfImportPreviewDialog(
