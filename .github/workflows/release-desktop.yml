@@ -93,7 +93,7 @@ jobs:
       # downloadable app. Keep these credentials in repository secrets; fail
       # the release job rather than quietly publishing an unsigned DMG.
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERTIFICATE_BASE64 != '' }}
+        if: ${{ env.MACOS_CERTIFICATE_BASE64 != '' }}
         run: |
           KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
