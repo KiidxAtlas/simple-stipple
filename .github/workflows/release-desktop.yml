@@ -130,10 +130,8 @@ jobs:
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
-          xcrun stapler staple dist/SimpleStipple.app
-          hdiutil detach "$(hdiutil attach -nobrowse -readonly dist/SimpleStipple-macOS.dmg | awk '/Volumes\/SimpleStipple/ {print $1; exit}')" || true
           xcrun stapler staple dist/SimpleStipple-macOS.dmg
-          spctl --assess --type open --context context:primary-signature dist/SimpleStipple.app
+          xcrun stapler validate dist/SimpleStipple-macOS.dmg
 
       - name: Require macOS notarization credentials
         if: ${{ startsWith(github.ref, 'refs/tags/') && (env.APPLE_ID == '' || env.APPLE_APP_PASSWORD == '' || env.APPLE_TEAM_ID == '') }}
