@@ -39,6 +39,14 @@ def _read_version_from_pyproject() -> str:
 
 def _detect_current_version() -> str:
     """Resolve current app version from package metadata or project source."""
+    # In a source checkout (including editable installs), distribution
+    # metadata can lag behind pyproject.toml after a version bump. Prefer the
+    # checked-out project declaration so the updater does not offer the
+    # version that was installed before the current release. Frozen builds do
+    # not ship the repository file, so they fall back to package metadata.
+    source_version = _read_version_from_pyproject()
+    if source_version != "0.0.0":
+        return source_version
     try:
         return metadata.version(_REPO_NAME)
     except metadata.PackageNotFoundError:

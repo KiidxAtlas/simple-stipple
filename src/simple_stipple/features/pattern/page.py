@@ -1392,7 +1392,9 @@ class PatternPage(BasePage):
         if hasattr(self, "_zones_section") and isinstance(self._zones_section, CollapsibleSection):
             n = len(self._zones) if hasattr(self, "_zones") else 0
             if n == 0:
-                self._zones_section.set_subtitle("No zones assigned", dim=True)
+                self._zones_section.set_subtitle(
+                    "Optional · different pattern for a selection", dim=True
+                )
             else:
                 self._zones_section.set_subtitle(f"{n} zone{'s' if n != 1 else ''} assigned")
         if hasattr(self, "_summary_chip"):

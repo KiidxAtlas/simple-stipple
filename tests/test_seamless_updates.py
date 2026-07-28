@@ -11,6 +11,13 @@ from types import ModuleType
 from simple_stipple.platform import updates
 
 
+def test_current_version_prefers_source_project_version(monkeypatch) -> None:
+    monkeypatch.setattr(updates, "_read_version_from_pyproject", lambda: "0.3.5")
+    monkeypatch.setattr(updates.metadata, "version", lambda _name: "0.3.4")
+
+    assert updates._detect_current_version() == "0.3.5"
+
+
 def test_update_staging_path_is_private_and_sanitized(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(updates.tempfile, "gettempdir", lambda: str(tmp_path))
     path = updates.update_staging_path("../v 1.2.3", "Windows")

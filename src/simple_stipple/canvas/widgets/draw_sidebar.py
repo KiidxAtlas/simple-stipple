@@ -257,7 +257,10 @@ class DrawSidebar(QFrame):
         self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Keep a fallback for translated/long tool names; otherwise the
+        # narrow drawer silently clips labels and controls at its minimum
+        # width instead of exposing the full content.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         content = QWidget(scroll)
         self._content = content

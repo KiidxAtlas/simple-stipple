@@ -183,6 +183,7 @@ class App(QMainWindow):
                 "Pattern — generate fills from a prepared outline",
                 "Trace — turn a raster image into editable vector outlines",
                 "Convert — convert or repair vector files",
+                "Repository — review, commit, pull, and push Git changes",
             )
         ):
             self._tabs.setTabToolTip(index, tooltip)
@@ -352,16 +353,11 @@ class App(QMainWindow):
         self._menu_controller._refresh_shortcut_tooltips()
 
     def _init_tab_bindings(self) -> None:
-        from simple_stipple.features.repository import RepoPage
-
         self._draft_page: Any = self._page_runtime.get("draft")
         self._pattern_page: Any = cast(Any, self._page_runtime.get("pattern"))
-        # Repository sync is a utility, not a drawing workflow, so it lives
-        # in a File-menu window (Alt+5) instead of a top-level tab. The page
-        # is built eagerly so background auto-fetch works without the window
-        # ever being opened.
-        self._repo_page: Any = RepoPage(settings=self._settings)
-        self._repo_dialog: Any = None
+        # Repository Sync is a first-class page; the File menu action points
+        # to this same instance so its state cannot diverge.
+        self._repo_page: Any = self._page_runtime.get("repository")
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
 
@@ -417,20 +413,8 @@ class App(QMainWindow):
         self._page_runtime.switch_to("convert")
 
     def _open_repo_dialog(self) -> None:
-        """Show the repository sync window (modeless; reused across opens)."""
-        if self._repo_dialog is None:
-            from PySide6.QtWidgets import QDialog
-
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Repository Sync")
-            dialog.resize(920, 560)
-            dialog_layout = QVBoxLayout(dialog)
-            dialog_layout.setContentsMargins(8, 8, 8, 8)
-            dialog_layout.addWidget(self._repo_page)
-            self._repo_dialog = dialog
-        self._repo_dialog.show()
-        self._repo_dialog.raise_()
-        self._repo_dialog.activateWindow()
+        """Navigate to Repository Sync from the File menu."""
+        self._page_runtime.switch_to("repository")
 
     def _has_workspace_content(self) -> bool:
         return self._page_runtime.has_workspace_content()
@@ -589,11 +573,6 @@ class App(QMainWindow):
                     shutdown()
                 except Exception as exc:  # noqa: BLE001
                     report_error("Page shutdown failed", exc)
-        # The repo page lives outside the page runtime (File-menu window).
-        try:
-            self._repo_page.shutdown()
-        except Exception as exc:  # noqa: BLE001
-            report_error("Repo page shutdown failed", exc)
         # Keep the autosave snapshot when unsaved changes were discarded —
         # it is the only path back to that work. Saving already discards it.
         if not self._workspace_dirty:

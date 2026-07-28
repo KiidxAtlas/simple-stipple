@@ -142,6 +142,14 @@ class ConvertPage(BasePage):
         left.addSpacing(4)
 
         self._tool_stack = QStackedWidget()
+        # The Repair DXF form has a wider natural hint than the compact
+        # sidebar. Allow the stack and its page to shrink to the viewport;
+        # otherwise the horizontal scrollbar is disabled while controls are
+        # laid out at ~340px, visibly clipping the sidebar at 280–320px.
+        stack_policy = self._tool_stack.sizePolicy()
+        stack_policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        self._tool_stack.setSizePolicy(stack_policy)
+        self._tool_stack.setMinimumWidth(0)
         self._fvi_subtab = FviSubTab(settings=self._settings)
         self._fix_subtab = FixerSubTab(settings=self._settings)
         self._svg_subtab = SvgSubTab(settings=self._settings)
@@ -150,6 +158,16 @@ class ConvertPage(BasePage):
         self._tool_stack.addWidget(self._fix_subtab)
         self._tool_stack.addWidget(self._svg_subtab)
         self._tool_stack.addWidget(self._svg_dxf_subtab)
+        for subtab in (
+            self._fvi_subtab,
+            self._fix_subtab,
+            self._svg_subtab,
+            self._svg_dxf_subtab,
+        ):
+            subtab.setMinimumWidth(0)
+            subtab_policy = subtab.sizePolicy()
+            subtab_policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+            subtab.setSizePolicy(subtab_policy)
         left.addWidget(self._tool_stack, stretch=1)
 
         # ── Manual sidebar: scroll area + sticky footer ───────────────────────
@@ -163,7 +181,16 @@ class ConvertPage(BasePage):
         _scroll = QScrollArea()
         _scroll.setWidgetResizable(True)
         _scroll.setFrameShape(QFrame.Shape.NoFrame)
-        _scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        _scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # Convert uses a custom sidebar wrapper rather than sidebar_panel;
+        # apply the same text reflow policy here so long task descriptions and
+        # status messages never disappear behind the viewport edge.
+        for label in left_w.findChildren(QLabel):
+            if label.text().strip():
+                label.setWordWrap(True)
+                label_policy = label.sizePolicy()
+                label_policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+                label.setSizePolicy(label_policy)
         _scroll.setWidget(left_w)
         sidebar_outer.addWidget(_scroll, stretch=1)
 

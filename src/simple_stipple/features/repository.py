@@ -100,6 +100,14 @@ class RepoPage(BasePage):
         self._pull_btn.setToolTip("Pull latest changes from remote")
         self._pull_btn.clicked.connect(self._git_pull)
         pull_card_layout.addWidget(self._pull_btn)
+        self._force_pull_btn = QPushButton("Force Pull / Reset")
+        self._force_pull_btn.setMinimumHeight(34)
+        self._force_pull_btn.setProperty("role", "danger")
+        self._force_pull_btn.setToolTip(
+            "Discard local tracked and untracked changes and match the remote tracking branch"
+        )
+        self._force_pull_btn.clicked.connect(self._git_force_pull)
+        pull_card_layout.addWidget(self._force_pull_btn)
         self._pull_status = QLabel("")
         self._pull_status.setWordWrap(True)
         pull_card_layout.addWidget(self._pull_status)
@@ -251,6 +259,7 @@ class RepoPage(BasePage):
         for button in (
             self._status_btn,
             self._pull_btn,
+            self._force_pull_btn,
             self._commit_btn,
             self._push_btn,
         ):
@@ -366,6 +375,48 @@ class RepoPage(BasePage):
                 self._set_step_status(self._pull_status, "Pull failed — check log", STATUS_ERR)
 
         self._run_git_async([["pull"]], done)
+
+    def _git_force_pull(self) -> None:
+        """Reset the selected checkout to its remote tracking branch.
+
+        Fetch first, then reset the current branch to ``@{u}``. Cleaning
+        untracked files is intentional: the confirmation makes the data-loss
+        boundary explicit and ensures the folder genuinely matches HEAD.
+        """
+        repo = self._repo_dir(show_dialogs=True)
+        if repo is None:
+            return
+        answer = QMessageBox.warning(
+            self,
+            "Force Pull — discard local changes?",
+            "This will fetch the remote, reset the current branch to its upstream HEAD, "
+            "and permanently delete local tracked and untracked changes.\n\n"
+            f"Repository: {repo}\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        def done(results: list[tuple[list[str], bool, str]]) -> None:
+            ok = results[-1][1] if results else False
+            if ok:
+                self._set_step_status(self._pull_status, "Reset to remote HEAD", STATUS_OK)
+            else:
+                self._set_step_status(
+                    self._pull_status,
+                    "Force pull failed — check log",
+                    STATUS_ERR,
+                )
+
+        self._run_git_async(
+            [
+                ["fetch", "origin", "--prune"],
+                ["reset", "--hard", "@{u}"],
+                ["clean", "-fd"],
+            ],
+            done,
+        )
 
     def _git_commit(self) -> None:
         msg = self._commit_msg.text().strip() or "Update project files"

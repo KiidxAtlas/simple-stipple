@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QMetaObject, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QCoreApplication, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -52,6 +52,7 @@ class _ConversionSubTab(QWidget):
     log_line = Signal(str)
     _btn_state = Signal(bool)
     _status_sig = Signal(str, str)
+    _readiness_requested = Signal()
     _status: QLabel
     _thread: threading.Thread | None = None
     _mode_single: QPushButton
@@ -74,6 +75,12 @@ class _ConversionSubTab(QWidget):
         instead of a button that visibly isn't ready yet.
         """
         self._readiness_edit = source_edit
+        if not getattr(self, "_readiness_signal_bound", False):
+            self._readiness_requested.connect(
+                self._refresh_readiness_on_gui,
+                Qt.ConnectionType.QueuedConnection,
+            )
+            self._readiness_signal_bound = True
         source_edit.textChanged.connect(lambda _text: self._refresh_readiness())
         self._refresh_readiness()
 
@@ -91,10 +98,15 @@ class _ConversionSubTab(QWidget):
         # off-thread.
         app = QCoreApplication.instance()
         if app is not None and QThread.currentThread() is not app.thread():
-            QMetaObject.invokeMethod(
-                self, b"_refresh_readiness", Qt.ConnectionType.QueuedConnection
-            )
+            # PySide6 6.9 no longer accepts this string-based invokeMethod
+            # form reliably, even when the target is decorated as a Slot.
+            # A queued Qt signal is the supported cross-thread handoff.
+            self._readiness_requested.emit()
             return
+        self._refresh_readiness_on_gui()
+
+    @Slot()
+    def _refresh_readiness_on_gui(self) -> None:
         self._btn_state.emit(self.is_ready())
 
     def _start_job(self) -> threading.Event:

@@ -352,7 +352,16 @@ class TracePage(BasePage):
             CollapsibleSection(
                 "Recipes",
                 recipes_content,
-                expanded=bool(self._settings.get("trace_recipes")),
+                # Recipes are a useful reuse tool, but expanding them on
+                # startup consumes most of the trace sidebar before the user
+                # has even chosen an image. The section remains one click
+                # away and its Apply/Save controls are unchanged.
+                expanded=False,
+                subtitle=(
+                    f"{len(self._settings.get('trace_recipes', {}))} saved"
+                    if isinstance(self._settings.get("trace_recipes"), dict)
+                    else "Optional"
+                ),
             )
         )
 

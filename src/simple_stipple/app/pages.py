@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QTabWidget, QWidget
 from simple_stipple.features.convert import ConvertPage
 from simple_stipple.features.draft import DraftPage
 from simple_stipple.features.pattern.page import PatternPage
+from simple_stipple.features.repository import RepoPage
 from simple_stipple.features.trace.page import TracePage
 
 PageFactory = Callable[[dict], QWidget]
@@ -65,6 +66,12 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             "page convert utilities",
             lambda settings: ConvertPage(settings=settings),
             ("_preview_canvas",),
+        ),
+        PageSpec(
+            "repository",
+            "Repository",
+            "page repository git sync pull push commit",
+            lambda settings: RepoPage(settings=settings),
         ),
     )
 

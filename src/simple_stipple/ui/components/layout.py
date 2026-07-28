@@ -6,6 +6,7 @@ import platform as _platform
 
 from PySide6.QtCore import (
     Qt,
+    QTimer,
 )
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
@@ -67,7 +68,11 @@ def sidebar_panel(content: QWidget, *, min_width: int = 340, max_width: int = 43
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
-    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    # Prefer reflow, but retain horizontal scrolling as a safety net for
+    # controls whose native widgets cannot wrap (long paths, combo entries,
+    # translated labels). Disabling it caused silent clipping throughout the
+    # app when a child retained a wider size hint than the sidebar.
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     scroll.setWidget(content)
     layout.addWidget(scroll)
     frame.setMinimumWidth(min_width)
@@ -77,7 +82,22 @@ def sidebar_panel(content: QWidget, *, min_width: int = 340, max_width: int = 43
     # the entire application wider than its declared compact breakpoint.
     content.setMinimumWidth(0)
     content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+    # Most page sidebars are assembled immediately after this helper returns.
+    # Run once after construction so labels added by the page are also made
+    # responsive without requiring every feature to maintain its own audit.
+    QTimer.singleShot(0, lambda: _prepare_sidebar_content(content))
     return frame
+
+
+def _prepare_sidebar_content(content: QWidget) -> None:
+    """Make sidebar text reflow instead of being silently truncated."""
+    for label in content.findChildren(QLabel):
+        # Preserve icon-only labels and status-strip-like compact markers.
+        if label.text().strip() and not label.property("icon-only"):
+            label.setWordWrap(True)
+            policy = label.sizePolicy()
+            policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+            label.setSizePolicy(policy)
 
 
 class ResponsiveContentSplitter(QSplitter):
