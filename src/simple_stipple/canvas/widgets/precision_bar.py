@@ -41,7 +41,7 @@ class CanvasPrecisionBar(QFrame):
         layout.setSpacing(4)
 
         self._pan_btn = QPushButton("Pan")
-        self._pan_btn.setMinimumHeight(24)
+        self._pan_btn.setMinimumHeight(30)
         self._pan_btn.setCheckable(True)
         self._pan_btn.setToolTip("Pan the canvas by dragging (Shortcut: P)")
         self._pan_btn.setAccessibleName("Pan tool")
@@ -50,7 +50,7 @@ class CanvasPrecisionBar(QFrame):
         layout.addSpacing(8)
 
         self._grid_btn = QPushButton("Grid")
-        self._grid_btn.setMinimumHeight(24)
+        self._grid_btn.setMinimumHeight(30)
         self._grid_btn.setCheckable(True)
         self._grid_btn.setToolTip("Toggle canvas grid overlay")
         self._grid_btn.clicked.connect(self._toggle_grid)
@@ -62,7 +62,8 @@ class CanvasPrecisionBar(QFrame):
         self._spacing_label = QLabel("Spacing")
         layout.addWidget(self._spacing_label)
         self._spacing = QLineEdit()
-        self._spacing.setFixedWidth(64)
+        self._spacing.setFixedWidth(76)
+        self._spacing.setMinimumHeight(30)
         self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._spacing.setToolTip("Grid spacing (mm) — accepts expressions like 25/2")
         self._spacing.setAccessibleName("Grid spacing")
@@ -73,14 +74,14 @@ class CanvasPrecisionBar(QFrame):
         layout.addWidget(self._spacing)
 
         self._spacing_dec = QPushButton("\u2212")
-        self._spacing_dec.setFixedSize(24, 24)
+        self._spacing_dec.setFixedSize(30, 30)
         self._spacing_dec.setProperty("role", "icon-sm")
         self._spacing_dec.setToolTip("Halve grid spacing")
         self._spacing_dec.clicked.connect(lambda: self._scale_spacing(0.5))
         layout.addWidget(self._spacing_dec)
 
         self._spacing_inc = QPushButton("+")
-        self._spacing_inc.setFixedSize(24, 24)
+        self._spacing_inc.setFixedSize(30, 30)
         self._spacing_inc.setProperty("role", "icon-sm")
         self._spacing_inc.setToolTip("Double grid spacing")
         self._spacing_inc.clicked.connect(lambda: self._scale_spacing(2.0))
@@ -91,45 +92,43 @@ class CanvasPrecisionBar(QFrame):
         self._snap_btn = QToolButton()
         self._snap_btn.setText("Snap")
         self._snap_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._snap_btn.setToolTip(
-            "Choose which geometric constraints are active (hold Alt to bypass)"
-        )
+        self._snap_btn.setToolTip("Choose the exact snap aids to use (hold Alt to bypass)")
         self._snap_btn.setAccessibleName("Snapping options")
+        self._snap_btn.setAccessibleDescription(
+            "Choose which geometry the cursor can snap to while drawing or editing"
+        )
         self._snap_menu = QMenu(self._snap_btn)
         self._snap_actions = {}
         for key, label_text, setter in (
-            ("snap_master", "Enable snapping", "set_snap_master"),
+            ("snap_vertex", "Vertices", "set_snap_vertex"),
+            ("snap_midpoint", "Midpoints", "set_snap_midpoint"),
+            ("snap_parallel", "Parallel", "set_snap_parallel"),
+            ("snap_perpendicular", "Perpendicular", "set_snap_perpendicular"),
+            ("snap_equal_length", "Equal length", "set_snap_equal_length"),
+            ("snap_align_x", "Align X", "set_snap_align_x"),
+            ("snap_align_y", "Align Y", "set_snap_align_y"),
             ("grid_snap", "Grid points", "set_grid_snap"),
-            ("snap_vertex", "Vertices and centers", "set_snap_vertex"),
-            ("snap_edge", "Edges and midpoints", "set_snap_edge"),
-            ("snap_tangent", "Tangents", "set_snap_tangent"),
-            ("snap_extension", "Edge extensions", "set_snap_extension"),
-            ("snap_angle", "Angle constraints", "set_snap_angle"),
-            ("snap_equal_length", "Match existing line length", "set_snap_equal_length"),
-            (
-                "snap_axis_alignment",
-                "Align endpoint X/Y with other endpoints",
-                "set_snap_axis_alignment",
-            ),
         ):
             action = self._snap_menu.addAction(label_text)
             action.setCheckable(True)
             action.toggled.connect(lambda checked, method=setter: self._set_snap(method, checked))
             self._snap_actions[key] = action
-            if key == "snap_master":
-                self._snap_menu.addSeparator()
         self._snap_btn.setMenu(self._snap_menu)
         layout.addWidget(self._snap_btn)
 
         self._construction_btn = QPushButton("Construction")
         self._construction_btn.setCheckable(True)
         self._construction_btn.setToolTip("Create new geometry as construction/reference geometry")
+        self._construction_btn.setAccessibleName("Construction geometry")
         self._construction_btn.toggled.connect(self._set_construction)
         layout.addWidget(self._construction_btn)
 
         self._constraints_btn = QToolButton()
         self._constraints_btn.setText("Constrain")
         self._constraints_btn.setAccessibleName("Geometry constraints")
+        self._constraints_btn.setAccessibleDescription(
+            "Apply geometric constraints to selected edges or vertices"
+        )
         self._constraints_btn.setToolTip("Add or remove constraints on selected geometry")
         self._constraints_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         constraints_menu = QMenu(self._constraints_btn)

@@ -24,13 +24,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from simple_stipple.ui.components.collapsible import CollapsibleSection
+from simple_stipple.ui.components.inputs import NoWheelSlider
 
 
 class TextField(QWidget):
@@ -57,7 +57,13 @@ class TextField(QWidget):
         self.entry = entry or QLineEdit(default)
         if entry is None:
             self.entry.setText(default)
-        self.entry.setFixedWidth(width)
+        # A fixed-width editor becomes an illegible sliver once the label
+        # stacks above it in a narrow inspector. Keep the compact width in a
+        # two-column row, but let the editor use the full card width when the
+        # field reflows vertically.
+        self._entry_width = width
+        self.entry.setMinimumWidth(min(width, 64))
+        self.entry.setMaximumWidth(width)
         self.entry.setPlaceholderText(placeholder)
         self.entry.setAccessibleName(label)
         self._marker.setBuddy(self.entry)
@@ -73,6 +79,7 @@ class TextField(QWidget):
         self._layout.setDirection(
             QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight
         )
+        self.entry.setMaximumWidth(16777215 if stacked else self._entry_width)
 
 
 class SliderField(QWidget):
@@ -100,7 +107,7 @@ class SliderField(QWidget):
         layout.addWidget(
             TextField(label, entry=entry, required=not empty_at_minimum, tooltip=tooltip)
         )
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.slider.setAccessibleName(label)
         self.slider.setRange(0, round((maximum - minimum) / step))
         self.slider.setToolTip(tooltip)

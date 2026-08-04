@@ -42,7 +42,10 @@ class RecentFilesButton(QPushButton):
         self._settings = settings
         self._kind = kind
         self._empty_message = empty_message
-        self.setFixedWidth(76)
+        # Reserve room for both the word and the disclosure icon. At 76 px
+        # Fusion elides "Recent" to "Recen", a particularly unhelpful label
+        # in the already-dense file source row.
+        self.setFixedWidth(94)
         self.setToolTip("Pick from recently opened files")
         self.clicked.connect(self._open_menu)
 

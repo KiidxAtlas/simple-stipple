@@ -216,14 +216,16 @@ def snap_to_polyline(
     snap_dist: float = _SNAP_DIST,
     min_scale: float = _MIN_SCALE,
     allow_vertex: bool = True,
+    allow_midpoint: bool = True,
     allow_edge: bool = True,
 ) -> SnapResult | None:
     """Return the nearest semantic snap on any polyline within snap distance.
 
     Priority order: vertices, midpoints, intersections, centers, perpendicular
     (when drawing), and finally generic edges. ``allow_vertex`` gates the
-    vertex/midpoint/intersection/center "point family"; ``allow_edge`` gates
-    the perpendicular/generic-edge fallback family.
+    vertex/intersection/center point family; ``allow_midpoint`` independently
+    gates midpoint targets; ``allow_edge`` gates the perpendicular/generic-edge
+    fallback family.
     """
     cwx, cwy = c2w(cx, cy)
     world_r = (snap_dist / max(scale, min_scale)) * 1.6
@@ -257,10 +259,11 @@ def snap_to_polyline(
             vertex_pt = world_points[nearest]
             return (vertex_pt[0], vertex_pt[1], "vertex")
 
-        midpoint = _nearest_midpoint(cx, cy, segments, w2c, snap_dist)
-        if midpoint is not None:
-            _distance, point = midpoint
-            return (point[0], point[1], "midpoint")
+        if allow_midpoint:
+            midpoint = _nearest_midpoint(cx, cy, segments, w2c, snap_dist)
+            if midpoint is not None:
+                _distance, point = midpoint
+                return (point[0], point[1], "midpoint")
 
         intersection = _nearest_intersection(
             cx, cy, segments, w2c, segment_intersection_point, snap_dist
@@ -355,6 +358,7 @@ def resolve_snap(
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
     allow_vertex: bool = True,
+    allow_midpoint: bool = True,
     allow_edge: bool = True,
 ) -> SnapResult | None:
     candidates: list[tuple[float, SnapResult]] = []
@@ -375,6 +379,7 @@ def resolve_snap(
             exclude_vertices=exclude_vertices,
             mode=mode,
             allow_vertex=allow_vertex,
+            allow_midpoint=allow_midpoint,
             allow_edge=allow_edge,
         )
         if poly_snap is not None:
@@ -421,6 +426,7 @@ def resolve_drag_snap(
     segment_intersection_point: SegmentIntersectionPoint,
     mode: str | None,
     allow_vertex: bool = True,
+    allow_midpoint: bool = True,
     allow_edge: bool = True,
     exclude_vertices: set[tuple[EntityId, int]] | None = None,
     exclude_segments: set[tuple[EntityId, int]] | None = None,
@@ -481,7 +487,7 @@ def resolve_drag_snap(
                     )
                 )
 
-        if allow_vertex:
+        if allow_midpoint:
             best_dist: float = float(_SNAP_DIST)
             best_midpoint: Point | None = None
             for _eid, poly in candidate_polys:

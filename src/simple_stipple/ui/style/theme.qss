@@ -1,10 +1,70 @@
-/* Use Qt's native platform UI font. */
+/* Simple Stipple visual system.
+ *
+ * Written against the semantic names in ``ui/style/tokens.py``: each dollar-
+ * prefixed name is substituted at load time. There are no raw colors here, so
+ * dark, light, and high-contrast all render from this one file and cannot
+ * drift apart.
+ *
+ * Ordering matters in QSS the way it does in CSS: later rules of equal
+ * specificity win. Sections run general -> specific.
+ */
 
-QMainWindow {
-    background: #0d1117;
+/* ══ Shell ═══════════════════════════════════════════════════════════════ */
+
+QMainWindow, QDialog, QMessageBox {
+    background: $bg_app;
+    color: $text;
+}
+QWidget#centralwidget {
+    background: $bg_app;
+}
+QScrollArea, QStackedWidget {
+    border: none;
+    background: transparent;
 }
 
-/* ── Tab bar ─────────────────────────────────────────── */
+QMenuBar {
+    background: $bg_app;
+    color: $text_muted;
+    border-bottom: 1px solid $border;
+    padding: 2px 6px;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 5px 9px;
+    border-radius: $radius_sm;
+}
+QMenuBar::item:selected {
+    background: $bg_surface_alt;
+    color: $text;
+}
+QMenu {
+    background: $bg_surface;
+    color: $text;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    padding: 5px;
+}
+QMenu::item {
+    padding: 7px 20px;
+    border-radius: $radius_sm;
+    color: $text;
+}
+QMenu::item:selected {
+    background: $accent_soft;
+    color: $accent_text;
+}
+QMenu::separator {
+    height: 1px;
+    background: $border;
+    margin: 5px 8px;
+}
+
+/* ══ Tabs ════════════════════════════════════════════════════════════════
+   The workspace switcher. The active tab is marked by an accent underline
+   plus full-strength text; inactive tabs are muted so the eye lands on one
+   place rather than five equally-weighted words. */
+
 QTabWidget::pane {
     border: none;
     background: transparent;
@@ -13,397 +73,326 @@ QTabBar {
     background: transparent;
 }
 QTabBar::tab {
+    color: $text_muted;
     background: transparent;
-    color: #8b949e;
-    padding: 8px 16px;
-    margin-right: 4px;
     border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-    font-size: 13px;
-    font-weight: 600;
-}
-QTabBar::tab:selected {
-    color: #e6edf3;
-    background: transparent;
-    border-bottom: 2px solid #2f81f7;
+    border-bottom: 3px solid transparent;
+    padding: 11px 18px 10px;
+    margin-right: 4px;
+    font-size: $font_sm;
+    font-weight: $weight_semibold;
 }
 QTabBar::tab:hover:!selected {
-    color: #c9d1d9;
-    border-bottom: 2px solid #30363d;
+    color: $text;
+    background: $bg_surface_alt;
+    border-top-left-radius: $radius_md;
+    border-top-right-radius: $radius_md;
 }
-
-QLabel[role="shell-eyebrow"], QLabel[role="eyebrow"] {
-    color: #6e7681;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-}
-QLabel[role="shell-title"] {
-    color: #f0f6fc;
-    font-size: 14px;
-    font-weight: 700;
-}
-QLabel[role="shell-subtitle"] {
-    color: #8b949e;
-    font-size: 12px;
-}
-QLabel[role="shell-sep"] {
-    color: #30363d;
-    font-size: 18px;
-}
-QLabel[role="shell-meta"] {
-    color: #c9d1d9;
-    font-size: 12px;
-    font-weight: 600;
-}
-QPushButton[role="shell-meta"] {
-    color: #c9d1d9;
-    font-size: 12px;
-    font-weight: 600;
+QTabBar::tab:selected {
+    color: $text_strong;
     background: transparent;
-    border: 1px solid transparent;
-    padding: 4px 8px;
+    border-bottom-color: $accent;
 }
-QPushButton[role="shell-meta"]:hover {
-    background: rgba(47, 129, 247, 0.12);
-    border-color: rgba(88, 166, 255, 0.45);
+/* The underline already identifies the active tab; a focus rectangle around
+   the whole strip on top of it is noise. */
+QTabBar:focus {
+    border: none;
 }
+
+/* ══ Surfaces ════════════════════════════════════════════════════════════ */
+
+QFrame[surface="sidebar"], QFrame[surface="panel"], QFrame[role="hero"],
+QFrame[role="page-header"], QFrame[role="status-region"] {
+    background: $bg_surface;
+    border: 1px solid $border;
+    border-radius: $radius_lg;
+}
+QFrame[surface="canvas"] {
+    background: $bg_input;
+    border: 1px solid $border;
+    border-radius: $radius_lg;
+}
+QFrame[role="collapsible"], QFrame[role="callout"], QFrame[role="object-browser"],
+QFrame[role="status-strip"], QFrame[role="draw-section"], QFrame[role="precision-bar"] {
+    background: $bg_surface_alt;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+}
+QWidget[role="pattern-side-panel"], QWidget#draw-side-panel {
+    background: $bg_surface;
+}
+QFrame[role="hairline"] {
+    color: $border;
+}
+QFrame[role="hsep"] {
+    background: $border;
+    max-height: 1px;
+    border: none;
+}
+QSplitter::handle {
+    background: transparent;
+    width: 10px;
+}
+QSplitter::handle:hover {
+    background: $accent_soft;
+    border-radius: $radius_sm;
+}
+
+/* A failure that blocks the whole application outranks any page, so it is
+   loud, persistent, and carries its own actions. */
+QFrame[role="system-banner"] {
+    background: $danger_soft;
+    border: 1px solid $danger_border;
+    border-radius: $radius_md;
+    color: $danger;
+}
+
+/* ══ Type ════════════════════════════════════════════════════════════════
+   Size and weight carry the hierarchy so color is left free to mean state.
+   Three levels only — page, section, body — because a fourth is not
+   distinguishable at a glance. */
+
 QLabel[role="page-title"] {
-    color: #f0f6fc;
-    font-size: 20px;
-    font-weight: 700;
+    color: $text_strong;
+    font-size: $font_2xl;
+    font-weight: $weight_bold;
 }
-QLabel[role="page-subtitle"] {
-    color: #8b949e;
-    font-size: 12px;
+QLabel[role="shell-title"], QLabel[role="title"], QLabel#title {
+    color: $text_strong;
+    font-size: $font_lg;
+    font-weight: $weight_bold;
 }
-QLabel[role="callout-title"] {
-    color: #f0f6fc;
-    font-size: 13px;
-    font-weight: 700;
+QLabel[role="dialog-title"] {
+    color: $text_strong;
+    font-size: $font_xl;
+    font-weight: $weight_bold;
 }
-QLabel[role="callout-body"] {
-    color: #8b949e;
-    font-size: 12px;
+QLabel[role="section-title"], QLabel[role="callout-title"],
+QLabel[role="collapsible-toggle-static"] {
+    color: $text;
+    font-size: $font_md;
+    font-weight: $weight_semibold;
 }
-QLabel[role="chip"] {
-    padding: 4px 8px;
-    border-radius: 4px;
-    border: 1px solid #2b3440;
-    background: rgba(31, 42, 56, 0.9);
-    color: #c9d1d9;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel[role="chip"][tone="accent"] {
-    background: rgba(47, 129, 247, 0.14);
-    border-color: rgba(88, 166, 255, 0.5);
-    color: #79c0ff;
-}
-QLabel[role="chip"][tone="success"] {
-    background: rgba(63, 185, 80, 0.14);
-    border-color: rgba(63, 185, 80, 0.45);
-    color: #7ee787;
-}
-QLabel[role="chip"][tone="warn"] {
-    background: rgba(210, 153, 34, 0.16);
-    border-color: rgba(210, 153, 34, 0.45);
-    color: #e3b341;
-}
-QLabel[role="chip"][tone="danger"] {
-    background: rgba(248, 81, 73, 0.12);
-    border-color: rgba(248, 81, 73, 0.45);
-    color: #ffb4ab;
-}
-
-/* A "chip" is a small tag; this is a full-width status line summarizing an
-   export/action outcome, so it gets its own left-aligned, roomier style
-   instead of squeezing sentence-length text into a pill shape. */
-QLabel[role="summary-banner"] {
-    padding: 4px 8px;
-    border-radius: 4px;
-    border: 1px solid #2b3440;
-    background: rgba(31, 42, 56, 0.9);
-    color: #c9d1d9;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel[role="summary-banner"][tone="success"] {
-    background: rgba(63, 185, 80, 0.14);
-    border-color: rgba(63, 185, 80, 0.45);
-    color: #7ee787;
-}
-QLabel[role="summary-banner"][tone="warn"] {
-    background: rgba(227, 179, 65, 0.14);
-    border-color: rgba(227, 179, 65, 0.5);
-    color: #e3b341;
-}
-QLabel[role="summary-banner"][tone="danger"] {
-    background: rgba(248, 81, 73, 0.14);
-    border-color: rgba(248, 81, 73, 0.5);
-    color: #ff7b72;
-}
-
-/* ── Section labels & subtitles ──────────────────────── */
-QLabel[role="section-label"] {
-    color: #8b949e;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.8px;
+QLabel[role="section-label"], QLabel[role="eyebrow"], QLabel[role="shell-eyebrow"],
+QLabel[role="input-header"] {
+    color: $text_subtle;
+    font-size: $font_2xs;
+    font-weight: $weight_bold;
+    letter-spacing: 1.1px;
     padding: 8px 0 4px 0;
 }
+QLabel[role="page-subtitle"], QLabel[role="shell-subtitle"], QLabel[role="dialog-subtitle"],
+QLabel[role="dialog-message"], QLabel[role="callout-body"], QLabel[role="hint"],
+QLabel[role="hint-sm"], QLabel[role="field-label"], QLabel[role="dim"],
 QLabel[role="section-subtitle"] {
-    color: #8b949e;
-    font-size: 11px;
+    color: $text_muted;
+    background: transparent;
+    font-size: $font_xs;
+}
+QLabel[role="section-subtitle"] {
     padding-left: 18px;
 }
 QLabel[role="section-subtitle"][dim="true"] {
-    color: #8b949e;
+    color: $text_subtle;
 }
-QLabel[role="field-label"] {
-    color: #8b949e;
+QLabel[role="shell-sep"], QLabel[role="toolbar-sep"] {
+    color: $border_strong;
+    font-size: $font_md;
 }
-QLabel[role="zone-edit-scope"] {
-    color: #8b949e;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-    padding: 8px;
-}
-QLabel[role="zone-edit-scope"][editing="true"] {
-    color: #ffffff;
-    background: rgba(47, 129, 247, 0.16);
-    border-color: #58a6ff;
-    font-weight: 700;
+QLabel[role="shell-meta"] {
+    color: $text;
+    font-size: $font_sm;
+    font-weight: $weight_medium;
 }
 
-/* ── Tooltip ─────────────────────────────────────────── */
-QToolTip {
-    background: #1c2128;
-    color: #e6edf3;
-    border: 1px solid #30363d;
-    padding: 4px 8px;
-    border-radius: 4px;
-}
+/* ══ Buttons ═════════════════════════════════════════════════════════════
+   Von Restorff: exactly one filled accent button per surface. Everything
+   else is an outline or a bare label, so the filled one is unmissable and
+   "what do I do next" never needs a second look. */
 
-/* ── Buttons ─────────────────────────────────────────── */
-QPushButton {
+QPushButton, QToolButton {
+    min-height: 30px;
     min-width: 24px;
-    min-height: 24px;
-    padding: 4px 12px;
-    border-radius: 6px;
-    background: #1a222d;
-    border: 1px solid #303a47;
-    color: #e6edf3;
-    font-size: 12px;
+    padding: 5px 12px;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    background: $bg_surface;
+    color: $text;
+    font-size: $font_sm;
+    font-weight: $weight_medium;
 }
-QPushButton:hover {
-    background: #212b37;
-    border-color: #58a6ff;
+QPushButton:hover, QToolButton:hover {
+    background: $bg_surface_alt;
+    border-color: $border_strong;
 }
-QPushButton:pressed {
-    background: #121922;
+QPushButton:pressed, QToolButton:pressed {
+    background: $bg_input;
 }
-QPushButton:disabled {
-    background: #161b22;
-    border-color: #21262d;
-    color: #484f58;
-}
-QPushButton:checked {
-    background: #1f3a6e;
-    border-color: #2f81f7;
-    color: #79c0ff;
-}
-QPushButton:focus, QToolButton:focus {
-    border: 2px solid #58a6ff;
-}
-
-QPushButton[active="true"] {
-    background: #1f3a6e;
-    border-color: #2f81f7;
-    color: #79c0ff;
-}
-QPushButton[active="true"]:hover {
-    background: #25437e;
-    border-color: #58a6ff;
-}
-
-/* Small square glyph buttons (e.g. the grid-spacing − / + steppers).
-   The default 5px/12px padding leaves no room for the glyph on a 24px
-   button, so the label gets clipped to nothing without this. */
-QPushButton[role="icon-sm"] {
-    padding: 0px;
-    font-size: 14px;
-}
-
-/* Hairline separator (ui.components.layout.sep()). Was a per-widget
-   setStyleSheet with a hardcoded color, so it stayed dark in Light mode. */
-QFrame[role="hairline"] {
-    color: #21262d;
-}
-
-/* Draw-sidebar cycle/state buttons (tool family, snap, arc, constraint
-   pickers). Previously a per-widget setStyleSheet, which outranks both this
-   file and the light/high-contrast substitution passes below — the sidebar
-   stayed dark-on-light regardless of theme. */
-QPushButton[role="cycle-icon"] {
-    border-radius: 6px;
-    background: #161b22;
-    border: 1px solid #30363d;
-}
-QPushButton[role="cycle-icon"]:hover {
-    background: #1c2128;
-    border-color: #58a6ff;
-}
-QPushButton[role="cycle-icon"]:checked {
-    background: #1f3a6e;
-    border-color: #2f81f7;
-}
-QPushButton[role="cycle-icon"]:pressed {
-    background: #21262d;
-    border-color: #79c0ff;
-}
-QPushButton[role="cycle-icon"]:disabled {
-    background: #0d1117;
-    border-color: #21262d;
+QPushButton:disabled, QToolButton:disabled {
+    background: $bg_surface_alt;
+    border-color: $border;
+    color: $text_subtle;
 }
 
 QPushButton[role="primary"] {
-    background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2f81f7, stop:1 #1f6feb);
-    border-color: #2f81f7;
-    color: #ffffff;
-    font-weight: 600;
+    background: $accent;
+    border: 1px solid $accent;
+    color: $on_accent;
+    min-height: 34px;
+    padding: 6px 18px;
+    font-weight: $weight_bold;
 }
 QPushButton[role="primary"]:hover {
-    background: #388bfd;
-    border-color: #58a6ff;
+    background: $accent_hover;
+    border-color: $accent_hover;
 }
 QPushButton[role="primary"]:pressed {
-    background: #1a70e0;
+    background: $accent_pressed;
+    border-color: $accent_pressed;
 }
 QPushButton[role="primary"]:disabled {
-    background: #161b22;
-    border-color: #21262d;
-    color: #484f58;
-    font-weight: normal;
+    background: $bg_surface_alt;
+    border-color: $border;
+    color: $text_subtle;
+    font-weight: $weight_medium;
 }
-QPushButton[role="danger"] {
-    background: rgba(248, 81, 73, 0.08);
-    border-color: rgba(248, 81, 73, 0.45);
-    color: #ffb4ab;
-}
-QPushButton[role="danger"]:hover {
-    background: rgba(248, 81, 73, 0.16);
-    border-color: #f85149;
-}
-QPushButton[role="secondary"], QToolButton {
+
+QPushButton[role="secondary"], QPushButton[role="ghost"], QToolButton {
     background: transparent;
-    border-color: #303a47;
-    color: #c9d1d9;
+    color: $text_muted;
 }
 QPushButton[role="ghost"] {
-    background: transparent;
     border-color: transparent;
-    color: #c9d1d9;
+}
+QPushButton[role="secondary"]:hover, QPushButton[role="ghost"]:hover,
+QToolButton:hover {
+    color: $text;
+    background: $bg_surface_alt;
+}
+QPushButton[role="danger"] {
+    background: $danger_soft;
+    border-color: $danger_border;
+    color: $danger;
+}
+QPushButton[role="danger"]:hover {
+    background: $danger_soft;
+    border-color: $danger;
 }
 
-QFrame[role="status-region"] {
-    background: rgba(31, 42, 56, 0.72);
-    border: 1px solid #303a47;
-    border-radius: 6px;
+/* Selected / active state is one language everywhere: soft accent fill,
+   accent border, accent text. */
+QPushButton[active="true"], QPushButton:checked, QToolButton[active="true"],
+QToolButton:checked, QPushButton[role="cycle-icon"]:checked {
+    background: $accent_soft;
+    border-color: $accent_border;
+    color: $accent_text;
 }
-QFrame[role="status-region"][tone="success"] { border-color: rgba(63, 185, 80, 0.55); }
-QFrame[role="status-region"][tone="warn"] { border-color: rgba(227, 179, 65, 0.65); }
-QFrame[role="status-region"][tone="danger"] { border-color: rgba(248, 81, 73, 0.7); }
-QFrame[role="system-banner"] {
-    background: rgba(248, 81, 73, 0.13);
-    border: 1px solid rgba(248, 81, 73, 0.75);
-    border-radius: 7px;
-    color: #ffb4ab;
+QPushButton[role="tool-item"] {
+    text-align: left;
+    padding-left: 14px;
 }
-
-QToolButton[role="workflow-step"] {
-    border: none;
-    padding: 4px 8px;
-    min-height: 32px;
-    font-size: 12px;
-    color: #6e7681;
-}
-QToolButton[role="workflow-step"][state="current"] {
-    color: #ffffff;
-    background: rgba(47, 129, 247, 0.18);
-    font-weight: 700;
-}
-QToolButton[role="workflow-step"][state="complete"] { color: #7ee787; }
-QPushButton[role="secondary"]:hover, QToolButton:hover {
-    background: #212b37;
-    border-color: #58a6ff;
+QPushButton[role="tool-item"][active="true"] {
+    background: $accent_soft;
+    border-left: 3px solid $accent;
+    border-color: $accent_border;
+    color: $accent_text;
 }
 QPushButton[role="mode-button"] {
     min-width: 64px;
     background: transparent;
     border-color: transparent;
-    color: #8b949e;
-    font-weight: 600;
+    color: $text_muted;
+    font-weight: $weight_medium;
 }
 QPushButton[role="mode-button"][active="true"] {
-    background: #1f3a6e;
-    border-color: #2f81f7;
-    color: #ffffff;
+    background: $accent_soft;
+    border-color: $accent_border;
+    color: $accent_text;
 }
-QToolButton {
-    min-width: 24px;
-    min-height: 32px;
+/* Square glyph buttons (the − / + steppers): the default horizontal padding
+   leaves no room for the glyph and clips it to nothing. */
+QPushButton[role="icon-sm"] {
+    padding: 0px;
+    font-size: $font_md;
+}
+QPushButton[role="browse-btn"] {
     padding: 4px 8px;
-    border: 1px solid #303a47;
-    border-radius: 6px;
+    font-size: $font_xs;
 }
-QToolButton[active="true"] {
-    background: #1f3a6e;
-    border-color: #2f81f7;
-    color: #ffffff;
+QPushButton[role="cycle-icon"] {
+    background: $bg_input;
+    border: 1px solid $border;
+}
+QPushButton[role="cycle-icon"]:hover {
+    border-color: $accent_border;
 }
 QToolButton[role="drawer-toggle"] {
-    background: rgba(13, 17, 23, 0.94);
-    border: 1px solid #58a6ff;
-    color: #f0f6fc;
-    font-weight: 700;
+    background: $overlay;
+    border: 1px solid $accent;
+    color: $accent_text;
+    font-weight: $weight_semibold;
 }
 QToolButton[role="drawer-toggle"]:hover {
-    background: #1f3a6e;
+    background: $accent_soft;
+}
+/* "⋯" already reads as "more"; the default menu arrow on top of it is noise. */
+QToolButton[role="overflow"]::menu-indicator {
+    image: none;
+    width: 0px;
+}
+QToolButton[role="collapsible-toggle"] {
+    text-align: left;
+    padding: 4px;
+    color: $text;
+    font-size: $font_sm;
+    font-weight: $weight_semibold;
+    letter-spacing: 0.2px;
+    border: none;
+    background: transparent;
+}
+QToolButton[role="collapsible-toggle"]:hover {
+    background: $accent_soft;
+    color: $accent_text;
 }
 
-/* ── Input fields ────────────────────────────────────── */
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-    min-height: 20px;
-    padding: 4px 8px;
-    border-radius: 6px;
-    border: 1px solid #2b3440;
-    background: #0f141b;
-    color: #e6edf3;
-    selection-background-color: #1f3a6e;
+/* ══ Focus ═══════════════════════════════════════════════════════════════
+   One unmistakable focus treatment on everything reachable by keyboard.
+   Item views and tabs suppress their platform outline, so without this they
+   would show no focus at all. */
+
+QPushButton:focus, QToolButton:focus, QLineEdit:focus, QComboBox:focus,
+QSpinBox:focus, QDoubleSpinBox:focus, QCheckBox:focus, QRadioButton:focus,
+QSlider:focus, QListWidget:focus, QTreeView:focus, QTreeWidget:focus,
+QPlainTextEdit:focus, QTextEdit:focus {
+    border: 2px solid $focus;
+    border-radius: $radius_md;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-    border: 2px solid #58a6ff;
-}
-QLineEdit[error="true"] {
-    border: 1px solid #f85149;
-    background: rgba(248, 81, 73, 0.08);
-}
-QLineEdit[error="true"]:focus {
-    border: 1px solid #ff7b72;
-    background: rgba(248, 81, 73, 0.12);
-}
-QComboBox[error="true"], QSpinBox[error="true"], QDoubleSpinBox[error="true"] {
-    border: 1px solid #f85149;
-    background: rgba(248, 81, 73, 0.08);
-}
-QComboBox[error="true"]:focus, QSpinBox[error="true"]:focus, QDoubleSpinBox[error="true"]:focus {
-    border: 1px solid #ff7b72;
-    background: rgba(248, 81, 73, 0.12);
+
+/* ══ Inputs ══════════════════════════════════════════════════════════════ */
+
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit,
+QListWidget {
+    background: $bg_input;
+    color: $text;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    padding: 5px 9px;
+    selection-background-color: $selection;
+    selection-color: $text_strong;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
-    border-color: #8b949e;
+    border-color: $border_strong;
+}
+QLineEdit:read-only {
+    background: $bg_surface_alt;
+    color: $text_muted;
+}
+/* Validation failure is shown on the field itself, next to the value that
+   caused it, rather than in a modal that hides the form behind it. */
+QLineEdit[error="true"], QComboBox[error="true"], QSpinBox[error="true"],
+QDoubleSpinBox[error="true"] {
+    border: 1px solid $danger;
+    background: $danger_soft;
 }
 QComboBox::drop-down {
     border: none;
@@ -414,68 +403,13 @@ QComboBox::down-arrow {
     width: 10px;
     height: 10px;
 }
-QLineEdit:read-only {
-    background: #161b22;
-    color: #8b949e;
-}
-
-QWidget#canvas-toolbar {
-    background: rgba(17, 23, 32, 0.92);
-    border: 1px solid #26303b;
-    border-radius: 8px;
-}
-QWidget#canvas-toolbar QLabel[role="toolbar-sep"] {
-    color: #484f58;
-}
-QLabel[role="toolbar-label"] {
-    color: #8b949e;
-    font-size: 10px;
-    font-weight: 700;
-}
-QLabel[role="toolbar-guidance"] {
-    color: #b7c3d0;
-    font-size: 11px;
-    padding-left: 8px;
-}
-QFrame[role="workflow-strip"] {
-    background: #111720;
-    border-bottom: 1px solid #26303b;
-}
-QLabel[role="workflow-step"] {
-    color: #b7c3d0;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel[role="workflow-arrow"] {
-    color: #484f58;
-    font-size: 12px;
-}
-QLabel[role="toolbar-selection"], QLabel[role="status-meta"],
-QLabel[role="status-selection"], QLabel[role="status-zoom"] {
-    color: #8b949e;
-    font-size: 11px;
-}
-QLabel[role="status-mode"], QLabel[role="status-selection"][active="true"],
-QLabel[role="toolbar-selection"][active="true"] {
-    color: #79c0ff;
-    font-size: 11px;
-    font-weight: 600;
-}
-QLabel[role="status-detail"], QLabel[role="status-coordinates"] {
-    color: #6e7681;
-    font-size: 10px;
-}
-QLabel[role="status-coordinates"] {
-    font-family: Menlo, Courier;
-}
-QLabel[role="status-separator"] {
-    color: #30363d;
-    font-size: 11px;
-}
 QComboBox QAbstractItemView {
-    background: #1c2128;
-    border: 1px solid #30363d;
-    selection-background-color: #1f3a6e;
+    background: $bg_surface;
+    color: $text;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    padding: 5px;
+    selection-background-color: $accent_soft;
     outline: none;
 }
 QSpinBox::up-button, QSpinBox::down-button,
@@ -484,513 +418,293 @@ QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
     border: none;
     background: transparent;
 }
-
-/* ── Scroll areas ────────────────────────────────────── */
-QScrollArea {
-    border: none;
-    background: transparent;
+QPlainTextEdit[role="log"], QTextEdit {
+    font-family: $mono;
+    font-size: $font_xs;
+}
+QTextEdit[role="release-notes"] {
+    color: $text_muted;
 }
 
-QFrame[surface="sidebar"], QFrame[surface="panel"], QFrame[surface="canvas"] {
-    background: rgba(17, 23, 32, 0.92);
-    border: 1px solid #26303b;
-    border-radius: 10px;
+QCheckBox, QRadioButton {
+    color: $text;
+    spacing: 9px;
+    min-height: 32px;
 }
-QWidget[role="pattern-side-panel"] {
-    background: #111720;
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 17px;
+    height: 17px;
+    border: 1px solid $border_strong;
+    background: $bg_input;
 }
-
-QFrame[role="hero"] {
-    background: rgba(17, 23, 32, 0.95);
-    border: 1px solid #2b3440;
-    border-radius: 10px;
+QCheckBox::indicator {
+    border-radius: 5px;
 }
-QDialog#command-palette,
-QDialog#keybindings-dialog {
-    background: #0f141b;
+QRadioButton::indicator {
+    border-radius: 9px;
 }
-QDialog#command-palette QLineEdit,
-QDialog#keybindings-dialog QLineEdit {
-    background: #0c1117;
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {
+    border-color: $accent_border;
 }
-QFrame[role="page-header"] {
-    border-radius: 10px;
-}
-QFrame[role="callout"] {
-    background: rgba(23, 30, 40, 0.94);
-    border-color: #2b3440;
-}
-QFrame[role="collapsible"], QFrame[role="status-strip"], QFrame[role="object-browser"] {
-    border-radius: 8px;
-    border-color: #2b3440;
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background: $accent;
+    border-color: $accent;
 }
 
-QToolButton {
-    padding: 4px 8px;
-    color: #e6edf3;
-    font-size: 12px;
-    font-weight: 700;
-    border: none;
-    background: transparent;
-    text-align: center;
-}
-QToolButton:hover {
-    color: #79c0ff;
-}
-
-/* "⋯" overflow buttons already say "more" — the default corner
-   menu-indicator arrow on top of the ellipsis is just noise. */
-QToolButton[role="overflow"]::menu-indicator {
-    image: none;
-    width: 0px;
-}
-
-/* Collapsible section toggle — left-aligned header */
-QToolButton[role="collapsible-toggle"] {
-    text-align: left;
-    padding: 4px;
-    color: #c9d1d9;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.2px;
-    border-radius: 4px;
-    background: transparent;
-    border: none;
-}
-QToolButton[role="collapsible-toggle"]:hover {
-    background: rgba(88, 166, 255, 0.07);
-    color: #e6edf3;
-}
-/* Static (non-collapsible) section card title — same weight as the
-   collapsible toggle text, no chevron, not clickable. */
-QLabel[role="collapsible-toggle-static"] {
-    padding: 4px;
-    color: #c9d1d9;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.2px;
-}
-
-/* Browse / clear buttons in settings rows */
-QPushButton[role="browse-btn"] {
-    padding: 4px 8px;
-    font-size: 11px;
-}
-
-QListWidget {
-    border: 1px solid #2b3440;
-    border-radius: 6px;
-    background: #0f141b;
-    padding: 4px;
-    outline: none;
-}
-QListWidget::item {
-    padding: 4px 8px;
-    margin: 1px 0;
-    border-radius: 4px;
-    color: #c9d1d9;
-}
-QListWidget::item:selected {
-    background: rgba(47, 129, 247, 0.18);
-    color: #f0f6fc;
-    border: 1px solid rgba(88, 166, 255, 0.35);
-}
-QListWidget::item:hover:!selected {
-    background: rgba(33, 43, 55, 0.85);
-}
-
-QFrame[surface="canvas"] {
-    background: rgba(15, 20, 27, 0.96);
-}
-
-QSplitter::handle {
-    background: transparent;
-    width: 10px;
-}
-QSplitter::handle:hover {
-    background: rgba(88, 166, 255, 0.18);
-    border-radius: 4px;
-}
-
-/* ── Sliders ─────────────────────────────────────────── */
 QSlider {
     min-height: 32px;
 }
-QSlider:focus {
-    border: 1px solid #58a6ff;
-    border-radius: 4px;
-}
 QSlider::groove:horizontal {
-    height: 3px;
-    background: #21262d;
+    height: 4px;
+    background: $border;
     border-radius: 2px;
     margin: 0 4px;
 }
 QSlider::sub-page:horizontal {
-    background: #2f81f7;
+    background: $accent;
     border-radius: 2px;
 }
 QSlider::handle:horizontal {
-    background: #e6edf3;
-    border: 2px solid #2f81f7;
-    width: 14px;
-    height: 14px;
+    background: $bg_surface;
+    border: 3px solid $accent;
+    width: 13px;
+    height: 13px;
     margin: -6px -1px;
-    border-radius: 8px;
+    border-radius: 10px;
 }
 QSlider::handle:horizontal:hover {
-    background: #2f81f7;
-    border-color: #58a6ff;
+    border-color: $accent_hover;
 }
 
-/* ── Progress bar ────────────────────────────────────── */
 QProgressBar {
-    border: none;
-    border-radius: 3px;
-    background: #21262d;
+    background: $bg_input;
+    color: $text_muted;
+    border: 1px solid $border;
+    border-radius: 5px;
+    min-height: 10px;
     text-align: center;
-    color: transparent;
-    max-height: 4px;
 }
 QProgressBar::chunk {
-    background: #2f81f7;
-    border-radius: 3px;
+    background: $accent;
+    border-radius: 4px;
 }
 
-/* ── Check boxes ─────────────────────────────────────── */
-QCheckBox {
+QGroupBox {
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    color: $text;
+    font-weight: $weight_semibold;
+    margin-top: 12px;
+    padding: 12px 8px 8px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 5px;
+    color: $text_muted;
+}
+
+/* ══ Progress and orientation ════════════════════════════════════════════
+   The workflow strip answers "where am I, and what is next" before the user
+   has to hunt for it — the steps are a narrative, not decoration. */
+
+QFrame[role="workflow-strip"] {
+    background: $bg_surface;
+    border-bottom: 1px solid $border;
+}
+QLabel[role="workflow-title"] {
+    color: $text_strong;
+    font-size: $font_md;
+    font-weight: $weight_bold;
+}
+QLabel[role="workflow-description"] {
+    color: $text_muted;
+    font-size: $font_xs;
+}
+/* The single most important sentence on the page: the next action. */
+QLabel[role="workflow-guidance"] {
+    background: $accent_soft;
+    border: 1px solid $accent_border;
+    border-radius: $radius_md;
+    color: $accent_text;
+    padding: 5px 10px;
+    font-size: $font_xs;
+    font-weight: $weight_semibold;
+}
+QLabel[role="workflow-guidance"][tone="success"] {
+    background: $success_soft;
+    border-color: $success_border;
+    color: $success;
+}
+QLabel[role="workflow-guidance"][tone="warn"] {
+    background: $warn_soft;
+    border-color: $warn_border;
+    color: $warn;
+}
+QToolButton[role="workflow-step"] {
+    border: none;
+    background: transparent;
+    padding: 4px 10px;
     min-height: 32px;
-    spacing: 8px;
+    font-size: $font_sm;
+    font-weight: $weight_medium;
+    color: $text_subtle;
 }
-QCheckBox::indicator {
-    width: 18px;
-    height: 18px;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-    background: #0d1117;
+QToolButton[role="workflow-step"][state="current"] {
+    background: $accent_soft;
+    color: $accent_text;
+    border-radius: $radius_md;
+    font-weight: $weight_bold;
 }
-QCheckBox::indicator:checked {
-    background: #2f81f7;
-    border-color: #2f81f7;
+QToolButton[role="workflow-step"][state="complete"] {
+    color: $success;
 }
-QCheckBox::indicator:hover {
-    border-color: #58a6ff;
+QToolButton[role="workflow-step"][state="stale"],
+QToolButton[role="workflow-step"][state="error"] {
+    color: $warn;
+    background: $warn_soft;
+    border-radius: $radius_md;
 }
-QCheckBox:focus {
-    border: 1px solid #58a6ff;
-    border-radius: 4px;
-}
-
-/* ── Plain text / log ────────────────────────────────── */
-QPlainTextEdit {
-    border: 1px solid #2b3440;
-    border-radius: 6px;
-    background: #0f141b;
-}
-/* ── Cutout callout card ────────────────────── */
-#cutoutCallout {
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-}
-#cutoutCallout[active="true"] {
-    background: #2a1e0a;
-    border-color: #7d4f00;
+QLabel[role="workflow-arrow"] {
+    color: $text_subtle;
 }
 
-/* ── Status label roles (ok / err / neutral) ─ */
+/* ══ Status ══════════════════════════════════════════════════════════════
+   One vocabulary for outcome: neutral, ok, warn, error. Same colors, same
+   shapes, whether it appears as a chip, a banner, or a region. */
+
+QFrame[role="status-region"][tone="success"] {
+    border-color: $success_border;
+}
+QFrame[role="status-region"][tone="warn"] {
+    border-color: $warn_border;
+}
+QFrame[role="status-region"][tone="danger"] {
+    border-color: $danger_border;
+    background: $danger_soft;
+}
+
+QLabel[role="chip"], QLabel[role="summary-banner"], QLabel[role="status-chip"] {
+    background: $bg_surface_alt;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    color: $text_muted;
+    padding: 4px 9px;
+    font-size: $font_xs;
+    font-weight: $weight_medium;
+}
+QLabel[role="chip"][tone="accent"], QLabel[role="summary-banner"][tone="accent"] {
+    background: $accent_soft;
+    border-color: $accent_border;
+    color: $accent_text;
+}
+QLabel[role="chip"][tone="success"], QLabel[role="summary-banner"][tone="success"] {
+    background: $success_soft;
+    border-color: $success_border;
+    color: $success;
+}
+QLabel[role="chip"][tone="warn"], QLabel[role="summary-banner"][tone="warn"] {
+    background: $warn_soft;
+    border-color: $warn_border;
+    color: $warn;
+}
+QLabel[role="chip"][tone="danger"], QLabel[role="summary-banner"][tone="danger"] {
+    background: $danger_soft;
+    border-color: $danger_border;
+    color: $danger;
+}
+
 QLabel[role="status-ok"] {
-    color: #3fb950;
-    background: #0f2a17;
-    border: 1px solid #1f6f3a;
-    border-radius: 4px;
+    color: $success;
+    background: $success_soft;
+    border: 1px solid $success_border;
+    border-radius: $radius_sm;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: $font_xs;
 }
 QLabel[role="status-err"] {
-    color: #f85149;
-    background: #2a0f0f;
-    border: 1px solid #6f1f1f;
-    border-radius: 4px;
+    color: $danger;
+    background: $danger_soft;
+    border: 1px solid $danger_border;
+    border-radius: $radius_sm;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: $font_xs;
 }
 QLabel[role="status-warn"] {
-    color: #e3b341;
-    background: #2a1e0a;
-    border: 1px solid #7d4f00;
-    border-radius: 4px;
+    color: $warn;
+    background: $warn_soft;
+    border: 1px solid $warn_border;
+    border-radius: $radius_sm;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: $font_xs;
 }
 QLabel[role="status-neutral"] {
-    color: #8b949e;
+    color: $text_muted;
     background: transparent;
     border: 1px solid transparent;
-    border-radius: 4px;
+    border-radius: $radius_sm;
     padding: 4px 8px;
-    font-size: 11px;
+    font-size: $font_xs;
 }
-
-QLabel[role="dialog-title"] {
-    color: #f0f6fc;
-    font-size: 16px;
-    font-weight: 700;
-}
-
-QLabel[role="dialog-subtitle"], QLabel[role="dialog-message"] {
-    color: #8b949e;
-    font-size: 12px;
-}
-
-QLabel[role="section-title"] {
-    color: #e6edf3;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-QTextEdit[role="release-notes"] {
-    background: #0f141b;
-    border: 1px solid #2b3440;
-    border-radius: 4px;
-    color: #c9d1d9;
-    font-size: 11px;
-}
-
-/* ── Toolbar separator ───────────────────────── */
-QLabel[role="toolbar-sep"] {
-    color: #21262d;
-    font-size: 12px;
-}
-
-/* ── Muted / hint text labels ──────────────────── */
-QLabel[role="hint"] {
-    color: #8b949e;
-    background: transparent;
-    font-size: 11px;
-}
-QLabel[role="hint-sm"] {
-    color: #8b949e;
-    background: transparent;
-    font-size: 11px;
-}
-QLabel[role="dim"] {
-    color: #8b949e;
-    background: transparent;
-}
-
-/* ── Preview status (text-only, no background) ─── */
 QLabel[role="preview-ok"] {
-    color: #3fb950;
+    color: $success;
     background: transparent;
-    font-size: 11px;
+    font-size: $font_xs;
 }
 QLabel[role="preview-err"] {
-    color: #f85149;
+    color: $danger;
     background: transparent;
-    font-size: 11px;
+    font-size: $font_xs;
 }
 QLabel[role="preview-dim"] {
-    color: #8b949e;
+    color: $text_muted;
     background: transparent;
-    font-size: 11px;
+    font-size: $font_xs;
 }
 
-/* ── Cutout callout icon + description ─────────── */
-QLabel[role="cutout-icon"] {
-    color: #8b949e;
-    background: transparent;
-    font-size: 12px;
-}
-QLabel[role="cutout-desc"] {
-    color: #8b949e;
-    background: transparent;
-    font-size: 10px;
-}
-QLabel[role="cutout-icon"][active="true"] {
-    color: #f0883e;
-}
-QLabel[role="cutout-desc"][active="true"] {
-    color: #f0883e;
-}
+/* ══ Lists, trees, tables ════════════════════════════════════════════════ */
 
-/* ── Neutral status chip (non-empty, non-ok/err) ── */
-QLabel[role="status-chip"] {
-    color: #8b949e;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 11px;
+QListWidget::item, QTreeWidget::item, QTreeView::item {
+    padding: 6px 8px;
+    margin: 1px 0;
+    border-radius: $radius_sm;
+    color: $text;
 }
-
-/* ── Log text pane ─────────────────────────────── */
-QPlainTextEdit[role="log"] {
-    font-family: Menlo, Courier;
-    font-size: 11px;
+QListWidget::item:hover:!selected, QTreeWidget::item:hover:!selected,
+QTreeView::item:hover:!selected {
+    background: $bg_surface_alt;
 }
-
-/* ── Horizontal rule separator ─────────────────── */
-QFrame[role="hsep"] {
-    background: #21262d;
-    max-height: 1px;
-    border: none;
+QListWidget::item:selected, QTreeWidget::item:selected, QTreeView::item:selected {
+    background: $accent_soft;
+    color: $accent_text;
+    border: 1px solid $accent_border;
 }
-/* ── Scroll bars ─────────────────────────────────────── */
-QScrollBar:vertical {
-    width: 5px;
-    background: transparent;
-    margin: 0;
-}
-QScrollBar::handle:vertical {
-    background: #30363d;
-    border-radius: 3px;
-    min-height: 24px;
-}
-QScrollBar::handle:vertical:hover {
-    background: #484f58;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0;
-}
-QScrollBar:horizontal {
-    height: 5px;
-    background: transparent;
-    margin: 0;
-}
-QScrollBar::handle:horizontal {
-    background: #30363d;
-    border-radius: 3px;
-    min-width: 24px;
-}
-QScrollBar::handle:horizontal:hover {
-    background: #484f58;
-}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-    width: 0;
-}
-
-/* ── Menu ────────────────────────────────────────────── */
-QMenu {
-    background: #1c2128;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 4px;
-}
-QMenu::item {
-    padding: 4px 16px;
-    border-radius: 4px;
-    color: #e6edf3;
-}
-QMenu::item:selected {
-    background: #1f3a6e;
-    color: #79c0ff;
-}
-QMenu::separator {
-    height: 1px;
-    background: #30363d;
-    margin: 4px 8px;
-}
-
-/* ── Message boxes ───────────────────────────────────── */
-QMessageBox {
-    background: #161b22;
-}
-
-/* ── Dialog ──────────────────────────────────────────── */
-QDialog {
-    background: #161b22;
-}
-
-/* ── Tool-item selector buttons (vertical left rail) ─── */
-QPushButton[role="tool-item"] {
-    text-align: left;
-    padding-left: 14px;
-    border-radius: 6px;
-}
-QPushButton[role="tool-item"][active="true"] {
-    background: rgba(47, 129, 247, 0.15);
-    border-left: 3px solid #2f81f7;
-    border-color: #2f81f7;
-    color: #79c0ff;
-}
-QPushButton[role="tool-item"][active="true"]:hover {
-    background: rgba(47, 129, 247, 0.22);
-}
-
-/* ── Empty-state labels ──────────────────────────────── */
-QLabel[role="empty-icon"] {
-    color: #484f58;
-    font-size: 36px;
-}
-QLabel[role="empty-title"] {
-    color: #c9d1d9;
-    font-size: 15px;
-    font-weight: 600;
-}
-QLabel[role="empty-hint"] {
-    color: #9da7b3;
-    font-size: 12px;
-}
-QWidget[role="empty-state"] {
-    background: #0b0f14;
-}
-QFrame[role="preview-surface"] {
-    background: #0b0f14;
-}
-QFrame#conversion-preview,
-QFrame#conversion-preview QStackedWidget,
-QFrame#conversion-preview QWidget[role="empty-state"] {
-    background: #0b0f14;
-}
-QStackedWidget {
-    background: transparent;
-}
-
-/* ── Tree widgets (layer tree) ────────────────────────── */
-/* A fully-opaque selection highlight swallowed the branch expand/collapse
-   arrow and made the row checkbox tick nearly invisible. A translucent tint
-   keeps both legible while still reading clearly as "selected". */
 QTreeWidget {
     background: transparent;
     border: none;
     outline: none;
-    alternate-background-color: rgba(255, 255, 255, 6);
-}
-QTreeWidget::item {
-    padding: 4px;
-    border-radius: 4px;
-}
-QTreeWidget::item:hover:!selected {
-    background: rgba(255, 255, 255, 18);
-}
-QTreeWidget::item:selected {
-    background: rgba(47, 129, 247, 70);
-    color: #ffffff;
-}
-QTreeWidget::item:selected:!active {
-    background: rgba(47, 129, 247, 45);
+    alternate-background-color: $scrim;
 }
 QTreeWidget::branch {
     background: transparent;
 }
-/* The row-visibility checkbox is an item-view indicator, not a QCheckBox,
-   so it needs its own rule — without it Fusion fills its cell with an
-   opaque selection-highlight square that reads as a stray color swatch. */
+/* The row-visibility box is an item-view indicator, not a QCheckBox, so it
+   needs its own rule — otherwise Fusion fills the cell with an opaque
+   highlight square that reads as a stray color swatch. */
 QTreeView::indicator {
     width: 15px;
     height: 15px;
-    border: 1px solid #30363d;
-    border-radius: 4px;
-    background: #0d1117;
+    border: 1px solid $border_strong;
+    border-radius: $radius_sm;
+    background: $bg_input;
 }
 QTreeView::indicator:checked {
-    background: #2f81f7;
-    border-color: #2f81f7;
+    background: $accent;
+    border-color: $accent;
     image: url({ICONS_DIR}/check.svg);
 }
 QTreeView::indicator:unchecked:hover {
-    border-color: #58a6ff;
+    border-color: $accent_border;
 }
 QTreeWidget::branch:has-children:!has-siblings:closed,
 QTreeWidget::branch:closed:has-children:has-siblings {
@@ -1000,34 +714,204 @@ QTreeWidget::branch:open:has-children:!has-siblings,
 QTreeWidget::branch:open:has-children:has-siblings {
     image: url({ICONS_DIR}/chevron_down.svg);
 }
-/* Renaming a layer/shape (F2 or double-click) opens a real QLineEdit as
-   the inline editor, sized to fit inside the tree row — but it still
-   picks up the generic QLineEdit's 5px vertical padding + border above,
-   which is taller than the row, clipping the typed text top and bottom.
-   Cut it down to fit. */
+/* The inline rename editor inherits the generic QLineEdit padding, which is
+   taller than a tree row and clips the text it is meant to show. */
 QTreeWidget QLineEdit {
     padding: 0px 4px;
     margin: 0px;
-    border: 1px solid #2f81f7;
+    border: 1px solid $accent;
     border-radius: 3px;
-    background: #0d1117;
-    color: #e6edf3;
+    background: $bg_input;
+    color: $text;
+}
+QHeaderView::section {
+    background: $bg_surface_alt;
+    color: $text_muted;
+    border: none;
+    border-bottom: 1px solid $border;
+    padding: 7px;
+    font-weight: $weight_semibold;
+}
+QTableView, QTableWidget {
+    background: $bg_input;
+    alternate-background-color: $bg_surface_alt;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+    gridline-color: $border;
+}
+QTableView::item:selected, QTableWidget::item:selected {
+    background: $selection;
+    color: $text_strong;
 }
 
-/* Item views and tabs otherwise lose all visible keyboard focus because their
-   platform outline is intentionally disabled by the themed surfaces. */
-QListWidget:focus, QTreeView:focus, QTabBar:focus {
-    border: 1px solid #58a6ff;
-    border-radius: 4px;
+/* ══ Scrollbars, tooltips ════════════════════════════════════════════════ */
+
+QScrollBar:vertical {
+    width: 6px;
+    background: transparent;
+    margin: 0;
+}
+QScrollBar:horizontal {
+    height: 6px;
+    background: transparent;
+    margin: 0;
+}
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: $border_strong;
+    border-radius: 3px;
+    min-height: 24px;
+    min-width: 24px;
+}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+    background: $text_muted;
+}
+QScrollBar::add-line, QScrollBar::sub-line {
+    background: transparent;
+    border: none;
+    height: 0;
+    width: 0;
 }
 
-/* ── QTextEdit (git log) ─────────────────────────────── */
-QTextEdit {
-    border: 1px solid #2b3440;
-    border-radius: 6px;
-    background: #0f141b;
-    color: #c9d1d9;
-    font-family: Menlo, Courier;
-    font-size: 11px;
-    selection-background-color: #264f78;
+QToolTip {
+    background: $bg_surface;
+    color: $text;
+    border: 1px solid $border_strong;
+    border-radius: $radius_sm;
+    padding: 6px 9px;
+}
+
+/* ══ Canvas chrome ═══════════════════════════════════════════════════════
+   The drawing surface itself stays dark in every appearance so geometry
+   reads identically; the chrome floating over it follows the theme. */
+
+QWidget#canvas-toolbar {
+    background: $overlay;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+}
+QLabel[role="toolbar-label"] {
+    color: $text_subtle;
+    font-size: $font_2xs;
+    font-weight: $weight_bold;
+}
+QLabel[role="toolbar-guidance"] {
+    color: $text_muted;
+    font-size: $font_xs;
+    padding-left: 8px;
+}
+QLabel[role="toolbar-selection"], QLabel[role="status-meta"],
+QLabel[role="status-selection"], QLabel[role="status-zoom"] {
+    color: $text_muted;
+    font-size: $font_xs;
+}
+QLabel[role="status-mode"], QLabel[role="status-selection"][active="true"],
+QLabel[role="toolbar-selection"][active="true"] {
+    color: $accent_text;
+    font-size: $font_xs;
+    font-weight: $weight_medium;
+}
+QLabel[role="status-detail"] {
+    color: $text_subtle;
+    font-size: $font_2xs;
+}
+QLabel[role="status-coordinates"] {
+    color: $text_subtle;
+    font-size: $font_2xs;
+    font-family: $mono;
+}
+QLabel[role="status-separator"] {
+    color: $border;
+    font-size: $font_xs;
+}
+QLabel[role="zone-edit-scope"] {
+    color: $text_muted;
+    border: 1px solid $border;
+    border-radius: $radius_sm;
+    padding: 8px;
+}
+QLabel[role="zone-edit-scope"][editing="true"] {
+    color: $accent_text;
+    background: $accent_soft;
+    border-color: $accent_border;
+    font-weight: $weight_semibold;
+}
+#cutoutCallout {
+    background: $bg_surface_alt;
+    border: 1px solid $border;
+    border-radius: $radius_sm;
+}
+#cutoutCallout[active="true"] {
+    background: $warn_soft;
+    border-color: $warn_border;
+}
+QLabel[role="cutout-icon"], QLabel[role="cutout-desc"] {
+    color: $text_muted;
+    background: transparent;
+    font-size: $font_2xs;
+}
+QLabel[role="cutout-icon"][active="true"], QLabel[role="cutout-desc"][active="true"] {
+    color: $warn;
+}
+
+/* ══ Empty states ════════════════════════════════════════════════════════
+   The first screen a user meets on a page. It names the surface, says what
+   to do, and stays out of the way once there is real content. These sit on
+   the invariant ink backdrop, so their text is fixed light rather than
+   theme-following. */
+
+QWidget[role="empty-state"], QFrame[role="preview-surface"],
+QFrame#conversion-preview, QFrame#conversion-preview QStackedWidget,
+QFrame#conversion-preview QWidget[role="empty-state"] {
+    background: $bg_ink;
+}
+QWidget[role="empty-state"] QLabel[role="empty-icon"],
+QFrame[role="preview-surface"] QLabel[role="empty-icon"] {
+    color: $ink_muted;
+    font-size: 36px;
+}
+QWidget[role="empty-state"] QLabel[role="empty-title"],
+QFrame[role="preview-surface"] QLabel[role="empty-title"] {
+    color: $ink_text;
+    font-size: $font_lg;
+    font-weight: $weight_semibold;
+}
+QWidget[role="empty-state"] QLabel[role="empty-hint"],
+QFrame[role="preview-surface"] QLabel[role="empty-hint"] {
+    color: $ink_muted;
+    font-size: $font_sm;
+}
+
+/* ══ Named dialogs ═══════════════════════════════════════════════════════ */
+
+QDialog#command-palette, QDialog#keybindings-dialog, QDialog#radial-menu-dialog,
+QDialog#draw-sidebar-customize-dialog {
+    background: $bg_app;
+}
+QDialog#command-palette QLineEdit, QDialog#keybindings-dialog QLineEdit {
+    background: $bg_input;
+    font-size: $font_lg;
+    padding: 10px 12px;
+}
+QWidget#helpHeader {
+    background: $bg_surface;
+    border-bottom: 1px solid $border;
+}
+QLabel#helpTitle {
+    color: $text_strong;
+    font-size: $font_xl;
+    font-weight: $weight_bold;
+}
+QWidget#tocPanel {
+    background: $bg_surface;
+    border-right: 1px solid $border;
+}
+QLabel#tocLabel {
+    color: $text_subtle;
+    font-size: $font_2xs;
+    font-weight: $weight_bold;
+    letter-spacing: 1.1px;
+}
+QLabel#tocSearchStatus {
+    color: $text_muted;
+    font-size: $font_xs;
 }

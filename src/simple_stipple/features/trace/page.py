@@ -13,7 +13,6 @@ from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -25,7 +24,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QSlider,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
@@ -66,7 +64,7 @@ from simple_stipple.features.trace.session import (
 from simple_stipple.platform.config import save_settings
 from simple_stipple.ui.components.collapsible import CollapsibleSection
 from simple_stipple.ui.components.feedback import parse_float_field_with_feedback, show_error
-from simple_stipple.ui.components.inputs import make_resettable_line_edit
+from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
 from simple_stipple.ui.components.layout import (
     content_splitter,
     sidebar_panel,
@@ -146,9 +144,12 @@ class TracePage(BasePage):
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
         self._workflow_strip = workflow_strip(
-            ("Choose image", "Adjust trace", "Preview and edit", "Export")
+            ("Choose image", "Adjust trace", "Preview and edit", "Export"),
+            title="Image trace",
+            description="Turn a raster image into editable vector outlines with a live, reviewable preview.",
         )
         root.addWidget(self._workflow_strip)
+        self._workflow_strip.setVisible(False)
 
         left_w = QWidget()
         left = QVBoxLayout(left_w)
@@ -257,12 +258,12 @@ class TracePage(BasePage):
         )
         self._recent_btn.setToolTip("Pick from recently opened images")
         self._recent_btn.fileSelected.connect(self._load_image_from_recent)
-        source_row = QHBoxLayout()
-        source_row.setContentsMargins(0, 0, 0, 0)
-        source_row.setSpacing(8)
-        source_row.addWidget(self._source_field, stretch=1)
-        source_row.addWidget(self._recent_btn)
-        source_layout.addLayout(source_row)
+        # File path, Browse, and Recent previously competed for one 260 px
+        # row, producing the clipped controls in the Trace inspector. Keep
+        # source selection sequential: enter/browse first, then choose a
+        # recent file as the alternate path.
+        source_layout.addWidget(self._source_field)
+        source_layout.addWidget(self._recent_btn)
         self._thumb_lbl = QLabel()
         self._thumb_lbl.setMaximumHeight(120)
         self._thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -289,14 +290,16 @@ class TracePage(BasePage):
 
         # Primary actions sit directly under Trace Settings — they act on
         # the live preview those settings drive.
-        action_row = QHBoxLayout()
+        action_row = QVBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
-        action_row.setSpacing(8)
+        action_row.setSpacing(6)
         self._reload_btn = QPushButton("Refresh Preview")
+        self._reload_btn.setProperty("role", "primary")
         self._reload_btn.setToolTip("Retrace immediately with the current settings.")
         self._reload_btn.clicked.connect(self._force_reload_trace)
-        action_row.addWidget(self._reload_btn, stretch=1)
+        action_row.addWidget(self._reload_btn)
         self._smooth_btn = QPushButton("Smooth Curves…")
+        self._smooth_btn.setProperty("role", "secondary")
         self._smooth_btn.setToolTip(
             "Fit every traced outline to a smooth bezier curve, rounding "
             "off pixel-staircase noise while keeping real corners sharp.\n"
@@ -305,7 +308,7 @@ class TracePage(BasePage):
             "reverts it."
         )
         self._smooth_btn.clicked.connect(self._smooth_traced_curves)
-        action_row.addWidget(self._smooth_btn, stretch=1)
+        action_row.addWidget(self._smooth_btn)
         layout.addLayout(action_row)
 
         self._status = QLabel("")
@@ -318,52 +321,6 @@ class TracePage(BasePage):
         self._progress.setValue(0)
         self._progress.setVisible(False)  # only shown while tracing
         layout.addWidget(self._progress)
-
-        # ── Recipes section ───────────────────────────────────────────────────
-        # A collapsible card like its siblings (was a bare caption + row,
-        # the odd one out on this sidebar).
-        recipes_content = QWidget()
-        recipes_layout = QVBoxLayout(recipes_content)
-        recipes_layout.setContentsMargins(0, 0, 0, 0)
-        recipes_layout.setSpacing(8)
-        recipe_row = QHBoxLayout()
-        self._recipe_combo = QComboBox()
-        self._recipe_combo.setToolTip("Reusable trace settings recipes")
-        self._refresh_trace_recipes()
-        recipe_row.addWidget(self._recipe_combo, stretch=1)
-        self._apply_recipe_btn = QPushButton("Apply")
-        self._apply_recipe_btn.setToolTip("Apply the selected recipe")
-        self._apply_recipe_btn.setEnabled(bool(self._settings.get("trace_recipes")))
-        self._apply_recipe_btn.clicked.connect(self._apply_trace_recipe)
-        recipe_row.addWidget(self._apply_recipe_btn)
-        recipes_layout.addLayout(recipe_row)
-        save_row = QHBoxLayout()
-        self._recipe_name_edit = QLineEdit()
-        self._recipe_name_edit.setPlaceholderText("New recipe name")
-        self._recipe_name_edit.setAccessibleName("Trace recipe name")
-        self._recipe_name_edit.returnPressed.connect(self._save_trace_recipe)
-        save_row.addWidget(self._recipe_name_edit, stretch=1)
-        save_recipe = QPushButton("Save recipe")
-        save_recipe.setToolTip("Save the current controls as a reusable recipe")
-        save_recipe.clicked.connect(self._save_trace_recipe)
-        save_row.addWidget(save_recipe)
-        recipes_layout.addLayout(save_row)
-        layout.addWidget(
-            CollapsibleSection(
-                "Recipes",
-                recipes_content,
-                # Recipes are a useful reuse tool, but expanding them on
-                # startup consumes most of the trace sidebar before the user
-                # has even chosen an image. The section remains one click
-                # away and its Apply/Save controls are unchanged.
-                expanded=False,
-                subtitle=(
-                    f"{len(self._settings.get('trace_recipes', {}))} saved"
-                    if isinstance(self._settings.get("trace_recipes"), dict)
-                    else "Optional"
-                ),
-            )
-        )
 
         # ── Advanced section ──────────────────────────────────────────────────
         advanced = build_lazy_section(
@@ -533,7 +490,7 @@ class TracePage(BasePage):
         self._lock_cb.setToolTip("Keep width and height proportional when resizing")
         self._lock_cb.stateChanged.connect(self._on_aspect_lock_changed)
 
-        self._blur_slider = QSlider(Qt.Orientation.Horizontal)
+        self._blur_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self._blur_slider.setRange(0, BLUR_SLIDER_MAX)
         # Initial position derives from the field default (TRACE_DEFAULTS or
         # the user's Settings override) so slider and text never start out
@@ -546,7 +503,7 @@ class TracePage(BasePage):
         self._blur_slider.setToolTip("Drag to adjust the blur radius (0.0 – 5.0)")
         self._blur_slider.valueChanged.connect(self._on_blur_slider)
 
-        self._thresh_slider = QSlider(Qt.Orientation.Horizontal)
+        self._thresh_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self._thresh_slider.setRange(0, THRESHOLD_SLIDER_MAX)
         try:
             thresh_default = int(float(trace_default(self._settings, "threshold")))
@@ -723,6 +680,8 @@ class TracePage(BasePage):
             on_use_selected_as_custom_tile=self.customTileRequested.emit,
             draft_profile=True,
         )
+        self._canvas.set_context_menu_profile("trace")
+        self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
         self._canvas.set_empty_message(
             "Start a trace\n1  Open or drop an image\n"
             "2  Adjust threshold and cleanup\n3  Export or send the result"
@@ -750,6 +709,7 @@ class TracePage(BasePage):
         # the middle, status strip along the bottom — same as Draft.
         self._canvas_status = CanvasStatusStrip()
         self._canvas_status.set_zoom_callback(self._on_zoom_preset)
+        self._canvas_status.bind_canvas(self._canvas)
 
         canvas_shell = QWidget()
         canvas_layout = QVBoxLayout(canvas_shell)
@@ -803,84 +763,6 @@ class TracePage(BasePage):
         self._refresh_canvas_panels()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
-
-    def _refresh_trace_recipes(self) -> None:
-        current = self._recipe_combo.currentText() if hasattr(self, "_recipe_combo") else ""
-        self._recipe_combo.clear()
-        names = sorted((self._settings.get("trace_recipes") or {}).keys())
-        if names:
-            self._recipe_combo.addItems(names)
-        else:
-            self._recipe_combo.addItem("No saved recipes")
-        if hasattr(self, "_apply_recipe_btn"):
-            self._apply_recipe_btn.setEnabled(bool(names))
-        if current:
-            self._recipe_combo.setCurrentText(current)
-
-    def _trace_recipe_payload(self) -> dict:
-        state = get_trace_workspace_state(self)
-        keys = {
-            "blur",
-            "threshold",
-            "auto_threshold",
-            "invert",
-            "edge_mode",
-            "canny_low",
-            "canny_high",
-            "outer_only",
-            "simplify",
-            "min_area",
-            "max_area",
-            "close_r",
-            "max_res",
-        }
-        return {key: state[key] for key in keys}
-
-    def _save_trace_recipe(self) -> None:
-        name = self._recipe_name_edit.text().strip()
-        if not name:
-            self._set_status("Enter a recipe name beside Save recipe.", STATUS_WARN)
-            self._recipe_name_edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            return
-        recipes = dict(self._settings.get("trace_recipes") or {})
-        recipes[name] = self._trace_recipe_payload()
-        self._settings["trace_recipes"] = recipes
-        save_settings(self._settings)
-        self._refresh_trace_recipes()
-        self._recipe_combo.setCurrentText(name)
-        self._recipe_name_edit.clear()
-        self._set_status(f"Saved trace recipe ‘{name}’.", STATUS_OK)
-
-    def _apply_trace_recipe(self) -> None:
-        name = self._recipe_combo.currentText()
-        recipe = (self._settings.get("trace_recipes") or {}).get(name)
-        if not isinstance(recipe, dict):
-            return
-        text_fields = {
-            "blur": self._blur,
-            "threshold": self._thresh_entry,
-            "canny_low": self._canny_low,
-            "canny_high": self._canny_high,
-            "simplify": self._simplify,
-            "min_area": self._min_area,
-            "max_area": self._max_area,
-            "close_r": self._close_r,
-            "max_res": self._max_res,
-        }
-        for key, widget in text_fields.items():
-            if key in recipe:
-                widget.setText(str(recipe[key]))
-        checks: dict[str, QCheckBox] = {
-            "auto_threshold": self._auto_thresh_cb,
-            "invert": self._invert_cb,
-            "edge_mode": self._edge_mode_cb,
-            "outer_only": self._outer_only_cb,
-        }
-        for key, check_widget in checks.items():
-            if key in recipe:
-                check_widget.setChecked(bool(recipe[key]))
-        self._schedule_trace()
-        self._set_status(f"Applied trace recipe ‘{name}’.", STATUS_OK)
 
     def _set_status(self, text: str, color: str = STATUS_NEUTRAL) -> None:
         set_status_label(self._status, text, color)

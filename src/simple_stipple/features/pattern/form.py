@@ -7,13 +7,21 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator, QIntValidator
-from PySide6.QtWidgets import QCheckBox, QComboBox, QGridLayout, QLabel, QLineEdit, QSlider, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from simple_stipple.features.pattern.form_spec import PARAM_SPECS
-from simple_stipple.ui.components.inputs import make_resettable_line_edit
+from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
 
 
-def _numeric_field(default: str, width: int = 80) -> QLineEdit:
+def _numeric_field(default: str, width: int = 88) -> QLineEdit:
     field = QLineEdit(default)
     make_resettable_line_edit(field, default)
     field.setFixedWidth(width)
@@ -33,14 +41,23 @@ def build_param_widget(
 ) -> QWidget:
     """Build fields from ``PARAM_SPECS`` and bind them to their page attributes."""
     widget = QWidget()
-    grid = QGridLayout(widget)
-    grid.setContentsMargins(0, 0, 0, 0)
-    row = 0
+    layout = QVBoxLayout(widget)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
 
     for spec in PARAM_SPECS.get(pattern_name, []):
         field: QWidget
         if spec.kind in {"float", "int"}:
-            grid.addWidget(QLabel(spec.label), row, 0)
+            control = QWidget()
+            control_layout = QVBoxLayout(control)
+            control_layout.setContentsMargins(0, 0, 0, 0)
+            control_layout.setSpacing(4)
+            label = QLabel(spec.label)
+            label.setToolTip(spec.tooltip)
+            control_layout.addWidget(label)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
             field = _numeric_field(spec.default)
             field.setAccessibleName(spec.label)
             if spec.kind == "int":
@@ -61,10 +78,10 @@ def build_param_widget(
                 validator.setNotation(QDoubleValidator.Notation.StandardNotation)
                 field.setValidator(validator)
             field.textChanged.connect(schedule_preview)
-            grid.addWidget(field, row, 1)
+            row.addWidget(field)
             # Keep the precise field and a drag-friendly live control in sync.
             # The page's existing 100 ms preview timer performs the debounce.
-            slider = QSlider(Qt.Orientation.Horizontal)
+            slider = NoWheelSlider(Qt.Orientation.Horizontal)
             slider.setObjectName(f"{spec.attr.removeprefix('_')}_slider")
             slider.setAccessibleName(f"{spec.label} slider")
             slider.setRange(0, 1000)
@@ -89,7 +106,7 @@ def build_param_widget(
 
             def from_text(
                 text: str,
-                target: QSlider = slider,
+                target: NoWheelSlider = slider,
                 lo: float = low,
                 hi: float = high,
             ) -> None:
@@ -103,29 +120,36 @@ def build_param_widget(
 
             slider.valueChanged.connect(from_slider)
             field.textChanged.connect(from_text)
-            grid.addWidget(slider, row, 2)
+            slider.setMinimumWidth(90)
+            row.addWidget(slider, stretch=1)
+            control_layout.addLayout(row)
             setattr(page, f"{spec.attr}_slider", slider)
+            layout.addWidget(control)
         elif spec.kind == "checkbox":
             checkbox = QCheckBox(spec.label)
             checkbox.stateChanged.connect(schedule_preview)
-            grid.addWidget(checkbox, row, 0, 1, 2)
+            layout.addWidget(checkbox)
             field = checkbox
         else:
-            grid.addWidget(QLabel(spec.label), row, 0)
+            control = QWidget()
+            control_layout = QVBoxLayout(control)
+            control_layout.setContentsMargins(0, 0, 0, 0)
+            control_layout.setSpacing(4)
+            control_layout.addWidget(QLabel(spec.label))
             combo = QComboBox()
             combo.setAccessibleName(spec.label)
-            combo.setFixedWidth(120)
             combo.addItems(spec.items)
             combo.setCurrentText(spec.default)
             combo.currentTextChanged.connect(schedule_preview)
-            grid.addWidget(combo, row, 1)
+            control_layout.addWidget(combo)
+            layout.addWidget(control)
             field = combo
 
         field.setToolTip(spec.tooltip)
         setattr(page, spec.attr, field)
-        row += 1
         if spec.hint is not None:
-            grid.addWidget(_hint(spec.hint), row, 0, 1, 2)
-            row += 1
+            layout.addWidget(_hint(spec.hint))
+
+    layout.addStretch()
 
     return widget

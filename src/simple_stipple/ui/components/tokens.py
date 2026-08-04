@@ -1,11 +1,19 @@
-"""Shared spacing and motion tokens for reusable UI components."""
+"""Spacing and motion tokens for widget code.
 
-SPACE_XS = 4
-SPACE_SM = 8
-SPACE_MD = 12
-SPACE_LG = 16
-SPACE_XL = 24
-MOTION_DURATION_MS = 150
+The values live in :mod:`simple_stipple.ui.style.tokens` alongside the colors
+and type scale the stylesheet is built from — one source for the whole visual
+system. This module re-exports the subset Python layout code needs so widgets
+do not reach across into the style package just to get a margin.
+"""
+
+from simple_stipple.ui.style.tokens import (
+    MOTION_DURATION_MS,
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XL,
+    SPACE_XS,
+)
 
 __all__ = [
     "MOTION_DURATION_MS",

@@ -104,6 +104,40 @@ class EscapeBlurFilter(QObject):
         return False
 
 
+class CanvasEscapeRouter(QObject):
+    """Make Escape leave an active canvas tool even when a panel owns focus.
+
+    CAD workflows commonly move keyboard focus into a numeric field while a
+    drawing tool remains active. Letting that field consume Escape means the
+    user has to click the canvas before they can leave the tool, which breaks
+    the expected "Escape returns to Select" muscle memory. This application
+    filter is deliberately narrow: it only acts for its visible canvas while
+    a non-Select tool is active, and never steals Escape from a modal dialog.
+    """
+
+    def __init__(self, canvas: QWidget) -> None:
+        super().__init__(canvas)
+        self._canvas_ref = weakref.ref(canvas)
+
+    def eventFilter(self, _obj, event) -> bool:
+        if event.type() != QEvent.Type.KeyPress or event.key() != Qt.Key.Key_Escape:
+            return False
+        canvas = self._canvas_ref()
+        if canvas is None or not canvas.isVisible() or QApplication.activeModalWidget() is not None:
+            return False
+        if getattr(canvas, "_mode", "select") == "select" and not any(
+            bool(getattr(canvas, attribute, False))
+            for attribute in ("_dimension_mode", "_measure_mode")
+        ):
+            return False
+        exit_to_select = getattr(canvas, "exit_to_select", None)
+        if not callable(exit_to_select):
+            return False
+        exit_to_select()
+        event.accept()
+        return True
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Layout helpers
 # ══════════════════════════════════════════════════════════════════════════

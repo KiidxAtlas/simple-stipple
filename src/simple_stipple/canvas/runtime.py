@@ -529,9 +529,9 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
         hidden = layer_view_state.setdefault(layer_name, {}).setdefault("hidden", set())
-        # Outline layer (not preview) is editable/draggable so users get the
-        # same rename and selection features as the Draft tab.
-        is_outline = layer_name == "pattern_active"
+        # Outline rows are editable/draggable; preview rows are deliberately
+        # read-only because they are regenerated from the source outline.
+        is_outline = not self._get_showing_preview()
         label_fn = (
             self._shape_label_builder(layer_name, prefix="Outline")
             if is_outline
@@ -669,24 +669,34 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                 )
             return rows
 
-        # Edit mode: the canvas state IS the outline. Show a single row
-        # so the tree is honest about what is actually on the canvas.
-        entity_ids = list(self._canvas._entities_by_id.keys())
-        rows.append(
-            build_layer_row(
-                name="pattern_active",
-                display_name="Outline",
-                active=True,
-                visible=True,
-                editable=False,
-                shapes=self._build_tree_shape_rows(
-                    "pattern_active",
-                    entity_ids,
-                    self._canvas.get_polylines_state(),
-                    layer_view_state,
-                ),
+        # Edit mode is the real source document, so preserve and expose its
+        # actual layers. This makes move-to-layer, cutouts, and layer edits
+        # work exactly as they do in Draft instead of presenting a fake
+        # single "Outline" category.
+        entities = list(self._canvas._entities_by_id.values())
+        layer_names = self._canvas.layer_names() or ["Outline"]
+        for layer_name in layer_names:
+            pairs = [
+                (entity.id, self._canvas._flattened_points_by_id(entity.id))
+                for entity in entities
+                if (entity.layer or "Outline") == layer_name
+            ]
+            rows.append(
+                build_layer_row(
+                    name=layer_name,
+                    display_name=layer_name,
+                    active=layer_name == self._canvas.active_layer,
+                    visible=True,
+                    editable=True,
+                    shapes=self._build_tree_shape_rows(
+                        layer_name,
+                        [entity_id for entity_id, _poly in pairs],
+                        [poly for _entity_id, poly in pairs],
+                        layer_view_state,
+                    ),
+                    color=self._canvas.layer_color(layer_name),
+                )
             )
-        )
         return rows
 
     def refresh_canvas_panels(self) -> None:

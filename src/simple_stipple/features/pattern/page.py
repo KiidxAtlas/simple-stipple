@@ -214,6 +214,7 @@ class PatternPage(BasePage):
         }
         self._preview_zone_owners: list[int | None] = []
         self._outline_ids: list[str] = []
+        self._outline_layers: dict[str, str] = {}
         self._outline_roles: dict[str, str] = {}
         self._pattern_cell_cutouts: list[list[tuple[float, float]]] = []
         self._pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = []
@@ -241,9 +242,12 @@ class PatternPage(BasePage):
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
         self._workflow_strip = workflow_strip(
-            ("Choose outline", "Define zones", "Choose treatment", "Preview", "Export")
+            ("Choose outline", "Define zones", "Choose treatment", "Preview", "Export"),
+            title="Pattern generator",
+            description="Turn closed outlines into adjustable fills, then inspect the result before export.",
         )
         root.addWidget(self._workflow_strip)
+        self._workflow_strip.setVisible(False)
 
         left_w = QWidget()
         left = QVBoxLayout(left_w)
@@ -403,7 +407,6 @@ class PatternPage(BasePage):
         if hasattr(self, "_layer_sidebar"):
             self._layer_sidebar.clear()
         self._canvas.deselect_all()
-        self._canvas.set_layer_model([], None)
         if checked and self._preview_polys_cache:
             selected_zone = self._zone_list.currentRow()
             # Switch to preview view
@@ -433,12 +436,7 @@ class PatternPage(BasePage):
             self._canvas.set_pattern_cell_context(set())
             self._canvas.set_ghost_polylines(None)
             if self._edit_polys:
-                self._canvas.load(
-                    self._edit_polys,
-                    fit=False,
-                    entity_ids=list(self._outline_ids),
-                )
-            self._canvas.set_layer_model([], None)
+                self._load_outline_canvas(fit=False)
             if self._preview_polys_cache:
                 self._set_preview_status("Editing outline — preview cached")
             else:
@@ -572,6 +570,32 @@ class PatternPage(BasePage):
     ) -> list[dict[str, Any]]:
         return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
+    def _open_pattern_layer_settings(self, layer: str) -> None:
+        """Turn a virtual export layer into a useful shortcut, not a dead row."""
+        if layer == "pattern_fill":
+            self._fill_section.set_expanded(True)
+            self._fill_mode_combo.setFocus()
+            self._set_status("Fill settings are ready to edit.", STATUS_OK)
+        elif layer == "pattern_preview":
+            self._pattern_section.set_expanded(True)
+            self._pattern_combo.setFocus()
+            self._set_status("Pattern settings are ready to edit.", STATUS_OK)
+        elif layer == "pattern_outline":
+            self._shape_section.set_expanded(True)
+            self._set_status("Outline source settings are ready to edit.", STATUS_OK)
+
+    def _on_pattern_layer_visibility_changed(self, layer: str, visible: bool) -> None:
+        """Make the Fill eye a real output toggle, including from the tree menu."""
+        if layer != "pattern_fill":
+            return
+        current = self._fill_mode_combo.currentData() or "none"
+        if visible and current == "none":
+            self._fill_mode_combo.setCurrentIndex(1)  # Lines: predictable default
+            self._set_status("Fill enabled from Layers — adjust its settings if needed.", STATUS_OK)
+        elif not visible and current != "none":
+            self._fill_mode_combo.setCurrentIndex(0)
+            self._set_status("Fill disabled from Layers.", STATUS_OK)
+
     def _on_toolbar_mode(self, value: str) -> None:
         self._canvas_runtime.on_toolbar_mode(value)
         self._refresh_canvas_panels()
@@ -687,7 +711,11 @@ class PatternPage(BasePage):
                 for index, entity_id in enumerate(canvas_ids)
                 if entity_id in set(self._canvas.get_selected_ids())
             }
-            self._canvas.load(new_polys, fit=False, entity_ids=list(new_outline_ids))
+            self._load_outline_canvas(
+                fit=False,
+                polys=new_polys,
+                entity_ids=new_outline_ids,
+            )
             self._canvas.set_selection(
                 [
                     new_outline_ids[index]
@@ -699,6 +727,11 @@ class PatternPage(BasePage):
             self._invalidate_zones_for_geometry_change(set(new_outline_ids))
         self._edit_polys = new_polys
         self._outline_ids = new_outline_ids
+        self._outline_layers = {
+            entity_id: entity.layer or "Outline"
+            for entity_id, entity in self._canvas._entities_by_id.items()
+            if entity_id in set(new_outline_ids)
+        }
         self._refresh_canvas_panels()
         self._schedule_preview()
         self._emit_state_changed()
@@ -707,10 +740,11 @@ class PatternPage(BasePage):
         # Select shapes on canvas without toggling preview mode — the user
         # should be able to highlight shapes in the layer tree while reviewing
         # the generated pattern.
-        # Pattern tree layers are virtual categories; normalize any stale
-        # active-layer state before applying the canonical entity selection.
+        # Preview tree layers are virtual categories. Editable outlines keep
+        # their real source-layer model so layer activation/reordering and
+        # moves continue to work after selecting from the tree.
         selected_ids = flatten_shape_keys(indices)
-        if hasattr(self._canvas, "set_layer_model"):
+        if self._showing_preview and hasattr(self._canvas, "set_layer_model"):
             self._canvas.set_layer_model([], None)
         valid_ids = [eid for eid in selected_ids if eid in self._canvas._entities_by_id]
         self._canvas.set_selection(valid_ids)
@@ -723,6 +757,12 @@ class PatternPage(BasePage):
     def _on_shape_renamed(self, layer_name: str, shape_key: object, new_label: str) -> None:
         """Persist a custom display label for an outline shape."""
         self._canvas_runtime.rename_shape(layer_name, shape_key, new_label)
+
+    def _on_tree_outline_role_requested(self, shape_key: object, role: str) -> None:
+        """Apply an outline role from Pattern's layer-tree context menu."""
+        for entity_id in flatten_shape_keys(shape_key):
+            if entity_id in self._outline_ids:
+                self._on_canvas_outline_role_change(self._outline_ids.index(entity_id), role)
 
     def _on_send_selected_to_draft_from_canvas(
         self,
@@ -923,20 +963,10 @@ class PatternPage(BasePage):
     # ── Build (UI construction) ───────────────────────────────────────────────
 
     def _update_engraving_section_summaries(self, *_args) -> None:
-        self._engraving_placement_section.set_subtitle(
-            f"{self._engrave_w.value():.2f} × {self._engrave_h.value():.2f} mm · "
-            f"{self._engrave_rotation.value():.0f}°"
-        )
-        appearance = "Inverted" if self._engrave_invert.isChecked() else "Normal"
-        self._engraving_appearance_section.set_subtitle(
-            f"Gamma {self._engrave_gamma.value():.2f} · {appearance}"
-        )
+        self._refresh_engraving_ui()
         self._engraving_process_section.set_subtitle(
             f"{self._engrave_material.currentText()} · "
             f"{self._engrave_max_power.value():.0f}% · {self._engrave_speed.value():.0f} mm/s"
-        )
-        self._engraving_output_section.set_subtitle(
-            f"{self._engrave_target.currentText()} · positioned assets"
         )
         valid = self._engrave_min_power.value() <= self._engrave_max_power.value()
         self._engraving_process_error.setText(
@@ -945,6 +975,92 @@ class PatternPage(BasePage):
             else ""
         )
         self._engraving_process_error.setVisible(not valid)
+
+    def _refresh_engraving_ui(self) -> None:
+        """Keep the image workspace actions clear and truthful at all times."""
+        has_image = bool(self._engraving_image_path)
+        if has_image:
+            name = Path(self._engraving_image_path).name
+            self._engraving_image_label.setText(name)
+            self._engraving_section.set_subtitle(
+                f"{name} · {self._engrave_w.value():.1f} × {self._engrave_h.value():.1f} mm"
+            )
+            self._engrave_choose_btn.setText("Replace image…")
+        else:
+            self._engraving_image_label.setText("No image selected — add one to place and engrave it.")
+            self._engraving_section.set_subtitle("Add an image to begin")
+            self._engrave_choose_btn.setText("Add image…")
+        self._engrave_remove_btn.setEnabled(has_image)
+        self._engrave_edit_btn.setEnabled(has_image)
+        self._engrave_fit_btn.setEnabled(has_image)
+        self._engrave_center_btn.setEnabled(has_image)
+        # Keep the CTA actionable. It explains the prerequisite if no source
+        # exists instead of becoming a dead, undiscoverable control.
+        self._engrave_export_btn.setEnabled(True)
+
+    def _remove_engraving_image(self) -> None:
+        """Detach the image from the workspace without touching the source file."""
+        if not self._engraving_image_path:
+            return
+        self._engraving_image_path = ""
+        self._canvas.clear_background_image()
+        self._refresh_engraving_ui()
+        self._set_status("Engraving image removed from this workspace.", STATUS_OK)
+        self._emit_state_changed()
+
+    def _edit_engraving_on_canvas(self) -> None:
+        if not self._engraving_image_path:
+            self._set_status("Add an engraving image before editing it.", STATUS_WARN)
+            return
+        self._engraving_section.set_expanded(True)
+        if not self._engrave_canvas_edit.isChecked():
+            self._engrave_canvas_edit.setChecked(True)
+        self._update_engraving_overlay()
+        self._canvas.select_background_image(True)
+        self._set_status("Image selected — drag it, use handles, or press Tab for placement fields.", STATUS_OK)
+
+    def _center_engraving_image(self) -> None:
+        if not self._engraving_image_path:
+            return
+        center_x, center_y = self._canvas._c2w(
+            self._canvas.width() / 2.0, self._canvas.height() / 2.0
+        )
+        self._engrave_x.setValue(center_x - self._engrave_w.value() / 2.0)
+        self._engrave_y.setValue(center_y - self._engrave_h.value() / 2.0)
+        self._set_status("Engraving image centered in the current canvas view.", STATUS_OK)
+
+    def _fit_engraving_to_outline(self) -> None:
+        if not self._engraving_image_path:
+            return
+        points = [point for poly in self._generation_polys() for point in poly]
+        if not points:
+            self._set_status("Add an outline before fitting the engraving image.", STATUS_WARN)
+            return
+        xs, ys = zip(*points, strict=True)
+        self._engrave_x.setValue(min(xs))
+        self._engrave_y.setValue(min(ys))
+        self._engrave_w.setValue(max(max(xs) - min(xs), 0.01))
+        self._engrave_h.setValue(max(max(ys) - min(ys), 0.01))
+        self._set_status("Engraving image fitted to the outline bounds.", STATUS_OK)
+
+    def _on_engraving_canvas_key(self, action: str, reverse: bool = False) -> None:
+        """Make an image selected on canvas keyboard-editable and removable."""
+        if action == "remove":
+            self._remove_engraving_image()
+            return
+        self._engraving_section.set_expanded(True)
+        fields = (
+            self._engrave_x,
+            self._engrave_y,
+            self._engrave_w,
+            self._engrave_h,
+            self._engrave_rotation,
+        )
+        current = getattr(self, "_engrave_tab_index", 1)
+        self._engrave_tab_index = (current - 1 if reverse else current + 1) % len(fields)
+        target = fields[self._engrave_tab_index]
+        target.setFocus()
+        target.selectAll()
 
     def _choose_engraving_image(self) -> None:
         path = pick_open_file(
@@ -958,7 +1074,6 @@ class PatternPage(BasePage):
         if not path:
             return
         self._engraving_image_path = path
-        self._engraving_image_label.setText(Path(path).name)
         # Loading an image must not silently fit it to the outline. Respect
         # embedded DPI when present; otherwise retain the user's current width
         # and derive only the height needed to preserve the image aspect ratio.
@@ -977,10 +1092,10 @@ class PatternPage(BasePage):
         )
         self._engrave_x.setValue(center_x - self._engrave_w.value() / 2.0)
         self._engrave_y.setValue(center_y - self._engrave_h.value() / 2.0)
-        self._engraving_section.set_subtitle(Path(path).name)
         self._update_engraving_overlay()
         self._canvas.select_background_image(True)
         self._engraving_section.set_expanded(True)
+        self._refresh_engraving_ui()
         self._set_status(
             "Engraving image selected — drag inside it or use the corner handles.",
             STATUS_OK,
@@ -1023,11 +1138,10 @@ class PatternPage(BasePage):
         self._emit_state_changed()
 
     def _on_engraving_selection_changed(self, selected: bool) -> None:
-        if selected and hasattr(self, "_engraving_placement_section"):
+        if selected:
             self._engraving_section.set_expanded(True)
-            self._engraving_placement_section.set_expanded(True)
             self._set_status(
-                "Active target: engraving image — drag, resize, or rotate it on canvas.",
+                "Active target: engraving image — drag it, use handles, or press Tab to edit placement.",
                 STATUS_OK,
             )
         elif self._engraving_image_path:
@@ -1054,6 +1168,7 @@ class PatternPage(BasePage):
                 self._canvas.set_background_image_editable(
                     self._engrave_canvas_edit.isChecked(), self._on_engraving_canvas_transform
                 )
+                self._canvas.set_background_image_key_callback(self._on_engraving_canvas_key)
         except OSError:
             self._canvas.clear_background_image()
 
@@ -1136,12 +1251,9 @@ class PatternPage(BasePage):
         if self._preview_polys_cache and not self._preview_is_stale:
             continuation()
             return
-        has_treatment = bool(self._zones) or (
-            bool(self._edit_polys) and self._current_pattern_key() != "— None —"
-        )
-        if not has_treatment:
+        if not self._zones and not self._edit_polys:
             self._set_status(
-                "Export needs an outline and treatment before preview validation.", STATUS_WARN
+                "Load an outline before preview validation.", STATUS_WARN
             )
             return
         self._pending_export_after_preview = continuation
@@ -1264,7 +1376,9 @@ class PatternPage(BasePage):
             w.hide()
         if pattern_key in self._pattern_widgets:
             self._pattern_widgets[pattern_key].show()
-            self._schedule_preview()
+        # “None” is a valid treatment: it produces fill-only or outline-only
+        # output. Refresh it exactly as we do every other pattern choice.
+        self._schedule_preview()
         has_pattern = pattern_key != "— None —" and pattern_key in self._pattern_widgets
         self._modifiers_label.setVisible(has_pattern)
         self._modifiers_widget.setVisible(has_pattern)
@@ -1652,7 +1766,7 @@ class PatternPage(BasePage):
 
     def load_outline_polys(
         self,
-        polys: list[list[tuple[float, float]]],
+        polys: list,
         *,
         source_label: str = "Draft selection",
         offer_undo: bool = False,
@@ -1660,7 +1774,23 @@ class PatternPage(BasePage):
         if not polys:
             return
         self._pre_transfer_state = self.get_workspace_state() if offer_undo else None
-        incoming = [[(x, y) for x, y in poly] for poly in polys]
+        incoming: list[list[tuple[float, float]]] = []
+        layers: list[str | None] = []
+        for item in polys:
+            if isinstance(item, dict):
+                points = item.get("points", [])
+                layer = item.get("layer")
+            else:
+                points, layer = item, None
+            try:
+                poly = [(float(x), float(y)) for x, y in points]
+            except (TypeError, ValueError):
+                continue
+            if len(poly) >= 2:
+                incoming.append(poly)
+                layers.append(str(layer) if layer else None)
+        if not incoming:
+            return
         self._suspend_state = True
         self._preview_user_opt_out = False
         self._showing_preview = False
@@ -1670,6 +1800,10 @@ class PatternPage(BasePage):
         self._orig_polys = [list(poly) for poly in incoming]
         self._edit_polys = [list(poly) for poly in incoming]
         self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
+        self._outline_layers = {
+            entity_id: layer or "Outline"
+            for entity_id, layer in zip(self._outline_ids, layers, strict=True)
+        }
         self._exclusion_ids.clear()
         self._export_is_current = False
         self._preview_is_stale = False
@@ -1677,11 +1811,7 @@ class PatternPage(BasePage):
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._zones.clear()
         self._refresh_zone_list()
-        self._canvas.set_polylines_state(
-            self._edit_polys,
-            fit=True,
-            entity_ids=list(self._outline_ids),
-        )
+        self._load_outline_canvas(fit=True)
         self._sync_canvas_cutout_highlight()
         self._refresh_cutout_status()
         self._canvas.set_mode("select")
@@ -1698,6 +1828,28 @@ class PatternPage(BasePage):
         self._refresh_canvas_panels()
         self._schedule_preview()
         self._emit_state_changed()
+
+    def _load_outline_canvas(
+        self,
+        *,
+        fit: bool,
+        polys: list[list[tuple[float, float]]] | None = None,
+        entity_ids: list[str] | None = None,
+    ) -> None:
+        """Load editable outlines without discarding their source layers."""
+        paths = self._edit_polys if polys is None else polys
+        ids = self._outline_ids if entity_ids is None else entity_ids
+        records = [
+            {
+                "id": entity_id,
+                "points": poly,
+                "layer": self._outline_layers.get(entity_id, "Outline"),
+            }
+            for entity_id, poly in zip(ids, paths, strict=True)
+        ]
+        layer_order = list(dict.fromkeys(str(record["layer"]) for record in records))
+        self._canvas.set_layer_model(layer_order, layer_order[0] if layer_order else None)
+        self._canvas.set_entity_records(records, fit=fit)
 
     def _undo_outline_transfer(self) -> None:
         previous = getattr(self, "_pre_transfer_state", None)
@@ -1923,9 +2075,6 @@ class PatternPage(BasePage):
         # geometry guards so configuring a future pattern can be saved,
         # recovered, and protected by the close confirmation.
         self._emit_state_changed()
-        fill_active = bool(self._collect_fill_options())
-        if not self._zones and not fill_active and self._current_pattern_key() == "— None —":
-            return
         if not self._zones and not self._edit_polys:
             return
         self._preview_revision += 1
@@ -2101,6 +2250,8 @@ class PatternPage(BasePage):
             f"{count} shapes ({detail_str}) · {diagnostics.total_length:.1f} mm path"
             f" · {diagnostics.travel_length:.1f} mm travel"
         )
+        if self._preview_categories.get("preview_limited"):
+            status_text += " · simplified display (export remains full detail)"
         if self._showing_preview:
             self._canvas.set_dense_preview_render(True)
             selected_zone = self._zone_list.currentRow()
@@ -2212,9 +2363,8 @@ class PatternPage(BasePage):
         has_preview = bool(self._preview_polys_cache)
         is_computing = self._preview_task.running
         has_outline = bool(self._edit_polys or self._zones)
-        has_treatment = bool(self._zones) or (
-            has_outline and self._current_pattern_key() != "— None —"
-        )
+        # Pattern and fill are optional treatments layered on a valid outline.
+        has_treatment = has_outline
         if self._export_is_current:
             workflow_states = ["complete", "complete", "complete", "complete", "current"]
         elif self._preview_is_stale and has_treatment:
@@ -2254,22 +2404,22 @@ class PatternPage(BasePage):
             )
         self._cancel_preview_btn.setVisible(is_computing)
         if hasattr(self, "_gen_btn"):
-            pattern_ready = self._current_pattern_key() != "— None —"
-            can_export = bool(self._edit_polys) and (pattern_ready or bool(self._zones))
-            self._gen_btn.setEnabled(
-                can_export and not self._generate_task.running and not self._preview_task.running
-            )
+            can_export = bool(self._edit_polys or self._zones)
+            # Do not leave the user with a disabled primary action. Clicking
+            # without an outline gives the existing clear recovery message;
+            # “None” exports fill-only or outline-only geometry.
+            self._gen_btn.setEnabled(not self._generate_task.running)
             if self._generate_task.running:
                 export_tip = "Stop the current pattern export"
-            elif self._preview_task.running:
-                export_tip = "Preview is still computing; export will be available when it finishes"
             elif can_export:
-                export_tip = "Generate the pattern fill and save as a DXF  (⌘E)"
+                export_tip = "Export the current outline, pattern, and/or fill as a DXF  (⌘E)"
             else:
-                export_tip = "Load an outline and choose a pattern before exporting"
+                export_tip = "Load an outline to export it, a fill, or a pattern  (⌘E)"
             self._gen_btn.setToolTip(export_tip)
             if hasattr(self, "_export_actions"):
-                self._export_actions["engraving"].setEnabled(bool(self._engraving_image_path))
+                # This action can explain what is missing, so do not turn it
+                # into a dead menu item before an image has been selected.
+                self._export_actions["engraving"].setEnabled(True)
             open_outlines = sum(
                 1 for poly in self._edit_polys if len(poly) > 1 and poly[0] != poly[-1]
             )

@@ -50,6 +50,24 @@ class SnapEngine:
 
     GUIDE_SNAP_PX = 8.0
     RELATIONSHIP_REFERENCE_PX = 96.0
+    # A combined relationship has one exact endpoint, but asking users to
+    # land inside the generic 10px vertex radius defeats the point of an
+    # intelligent constraint snap.  It gets a forgiving acquisition band
+    # and a small hysteresis band after it has been acquired.
+    COMBINED_RELATIONSHIP_ACQUIRE_PX = 28.0
+    COMBINED_RELATIONSHIP_RETAIN_PX = 36.0
+    # Equal length also resolves to one exact endpoint, so it needs the same
+    # magnetic range as the combined relationship.  Directional constraints
+    # resolve to a line rather than a point, and deliberately use a smaller
+    # band to keep a freehand segment easy to draw.
+    EQUAL_LENGTH_ACQUIRE_PX = 28.0
+    EQUAL_LENGTH_RETAIN_PX = 36.0
+    DIRECTIONAL_RELATIONSHIP_ACQUIRE_PX = 18.0
+    DIRECTIONAL_RELATIONSHIP_RETAIN_PX = 24.0
+    # Axis alignment and extensions are inferred construction lines.  Give
+    # them a little more room than a precise vertex/curve target, without
+    # allowing them to pull geometry from across the canvas.
+    INFERRED_LINE_SNAP_PX = 18.0
 
     def __init__(self, view: CanvasView) -> None:
         self.v = view
@@ -86,6 +104,7 @@ class SnapEngine:
         # explicitly hidden geometry must not create invisible snap targets.
         hidden_polys = v._flagged("hidden")
         vertex_enabled = allow_vertex and getattr(v, "_snap_vertex_enabled", True)
+        midpoint_enabled = allow_vertex and getattr(v, "_snap_midpoint_enabled", True)
         edge_enabled = allow_edge and getattr(v, "_snap_edge_enabled", True)
         if drag:
             best = resolve_drag_snap(
@@ -96,6 +115,7 @@ class SnapEngine:
                 allow_polyline=allow_polyline,
                 allow_grid=allow_grid,
                 allow_vertex=vertex_enabled,
+                allow_midpoint=midpoint_enabled,
                 allow_edge=edge_enabled,
                 exclude_vertices=exclude_vertices,
                 exclude_segments=exclude_segments,
@@ -122,6 +142,7 @@ class SnapEngine:
                 allow_polyline=allow_polyline,
                 allow_grid=allow_grid,
                 allow_vertex=vertex_enabled,
+                allow_midpoint=midpoint_enabled,
                 allow_edge=edge_enabled,
                 grid_snap_enabled=v._grid_snap,
                 grid_spacing=v._grid_spacing,
@@ -163,7 +184,10 @@ class SnapEngine:
             and edge_enabled
             and reference_point is not None
             and (
-                getattr(v, "_snap_angle_enabled", True)
+                getattr(v, "_snap_parallel_enabled", getattr(v, "_snap_angle_enabled", True))
+                or getattr(
+                    v, "_snap_perpendicular_enabled", getattr(v, "_snap_angle_enabled", True)
+                )
                 or getattr(v, "_snap_equal_length_enabled", True)
             )
         ):
@@ -175,7 +199,10 @@ class SnapEngine:
                     cx, cy, wx, wy, reference_point, exclude=exclude_polys
                 ),
             )
-        if allow_polyline and vertex_enabled and getattr(v, "_snap_axis_alignment_enabled", True):
+        if allow_polyline and vertex_enabled and (
+            getattr(v, "_snap_align_x_enabled", getattr(v, "_snap_axis_alignment_enabled", True))
+            or getattr(v, "_snap_align_y_enabled", getattr(v, "_snap_axis_alignment_enabled", True))
+        ):
             best = self._pick_better(
                 cx,
                 cy,
@@ -190,7 +217,13 @@ class SnapEngine:
                 self._extension_candidate(cx, cy, exclude=exclude_polys),
             )
         best = self._pick_better(cx, cy, best, self._guide_candidate(cx, cy, wx, wy))
-        if best is None or best[2] not in {"parallel", "perpendicular", "equal_length"}:
+        if best is None or best[2] not in {
+            "parallel",
+            "perpendicular",
+            "equal_length",
+            "parallel_equal_length",
+            "perpendicular_equal_length",
+        }:
             self.clear_relationship_reference()
         return best
 
@@ -212,7 +245,6 @@ class SnapEngine:
         locked_reference = self.last_relationship_reference
         locked_type = self.last_relationship_type
         ax, ay = reference
-        radius = ShapeSnapEngine.SNAP_RADIUS
         pointer_angle = math.atan2(wy - ay, wx - ax)
         pointer_length = math.hypot(wx - ax, wy - ay)
         if pointer_length <= 1e-12:
@@ -220,6 +252,7 @@ class SnapEngine:
         hidden_ids = self.v._flagged("hidden")
         candidates: list[tuple[SnapResult, RelationshipReference]] = []
         equal_candidates: list[tuple[SnapResult, RelationshipReference]] = []
+        combined_candidates: list[tuple[SnapResult, RelationshipReference]] = []
         sources = [
             (entity.id, entity.points, False)
             for entity in self.v._entities
@@ -232,66 +265,48 @@ class SnapEngine:
             # is not yet present in the document entity list.
             sources.append((_ACTIVE_DRAW_REFERENCE, draw_points, True))
         for entity_id, points, is_active_draw in sources:
-            if len(points) < 2:
-                continue
-            for segment_index, (start, end) in enumerate(zip(points, points[1:])):
-                dx, dy = end[0] - start[0], end[1] - start[1]
-                length = math.hypot(dx, dy)
-                if length <= 1e-9:
-                    continue
-                start_c, end_c = self.v._w2c(*start), self.v._w2c(*end)
-                # Once acquired, keep evaluating only that source regardless
-                # of pointer distance. It releases when its geometric
-                # relationship no longer falls within the snap tolerance.
-                if not self._relationship_source_is_eligible(
-                    cx,
-                    cy,
-                    entity_id,
-                    segment_index,
-                    start_c,
-                    end_c,
-                    locked_reference,
-                    always_available=is_active_draw,
-                ):
-                    continue
-                source: RelationshipReference = (entity_id, segment_index, start, end)
-                angle = math.atan2(dy, dx) % math.pi
-                if getattr(self.v, "_snap_angle_enabled", True):
-                    for target_angle, role in (
-                        (angle, "parallel"),
-                        (angle + math.pi / 2, "perpendicular"),
-                    ):
-                        if locked_type is not None and role != locked_type:
-                            continue
-                        if math.cos(pointer_angle - target_angle) < 0:
-                            target_angle += math.pi
-                        candidates.append(
-                            (
-                                (
-                                    ax + pointer_length * math.cos(target_angle),
-                                    ay + pointer_length * math.sin(target_angle),
-                                    role,
-                                ),
-                                source,
-                            )
-                        )
-                if getattr(self.v, "_snap_equal_length_enabled", True) and locked_type in {
-                    None,
-                    "equal_length",
-                }:
-                    ux, uy = (wx - ax) / pointer_length, (wy - ay) / pointer_length
-                    equal_candidates.append(
-                        (
-                            (ax + length * ux, ay + length * uy, "equal_length"),
-                            source,
-                        )
-                    )
+            self._collect_relationship_candidates(
+                entity_id,
+                points,
+                is_active_draw,
+                cx=cx,
+                cy=cy,
+                reference=reference,
+                pointer=(wx, wy),
+                pointer_angle=pointer_angle,
+                pointer_length=pointer_length,
+                locked_reference=locked_reference,
+                locked_type=locked_type,
+                directional=candidates,
+                equal=equal_candidates,
+                combined=combined_candidates,
+            )
 
-        equal = self._nearest_relationship_candidate(cx, cy, radius, equal_candidates)
+        combined_radius = (
+            self.COMBINED_RELATIONSHIP_RETAIN_PX
+            if locked_type in {"parallel_equal_length", "perpendicular_equal_length"}
+            else self.COMBINED_RELATIONSHIP_ACQUIRE_PX
+        )
+        combined = self._nearest_relationship_candidate(
+            cx, cy, combined_radius, combined_candidates
+        )
+        if combined is not None:
+            return combined
+        equal_radius = (
+            self.EQUAL_LENGTH_RETAIN_PX
+            if locked_type == "equal_length"
+            else self.EQUAL_LENGTH_ACQUIRE_PX
+        )
+        equal = self._nearest_relationship_candidate(cx, cy, equal_radius, equal_candidates)
+        directional_radius = (
+            self.DIRECTIONAL_RELATIONSHIP_RETAIN_PX
+            if locked_type in {"parallel", "perpendicular"}
+            else self.DIRECTIONAL_RELATIONSHIP_ACQUIRE_PX
+        )
         result = (
             equal
             if equal is not None
-            else self._nearest_relationship_candidate(cx, cy, radius, candidates)
+            else self._nearest_relationship_candidate(cx, cy, directional_radius, candidates)
         )
         if result is not None:
             return result
@@ -302,6 +317,162 @@ class SnapEngine:
             return self._relationship_candidate(cx, cy, wx, wy, reference, exclude=exclude)
         self.clear_relationship_reference()
         return None
+
+    def _collect_relationship_candidates(
+        self,
+        entity_id: str,
+        points: list[tuple[float, float]],
+        is_active_draw: bool,
+        *,
+        cx: float,
+        cy: float,
+        reference: tuple[float, float],
+        pointer: tuple[float, float],
+        pointer_angle: float,
+        pointer_length: float,
+        locked_reference: RelationshipReference | None,
+        locked_type: str | None,
+        directional: list[tuple[SnapResult, RelationshipReference]],
+        equal: list[tuple[SnapResult, RelationshipReference]],
+        combined: list[tuple[SnapResult, RelationshipReference]],
+    ) -> None:
+        """Append every usable relationship candidate from one geometry source."""
+        if len(points) < 2:
+            return
+        ax, ay = reference
+        wx, wy = pointer
+        parallel_enabled = getattr(
+            self.v, "_snap_parallel_enabled", getattr(self.v, "_snap_angle_enabled", True)
+        )
+        perpendicular_enabled = getattr(
+            self.v, "_snap_perpendicular_enabled", getattr(self.v, "_snap_angle_enabled", True)
+        )
+        equal_enabled = getattr(self.v, "_snap_equal_length_enabled", True)
+        for segment_index, (start, end) in enumerate(zip(points, points[1:])):
+            dx, dy = end[0] - start[0], end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length <= 1e-9:
+                continue
+            start_c, end_c = self.v._w2c(*start), self.v._w2c(*end)
+            if not self._relationship_source_is_eligible(
+                cx,
+                cy,
+                entity_id,
+                segment_index,
+                start_c,
+                end_c,
+                locked_reference,
+                always_available=is_active_draw,
+            ):
+                continue
+            source: RelationshipReference = (entity_id, segment_index, start, end)
+            angle = math.atan2(dy, dx) % math.pi
+            directions = tuple(
+                direction
+                for direction in (
+                    (angle, "parallel") if parallel_enabled else None,
+                    (angle + math.pi / 2, "perpendicular") if perpendicular_enabled else None,
+                )
+                if direction is not None
+            )
+            if directions:
+                self._append_directional_candidates(
+                    directional,
+                    source,
+                    directions,
+                    ax,
+                    ay,
+                    pointer_angle,
+                    pointer_length,
+                    locked_type,
+                )
+            if equal_enabled and self._relationship_type_is_allowed("equal_length", locked_type):
+                ux, uy = (wx - ax) / pointer_length, (wy - ay) / pointer_length
+                equal.append(((ax + length * ux, ay + length * uy, "equal_length"), source))
+            if directions and equal_enabled:
+                self._append_combined_candidates(
+                    combined,
+                    source,
+                    directions,
+                    ax,
+                    ay,
+                    pointer_angle,
+                    length,
+                    locked_type,
+                )
+
+    def _append_directional_candidates(
+        self,
+        options: list[tuple[SnapResult, RelationshipReference]],
+        source: RelationshipReference,
+        directions: tuple[tuple[float, str], ...],
+        ax: float,
+        ay: float,
+        pointer_angle: float,
+        pointer_length: float,
+        locked_type: str | None,
+    ) -> None:
+        for target_angle, role in directions:
+            if not self._relationship_type_is_allowed(role, locked_type):
+                continue
+            if math.cos(pointer_angle - target_angle) < 0:
+                target_angle += math.pi
+            options.append(
+                (
+                    (
+                        ax + pointer_length * math.cos(target_angle),
+                        ay + pointer_length * math.sin(target_angle),
+                        role,
+                    ),
+                    source,
+                )
+            )
+
+    def _append_combined_candidates(
+        self,
+        options: list[tuple[SnapResult, RelationshipReference]],
+        source: RelationshipReference,
+        directions: tuple[tuple[float, str], ...],
+        ax: float,
+        ay: float,
+        pointer_angle: float,
+        length: float,
+        locked_type: str | None,
+    ) -> None:
+        """Add exact angle-and-length candidates for a source segment."""
+        for target_angle, role in directions:
+            combined_role = f"{role}_equal_length"
+            if not self._relationship_type_is_allowed(combined_role, locked_type):
+                continue
+            if math.cos(pointer_angle - target_angle) < 0:
+                target_angle += math.pi
+            options.append(
+                (
+                    (
+                        ax + length * math.cos(target_angle),
+                        ay + length * math.sin(target_angle),
+                        combined_role,
+                    ),
+                    source,
+                )
+            )
+
+    @staticmethod
+    def _relationship_type_is_allowed(role: str, locked_type: str | None) -> bool:
+        """Keep one acquired relationship stable without hiding a paired one."""
+        if locked_type is None:
+            return True
+        if role == locked_type:
+            return True
+        if role == "equal_length":
+            return locked_type in {"parallel_equal_length", "perpendicular_equal_length"}
+        if role in {"parallel_equal_length", "perpendicular_equal_length"}:
+            # A line already held parallel/perpendicular should promote to
+            # the paired length relationship when its endpoint reaches the
+            # source length. This keeps the intended direction while still
+            # making the exact length easy to acquire.
+            return locked_type in {role.removesuffix("_equal_length"), "equal_length"}
+        return False
 
     def _nearest_relationship_candidate(
         self,
@@ -380,7 +551,13 @@ class SnapEngine:
         """Align the moving endpoint's X or Y coordinate to visible endpoints."""
         hidden_ids = self.v._flagged("hidden")
         best: SnapResult | None = None
-        best_distance = ShapeSnapEngine.SNAP_RADIUS
+        best_distance = self.INFERRED_LINE_SNAP_PX
+        align_x_enabled = getattr(
+            self.v, "_snap_align_x_enabled", getattr(self.v, "_snap_axis_alignment_enabled", True)
+        )
+        align_y_enabled = getattr(
+            self.v, "_snap_align_y_enabled", getattr(self.v, "_snap_axis_alignment_enabled", True)
+        )
         for entity in self.v._entities:
             if entity.id in (exclude or ()) or entity.id in hidden_ids or not entity.points:
                 continue
@@ -395,12 +572,12 @@ class SnapEngine:
             for px, py in points:
                 pcx, _ = self.v._w2c(px, wy)
                 x_distance = abs(cx - pcx)
-                if x_distance < best_distance:
+                if align_x_enabled and x_distance < best_distance:
                     best_distance = x_distance
                     best = (px, wy, "axis_x")
                 _, pcy = self.v._w2c(wx, py)
                 y_distance = abs(cy - pcy)
-                if y_distance < best_distance:
+                if align_y_enabled and y_distance < best_distance:
                     best_distance = y_distance
                     best = (wx, py, "axis_y")
         return best
@@ -578,7 +755,7 @@ class SnapEngine:
             return None
         wx, wy = self.v._c2w(cx, cy)
         best: SnapResult | None = None
-        best_dist = ShapeSnapEngine.SNAP_RADIUS
+        best_dist = self.INFERRED_LINE_SNAP_PX
         hidden_ids = self.v._flagged("hidden")
         for entity in self.v._entities:
             if entity.id in (exclude or ()) or entity.id in hidden_ids:
@@ -618,8 +795,8 @@ class SnapEngine:
         sd = math.hypot(cx - scx, cy - scy)
         first_priority = self._snap_priority(first[2])
         second_priority = self._snap_priority(second[2])
-        first_explicit = first_priority >= 90
-        second_explicit = second_priority >= 90
+        first_explicit = self._is_explicit_finite_geometry(first[2])
+        second_explicit = self._is_explicit_finite_geometry(second[2])
         if first_explicit != second_explicit:
             # Explicit finite geometry always beats inferred construction
             # when both candidates are inside their acquisition radii.
@@ -665,13 +842,28 @@ class SnapEngine:
             return 60
         if snap_type in {
             "equal_length",
-            "axis_x",
-            "axis_y",
             "parallel",
             "perpendicular",
         }:
-            return 40
+            # Constraint relationships should not be masked by a visible
+            # grid. Explicit finite geometry still wins in _pick_better.
+            return 90
+        if snap_type in {"parallel_equal_length", "perpendicular_equal_length"}:
+            return 92
+        if snap_type in {"axis_x", "axis_y"}:
+            return 75
         return 50
+
+    @staticmethod
+    def _is_explicit_finite_geometry(snap_type: str) -> bool:
+        """Whether a candidate represents an existing finite geometry target."""
+        return (
+            snap_type in {"intersection", "center", "midpoint", "edge", "tangent"}
+            or snap_type == "vertex"
+            or snap_type.startswith(
+                ("vertex_", "spline_control_", "arc_start", "arc_end", "circle_", "ellipse_", "quadrant_")
+            )
+        )
 
     @staticmethod
     def _is_magnetic_point(snap_type: str) -> bool:
@@ -683,7 +875,9 @@ class SnapEngine:
 class ShapeSnapEngine:
     """Shape-aware snapping for precise alignment and positioning."""
 
-    SNAP_RADIUS = 10.0  # Screen pixels
+    # Match the core CAD snap distance so analytic shapes and polyline
+    # geometry feel equally reachable.
+    SNAP_RADIUS = 14.0  # Screen pixels
 
     @staticmethod
     def get_snap_candidates(shape: Shape) -> list[tuple[float, float, str]]:

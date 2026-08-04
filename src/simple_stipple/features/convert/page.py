@@ -46,7 +46,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
-from simple_stipple.ui.components.workflow import set_status_label
+from simple_stipple.ui.components.workflow import set_status_label, workflow_strip
 from simple_stipple.ui.files import reveal_label
 from simple_stipple.ui.recent import KIND_VECTOR, record_recent
 from simple_stipple.ui.style.theme import STATUS_NEUTRAL, STATUS_WARN
@@ -86,6 +86,12 @@ class ConvertPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
+        self._workflow_strip = workflow_strip(
+            ("Choose task", "Add input", "Run conversion", "Review result"),
+            title="Vector tools",
+            description="Repair or convert a file, then review the resulting geometry before continuing.",
+        )
+        root.addWidget(self._workflow_strip)
 
         # ── Left sidebar content ──────────────────────────────────────────────
         left_w = QWidget()
@@ -311,6 +317,7 @@ class ConvertPage(BasePage):
         self._preview_canvas.set_grid_snap(False)
         self._preview_canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
         self._precision_bar.bind_canvas(self._preview_canvas)
+        self._canvas_status.bind_canvas(self._preview_canvas)
         _cl.addWidget(self._preview_canvas, stretch=1)
 
         log_lbl = QLabel("LOG")
@@ -391,6 +398,7 @@ class ConvertPage(BasePage):
             for combo in subtab.findChildren(QComboBox):
                 combo.currentIndexChanged.connect(lambda _index: self._emit_state_changed())
             subtab._src_edit.textChanged.connect(self._sync_shared_input_from_task)
+            subtab._src_edit.textChanged.connect(lambda _text: self._update_workflow())
         self.setAcceptDrops(True)
         selected_task = max(0, min(3, int(self._settings.get("convert_selected_task", 0))))
         selected_button = self._tool_group.button(selected_task)
@@ -401,6 +409,7 @@ class ConvertPage(BasePage):
         self._initializing_task = False
         self._update_task_selector_mode(sidebar_width)
         self._refresh_preview_ui()
+        self._update_workflow()
 
     def sizeHint(self) -> QSize:
         """Prefer a width that fits the smallest supported application window."""
@@ -596,6 +605,7 @@ class ConvertPage(BasePage):
         self._footer_overflow_menu.addSeparator()
         cancel_action = self._footer_overflow_menu.addAction("Cancel Active Job", subtab.cancel)
         cancel_action.setEnabled(still_running)
+        self._update_workflow()
 
     def _trigger_active_subtab(self) -> None:
         """Disable footer CTA, show working status, then invoke the active subtab."""
@@ -645,6 +655,7 @@ class ConvertPage(BasePage):
         self._log.appendPlainText(text)
         scrollbar = self._log.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        self._update_workflow()
 
     def _refresh_preview_ui(self) -> None:
         if not hasattr(self, "_preview_canvas"):
@@ -675,6 +686,22 @@ class ConvertPage(BasePage):
                 for poly in self._preview_canvas.get_polylines_state()
             )
         )
+        self._update_workflow()
+
+    def _update_workflow(self) -> None:
+        """Expose the next meaningful Convert action at all times."""
+        if not hasattr(self, "_tool_stack"):
+            return
+        source = self._active_conversion_tab()._src_edit.text().strip()
+        has_result = hasattr(self, "_preview_canvas") and bool(self._preview_canvas.poly_count)
+        running = bool(getattr(self._active_conversion_tab(), "_running", False))
+        if has_result:
+            states = ("complete", "complete", "complete", "current")
+        elif source or running:
+            states = ("complete", "complete", "current", "pending")
+        else:
+            states = ("complete", "current", "pending", "pending")
+        self._workflow_strip.set_step_states(states)
 
     def _open_preview_in_draft(self) -> None:
         polys = self._preview_canvas.get_polylines_state()

@@ -10,12 +10,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath
-from PySide6.QtWidgets import QLineEdit, QSpinBox, QWidget
+from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath, QPalette
+from PySide6.QtWidgets import QLabel, QLineEdit, QSpinBox, QWidget
 
 from simple_stipple.document.model import EntityRecord
 from simple_stipple.platform.config import user_data_dir
 from simple_stipple.ui.components.feedback import refresh_style
+from simple_stipple.ui.style.theme import resolve_tokens
 from simple_stipple.ui.units import (
     parse_numeric_expression as _parse_expression,
 )
@@ -73,18 +74,30 @@ class HudTextService:
 
     # ── Auto-dimension HUD (Fusion 360 style) ──────────────────────────────
 
-    _DIM_STYLE = (
-        "background: #161b22; color: #f0f6fc; border: 1px solid #30363d;"
-        "border-radius: 6px; font-size: 12px;"
-        "font-family: Menlo, Consolas, 'DejaVu Sans Mono', monospace;"
-        "padding: 3px 6px;"
-    )
-    _DIM_STYLE_HOVER = (
-        "background: #1c2128; color: #f0f6fc; border: 1px solid #58a6ff;"
-        "border-radius: 6px; font-size: 12px;"
-        "font-family: Menlo, Consolas, 'DejaVu Sans Mono', monospace;"
-        "padding: 3px 6px;"
-    )
+    def _hud_input_style(self, *, focused: bool = False) -> str:
+        """Use the active app palette for canvas editors, not a blue-only skin."""
+        theme = resolve_tokens()
+        palette = self._host.palette()
+        border = palette.color(
+            QPalette.ColorRole.Highlight if focused else QPalette.ColorRole.Mid
+        ).name()
+        background = palette.color(
+            QPalette.ColorRole.AlternateBase if focused else QPalette.ColorRole.Base
+        ).name()
+        text = palette.color(QPalette.ColorRole.Text).name()
+        return (
+            f"background: {background}; color: {text}; "
+            f"border: 1px solid {border}; border-radius: {theme['radius_sm']}; "
+            f"font-size: {theme['font_sm']}; font-family: {theme['mono']}; padding: 3px 7px;"
+        )
+
+    def _hud_label_style(self) -> str:
+        palette = self._host.palette()
+        return (
+            f"background: {palette.color(QPalette.ColorRole.Window).name()}; "
+            f"color: {palette.color(QPalette.ColorRole.PlaceholderText).name()}; "
+            "border: none; font-size: 10px; font-weight: 600; padding: 0 2px;"
+        )
 
     def _make_hud_edit(
         self,
@@ -101,13 +114,15 @@ class HudTextService:
         - Monospace font for precise number reading
         """
         edit = QLineEdit(cast("QWidget", self._host))
-        edit.setFixedWidth(max(width, 60))
-        edit.setFixedHeight(height)
+        edit.setFixedWidth(max(width, 76))
+        edit.setFixedHeight(max(height, 30))
         edit.setAlignment(align)
-        edit.setStyleSheet(self._DIM_STYLE)
+        edit.setStyleSheet(self._hud_input_style())
+        edit.setAccessibleName(placeholder or "Canvas numeric input")
+        edit.setAccessibleDescription("Type a value, press Enter to apply, or Escape to cancel")
 
         # Store hover style for focus events.
-        edit.setProperty("_dim_hover_style", self._DIM_STYLE_HOVER)
+        edit.setProperty("_dim_hover_style", self._hud_input_style(focused=True))
 
         if placeholder:
             edit.setPlaceholderText(placeholder)
@@ -132,10 +147,12 @@ class HudTextService:
         spin = QSpinBox(cast("QWidget", self._host))
         spin.setRange(minimum, maximum)
         spin.setValue(value)
-        spin.setFixedWidth(max(width, 60))
-        spin.setFixedHeight(height)
+        spin.setFixedWidth(max(width, 76))
+        spin.setFixedHeight(max(height, 30))
         spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        spin.setStyleSheet(self._DIM_STYLE)
+        spin.setStyleSheet(self._hud_input_style())
+        spin.setAccessibleName("Canvas numeric stepper")
+        spin.setAccessibleDescription("Type a value or use the arrow keys to adjust it")
         spin.installEventFilter(cast("QWidget", self._host))
         spin.show()
         return spin
@@ -163,12 +180,19 @@ class HudTextService:
         unit = self._host._unit_system if is_length else None
         display_label = label.replace("mm", _unit_suffix(unit)) if unit else label
         display_default = _to_display(default, unit) if unit else default
-        edit = self._make_hud_edit(placeholder=display_label, width=180, height=32)
+        edit = self._make_hud_edit(placeholder="Value", width=180, height=32)
         edit.setText(f"{display_default:g}")
         edit.selectAll()
         edit.setToolTip(display_label)
-        edit.move(*self._context_hud_position(180, 32))
+        x, y = self._context_hud_position(180, 52)
+        label_widget = QLabel(display_label, cast("QWidget", self._host))
+        label_widget.setStyleSheet(self._hud_label_style())
+        label_widget.setFixedSize(180, 18)
+        label_widget.move(x, y)
+        label_widget.show()
+        edit.move(x, y + 20)
         self._host._hud_prompt_edit = edit
+        self._host._hud_prompt_label = label_widget
         self._host._show_flash(display_label, 1600)
 
         def _preview(text: str) -> None:
@@ -232,11 +256,18 @@ class HudTextService:
     ) -> None:
         """Inline non-numeric prompt whose callback may raise ValueError."""
         self._dismiss_hud_prompt()
-        edit = self._make_hud_edit(placeholder=label, width=width, height=24)
+        edit = self._make_hud_edit(placeholder="Value", width=width, height=24)
         edit.setText(initial)
-        edit.move(*self._context_hud_position(width, 24))
+        x, y = self._context_hud_position(width, 44)
+        label_widget = QLabel(label, cast("QWidget", self._host))
+        label_widget.setStyleSheet(self._hud_label_style())
+        label_widget.setFixedSize(width, 18)
+        label_widget.move(x, y)
+        label_widget.show()
+        edit.move(x, y + 20)
         edit.setToolTip(label)
         self._host._hud_prompt_edit = edit
+        self._host._hud_prompt_label = label_widget
         self._host._show_flash(label, 1800)
 
         def _commit() -> None:
@@ -289,6 +320,10 @@ class HudTextService:
         if edit is not None:
             edit.deleteLater()
         self._host._hud_prompt_edit = None
+        label_widget = getattr(self._host, "_hud_prompt_label", None)
+        if label_widget is not None:
+            label_widget.deleteLater()
+        self._host._hud_prompt_label = None
         self._host._clear_operation_preview()
 
     def _show_dim_inputs(self) -> None:
@@ -297,7 +332,17 @@ class HudTextService:
         if not self._host._draw_pts:
             return
 
-        dist_edit = self._make_hud_edit("d:", 70)
+        dist_label = QLabel(
+            f"Length ({_unit_suffix(self._host._unit_system)})",
+            cast("QWidget", self._host),
+        )
+        dist_label.setStyleSheet(self._hud_label_style())
+        dist_label.setFixedSize(92, 16)
+        dist_label.show()
+        self._host._dim_distance_label = dist_label
+
+        dist_edit = self._make_hud_edit("Length", 92)
+        dist_edit.setAccessibleDescription("Next segment length in the active unit")
         dist_edit.returnPressed.connect(self._apply_dim_input)
         # textEdited fires only on user keystrokes (not setText), so the dirty
         # flag tracks genuine typing; clearing the field resumes live updates.
@@ -307,7 +352,14 @@ class HudTextService:
         self._host._dim_distance_edit = dist_edit
         self._host._dim_distance_dirty = False
 
-        angle_edit = self._make_hud_edit("∠:", 55)
+        angle_label = QLabel("Angle (°)", cast("QWidget", self._host))
+        angle_label.setStyleSheet(self._hud_label_style())
+        angle_label.setFixedSize(92, 16)
+        angle_label.show()
+        self._host._dim_angle_label = angle_label
+
+        angle_edit = self._make_hud_edit("Angle", 92)
+        angle_edit.setAccessibleDescription("Next segment angle in degrees")
         angle_edit.returnPressed.connect(self._apply_dim_input)
         angle_edit.textEdited.connect(
             lambda t: setattr(self._host, "_dim_angle_dirty", bool(t.strip()))
@@ -331,6 +383,12 @@ class HudTextService:
             self._host._dim_angle_edit.hide()
             self._host._dim_angle_edit.deleteLater()
             self._host._dim_angle_edit = None
+        for attr in ("_dim_distance_label", "_dim_angle_label"):
+            label = getattr(self._host, attr, None)
+            if label is not None:
+                label.hide()
+                label.deleteLater()
+                setattr(self._host, attr, None)
         self._host._dim_distance_dirty = False
         self._host._dim_angle_dirty = False
 
@@ -436,15 +494,21 @@ class HudTextService:
         # Default: below-right of cursor
         dx, dy = 28, 22
         # If near right edge, flip to left side
-        if cx + dx + 80 > vw:
-            dx = -100
+        if cx + dx + 92 > vw:
+            dx = -112
         # If near bottom edge, flip above
-        if cy + dy + 50 > vh:
-            dy = -50
+        if cy + dy + 76 > vh:
+            dy = -76
+        x = int(cx + dx)
+        y = int(cy + dy)
+        if self._host._dim_distance_label is not None:
+            self._host._dim_distance_label.move(x, y)
         if self._host._dim_distance_edit is not None:
-            self._host._dim_distance_edit.move(int(cx + dx), int(cy + dy))
+            self._host._dim_distance_edit.move(x, y + 16)
+        if self._host._dim_angle_label is not None:
+            self._host._dim_angle_label.move(x, y + 44)
         if self._host._dim_angle_edit is not None:
-            self._host._dim_angle_edit.move(int(cx + dx), int(cy + dy + 24))
+            self._host._dim_angle_edit.move(x, y + 60)
 
     def _update_dim_values(self, distance: float, angle: float) -> None:
         """Update displayed values in the dim inputs, unless user has typed.
@@ -566,7 +630,7 @@ class HudTextService:
         chx, chy = self._host._w2c(hx, hy)
         mx, my = (cax + chx) / 2, (cay + chy) / 2
 
-        le = QLineEdit(cast("QWidget", self._host))
+        le = self._make_hud_edit(width=180, height=32)
         display_dist = _to_display(dist, self._host._unit_system)
         le.setText(f"{display_dist:.4g}")
         le.setPlaceholderText(f"Target distance ({_unit_suffix(self._host._unit_system)})")
@@ -574,24 +638,17 @@ class HudTextService:
             "Enter the real target distance. The first picked point remains fixed.\n"
             "Expressions such as 25.4/2 are accepted."
         )
-        le.setFixedWidth(150)
-        le.setFixedHeight(24)
-        le.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        le.setStyleSheet(
-            "background: #001522; color: #ffffff; border: 1px solid #00d8ff;"
-            "border-radius: 3px; font-size: 12px; font-weight: bold;"
-        )
+        le.setAccessibleName("Measure target distance")
         le.move(
             *self._hud_position_near(
                 mx,
                 my,
-                150,
-                24,
-                offset_x=-75,
-                offset_y=-40,
+                180,
+                32,
+                offset_x=-90,
+                offset_y=-44,
             )
         )
-        le.show()
         le.setFocus()
         le.selectAll()
         le.returnPressed.connect(self._apply_measure_scale)

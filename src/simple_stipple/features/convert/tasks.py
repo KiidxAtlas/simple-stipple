@@ -294,7 +294,10 @@ class _ConversionSubTab(QWidget):
         self._btn.setMinimumHeight(38)
         self._btn.clicked.connect(self._run)
 
-        self._status = QLabel("")
+        # Status is presented in ConvertPage's sticky footer. Keep this
+        # compatibility label parented to its sub-tab so status signals can
+        # never turn it into an accidental top-level native window.
+        self._status = QLabel("", self)
         self._status.setWordWrap(True)
         self._status.setVisible(False)
 

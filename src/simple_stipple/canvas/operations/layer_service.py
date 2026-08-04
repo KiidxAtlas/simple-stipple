@@ -203,7 +203,7 @@ class LayerService:
         return {
             entity.id
             for entity in self._host._entities
-            if entity.hidden or not self.on_active(entity)
+            if entity.hidden
         }
 
     def drop_inactive_selection(self) -> None:

@@ -12,6 +12,7 @@ from __future__ import annotations
 from simple_stipple.platform.paths import custom_tiles_dir, user_data_dir
 from simple_stipple.platform.settings import (
     CONTEXT_MENU_SECTION_LABELS,
+    CONTEXT_MENU_TRANSFORM_ITEMS,
     DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
@@ -35,6 +36,7 @@ from simple_stipple.platform.settings import (
     SMOOTHING_METHODS,
     SettingsSchema,
     normalize_context_menu_overflow_sections,
+    normalize_context_menu_profiles,
     normalize_context_menu_sections,
     normalize_draw_sidebar_shape_tools,
     save_settings,
@@ -42,6 +44,7 @@ from simple_stipple.platform.settings import (
 
 __all__ = [
     "CONTEXT_MENU_SECTION_LABELS",
+    "CONTEXT_MENU_TRANSFORM_ITEMS",
     "DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS",
     "DEFAULT_CONTEXT_MENU_SECTIONS",
     "DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE",
@@ -66,6 +69,7 @@ __all__ = [
     "SettingsSchema",
     "custom_tiles_dir",
     "normalize_context_menu_overflow_sections",
+    "normalize_context_menu_profiles",
     "normalize_context_menu_sections",
     "normalize_draw_sidebar_shape_tools",
     "save_settings",

@@ -11,6 +11,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
     QSizePolicy,
@@ -48,6 +49,57 @@ def info_chip(text: str, tone: str = "neutral") -> QLabel:
     chip.setProperty("tone", tone)
     chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return chip
+
+
+def empty_state(
+    *,
+    title: str,
+    hint: str = "",
+    icon: str = "",
+    action: QWidget | None = None,
+) -> QWidget:
+    """Build the "nothing here yet" panel a page shows before it has content.
+
+    This is the first thing a user reads on an unfamiliar page, so it says
+    what the surface is for and what to do next rather than leaving a blank
+    rectangle to interpret. Pass *action* to put the single obvious next step
+    directly inside it.
+    """
+    host = QWidget()
+    host.setProperty("role", "empty-state")
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(24, 24, 24, 24)
+    layout.setSpacing(8)
+    layout.addStretch()
+    if icon:
+        glyph = QLabel(icon)
+        glyph.setProperty("role", "empty-icon")
+        glyph.setProperty("icon-only", True)
+        glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(glyph)
+    heading = QLabel(title)
+    heading.setProperty("role", "empty-title")
+    heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    heading.setWordWrap(True)
+    layout.addWidget(heading)
+    if hint:
+        detail = QLabel(hint)
+        detail.setProperty("role", "empty-hint")
+        detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        detail.setWordWrap(True)
+        layout.addWidget(detail)
+    if action is not None:
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(action)
+        row.addStretch()
+        layout.addLayout(row)
+    layout.addStretch()
+    # Screen readers otherwise announce an unlabelled container and the user
+    # has to tab through to discover why the page looks empty.
+    host.setAccessibleName(title)
+    host.setAccessibleDescription(hint or title)
+    return host
 
 
 def surface_frame(surface: str = "panel") -> QFrame:

@@ -104,9 +104,17 @@ class Document:
         entity = self.entity_for_id(entity_id)
         if entity is None:
             return False
-        return not entity.hidden and self.on_active_layer(entity)
+        # The active layer determines where new geometry is created; it is
+        # not a selection filter. Visible geometry remains selectable across
+        # layers, while hidden layers remain protected from interaction.
+        return not entity.hidden
 
     def drop_inactive_selection(self) -> bool:
+        """Discard only hidden or deleted entities from selection.
+
+        The historical name is retained because callers invoke this after a
+        layer change. Switching layers must not lose a mixed-layer selection.
+        """
         selection = {eid for eid in self.selection if self.entity_selectable_by_id(eid)}
         changed = selection != self.selection
         self.selection = selection
@@ -296,6 +304,9 @@ class PatternTabState(TabStateBase):
     orig_polys: list[list[tuple[float, float]]] = Field(default_factory=list)
     edit_polys: list[list[tuple[float, float]]] = Field(default_factory=list)
     outline_ids: list[str] = Field(default_factory=list)
+    # The Pattern tab keeps the source document's layer assignment while an
+    # outline is being edited.  Preview/export layers are derived separately.
+    outline_layers: dict[str, str] = Field(default_factory=dict)
     outline_roles: dict[str, str] = Field(default_factory=dict)
     pattern_cell_cutouts: list[list[tuple[float, float]]] = Field(default_factory=list)
     pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = Field(default_factory=list)

@@ -120,6 +120,21 @@ def keyPressEvent(self, event: QKeyEvent):
         self._escape_cb()
         return
 
+    # An editable image is a first-class canvas target.  Give it the same
+    # keyboard affordances as geometry: Delete removes the workspace image,
+    # and Tab moves into its precise placement fields instead of being eaten
+    # by the canvas' shape-dimension HUD.
+    if self._bg_selected and key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+        if callable(self._bg_key_callback):
+            self._bg_key_callback("remove")
+            event.accept()
+            return
+    if self._bg_selected and key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+        if callable(self._bg_key_callback):
+            self._bg_key_callback("tab", key == Qt.Key.Key_Backtab)
+            event.accept()
+            return
+
     if self._selectable:
         # B. Dimension HUD key interception — digits/period/minus go to distance field
         if self._dim_distance_edit is not None and key in (
@@ -466,6 +481,10 @@ def mouseMoveEvent(self, event: QMouseEvent):
     wx, wy = self._c2w(pos.x(), pos.y())
     self._cursor_wx = wx
     self._cursor_wy = wy
+    # Cursor updates are intentionally separate from the page-wide status
+    # refresh.  Rebuilding a layer tree on each mouse move made the bottom
+    # readout stale unless another operation happened to refresh the page.
+    self._queue_cursor_position_update()
     self._hover_snap = None
     self._hover_snap_type = None
     self._hover_snap_multi = []

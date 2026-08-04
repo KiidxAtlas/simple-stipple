@@ -1,4 +1,4 @@
-"""Application theming utilities (palette + external QSS)."""
+"""Application theming: resolve design tokens into a Qt palette and stylesheet."""
 
 from __future__ import annotations
 
@@ -11,12 +11,18 @@ from pathlib import Path
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
+from simple_stipple.ui.style import tokens
+
 # Standard status-label colors, shared by every page's status/footer label
 # (previously hardcoded independently in several pages).
 STATUS_OK = "#3fb950"
 STATUS_ERR = "#f85149"
 STATUS_WARN = "#e3b341"
 STATUS_NEUTRAL = "#8b949e"
+
+# ``$name`` in theme.qss. QSS already uses ``{}`` for rule blocks, so ``$`` is
+# the placeholder rather than ``str.format``.
+_TOKEN_PATTERN = re.compile(r"\$([a-z0-9_]+)")
 
 _STYLE_TEMP_DIR: tempfile.TemporaryDirectory[str] | None = None
 
@@ -61,63 +67,82 @@ def icon_path(name: str) -> Path:
     return style_resource_path(f"icons/{name}")
 
 
-def _build_dark_palette() -> QPalette:
-    p = QPalette()
-    p.setColor(QPalette.ColorRole.Window, QColor("#161b22"))
-    p.setColor(QPalette.ColorRole.WindowText, QColor("#e6edf3"))
-    p.setColor(QPalette.ColorRole.Base, QColor("#0d1117"))
-    p.setColor(QPalette.ColorRole.AlternateBase, QColor("#1c2128"))
-    p.setColor(QPalette.ColorRole.ToolTipBase, QColor("#1c2128"))
-    p.setColor(QPalette.ColorRole.ToolTipText, QColor("#e6edf3"))
-    p.setColor(QPalette.ColorRole.Text, QColor("#e6edf3"))
-    p.setColor(QPalette.ColorRole.Button, QColor("#21262d"))
-    p.setColor(QPalette.ColorRole.ButtonText, QColor("#e6edf3"))
-    p.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
-    p.setColor(QPalette.ColorRole.Highlight, QColor("#2f81f7"))
-    p.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
-    p.setColor(QPalette.ColorRole.PlaceholderText, QColor("#484f58"))
-    p.setColor(QPalette.ColorRole.Mid, QColor("#30363d"))
-    p.setColor(QPalette.ColorRole.Dark, QColor("#0d1117"))
-    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#484f58"))
-    p.setColor(
-        QPalette.ColorGroup.Disabled,
-        QPalette.ColorRole.ButtonText,
-        QColor("#484f58"),
-    )
-    return p
+def resolve_tokens(*, appearance: str = "dark", high_contrast: bool = False) -> dict[str, str]:
+    """Return the active token map — the same one the stylesheet is built from.
+
+    Exposed so widgets that must paint outside QSS (canvas overlays, rendered
+    icons) can read the theme instead of hardcoding a color that then only
+    looks right in one appearance.
+    """
+    return tokens.resolve(appearance, high_contrast)
 
 
-def _build_light_palette() -> QPalette:
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor("#f6f8fa"))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#1f2328"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#eef1f4"))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#1f2328"))
-    palette.setColor(QPalette.ColorRole.Text, QColor("#1f2328"))
-    palette.setColor(QPalette.ColorRole.Button, QColor("#f0f2f4"))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#1f2328"))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#0969da"))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
-    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#6e7781"))
-    palette.setColor(QPalette.ColorRole.Mid, QColor("#d0d7de"))
-    return palette
+def substitute_tokens(template: str, values: dict[str, str]) -> str:
+    """Replace every ``$name`` in *template*.
+
+    An unknown name is a typo in the stylesheet, not something to paper over
+    with a default that silently renders the wrong color, so it raises.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        try:
+            return values[name]
+        except KeyError:
+            raise KeyError(f"Unknown style token ${name}") from None
+
+    return _TOKEN_PATTERN.sub(replace, template)
 
 
 def accessibility_palette(high_contrast: bool = False, appearance: str = "dark") -> QPalette:
-    """Return the application palette, optionally with stronger separation."""
-    palette = _build_light_palette() if appearance == "light" else _build_dark_palette()
-    if high_contrast:
-        palette.setColor(QPalette.ColorRole.Window, QColor("#000000"))
-        palette.setColor(QPalette.ColorRole.Base, QColor("#000000"))
-        palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#151515"))
-        palette.setColor(QPalette.ColorRole.WindowText, QColor("#ffffff"))
-        palette.setColor(QPalette.ColorRole.Text, QColor("#ffffff"))
-        palette.setColor(QPalette.ColorRole.ButtonText, QColor("#ffffff"))
-        palette.setColor(QPalette.ColorRole.Mid, QColor("#8a8a8a"))
-        palette.setColor(QPalette.ColorRole.Highlight, QColor("#58a6ff"))
+    """Return the application palette built from the active token set.
+
+    Qt draws some chrome (native menus, non-styled sub-controls, the text
+    cursor) from the palette rather than the stylesheet, so both are derived
+    from the same tokens and cannot disagree.
+    """
+    theme = tokens.resolve(appearance, high_contrast)
+    palette = QPalette()
+    for role, token in (
+        (QPalette.ColorRole.Window, "bg_app"),
+        (QPalette.ColorRole.WindowText, "text"),
+        (QPalette.ColorRole.Base, "bg_input"),
+        (QPalette.ColorRole.AlternateBase, "bg_surface_alt"),
+        (QPalette.ColorRole.ToolTipBase, "bg_surface"),
+        (QPalette.ColorRole.ToolTipText, "text"),
+        (QPalette.ColorRole.Text, "text"),
+        (QPalette.ColorRole.Button, "bg_surface"),
+        (QPalette.ColorRole.ButtonText, "text"),
+        (QPalette.ColorRole.BrightText, "text_strong"),
+        (QPalette.ColorRole.Highlight, "accent"),
+        (QPalette.ColorRole.HighlightedText, "on_accent"),
+        (QPalette.ColorRole.PlaceholderText, "text_subtle"),
+        (QPalette.ColorRole.Mid, "border"),
+        (QPalette.ColorRole.Dark, "bg_app"),
+    ):
+        palette.setColor(role, QColor(theme[token]))
+    disabled = QColor(theme["text_subtle"])
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled)
     return palette
+
+
+def _density_overrides(density: str) -> str:
+    """Comfortable density enlarges pointer targets without rescaling the canvas."""
+    if density != "comfortable":
+        return ""
+    return """
+
+QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
+    min-height: 36px;
+}
+QPushButton[role="primary"] { min-height: 44px; }
+QCheckBox, QRadioButton, QSlider { min-height: 44px; }
+QListView::item, QTreeView::item, QListWidget::item, QTreeWidget::item {
+    min-height: 36px;
+}
+QFrame[role="collapsible"] { padding-top: 4px; padding-bottom: 4px; }
+"""
 
 
 def load_app_qss(
@@ -127,132 +152,30 @@ def load_app_qss(
     appearance: str = "dark",
     density: str = "compact",
 ) -> str:
-    candidates = [style_resource_path("theme.qss")]
+    """Render the stylesheet template for one appearance."""
+    qss_path = style_resource_path("theme.qss")
+    if not qss_path.exists():
+        logging.warning("Theme stylesheet not found at %s", qss_path)
+        return ""
 
-    for qss_path in candidates:
-        if qss_path.exists():
-            icons_dir = qss_path.with_name("icons").as_posix()
-            # Qt's QSS url() needs forward slashes even on Windows, and the
-            # icon directory may be a package path or a materialized archive.
-            qss = qss_path.read_text(encoding="utf-8").replace("{ICONS_DIR}", icons_dir)
-            if scale != 1.0:
-                qss = re.sub(
-                    r"font-size:\s*(\d+(?:\.\d+)?)px",
-                    lambda match: f"font-size: {float(match.group(1)) * scale:.1f}px",
-                    qss,
-                )
-            if high_contrast:
-                for source, target in {
-                    "#0d1117": "#000000",
-                    "#161b22": "#080808",
-                    "#1a222d": "#151515",
-                    "#21262d": "#202020",
-                    "#30363d": "#8a8a8a",
-                    "#484f58": "#b8b8b8",
-                    "#6e7681": "#d0d0d0",
-                    "#8b949e": "#e0e0e0",
-                    "#e6edf3": "#ffffff",
-                }.items():
-                    qss = qss.replace(source, target)
-            elif appearance == "light":
-                for source, target in {
-                    "rgba(17, 23, 32, 0.92)": "rgba(255, 255, 255, 0.96)",
-                    "rgba(17, 23, 32, 0.95)": "rgba(255, 255, 255, 0.98)",
-                    "rgba(23, 30, 40, 0.94)": "rgba(246, 248, 250, 0.98)",
-                    "rgba(31, 42, 56, 0.72)": "rgba(246, 248, 250, 0.96)",
-                    "rgba(31, 42, 56, 0.9)": "rgba(246, 248, 250, 0.98)",
-                    "#0d1117": "#f6f8fa",
-                    "#0c1117": "#ffffff",
-                    "#0f141b": "#ffffff",
-                    "#111720": "#f6f8fa",
-                    "#121922": "#eaeef2",
-                    "#161b22": "#ffffff",
-                    "#1a222d": "#f0f2f4",
-                    "#1c2128": "#ffffff",
-                    "#21262d": "#eaeef2",
-                    "#212b37": "#e1e6eb",
-                    "#26303b": "#d0d7de",
-                    "#2b3440": "#d0d7de",
-                    "#30363d": "#d0d7de",
-                    "#303a47": "#b6bec8",
-                    "#484f58": "#8c959f",
-                    "#6e7681": "#57606a",
-                    "#8b949e": "#57606a",
-                    "#c9d1d9": "#24292f",
-                    "#e6edf3": "#1f2328",
-                    "#f0f6fc": "#1f2328",
-                    # Status-chip / cutout-callout backgrounds (status-ok,
-                    # status-err, status-warn, #cutoutCallout[active]) were
-                    # dark-tinted near-black boxes even in Light mode — swap
-                    # for pale tints so the chip reads as a badge, not a hole.
-                    "#0f2a17": "#dafbe1",
-                    "#1f6f3a": "#4ac26b",
-                    "#2a0f0f": "#ffebe9",
-                    "#6f1f1f": "#ff8182",
-                    "#2a1e0a": "#fff8c5",
-                    "#7d4f00": "#d4a72c",
-                }.items():
-                    qss = qss.replace(source, target)
-                qss += """
+    # Qt's QSS url() needs forward slashes even on Windows, and the icon
+    # directory may be a package path or a materialized archive.
+    icons_dir = qss_path.with_name("icons").as_posix()
+    qss = qss_path.read_text(encoding="utf-8").replace("{ICONS_DIR}", icons_dir)
+    qss = substitute_tokens(qss, tokens.resolve(appearance, high_contrast))
+    qss += _density_overrides(density)
 
-/* Light chrome around the deliberately dark CAD canvas. */
-QWidget#canvas-toolbar {
-    background: #f6f8fa;
-    border-color: #d0d7de;
-}
-QWidget#canvas-toolbar QLabel[role="toolbar-guidance"],
-QWidget#canvas-toolbar QLabel[role="toolbar-selection"],
-QWidget#canvas-toolbar QToolButton {
-    color: #57606a;
-}
-QToolButton[role="drawer-toggle"] {
-    background: rgba(13, 17, 23, 0.92);
-    border: 1px solid #58a6ff;
-    color: #f0f6fc;
-}
-QToolButton[role="workflow-step"][state="current"] {
-    color: #0969da;
-}
-/* role="empty-state"/"preview-surface" keep their dark #0b0f14 backdrop in
-   every theme (same reasoning as the CAD canvas above — these surfaces
-   preview drawing geometry) — so unlike ordinary panels, their title/hint
-   text must stay light-on-dark rather than follow the general light-mode
-   text remap. Scoped by role rather than the Convert page's specific
-   #conversion-preview id so any future consumer of these roles is covered. */
-QWidget[role="empty-state"] QLabel[role="empty-title"],
-QFrame[role="preview-surface"] QLabel[role="empty-title"] {
-    color: #f0f6fc;
-}
-QWidget[role="empty-state"] QLabel[role="empty-hint"],
-QFrame[role="preview-surface"] QLabel[role="empty-hint"] {
-    color: #b7c3d0;
-}
-"""
-            if density == "comfortable":
-                qss += """
-
-/* Comfortable density: larger pointer targets without changing canvas scale. */
-QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
-    min-height: 36px;
-}
-QPushButton[role="primary"] { min-height: 44px; }
-QCheckBox, QSlider { min-height: 44px; }
-QListView::item, QTreeView::item, QListWidget::item, QTreeWidget::item {
-    min-height: 36px;
-}
-QFrame[role="collapsible"] { padding-top: 4px; padding-bottom: 4px; }
-"""
-            return qss
-
-    logging.warning(
-        "Theme stylesheet not found in expected locations: %s",
-        ", ".join(str(path) for path in candidates),
-    )
-    return ""
+    if scale != 1.0:
+        qss = re.sub(
+            r"font-size:\s*(\d+(?:\.\d+)?)px",
+            lambda match: f"font-size: {float(match.group(1)) * scale:.1f}px",
+            qss,
+        )
+    return qss
 
 
 def apply_dark_theme(app: QApplication) -> None:
-    """Apply app-wide dark palette and stylesheet from external QSS file."""
+    """Apply app-wide palette and stylesheet at the composition boundary."""
     app.setStyle("Fusion")
     app.setPalette(accessibility_palette())
     app.setStyleSheet(load_app_qss())

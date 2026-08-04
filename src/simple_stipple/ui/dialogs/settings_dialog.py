@@ -113,7 +113,6 @@ class SettingsDialog(QDialog):
             True,
         ),
         ("construction_mode_default", "Start drawing as construction geometry", False),
-        ("aspect_ratio_locked_default", "Lock aspect ratio while resizing", False),
         ("geometry_health_visible", "Show geometry-health warnings on canvas", False),
         ("curvature_visible", "Show curvature analysis while editing curves", False),
     ]
@@ -621,10 +620,12 @@ class SettingsDialog(QDialog):
             self,
             sections=current,
             overflow_sections=overflow,
+            profiles=self._settings.get("context_menu_profiles", {}),
         )
         if dlg.exec():
             self._settings["context_menu_sections"] = dlg.get_sections()
             self._settings["context_menu_overflow_sections"] = dlg.get_overflow_sections()
+            self._settings["context_menu_profiles"] = dlg.get_profiles()
 
     def _browse_dir(self, key: str) -> None:
         """Open file browser to select a directory."""

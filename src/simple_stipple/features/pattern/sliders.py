@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QSlider, QWidget
+from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QWidget
+
+from simple_stipple.ui.components.inputs import NoWheelSlider
 
 
 class PatternSlider(QWidget):
@@ -23,7 +25,7 @@ class PatternSlider(QWidget):
         super().__init__(parent)
         decimals = min(2, max(0, int(decimals)))
         self._factor = float(10**decimals)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.spin_box = QDoubleSpinBox()
         self.spin_box.setDecimals(decimals)
         self.spin_box.setRange(minimum, maximum)

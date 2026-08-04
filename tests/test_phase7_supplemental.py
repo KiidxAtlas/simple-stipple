@@ -45,6 +45,7 @@ from simple_stipple.ui.components import feedback
 from simple_stipple.ui.components.collapsible import CollapsibleSection
 from simple_stipple.ui.components.workflow import StatusRegion, set_status_label
 from simple_stipple.ui.recent import KIND_DXF, list_recent
+from simple_stipple.ui.style.theme import resolve_tokens
 
 
 @pytest.fixture(scope="module")
@@ -53,8 +54,14 @@ def app() -> QApplication:
 
 
 @pytest.fixture(autouse=True)
-def close_test_windows(app: QApplication):
-    """Run every top-level widget's real shutdown path after each UI test."""
+def close_test_windows(app: QApplication, monkeypatch: pytest.MonkeyPatch):
+    """Close UI-test windows without allowing a modal discard prompt to stall Qt.
+
+    These tests exercise layout and focus only; save/discard behavior is
+    covered independently. Page activation can mark a fresh workspace dirty,
+    so the production confirmation dialog would otherwise block test teardown.
+    """
+    monkeypatch.setattr(App, "_confirm_discard_if_dirty", lambda _self, **_kwargs: True)
     existing = set(app.topLevelWidgets())
     yield
     for widget in set(app.topLevelWidgets()) - existing:
@@ -227,10 +234,7 @@ def test_top_level_pages_have_working_focus_order_and_focus_state(
 
 
 def test_primary_and_secondary_theme_text_meet_wcag_aa_contrast() -> None:
-    qss = (
-        Path(__file__).parents[1] / "src" / "simple_stipple" / "ui" / "style" / "theme.qss"
-    ).read_text(encoding="utf-8")
-    assert "#0d1117" in qss and "#e6edf3" in qss and "#8b949e" in qss
+    theme = resolve_tokens()
 
     def luminance(hex_color: str) -> float:
         channels = [int(hex_color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
@@ -244,8 +248,8 @@ def test_primary_and_secondary_theme_text_meet_wcag_aa_contrast() -> None:
         light, dark = sorted((luminance(foreground), luminance(background)), reverse=True)
         return (light + 0.05) / (dark + 0.05)
 
-    assert ratio("#e6edf3", "#0d1117") >= 4.5
-    assert ratio("#8b949e", "#0d1117") >= 4.5
+    assert ratio(theme["text"], theme["bg_app"]) >= 4.5
+    assert ratio(theme["text_muted"], theme["bg_app"]) >= 4.5
 
 
 def test_accessible_status_event_hook_distinguishes_alerts(

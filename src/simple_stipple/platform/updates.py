@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+import plistlib
 import re
 import subprocess
 import sys
@@ -21,6 +22,7 @@ _LOG = logging.getLogger(__name__)
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 _SHA256_PATTERN = re.compile(r"\A([0-9a-fA-F]{64})(?:\s+[*]?(\S+))?\s*\Z")
+_PACKAGED_FALLBACK_VERSION = "0.3.5"
 
 
 def _read_version_from_pyproject() -> str:
@@ -47,12 +49,55 @@ def _detect_current_version() -> str:
     source_version = _read_version_from_pyproject()
     if source_version != "0.0.0":
         return source_version
+    # macOS app bundles do not necessarily retain Python distribution
+    # metadata. Their signed Info.plist is the authoritative release value.
+    try:
+        info = Path(sys.executable).resolve().parents[1] / "Info.plist"
+        if info.is_file():
+            value = plistlib.loads(info.read_bytes()).get("CFBundleShortVersionString")
+            if isinstance(value, str) and value.strip() and value.strip() != "0.0.0":
+                return value.strip()
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        pass
+    # Windows frozen apps carry the release version in the executable's
+    # VersionInfo resource, not in an Info.plist or importlib metadata.
+    windows_version = _read_windows_executable_version(Path(sys.executable))
+    if windows_version:
+        return windows_version
     try:
         return metadata.version(_REPO_NAME)
     except metadata.PackageNotFoundError:
-        return _read_version_from_pyproject()
+        return _PACKAGED_FALLBACK_VERSION
     except Exception:  # defensive fallback
-        return _read_version_from_pyproject()
+        return _PACKAGED_FALLBACK_VERSION
+
+
+def _read_windows_executable_version(executable: Path) -> str | None:
+    """Read ``FileVersion`` from a Windows EXE without a third-party module."""
+    if platform.system() != "Windows" or executable.suffix.casefold() != ".exe":
+        return None
+    try:
+        import ctypes
+
+        size = ctypes.windll.version.GetFileVersionInfoSizeW(str(executable), None)
+        if not size:
+            return None
+        data = ctypes.create_string_buffer(size)
+        if not ctypes.windll.version.GetFileVersionInfoW(str(executable), 0, size, data):
+            return None
+        value = ctypes.c_void_p()
+        value_len = ctypes.c_uint()
+        if not ctypes.windll.version.VerQueryValueW(
+            data,
+            "\\StringFileInfo\\040904B0\\FileVersion",
+            ctypes.byref(value),
+            ctypes.byref(value_len),
+        ):
+            return None
+        text = ctypes.wstring_at(value.value, value_len.value).strip().rstrip("\x00")
+        return text if text and text != "0.0.0" else None
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 _CURRENT_VERSION = _detect_current_version()

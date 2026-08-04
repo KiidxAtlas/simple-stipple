@@ -74,6 +74,7 @@ class _ResizeHandle(QFrame):
         self.setAccessibleDescription(
             "Use Left and Right arrows to resize. Hold Shift for larger steps."
         )
+        self.setToolTip("Drag to resize · Left/Right keys resize · Shift for larger steps")
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         self.setStyleSheet(
             "QFrame { background: transparent; border-right: 2px solid #30363d; }"
@@ -130,6 +131,7 @@ class _BottomResizeHandle(QFrame):
         self.setAccessibleDescription(
             "Use Up and Down arrows to resize. Hold Shift for larger steps."
         )
+        self.setToolTip("Drag to resize · Up/Down keys resize · Shift for larger steps")
         self.setCursor(Qt.CursorShape.SizeVerCursor)
         self.setStyleSheet(
             "QFrame { background: transparent; border-bottom: 2px solid #30363d; }"

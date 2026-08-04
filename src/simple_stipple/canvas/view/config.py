@@ -3,7 +3,7 @@
 from typing import Any, cast
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 from simple_stipple.canvas.model import CanvasModel
 from simple_stipple.canvas.operations.clipboard import ClipboardService
@@ -35,6 +35,7 @@ from simple_stipple.platform.config import (
     DEFAULT_SMOOTH_ITERATIONS,
     DEFAULT_SMOOTHING_METHOD,
 )
+from simple_stipple.ui.components.focus import CanvasEscapeRouter
 from simple_stipple.ui.units import DEFAULT_UNIT_SYSTEM
 
 
@@ -54,6 +55,12 @@ def _initialize_view(
     self._model = CanvasModel(parent=self)
     self._canvas_service = CanvasService(cast(CanvasModelPort, self._model))
     self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    # Route Escape to an active canvas tool even when a numeric HUD or
+    # properties-panel field has focus. The router ignores modal dialogs.
+    self._escape_router = CanvasEscapeRouter(self)
+    app = QApplication.instance()
+    if app is not None:
+        app.installEventFilter(self._escape_router)
 
     self._selectable = selectable
     self._empty_message = "No polylines loaded"
@@ -95,6 +102,7 @@ def _initialize_view(
     # Dense preview fills are visually identical when their strokes are
     # submitted to Qt in batches instead of one draw call per segment.
     self._dense_preview_render = False
+    self._context_menu_transform_items: list[str] = []
 
     self._scale = 1.0
     self._ox = 0.0
@@ -125,6 +133,7 @@ def _initialize_view(
     self._context_menu_sections = set(DEFAULT_CONTEXT_MENU_SECTIONS)
     self._context_menu_section_order = list(DEFAULT_CONTEXT_MENU_SECTIONS)
     self._context_menu_overflow_sections = set(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
+    self._context_menu_profile = "draft"
     # Named reusable geometry snippets. Definitions live in view state so
     # a workspace carries its own small symbol library without introducing
     # a second document format or global asset database.
@@ -307,6 +316,7 @@ def _initialize_view(
     self._bg_editable = False
     self._bg_selected = False
     self._bg_edit_callback = None
+    self._bg_key_callback = None
     self._bg_drag = None
 
     # Scale / Dimension button rects
@@ -338,6 +348,10 @@ def _initialize_view(
     self._geometry_health_visible = False
     self._curvature_visible = False
     self._constraints = []
+    # The two most recently selected edge references. Constraint commands use
+    # these so a user can constrain edges of a polyline, not only standalone
+    # two-point line entities.
+    self._constraint_segment_refs = []
 
     # Independent snap-category toggles (all default on, matching prior
     # unconditional behavior). Master is a hard kill-switch for every
@@ -345,12 +359,17 @@ def _initialize_view(
     # families; angle gates the Shift-held 45-degree snap.
     self._snap_master_enabled = True
     self._snap_vertex_enabled = True
+    self._snap_midpoint_enabled = True
     self._snap_edge_enabled = True
     self._snap_tangent_enabled = True
     self._snap_extension_enabled = True
     self._snap_angle_enabled = True
+    self._snap_parallel_enabled = True
+    self._snap_perpendicular_enabled = True
     self._snap_equal_length_enabled = True
     self._snap_axis_alignment_enabled = True
+    self._snap_align_x_enabled = True
+    self._snap_align_y_enabled = True
     self._rotation_snap_increment = 15.0
 
     # Construction / reference lines: list of ("h", y_world) or ("v", x_world)
@@ -358,6 +377,8 @@ def _initialize_view(
     # Auto-dimension HUD inputs (Fusion 360 style)
     self._dim_distance_edit = None
     self._dim_angle_edit = None
+    self._dim_distance_label = None
+    self._dim_angle_label = None
     self._dim_distance_dirty = False
     self._dim_angle_dirty = False
 

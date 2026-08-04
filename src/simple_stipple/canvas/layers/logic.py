@@ -137,8 +137,9 @@ def build_layer_row(
 
 
 def describe_polyline(entity_id: str, poly: list[tuple[float, float]]) -> str:
+    """Return a human-readable layer-row summary, never an implementation ID."""
     if not poly:
-        return f"{entity_id}  Empty"
+        return "Empty path"
     xs, ys = zip(*poly)
     width = max(xs) - min(xs)
     height = max(ys) - min(ys)
@@ -148,7 +149,7 @@ def describe_polyline(entity_id: str, poly: list[tuple[float, float]]) -> str:
         kind = "Closed"
     else:
         kind = "Open"
-    return f"{entity_id}  {kind}  ·  {point_count} pts  ·  {width:.1f} × {height:.1f} mm"
+    return f"{kind} path  ·  {point_count} pts  ·  {width:.1f} × {height:.1f} mm"
 
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -213,6 +213,9 @@ class EditingService:
             reference_point=reference_point,
             draw_points=self._host._draw_pts,
             mode=self._host._mode,
+            allow_vertex=self._host._snap_vertex_enabled,
+            allow_midpoint=self._host._snap_midpoint_enabled,
+            allow_edge=self._host._snap_edge_enabled,
         )
 
     def _resolve_snap(
@@ -448,7 +451,12 @@ class EditingService:
                 "circle": ("radius", height / 2.0),
                 "slot": ("width", height),
             }.get(entity.kind)
-            if parameter is not None:
+            # Parametric primitives update a single metadata field directly.
+            # With the persistent aspect lock enabled that shortcut skipped
+            # the companion dimension entirely, leaving a highlighted Lock
+            # button that had no effect. Use the common uniform scaler while
+            # locked so W and H always change together.
+            if parameter is not None and not self._host._aspect_ratio_locked:
                 return self._host.set_shape_param(indices[0], *parameter)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
@@ -488,7 +496,7 @@ class EditingService:
                 "circle": ("radius", width / 2.0),
                 "slot": ("length", width),
             }.get(entity.kind)
-            if parameter is not None:
+            if parameter is not None and not self._host._aspect_ratio_locked:
                 return self._host.set_shape_param(indices[0], *parameter)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
@@ -1247,7 +1255,15 @@ class EditingService:
         if not selected:
             self._host._show_flash("Select shape(s) first", 1000)
             return
-        payload = [[(x, y) for x, y in poly] for poly in selected]
+        selected_ids = set(self._host.get_selected_ids())
+        payload = [
+            {
+                "points": [[float(x), float(y)] for x, y in entity.points],
+                "layer": entity.layer,
+            }
+            for entity in self._host._entities
+            if entity.id in selected_ids
+        ]
         cb(payload)
         self._host._show_flash("Sent to Draft", 900)
 
@@ -1259,7 +1275,15 @@ class EditingService:
         if not selected:
             self._host._show_flash("Select shape(s) first", 1000)
             return
-        payload = [[(x, y) for x, y in poly] for poly in selected]
+        selected_ids = set(self._host.get_selected_ids())
+        payload = [
+            {
+                "points": [[float(x), float(y)] for x, y in entity.points],
+                "layer": entity.layer,
+            }
+            for entity in self._host._entities
+            if entity.id in selected_ids
+        ]
         cb(payload)
         self._host._show_flash("Sent to Pattern", 900)
 

@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
-    QSlider,
     QSpinBox,
     QSplitter,
     QToolButton,
@@ -134,9 +133,10 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         on_create_zone_from_selection=page._assign_zone,
         draft_profile=True,
     )
-    # Pattern's Outline/Pattern/Fill rows are virtual presentation categories,
-    # not document layers. Keep the canvas in single-layer mode so switching
-    # or renaming a category can never make valid geometry unselectable.
+    page._canvas.set_context_menu_profile("pattern")
+    page._canvas.set_context_menu_profiles(page._settings.get("context_menu_profiles", {}))
+    # Preview rows are virtual categories, but editable outlines retain their
+    # original document layers so the layer tree remains useful.
     page._canvas.set_layer_model([], None)
     page._canvas.set_empty_message(
         "Start a pattern\n1  Import or drop a closed outline\n"
@@ -174,6 +174,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     # the middle, status strip along the bottom — same as Draft.
     page._canvas_status = CanvasStatusStrip()
     page._canvas_status.set_zoom_callback(page._on_zoom_preset)
+    page._canvas_status.bind_canvas(page._canvas)
 
     canvas_shell = QWidget()
     canvas_shell_layout = QVBoxLayout(canvas_shell)
@@ -199,7 +200,9 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         title="Layers",
         editable=True,
         get_active_layer_name=lambda: (
-            "pattern_preview" if page._showing_preview else "pattern_active"
+            "pattern_preview"
+            if page._showing_preview
+            else (page._canvas.active_layer or "Outline")
         ),
         build_layer_rows=page._build_layer_tree_rows,
         on_selection_requested=page._on_browser_selection_requested,
@@ -210,6 +213,10 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._layer_sidebar = page._layer_module.controller
     # Wire outline-mode shape rename to the runtime's label store.
     page._layers_tree.shapeRenamed.connect(page._on_shape_renamed)
+    page._layers_tree.set_shape_role_actions_enabled(True)
+    page._layers_tree.shapeRoleRequested.connect(page._on_tree_outline_role_requested)
+    page._layers_tree.layerSettingsRequested.connect(page._open_pattern_layer_settings)
+    page._layers_tree.layerVisibilityChanged.connect(page._on_pattern_layer_visibility_changed)
     page._zone_layers_splitter.addWidget(page._layer_module)
     page._zone_layers_splitter.setStretchFactor(0, 1)
     side_layout.addWidget(page._zone_layers_splitter, stretch=1)
@@ -315,12 +322,17 @@ def build_left(page: Any, layout: QVBoxLayout) -> None:
 
 def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     shape_content, shape_layout = collapsible_content_widget(spacing=8)
-    file_row = QHBoxLayout()
     page._dxf_edit = QLineEdit()
     page._dxf_edit.setPlaceholderText("Select DXF, FVI, or SVG…")
     page._dxf_edit.setToolTip("Path to a DXF, FVI, or SVG outline (drag-and-drop supported)")
     page._dxf_edit.editingFinished.connect(page._reload_dxf)
-    file_row.addWidget(page._dxf_edit, stretch=1)
+    shape_layout.addWidget(page._dxf_edit)
+
+    # Keep the source path readable on a narrow sidebar. The previous single
+    # row forced the path, recent-files control, browse action, and reload
+    # affordance to compete for the same width and clipped their labels.
+    file_actions = QHBoxLayout()
+    file_actions.setSpacing(6)
     page._recent_btn = RecentFilesButton(
         page._settings,
         KIND_DXF,
@@ -328,20 +340,20 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     )
     page._recent_btn.setToolTip("Pick from recently opened vector files")
     page._recent_btn.fileSelected.connect(page._quick_load)
-    file_row.addWidget(page._recent_btn)
+    file_actions.addWidget(page._recent_btn, stretch=1)
     browse_btn = QPushButton("Browse…")
-    browse_btn.setFixedWidth(72)
+    browse_btn.setMinimumWidth(88)
     browse_btn.setToolTip("Browse for a DXF, FVI, or SVG outline")
     browse_btn.clicked.connect(page._browse_dxf)
-    file_row.addWidget(browse_btn)
+    file_actions.addWidget(browse_btn)
     _reload_btn = QToolButton()
     _reload_btn.setIcon(QIcon(str(icon_path("reload.svg"))))
     _reload_btn.setAccessibleName("Reload outline file")
-    _reload_btn.setFixedWidth(28)
+    _reload_btn.setFixedSize(32, 32)
     _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
     _reload_btn.clicked.connect(page._reload_dxf)
-    file_row.addWidget(_reload_btn)
-    shape_layout.addLayout(file_row)
+    file_actions.addWidget(_reload_btn)
+    shape_layout.addLayout(file_actions)
     orig_row = QHBoxLayout()
     orig_row.addWidget(QLabel("Original:"))
     page._orig_dims_label = QLabel("—")
@@ -349,36 +361,36 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     orig_row.addWidget(page._orig_dims_label)
     orig_row.addStretch()
     shape_layout.addLayout(orig_row)
-    dims_row = QHBoxLayout()
-    dims_row.setSpacing(8)
-    dims_row.addWidget(QLabel("W (mm)"))
+    dims_grid = QGridLayout()
+    dims_grid.setHorizontalSpacing(8)
+    dims_grid.setVerticalSpacing(6)
+    dims_grid.addWidget(QLabel("Width (mm)"), 0, 0, 1, 2)
     page._scale_w = QLineEdit()
     page._scale_w.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, page._scale_w))
-    page._scale_w.setFixedWidth(72)
     page._scale_w.setPlaceholderText("auto")
     page._scale_w.setToolTip("Target width of the outline in millimetres")
     page._scale_w.textChanged.connect(page._on_scale_w_changed)
     page._scale_w.textChanged.connect(page._schedule_preview)
-    dims_row.addWidget(page._scale_w)
+    dims_grid.addWidget(page._scale_w, 1, 0, 1, 2)
     page._ar_lock_btn = QToolButton()
     page._ar_lock_btn.setIcon(QIcon(str(icon_path("lock.svg"))))
+    page._ar_lock_btn.setText("Lock proportions")
+    page._ar_lock_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     page._ar_lock_btn.setAccessibleName("Lock outline aspect ratio")
-    page._ar_lock_btn.setFixedWidth(28)
+    page._ar_lock_btn.setMinimumHeight(32)
     page._ar_lock_btn.setCheckable(True)
     page._ar_lock_btn.setChecked(True)
     page._ar_lock_btn.setToolTip("Lock aspect ratio — keep W and H proportional")
-    dims_row.addWidget(page._ar_lock_btn)
-    dims_row.addWidget(QLabel("H (mm)"))
+    dims_grid.addWidget(page._ar_lock_btn, 2, 0, 1, 2)
+    dims_grid.addWidget(QLabel("Height (mm)"), 3, 0, 1, 2)
     page._scale_h = QLineEdit()
     page._scale_h.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, page._scale_h))
-    page._scale_h.setFixedWidth(72)
     page._scale_h.setPlaceholderText("auto")
     page._scale_h.setToolTip("Target height of the outline in millimetres")
     page._scale_h.textChanged.connect(page._on_scale_h_changed)
     page._scale_h.textChanged.connect(page._schedule_preview)
-    dims_row.addWidget(page._scale_h)
-    dims_row.addStretch()
-    shape_layout.addLayout(dims_row)
+    dims_grid.addWidget(page._scale_h, 4, 0, 1, 2)
+    shape_layout.addLayout(dims_grid)
     page._shape_section = CollapsibleSection(
         "Shape", shape_content, expanded=True, subtitle="No file loaded"
     )
@@ -772,22 +784,36 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
 
 
 def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
+    """Build a compact, task-first image engraving workspace.
+
+    The older version was four independently collapsible cards, which buried
+    the actions people need most (remove, edit, clip, and export).  Keep the
+    source and placement in one visible flow; reserve laser calibration for
+    a single optional detail section.
+    """
     content, form = collapsible_content_widget(spacing=8)
-    choose = QPushButton("Choose engraving image…")
-    choose.clicked.connect(page._choose_engraving_image)
-    form.addWidget(choose)
+
+    source_row = QHBoxLayout()
+    page._engrave_choose_btn = QPushButton("Add image…")
+    page._engrave_choose_btn.clicked.connect(page._choose_engraving_image)
+    source_row.addWidget(page._engrave_choose_btn, stretch=1)
+    page._engrave_remove_btn = QPushButton("Remove")
+    page._engrave_remove_btn.setProperty("role", "danger")
+    page._engrave_remove_btn.setToolTip("Remove the image from this workspace; the source file is unchanged.")
+    page._engrave_remove_btn.clicked.connect(page._remove_engraving_image)
+    source_row.addWidget(page._engrave_remove_btn)
+    form.addLayout(source_row)
     page._engraving_image_label = QLabel("No image selected")
     page._engraving_image_label.setWordWrap(True)
+    page._engraving_image_label.setProperty("role", "hint")
     form.addWidget(page._engraving_image_label)
-
-    placement_content, placement = collapsible_content_widget(spacing=8)
-    placement_grid = QGridLayout()
 
     def number(value, minimum, maximum, decimals=2, step=1.0):
         widget = QDoubleSpinBox()
         widget.setRange(minimum, maximum)
         widget.setDecimals(decimals)
         widget.setSingleStep(step)
+        widget.setKeyboardTracking(False)
         widget.setValue(value)
         widget.valueChanged.connect(page._update_engraving_overlay)
         return widget
@@ -797,43 +823,55 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     page._engrave_w = number(100, 0.01, 100000)
     page._engrave_h = number(100, 0.01, 100000)
     page._engrave_rotation = number(0, -360, 360, 1, 1)
-    for row, (label, widget) in enumerate(
+    placement_grid = QGridLayout()
+    placement_grid.setHorizontalSpacing(8)
+    for row, (left_label, left_field, right_label, right_field) in enumerate(
         (
-            ("X (mm)", page._engrave_x),
-            ("Y (mm)", page._engrave_y),
-            ("Width (mm)", page._engrave_w),
-            ("Height (mm)", page._engrave_h),
-            ("Rotation (°)", page._engrave_rotation),
+            ("X (mm)", page._engrave_x, "Y (mm)", page._engrave_y),
+            ("Width (mm)", page._engrave_w, "Height (mm)", page._engrave_h),
+            ("Rotation (°)", page._engrave_rotation, "", None),
         )
     ):
-        placement_grid.addWidget(QLabel(label), row, 0)
-        placement_grid.addWidget(widget, row, 1)
-    placement.addLayout(placement_grid)
-    page._engrave_canvas_edit = QCheckBox("Select, drag, and resize image on canvas")
+        placement_grid.addWidget(QLabel(left_label), row, 0)
+        placement_grid.addWidget(left_field, row, 1)
+        if right_field is not None:
+            placement_grid.addWidget(QLabel(right_label), row, 2)
+            placement_grid.addWidget(right_field, row, 3)
+    form.addLayout(placement_grid)
+    placement_actions = QHBoxLayout()
+    page._engrave_edit_btn = QPushButton("Edit on canvas")
+    page._engrave_edit_btn.setToolTip("Select the image and use its handles. Tab moves through placement fields.")
+    page._engrave_edit_btn.clicked.connect(page._edit_engraving_on_canvas)
+    placement_actions.addWidget(page._engrave_edit_btn)
+    page._engrave_fit_btn = QPushButton("Fit to outline")
+    page._engrave_fit_btn.clicked.connect(page._fit_engraving_to_outline)
+    placement_actions.addWidget(page._engrave_fit_btn)
+    page._engrave_center_btn = QPushButton("Center")
+    page._engrave_center_btn.clicked.connect(page._center_engraving_image)
+    placement_actions.addWidget(page._engrave_center_btn)
+    form.addLayout(placement_actions)
+    page._engrave_canvas_edit = QCheckBox("Enable canvas handles")
     page._engrave_canvas_edit.setChecked(True)
     page._engrave_canvas_edit.toggled.connect(
         lambda enabled: page._canvas.set_background_image_editable(
             enabled, page._on_engraving_canvas_transform
         )
     )
-    placement.addWidget(page._engrave_canvas_edit)
-    page._engraving_placement_section = CollapsibleSection(
-        "Placement", placement_content, expanded=True, subtitle="100 × 100 mm"
-    )
-    form.addWidget(page._engraving_placement_section)
+    form.addWidget(page._engrave_canvas_edit)
 
-    appearance_content, appearance = collapsible_content_widget(spacing=8)
-    page._engrave_gamma = number(1, 0.1, 5, 2, 0.05)
     appearance_grid = QGridLayout()
-    appearance_grid.addWidget(QLabel("Gamma / depth detail"), 0, 0)
+    page._engrave_gamma = number(1, 0.1, 5, 2, 0.05)
+    appearance_grid.addWidget(QLabel("Tone / gamma"), 0, 0)
     appearance_grid.addWidget(page._engrave_gamma, 0, 1)
     page._engrave_invert = QCheckBox("Invert light and dark")
     appearance_grid.addWidget(page._engrave_invert, 1, 0, 1, 2)
-    appearance.addLayout(appearance_grid)
-    page._engraving_appearance_section = CollapsibleSection(
-        "Appearance", appearance_content, expanded=False, subtitle="Gamma 1.00 · Normal"
-    )
-    form.addWidget(page._engraving_appearance_section)
+    appearance_grid.addWidget(QLabel("Carve / clip at export"), 2, 0)
+    page._engrave_target = QComboBox()
+    page._engrave_target.addItem("Whole outline", "outline")
+    page._engrave_target.addItem("Selected zone", "zone")
+    page._engrave_target.setToolTip("Keeps the original image unchanged and clips the exported engraving.")
+    appearance_grid.addWidget(page._engrave_target, 2, 1)
+    form.addLayout(appearance_grid)
 
     process_content, process = collapsible_content_widget(spacing=8)
     material_row = QHBoxLayout()
@@ -874,32 +912,10 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
         ("Max power (%)", page._engrave_max_power),
         ("Speed (mm/s)", page._engrave_speed),
     )
-    slider_scales = {
-        page._engrave_interval: 1000,
-        page._engrave_min_power: 10,
-        page._engrave_max_power: 10,
-        page._engrave_gamma: 100,
-    }
-
-    def make_slider(field: QDoubleSpinBox, scale: int) -> QSlider:
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setMinimumWidth(120)
-        slider.setRange(round(field.minimum() * scale), round(field.maximum() * scale))
-        slider.setValue(round(field.value() * scale))
-        slider.valueChanged.connect(lambda value, f=field, s=scale: f.setValue(value / s))
-        field.valueChanged.connect(lambda value, sl=slider, s=scale: sl.setValue(round(value * s)))
-        return slider
-
-    grid_row = 0
-    for label, widget in labels:
+    for grid_row, (label, widget) in enumerate(labels):
         process_grid.addWidget(QLabel(label), grid_row, 0)
         process_grid.addWidget(widget, grid_row, 1)
-        grid_row += 1
-        scale = slider_scales.get(widget)
-        if scale is not None:
-            # Full-width second row remains usable in the narrow sidebar.
-            process_grid.addWidget(make_slider(widget, scale), grid_row, 0, 1, 2)
-            grid_row += 1
+    grid_row = len(labels)
     process_grid.addWidget(QLabel("Passes"), grid_row, 0)
     process_grid.addWidget(page._engrave_passes, grid_row, 1)
     process.addLayout(process_grid)
@@ -908,55 +924,18 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     page._engraving_process_error.setProperty("role", "status-err")
     page._engraving_process_error.setVisible(False)
     process.addWidget(page._engraving_process_error)
-    safety_callout = QLabel(
-        "Machine and material settings are starting points only. Review settings before output."
-    )
+    safety_callout = QLabel("Starting values only — frame the job and test on scrap before production.")
     safety_callout.setWordWrap(True)
     safety_callout.setProperty("role", "status-warn")
     process.addWidget(safety_callout)
-    safety_detail_content, safety_detail = collapsible_content_widget(spacing=8)
-    safety = QLabel(
-        "Use only laser-safe materials; never engrave PVC or vinyl. Bare aluminum and steel "
-        "usually require a fiber laser or approved marking compound. Frame the job and run a "
-        "material test on scrap before production."
-    )
-    safety.setWordWrap(True)
-    safety_detail.addWidget(safety)
-    process.addWidget(
-        CollapsibleSection(
-            "Review settings", safety_detail_content, expanded=False, subtitle="Material safety"
-        )
-    )
     page._engraving_process_section = CollapsibleSection(
-        "Laser Process", process_content, expanded=False, subtitle="Custom · 80% · 100 mm/s"
+        "Laser settings", process_content, expanded=False, subtitle="Custom · 80% · 100 mm/s"
     )
     form.addWidget(page._engraving_process_section)
-
-    output_content, output = collapsible_content_widget(spacing=8)
-    target_row = QHBoxLayout()
-    target_row.addWidget(QLabel("Clip to"))
-    page._engrave_target = QComboBox()
-    page._engrave_target.addItem("Entire outline", "outline")
-    page._engrave_target.addItem("Selected zone", "zone")
-    target_row.addWidget(page._engrave_target, stretch=1)
-    output.addLayout(target_row)
-    export = QPushButton("Export Positioned Engraving Package…")
-    export.setProperty("role", "primary")
-    export.clicked.connect(page._export_pattern_engraving)
-    output.addWidget(export)
-    note = QLabel(
-        "Machine handoff: 1) Export the pattern DXF. 2) Export this engraving package. "
-        "3) Import the DXF and .positioned.svg into the same laser-software job without "
-        "moving either file. 4) Put the SVG raster on an engraving layer and copy speed, "
-        "power, interval, and passes from the .engrave.json sidecar. 5) Frame the job and "
-        "run a material test before production."
-    )
-    note.setWordWrap(True)
-    output.addWidget(note)
-    page._engraving_output_section = CollapsibleSection(
-        "Output", output_content, expanded=False, subtitle="Entire outline · positioned assets"
-    )
-    form.addWidget(page._engraving_output_section)
+    page._engrave_export_btn = primary_button("Export engraving package…", height=32)
+    page._engrave_export_btn.setToolTip("Export the positioned, clipped engraving image and handoff files.")
+    page._engrave_export_btn.clicked.connect(page._export_pattern_engraving)
+    form.addWidget(page._engrave_export_btn)
 
     for field in (
         page._engrave_x,
@@ -976,9 +955,10 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     page._engrave_material.currentIndexChanged.connect(page._update_engraving_section_summaries)
     page._engrave_target.currentIndexChanged.connect(page._update_engraving_section_summaries)
     page._engraving_section = CollapsibleSection(
-        "Image Engraving", content, expanded=False, subtitle="No image"
+        "Image Engraving", content, expanded=False, subtitle="Add an image to begin"
     )
     layout.addWidget(page._engraving_section)
+    page._refresh_engraving_ui()
 
 
 def build_export_section(page: Any, layout: QVBoxLayout) -> None:

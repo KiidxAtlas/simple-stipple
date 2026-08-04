@@ -1647,6 +1647,17 @@ class SelectTool(CanvasTool):
                     v._sel = v._sel | {target_entity.id}
             elif target_entity.id not in v._sel:
                 v._sel = {target_entity.id}
+            edge_hit = v._hit_test.nearest_edge(pos.x(), pos.y())
+            if edge_hit is not None and edge_hit[0] == target:
+                ref = {"entity_id": target, "segment_index": int(edge_hit[1])}
+                refs = list(getattr(v, "_constraint_segment_refs", []))
+                if not (ctrl or shift_toggle):
+                    refs = [ref]
+                elif ref not in refs:
+                    refs.append(ref)
+                if len(refs) > 2:
+                    refs = refs[-2:]
+                v._constraint_segment_refs = refs
             v._notify()
             hit = v._find_nearest_vertex_by_id(pos.x(), pos.y())
             target_kind = target_entity.kind

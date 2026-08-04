@@ -280,11 +280,11 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "_vor_cells",
             "Cell count",
             "60",
-            "Number of random Voronoi cells to generate",
+            "Number of random Voronoi cells to generate (high counts slow previews)",
             kind="int",
             param_key="n_cells",
             minimum=2,
-            maximum=10000,
+            maximum=2000,
         ),
         ParamField(
             "_vor_gap",

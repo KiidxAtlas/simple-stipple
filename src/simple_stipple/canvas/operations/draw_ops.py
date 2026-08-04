@@ -452,7 +452,18 @@ class ConstructionService:
         return changed
 
     def add_geometric_constraint(self, kind: str) -> int:
-        """Attach an explicit persistent constraint to selected line geometry."""
+        """Attach a persistent constraint to selected edges or vertices."""
+        segment_refs = [
+            ref
+            for ref in getattr(self._host, "_constraint_segment_refs", [])
+            if isinstance(ref, dict)
+            and str(ref.get("entity_id", "")) in self._host._entities_by_id
+        ]
+        vertex_refs = [
+            (str(entity_id), int(vertex_index))
+            for entity_id, vertex_index in getattr(self._host, "_edit_selected_verts", set())
+            if str(entity_id) in self._host._entities_by_id
+        ]
         line_indices = [
             index
             for index in self._host._selected_ids()
@@ -460,23 +471,67 @@ class ConstructionService:
         ]
         unary = {"horizontal", "vertical", "fixed"}
         binary = {"parallel", "perpendicular", "equal_length", "coincident"}
-        if kind in unary and not line_indices:
-            self._host._show_flash("Select one or more line segments", 1200)
+        if kind in unary and not (segment_refs or line_indices):
+            self._host._show_flash("Select one or more edges", 1200)
             return 0
-        if kind in binary and len(line_indices) != 2:
-            self._host._show_flash("Select exactly two line segments", 1200)
-            return 0
-        before = self._host._canvas_service.begin_preview()
-        additions: list[GeometricConstraint] = []
-        constraint_kind = cast(ConstraintKind, kind)
-        if kind in {"horizontal", "vertical"}:
+        if kind == "coincident" and len(vertex_refs) == 2:
+            first_ref, second_ref = vertex_refs
             additions = [
                 GeometricConstraint(
-                    kind=constraint_kind, entity_ids=(self._host._entities_by_id[index].id,)
+                    kind="coincident",
+                    entity_ids=(first_ref[0], second_ref[0]),
+                    parameters={"first_vertex": first_ref[1], "second_vertex": second_ref[1]},
                 )
+            ]
+        elif kind in binary and len(segment_refs) == 2:
+            first_ref, second_ref = segment_refs
+            additions = [
+                GeometricConstraint(
+                    kind=cast(ConstraintKind, kind),
+                    entity_ids=(str(first_ref["entity_id"]), str(second_ref["entity_id"])),
+                    parameters={
+                        "first_segment": int(first_ref["segment_index"]),
+                        "second_segment": int(second_ref["segment_index"]),
+                    },
+                )
+            ]
+            if kind == "coincident":
+                first = self._host._entities_by_id[str(first_ref["entity_id"])]
+                second = self._host._entities_by_id[str(second_ref["entity_id"])]
+                a = int(first_ref["segment_index"])
+                b = int(second_ref["segment_index"])
+                choice = min(
+                    (
+                        (math.dist(first.points[a + da], second.points[b + db]), da, db)
+                        for da in (0, 1)
+                        for db in (0, 1)
+                    ),
+                    key=lambda item: item[0],
+                )
+                additions[0].parameters.update(
+                    {"first_endpoint": choice[1], "second_endpoint": choice[2]}
+                )
+        elif kind in binary and len(line_indices) != 2:
+            self._host._show_flash("Select two edges (Shift-click to add the second)", 1600)
+            return 0
+        else:
+            additions = []
+        before = self._host._canvas_service.begin_preview()
+        constraint_kind = cast(ConstraintKind, kind)
+        if not additions and kind in {"horizontal", "vertical"}:
+            edge_sources = segment_refs or [
+                {"entity_id": self._host._entities_by_id[index].id, "segment_index": 0}
                 for index in line_indices
             ]
-        elif kind == "fixed":
+            additions = [
+                GeometricConstraint(
+                    kind=constraint_kind,
+                    entity_ids=(str(source["entity_id"]),),
+                    parameters={"first_segment": int(source["segment_index"])},
+                )
+                for source in edge_sources
+            ]
+        elif not additions and kind == "fixed":
             additions = [
                 GeometricConstraint(
                     kind="fixed",
@@ -489,7 +544,7 @@ class ConstructionService:
                 )
                 for index in line_indices
             ]
-        elif kind in binary:
+        elif not additions and kind in binary:
             first, second = (self._host._entities_by_id[index] for index in line_indices)
             parameters: dict[str, Any] = {}
             if kind == "coincident":
@@ -509,8 +564,6 @@ class ConstructionService:
                     parameters=parameters,
                 )
             ]
-        else:
-            return 0
         self._host._constraints.extend(additions)
         self._solve_geometric_constraints()
         self._host._canvas_service.commit_preview(before)

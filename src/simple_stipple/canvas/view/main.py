@@ -14,6 +14,7 @@ from PySide6.QtCore import (
     QPointF,
     QRectF,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QKeyEvent, QMouseEvent, QPainter, QWheelEvent
@@ -34,6 +35,7 @@ from simple_stipple.canvas.view.commands import (
     _rightclick_cb,
     _round_vertex,
     _show_shape_dim_inputs,
+    exit_to_select,
     get_export_dxf_state,
     set_view_state,
 )
@@ -242,6 +244,7 @@ class CanvasView(
     document_changed = Signal()
     operation_failed = Signal(str)
     viewChanged = Signal()  # emitted on zoom/pan so status readouts can update live
+    cursorPositionChanged = Signal(float, float)
 
     def _flagged(self, attr: str) -> set[str]:
         """Entity IDs whose boolean ``attr`` is set."""
@@ -945,12 +948,17 @@ class CanvasView(
             "measure_mode": self._measure_mode,
             "snap_master": self._snap_master_enabled,
             "snap_vertex": self._snap_vertex_enabled,
+            "snap_midpoint": self._snap_midpoint_enabled,
             "snap_edge": self._snap_edge_enabled,
             "snap_tangent": self._snap_tangent_enabled,
             "snap_extension": self._snap_extension_enabled,
             "snap_angle": self._snap_angle_enabled,
+            "snap_parallel": self._snap_parallel_enabled,
+            "snap_perpendicular": self._snap_perpendicular_enabled,
             "snap_equal_length": self._snap_equal_length_enabled,
             "snap_axis_alignment": self._snap_axis_alignment_enabled,
+            "snap_align_x": self._snap_align_x_enabled,
+            "snap_align_y": self._snap_align_y_enabled,
         }
 
     def get_topology_summary(self) -> dict[str, int]:
@@ -1389,6 +1397,10 @@ class CanvasView(
         self._bg_drag = None
         self._redraw()
 
+    def set_background_image_key_callback(self, callback) -> None:
+        """Set the owner callback for keys while an editable image is selected."""
+        self._bg_key_callback = callback
+
     def select_background_image(self, selected: bool = True) -> None:
         was_selected = self._bg_selected
         self._bg_selected = bool(selected and self._bg_editable and self._bg_pil is not None)
@@ -1524,6 +1536,17 @@ class CanvasView(
             normalize_context_menu_overflow_sections(sections)
         )
 
+    def set_context_menu_profile(self, profile: str) -> None:
+        self._context_menu_profile = str(profile)
+
+    def set_context_menu_profiles(self, profiles: dict) -> None:
+        from simple_stipple.platform.config import normalize_context_menu_profiles
+
+        profile = normalize_context_menu_profiles(profiles).get(self._context_menu_profile, {})
+        self.set_context_menu_sections(profile.get("sections", []))
+        self.set_context_menu_overflow_sections(profile.get("overflow", []))
+        self._context_menu_transform_items = list(profile.get("transform", []))
+
     def _context_menu_section_enabled(self, section: str) -> bool:
         return section in self._context_menu_sections
 
@@ -1545,6 +1568,10 @@ class CanvasView(
         self._snap_vertex_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
 
+    def set_snap_midpoint(self, enabled: bool) -> None:
+        self._snap_midpoint_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
     def set_snap_edge(self, enabled: bool) -> None:
         self._snap_edge_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
@@ -1561,12 +1588,30 @@ class CanvasView(
         self._snap_angle_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
 
+    def set_snap_parallel(self, enabled: bool) -> None:
+        self._snap_parallel_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_perpendicular(self, enabled: bool) -> None:
+        self._snap_perpendicular_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
     def set_snap_equal_length(self, enabled: bool) -> None:
         self._snap_equal_length_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
 
     def set_snap_axis_alignment(self, enabled: bool) -> None:
         self._snap_axis_alignment_enabled = bool(enabled)
+        self._snap_align_x_enabled = bool(enabled)
+        self._snap_align_y_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_align_x(self, enabled: bool) -> None:
+        self._snap_align_x_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_align_y(self, enabled: bool) -> None:
+        self._snap_align_y_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
 
     # ── Inlined from removed mixins (methods actually called from view.py) ──
@@ -1598,6 +1643,19 @@ class CanvasView(
         if self._cursor_wx is not None and self._cursor_wy is not None:
             return (self._cursor_wx, self._cursor_wy)
         return None
+
+    def _queue_cursor_position_update(self) -> None:
+        """Publish the final mouse-move position after snapping has resolved."""
+        if getattr(self, "_cursor_position_update_queued", False):
+            return
+        self._cursor_position_update_queued = True
+        QTimer.singleShot(0, self._emit_cursor_position_update)
+
+    def _emit_cursor_position_update(self) -> None:
+        self._cursor_position_update_queued = False
+        position = self.get_cursor_world_pos()
+        if position is not None:
+            self.cursorPositionChanged.emit(*position)
 
     def duplicate_selected(self) -> None:
         self._duplicate_selected()
@@ -2278,6 +2336,7 @@ class CanvasView(
 CanvasView._cancel_active_drag = _cancel_active_drag
 CanvasView._cancel_draw_in_progress = _cancel_draw_in_progress
 CanvasView._escape_cb = _escape_cb
+CanvasView.exit_to_select = exit_to_select
 CanvasView._find_dimension_at = _find_dimension_at
 CanvasView._rightclick_cb = _rightclick_cb
 CanvasView._round_vertex = _round_vertex

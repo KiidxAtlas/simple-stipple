@@ -51,6 +51,7 @@ def _intersection_points(geometry: object) -> list[PointTuple]:
         return [
             point
             for line in lines
+            if not line.is_empty and len(line.coords) >= 2
             for point in (
                 (float(line.coords[0][0]), float(line.coords[0][1])),
                 (float(line.coords[-1][0]), float(line.coords[-1][1])),
@@ -86,13 +87,34 @@ def _polygon_pieces(polygon: Polygon, cutter: LineString) -> list[list[PointTupl
     overlap = cutter.intersection(polygon.boundary)
     if isinstance(overlap, (LineString, MultiLineString)) and overlap.length > 1e-6:
         return []
+    boundary_points = _intersection_points(cutter.intersection(polygon.boundary))
+    unique_boundary_points: list[PointTuple] = []
+    for point in boundary_points:
+        if not any(_equal(point, existing) for existing in unique_boundary_points):
+            unique_boundary_points.append(point)
+    # A knife needs two boundary crossings to divide a closed shape. This
+    # deliberately still rejects a short stroke wholly inside the shape.
+    if len(unique_boundary_points) < 2:
+        return []
     inner = polygon.buffer(-1e-6)
     if (inner if not inner.is_empty else polygon).intersection(cutter).is_empty:
         return []
-    # A cutter must actually cross the region boundary and divide it. Never
-    # extend a short line invisibly: that made a line drawn merely inside a
-    # shape cut the entire region in half.
-    geometries = [item for item in split(polygon, cutter).geoms if isinstance(item, Polygon)]
+    # GEOS can refuse to split when the two endpoints sit exactly on a
+    # polygon edge/vertex. Extend only a proven boundary-to-boundary cutter
+    # by a tiny, geometry-relative amount; an interior-only stroke is still
+    # rejected above and never gets silently extended into a cut.
+    (x0, y0), (x1, y1) = cutter.coords[0], cutter.coords[-1]
+    dx, dy = x1 - x0, y1 - y0
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return []
+    min_x, min_y, max_x, max_y = polygon.bounds
+    extension = max(math.hypot(max_x - min_x, max_y - min_y), 1.0) * 1e-6
+    ux, uy = dx / length, dy / length
+    extended = LineString(
+        [(x0 - ux * extension, y0 - uy * extension), (x1 + ux * extension, y1 + uy * extension)]
+    )
+    geometries = [item for item in split(polygon, extended).geoms if isinstance(item, Polygon)]
     if len(geometries) < 2:
         return []
     return [[(float(x), float(y)) for x, y in geometry.exterior.coords] for geometry in geometries]

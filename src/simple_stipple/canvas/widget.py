@@ -719,6 +719,17 @@ class DxfCanvas(CanvasView):
                 "Send to Draft",
                 lambda: _run_transform(self._send_selected_to_draft),
             )
+        selected_ids = self.get_selected_ids()
+        layers = [name for name in self.layer_names() if name and name != self.active_layer]
+        if selected_ids and layers:
+            move_menu = menu.addMenu("Move selected to layer")
+            for layer in layers:
+                move_menu.addAction(
+                    layer,
+                    lambda _checked=False, target=layer: _run_transform(
+                        lambda: self.move_indices_to_layer(selected_ids, target)
+                    ),
+                )
 
     def _build_boolean_actions(self, menu, section_enabled) -> None:
         if not section_enabled("boolean"):
@@ -799,25 +810,36 @@ class DxfCanvas(CanvasView):
 
     def _build_transform_actions(self, menu, _run_transform, _run_prompted_transform) -> None:
         transform_menu = menu.addMenu("Transform")
-        transform_menu.addAction(
+        def add(item_id, label, callback):
+            action = transform_menu.addAction(label, callback)
+            action.setProperty("context_item", item_id)
+            return action
+
+        add(
+            "rotate_cw",
             "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0))
         )
-        transform_menu.addAction(
+        add(
+            "rotate_ccw",
             "Rotate -90°", lambda: _run_transform(lambda: self.rotate_selected(-90.0))
         )
-        transform_menu.addAction(
+        add(
+            "mirror_horizontal",
             "Mirror horizontal",
             lambda: _run_transform(lambda: self.mirror_selected("horizontal")),
         )
-        transform_menu.addAction(
+        add(
+            "mirror_vertical",
             "Mirror vertical",
             lambda: _run_transform(lambda: self.mirror_selected("vertical")),
         )
         transform_menu.addSeparator()
-        transform_menu.addAction(
+        add(
+            "size",
             "Edit width + height…", lambda: _run_transform(self._show_size_hud)
         )
-        transform_menu.addAction(
+        add(
+            "length",
             "Set line length…",
             lambda: _run_transform(
                 lambda: _run_prompted_transform(
@@ -829,7 +851,8 @@ class DxfCanvas(CanvasView):
                 )
             ),
         )
-        transform_menu.addAction(
+        add(
+            "angle",
             "Set line angle…",
             lambda: _run_transform(
                 lambda: _run_prompted_transform(
@@ -843,27 +866,41 @@ class DxfCanvas(CanvasView):
             ),
         )
         transform_menu.addSeparator()
-        transform_menu.addAction(
+        add(
+            "trim",
             canvas_commands.menu_text("mode.trim", "Trim segments…"),
             lambda: canvas_commands.run(self, "mode.trim"),
         )
-        transform_menu.addAction(
+        add(
+            "extend",
             canvas_commands.menu_text("mode.extend", "Extend to meet…"),
             lambda: canvas_commands.run(self, "mode.extend"),
         )
-        transform_menu.addAction(
+        add(
+            "knife",
             canvas_commands.menu_text("mode.knife", "Knife tool"),
             lambda: canvas_commands.run(self, "mode.knife"),
         )
         transform_menu.addSeparator()
-        transform_menu.addAction(
+        add(
+            "explode",
             "Explode to segments",
             lambda: _run_transform(self.explode_selected_to_segments),
         )
-        transform_menu.addAction(
+        add(
+            "merge",
             "Merge segments to object",
             lambda: _run_transform(self.merge_selected_segments_to_objects),
         )
+        configured = list(getattr(self, "_context_menu_transform_items", []))
+        if configured:
+            actions = [a for a in transform_menu.actions() if a.property("context_item")]
+            by_id = {str(action.property("context_item")): action for action in actions}
+            for action in list(transform_menu.actions()):
+                transform_menu.removeAction(action)
+            for item_id in configured:
+                if action := by_id.get(item_id):
+                    transform_menu.addAction(action)
 
     def _build_text_actions(self, menu, cx, cy) -> None:
         wx_txt, wy_txt = self._c2w(cx, cy)

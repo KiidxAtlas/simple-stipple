@@ -54,6 +54,7 @@ class ResponsiveCanvasToolbar(QWidget):
         self._guidance_chip.setAccessibleDescription(text)
         self._overflow.setToolTip(f"Secondary canvas actions. {text}")
         self._overflow.setAccessibleDescription(text)
+        self._update_responsive_state()
 
     def register_secondary(self, button: QAbstractButton) -> None:
         if button in self._responsive_buttons:
@@ -89,6 +90,12 @@ class ResponsiveCanvasToolbar(QWidget):
             widget.setVisible(not compact)
         self._overflow.setVisible(compact and bool(self._responsive_buttons))
         self._guidance_chip.setVisible(compact and bool(self._guidance_chip.text()))
+        # Keep a single source of guidance visible.  Previously the full
+        # instruction and its compact duplicate were both shown at narrower
+        # widths, consuming the room that the canvas actions needed.
+        full_guidance = getattr(self, "_full_guidance_label", None)
+        if full_guidance is not None:
+            full_guidance.setVisible(not compact)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -177,6 +184,7 @@ def canvas_toolbar(
     guidance_label.setMinimumWidth(0)
     guidance_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     shell_layout.addWidget(guidance_label, stretch=1)
+    shell._full_guidance_label = guidance_label
 
     shell_layout.addWidget(shell._guidance_chip)
     shell_layout.addWidget(shell._overflow)
@@ -187,6 +195,10 @@ def canvas_toolbar(
     selection_label.setMinimumWidth(0)
     selection_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     shell_layout.addWidget(selection_label)
+
+    # register_secondary() may have run before the full guidance label
+    # existed, so do one final pass once the whole toolbar is assembled.
+    shell._update_responsive_state()
 
     return shell, mode_buttons, selection_label, guidance_label
 

@@ -15,6 +15,12 @@ from simple_stipple.ui.units import to_display as _to_display
 class CanvasStatusStrip(QFrame):
     """Compact status bar — mode, selection, zoom, coordinates, and readiness."""
 
+    # The full diagnostic readout is useful on a wide canvas, but it becomes
+    # crowded before the page reaches its compact layout. Switch to Details
+    # early enough that the status bar never imposes a desktop-only minimum
+    # width on the whole workspace.
+    COMPACT_WIDTH = 960
+
     def __init__(self) -> None:
         super().__init__()
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -24,8 +30,9 @@ class CanvasStatusStrip(QFrame):
         layout.setContentsMargins(12, 4, 12, 4)
         layout.setSpacing(8)
         self._selection_count = 0
+        self._cursor_source = None
 
-        self._mode_label = QLabel("MODE · SELECT")
+        self._mode_label = QLabel("Select")
         self._mode_label.setProperty("role", "status-mode")
         self._mode_label.setAccessibleName("Active canvas mode")
         layout.addWidget(self._mode_label)
@@ -68,6 +75,8 @@ class CanvasStatusStrip(QFrame):
 
         self._cursor_label = QLabel("")
         self._cursor_label.setProperty("role", "status-coordinates")
+        self._cursor_label.setAccessibleName("Canvas cursor coordinates")
+        self._cursor_label.setMinimumWidth(150)
         layout.addWidget(self._cursor_label)
 
         layout.addWidget(self._dot())
@@ -112,8 +121,8 @@ class CanvasStatusStrip(QFrame):
     ) -> None:
         normalized_mode = mode.replace("_", " ").title()
         self._mode_label.setText(
-            f"MODE · {normalized_mode.upper()}"
-            + (" · Esc to exit" if mode.lower() != "select" else "")
+            normalized_mode
+            + (" · Esc → Select" if mode.lower() != "select" else "")
         )
         self._mode_label.setAccessibleDescription(
             f"{normalized_mode} mode"
@@ -153,10 +162,14 @@ class CanvasStatusStrip(QFrame):
         self._precision_action.setText(self._precision_label.text())
 
     def _update_responsive_visibility(self) -> None:
-        compact = self.width() < 800
+        compact = self.width() < self.COMPACT_WIDTH
         self._objects_label.setVisible(not compact)
         self._objects_dot.setVisible(not compact)
-        self._selection_label.setVisible(not compact or self._selection_count > 0)
+        # A zero-selection counter does not help the next action and was
+        # visual noise in every idle canvas.  Selection remains prominent as
+        # soon as there is something selected, while Details always exposes
+        # the complete snapshot in compact layouts.
+        self._selection_label.setVisible(self._selection_count > 0)
         self._selection_dot.setVisible(not compact and self._selection_count > 0)
         self._precision_label.setVisible(not compact)
         self._details_button.setVisible(compact)
@@ -168,6 +181,49 @@ class CanvasStatusStrip(QFrame):
     def set_zoom_callback(self, callback) -> None:
         """callback(value) where value is a percent int or "fit"."""
         self._on_zoom_selected = callback
+
+    def bind_canvas(self, canvas) -> None:
+        """Keep the compact status readout live without a full page refresh."""
+        if canvas is self._cursor_source:
+            return
+        previous = self._cursor_source
+        if previous is not None:
+            for signal, slot in (
+                (getattr(previous, "cursorPositionChanged", None), self._on_canvas_cursor_moved),
+                (getattr(previous, "viewChanged", None), self._refresh_bound_cursor),
+            ):
+                if signal is not None:
+                    try:
+                        signal.disconnect(slot)
+                    except (RuntimeError, TypeError):
+                        pass
+        self._cursor_source = canvas
+        if canvas is None:
+            self._cursor_label.clear()
+            return
+        cursor_signal = getattr(canvas, "cursorPositionChanged", None)
+        if cursor_signal is not None:
+            cursor_signal.connect(self._on_canvas_cursor_moved)
+        view_signal = getattr(canvas, "viewChanged", None)
+        if view_signal is not None:
+            view_signal.connect(self._refresh_bound_cursor)
+        self._refresh_bound_cursor()
+
+    def _on_canvas_cursor_moved(self, x: float, y: float) -> None:
+        source = self._cursor_source
+        self.set_cursor_position(
+            (x, y),
+            str(getattr(source, "_unit_system", "mm")),
+        )
+
+    def _refresh_bound_cursor(self) -> None:
+        source = self._cursor_source
+        if source is None or not hasattr(source, "get_cursor_world_pos"):
+            return
+        self.set_cursor_position(
+            source.get_cursor_world_pos(),
+            str(getattr(source, "_unit_system", "mm")),
+        )
 
     def _show_zoom_menu(self) -> None:
         callback = self._on_zoom_selected
@@ -188,6 +244,16 @@ class CanvasStatusStrip(QFrame):
             f"Y {_to_display(cursor_pos[1], unit):.2f} {_unit_suffix(unit)}"
         )
 
+    def set_cursor_position(
+        self,
+        cursor_pos: tuple[float, float] | None,
+        unit: str = "mm",
+    ) -> None:
+        """Update only the live coordinate text; safe to call every mouse move."""
+        self._cursor_label.setText(
+            self._format_cursor(cursor_pos, unit) if cursor_pos is not None else ""
+        )
+
     def set_zoom(
         self,
         zoom_percent: int,
@@ -201,7 +267,7 @@ class CanvasStatusStrip(QFrame):
         """
         self._zoom_label.setText(f"{zoom_percent}%")
         if cursor_pos is not None:
-            self._cursor_label.setText(self._format_cursor(cursor_pos, unit))
+            self.set_cursor_position(cursor_pos, unit)
 
     def set_selection_count(self, count: int) -> None:
         """Lightweight update — change only the selection label without a full snapshot."""

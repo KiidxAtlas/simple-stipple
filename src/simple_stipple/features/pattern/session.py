@@ -46,6 +46,7 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "orig_polys": page._orig_polys,
         "edit_polys": polys_to_save,
         "outline_ids": list(page._outline_ids),
+        "outline_layers": dict(page._outline_layers),
         "outline_roles": dict(page._outline_roles),
         "pattern_cell_cutouts": [list(poly) for poly in page._pattern_cell_cutouts],
         "pattern_cell_instance_cutouts": [
@@ -68,6 +69,7 @@ def get_pattern_workspace_state(page: Any) -> dict:
             "y": page._engrave_y.value(),
             "width": page._engrave_w.value(),
             "height": page._engrave_h.value(),
+            "rotation": page._engrave_rotation.value(),
             "interval": page._engrave_interval.value(),
             "min_power": page._engrave_min_power.value(),
             "max_power": page._engrave_max_power.value(),
@@ -95,6 +97,13 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._outline_ids = [str(v) for v in outline_ids]
     else:
         page._outline_ids = page._fresh_outline_ids(len(page._edit_polys))
+    page._outline_layers = {
+        str(key): str(value)
+        for key, value in pattern_state.outline_layers.items()
+        if str(key) in page._outline_ids and str(value).strip()
+    }
+    for outline_id in page._outline_ids:
+        page._outline_layers.setdefault(outline_id, "Outline")
     raw_roles = pattern_state.outline_roles
     page._outline_roles = {
         str(key): str(value)
@@ -120,11 +129,7 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._preview_btn.setProperty("active", True)
         refresh_style(page._preview_btn)
     else:
-        page._canvas.set_polylines_state(
-            page._edit_polys,
-            fit=bool(page._edit_polys),
-            entity_ids=list(page._outline_ids),
-        )
+        page._load_outline_canvas(fit=bool(page._edit_polys))
         page._showing_preview = False
         page._preview_btn.setChecked(False)
         page._preview_btn.setProperty("active", False)
@@ -155,6 +160,7 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._engrave_y.setValue(float(engraving.get("y", 0)))
         page._engrave_w.setValue(float(engraving.get("width", 100)))
         page._engrave_h.setValue(float(engraving.get("height", 100)))
+        page._engrave_rotation.setValue(float(engraving.get("rotation", 0)))
         page._engrave_interval.setValue(float(engraving.get("interval", 0.1)))
         page._engrave_min_power.setValue(float(engraving.get("min_power", 0)))
         page._engrave_max_power.setValue(float(engraving.get("max_power", 80)))
@@ -169,9 +175,10 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._engrave_material.setCurrentIndex(max(0, material_index))
         page._engrave_material.blockSignals(False)
     if page._engraving_image_path and Path(page._engraving_image_path).exists():
-        page._engraving_image_label.setText(Path(page._engraving_image_path).name)
-        page._engraving_section.set_subtitle(Path(page._engraving_image_path).name)
         page._update_engraving_overlay()
+    else:
+        page._canvas.clear_background_image()
+    page._refresh_engraving_ui()
     page._sync_canvas_cutout_highlight()
     page._refresh_cutout_status()
 

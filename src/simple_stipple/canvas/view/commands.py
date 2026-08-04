@@ -691,3 +691,13 @@ def _escape_cb(self) -> None:
     self.modeChanged.emit("select")
     self._notify()
     self._redraw()
+
+
+def exit_to_select(self) -> None:
+    """Cancel the active canvas interaction and restore Select mode.
+
+    This is intentionally callable outside ``keyPressEvent`` so an Escape
+    event from a side-panel or HUD input can use the exact same cleanup.
+    """
+    self._cancel_active_drag()
+    self._escape_cb()

@@ -170,6 +170,7 @@ DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS: tuple[str, ...] = (
     "arrange",
     "text",
 )
+CONTEXT_MENU_PROFILES: tuple[str, ...] = ("draft", "pattern", "trace")
 
 CONTEXT_MENU_SECTION_LABELS: tuple[tuple[str, str], ...] = (
     ("create", "Create shapes"),
@@ -182,6 +183,27 @@ CONTEXT_MENU_SECTION_LABELS: tuple[tuple[str, str], ...] = (
     ("text", "Add text"),
     ("view", "View, grid & mode"),
 )
+
+CONTEXT_MENU_TRANSFORM_ITEMS: tuple[tuple[str, str], ...] = (
+    ("rotate_cw", "Rotate +90°"),
+    ("rotate_ccw", "Rotate −90°"),
+    ("mirror_horizontal", "Mirror horizontal"),
+    ("mirror_vertical", "Mirror vertical"),
+    ("size", "Edit width + height…"),
+    ("length", "Set line length…"),
+    ("angle", "Set line angle…"),
+    ("trim", "Trim segments…"),
+    ("extend", "Extend to meet…"),
+    ("knife", "Knife tool"),
+    ("explode", "Explode to segments"),
+    ("merge", "Merge segments to object"),
+)
+
+
+def normalize_context_menu_transform_items(value: object) -> list[str]:
+    allowed = {key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS}
+    configured = [key for key in (value if isinstance(value, list) else []) if key in allowed]
+    return list(dict.fromkeys(configured))
 
 
 def normalize_context_menu_sections(value: object) -> list[str]:
@@ -202,6 +224,26 @@ def normalize_context_menu_overflow_sections(value: object) -> list[str]:
     allowed = {key for key, _label in CONTEXT_MENU_SECTION_LABELS}
     values = value if isinstance(value, list) else list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
     return list(dict.fromkeys(key for key in values if isinstance(key, str) and key in allowed))
+
+
+def normalize_context_menu_profiles(value: object) -> dict[str, dict[str, list[str]]]:
+    raw = value if isinstance(value, dict) else {}
+    result: dict[str, dict[str, list[str]]] = {}
+    for profile in CONTEXT_MENU_PROFILES:
+        saved = raw.get(profile)
+        saved = saved if isinstance(saved, dict) else {}
+        result[profile] = {
+            "sections": normalize_context_menu_sections(
+                saved.get("sections", list(DEFAULT_CONTEXT_MENU_SECTIONS))
+            ),
+            "overflow": normalize_context_menu_overflow_sections(
+                saved.get("overflow", list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS))
+            ),
+            "transform": normalize_context_menu_transform_items(
+                saved.get("transform", [key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS])
+            ),
+        }
+    return result
 
 
 # =============================================================================
@@ -372,14 +414,18 @@ class SettingsSchema(BaseModel):
     grid_spacing: Annotated[float, Field(ge=0.001, le=100000.0)] = 5.0
     snap_master: bool = True
     snap_vertex: bool = True
+    snap_midpoint: bool = True
     snap_edge: bool = True
     snap_tangent: bool = True
     snap_extension: bool = True
     snap_angle: bool = True
+    snap_parallel: bool = True
+    snap_perpendicular: bool = True
     snap_equal_length: bool = True
     snap_axis_alignment: bool = True
+    snap_align_x: bool = True
+    snap_align_y: bool = True
     construction_mode_default: bool = False
-    aspect_ratio_locked_default: bool = False
     geometry_health_visible: bool = False
     curvature_visible: bool = False
     high_contrast: bool = False
@@ -391,6 +437,9 @@ class SettingsSchema(BaseModel):
     )
     context_menu_overflow_sections: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
+    )
+    context_menu_profiles: dict[str, dict[str, list[str]]] = Field(
+        default_factory=lambda: normalize_context_menu_profiles({})
     )
     draw_sidebar_sections: list[str] = Field(
         default_factory=lambda: list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
@@ -425,6 +474,9 @@ def validate_settings(data: dict) -> dict:
     )
     validated["context_menu_overflow_sections"] = normalize_context_menu_overflow_sections(
         validated.get("context_menu_overflow_sections")
+    )
+    validated["context_menu_profiles"] = normalize_context_menu_profiles(
+        validated.get("context_menu_profiles")
     )
     return validated
 

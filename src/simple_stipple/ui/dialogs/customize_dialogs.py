@@ -9,9 +9,10 @@ instead of the full command registry, so no filter box is needed).
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.platform.config import (
     CONTEXT_MENU_SECTION_LABELS,
+    CONTEXT_MENU_TRANSFORM_ITEMS,
     DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
@@ -213,6 +215,15 @@ def _build_list(
 ) -> QListWidget:
     widget = QListWidget()
     widget.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+    # A QListWidget normally derives each row's height lazily from its
+    # delegate.  That can leave the first paint with overlapping checkbox
+    # rows until an item changes state (exactly the behaviour seen in the
+    # context-menu customizer).  These lists contain short, single-line
+    # commands, so stable uniform rows are both clearer and more reliable.
+    widget.setUniformItemSizes(True)
+    widget.setSpacing(2)
+    widget.setWordWrap(False)
+    widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     _fill_list(widget, labels, checked or list(defaults))
     return widget
 
@@ -226,7 +237,14 @@ def _fill_list(widget: QListWidget, labels: dict[str, str], checked: list[str]) 
         item.setData(Qt.ItemDataRole.UserRole, key)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(Qt.CheckState.Checked if key in checked_set else Qt.CheckState.Unchecked)
+        item.setSizeHint(QSize(0, 36))
+        # Long section names remain understandable even when the dialog is
+        # deliberately narrowed to keep the canvas visible behind it.
+        item.setToolTip(labels[key])
         widget.addItem(item)
+    # Populate and lay out synchronously so a just-opened dialog has the
+    # same geometry as one whose checkbox has subsequently been toggled.
+    widget.doItemsLayout()
 
 
 def _checked_keys(widget: QListWidget) -> list[str]:
@@ -405,11 +423,12 @@ class ContextMenuCustomizeDialog(QDialog):
         parent: QWidget | None = None,
         sections: list[str] | None = None,
         overflow_sections: list[str] | None = None,
+        profiles: dict | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Customize Canvas Context Menu")
-        self.resize(460, 540)
-        self.setMinimumSize(380, 420)
+        self.resize(460, 720)
+        self.setMinimumSize(380, 560)
         self.setModal(True)
         labels = dict(CONTEXT_MENU_SECTION_LABELS)
         current = [key for key in (sections or []) if key in labels]
@@ -420,6 +439,18 @@ class ContextMenuCustomizeDialog(QDialog):
         if overflow_sections is None:
             overflow = list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
         self._overflow_result = overflow
+        self._profiles: dict[str, dict[str, list[str]]] = {
+            name: {
+                "sections": list((profiles or {}).get(name, {}).get("sections", current)),
+                "overflow": list((profiles or {}).get(name, {}).get("overflow", overflow)),
+                "transform": list(
+                    (profiles or {}).get(name, {}).get(
+                        "transform", [key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS]
+                    )
+                ),
+            }
+            for name in ("draft", "pattern", "trace")
+        }
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
@@ -427,6 +458,14 @@ class ContextMenuCustomizeDialog(QDialog):
         title = QLabel("Canvas Context Menu")
         title.setProperty("role", "page-title")
         layout.addWidget(title)
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Customize for"))
+        self._profile_combo = QComboBox()
+        self._profile_combo.addItem("Draft", "draft")
+        self._profile_combo.addItem("Pattern", "pattern")
+        self._profile_combo.addItem("Trace", "trace")
+        profile_row.addWidget(self._profile_combo, stretch=1)
+        layout.addLayout(profile_row)
         subtitle = QLabel(
             "The first list controls what appears. The second controls which visible "
             "sections are grouped under More actions. Drag either list to set order. "
@@ -448,12 +487,30 @@ class ContextMenuCustomizeDialog(QDialog):
             DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
         )
         layout.addWidget(self._overflow_list, stretch=1)
+        transform_label = QLabel("Transform submenu")
+        transform_label.setProperty("role", "section-title")
+        layout.addWidget(transform_label)
+        self._transform_list = _build_list(
+            dict(CONTEXT_MENU_TRANSFORM_ITEMS),
+            self._profiles["draft"]["transform"],
+            tuple(key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS),
+        )
+        self._transform_list.setMaximumHeight(170)
+        layout.addWidget(self._transform_list)
+        self._profile_combo.currentIndexChanged.connect(self._switch_profile)
         sep(layout)
         buttons = QHBoxLayout()
         reset = QPushButton("Reset to defaults")
         reset.setAutoDefault(False)
         reset.clicked.connect(
             lambda: _fill_list(self._list, labels, list(DEFAULT_CONTEXT_MENU_SECTIONS))
+        )
+        reset.clicked.connect(
+            lambda: _fill_list(
+                self._transform_list,
+                dict(CONTEXT_MENU_TRANSFORM_ITEMS),
+                [key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS],
+            )
         )
         reset.clicked.connect(self._lock_view_item)
         reset.clicked.connect(
@@ -493,20 +550,42 @@ class ContextMenuCustomizeDialog(QDialog):
                 break
 
     def _apply(self) -> None:
+        self._save_current_profile()
+        active = str(self._profile_combo.currentData())
+        self._result = list(self._profiles[active]["sections"])
+        self._overflow_result = list(self._profiles[active]["overflow"])
+        self.accept()
+
+    def _save_current_profile(self) -> None:
         checked = _checked_keys(self._list)
         if "view" not in checked:
             checked.append("view")
-        self._result = checked
-        self._overflow_result = [
+        active = str(self._profile_combo.currentData())
+        self._profiles[active] = {"sections": checked, "overflow": [
             key for key in _checked_keys(self._overflow_list) if key in checked
-        ]
-        self.accept()
+        ], "transform": _checked_keys(self._transform_list)}
+
+    def _switch_profile(self, _index: int) -> None:
+        self._save_current_profile()
+        active = str(self._profile_combo.currentData())
+        labels = dict(CONTEXT_MENU_SECTION_LABELS)
+        _fill_list(self._list, labels, self._profiles[active]["sections"])
+        _fill_list(self._overflow_list, labels, self._profiles[active]["overflow"])
+        _fill_list(
+            self._transform_list,
+            dict(CONTEXT_MENU_TRANSFORM_ITEMS),
+            self._profiles[active]["transform"],
+        )
+        self._lock_view_item()
 
     def get_sections(self) -> list[str]:
         return list(self._result)
 
     def get_overflow_sections(self) -> list[str]:
         return list(self._overflow_result)
+
+    def get_profiles(self) -> dict[str, dict[str, list[str]]]:
+        return {name: {key: list(value) for key, value in data.items()} for name, data in self._profiles.items()}
 
 
 __all__ = ["ContextMenuCustomizeDialog", "DrawSidebarCustomizeDialog", "RadialMenuDialog"]

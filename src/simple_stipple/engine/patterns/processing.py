@@ -698,11 +698,13 @@ class PatternProcessor:
         )
         orig_outline = polylines_to_outline(scaled)
         outline_poly = cast(Any, orig_outline)
-        # The pattern uses the merged outline (existing behavior). The fill
-        # region uses even-odd nesting so a donut's inner ring becomes a
-        # hole instead of being silently merged into a solid.
-        nested_fill_region = build_fill_region(scaled)
-        fill_outline = nested_fill_region if nested_fill_region is not None else orig_outline
+        # Every closed outline is fillable by default, including a smaller
+        # closed outline nested inside a larger one.  A nested ring used to
+        # be silently treated as a hole here, making normal multi-shape
+        # transfers from Draft look as if the inner shape had disappeared.
+        # Cutouts are explicit now: the page passes them in
+        # ``exclusion_polys`` only after the user chooses the Cutout role.
+        fill_outline = orig_outline
         fill_outline = _repair_overlay_geometry(fill_outline)
         if fill_outline is None or fill_outline.is_empty:
             return []

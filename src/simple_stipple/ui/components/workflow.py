@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSizePolicy,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -39,21 +40,53 @@ class WorkflowStepper(QFrame):
 
     stepRequested = Signal(int)
 
-    def __init__(self, steps: tuple[str, ...], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        steps: tuple[str, ...],
+        parent: QWidget | None = None,
+        *,
+        title: str = "",
+        description: str = "",
+    ) -> None:
         super().__init__(parent)
         self._steps = steps
         self._labels: list[QToolButton] = []
         self.setProperty("surface", "panel")
         self.setProperty("role", "workflow-strip")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
+        layout = QVBoxLayout(self)
+        # Workflow status should orient the user, not consume the canvas.
+        # The previous 32 px steps plus generous vertical chrome made every
+        # editor begin beneath a large, dense header.
+        layout.setContentsMargins(16, 6, 16, 6)
+        layout.setSpacing(4)
+        self._guidance: QLabel | None = None
+        if title or description:
+            intro = QHBoxLayout()
+            intro.setSpacing(12)
+            if title:
+                title_label = QLabel(title)
+                title_label.setProperty("role", "workflow-title")
+                intro.addWidget(title_label)
+            if description:
+                description_label = QLabel(description)
+                description_label.setProperty("role", "workflow-description")
+                description_label.setWordWrap(True)
+                intro.addWidget(description_label, 1)
+            self._guidance = QLabel()
+            self._guidance.setProperty("role", "workflow-guidance")
+            self._guidance.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            intro.addWidget(self._guidance)
+            intro.addStretch()
+            layout.addLayout(intro)
+
+        steps_layout = QHBoxLayout()
+        steps_layout.setSpacing(8)
         for index, step in enumerate(steps):
             button = QToolButton()
             button.setText(f"{index + 1}  {step}")
             button.setProperty("role", "workflow-step")
-            button.setMinimumHeight(32)
+            button.setMinimumHeight(28)
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             button.setAccessibleName(f"Step {index + 1}: {step}")
             # The strip reports progress; page navigation is handled by each page's
@@ -61,15 +94,16 @@ class WorkflowStepper(QFrame):
             # an interaction that no consumer implements.
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            layout.addWidget(button)
+            steps_layout.addWidget(button)
             self._labels.append(button)
             if index < len(steps) - 1:
                 arrow = QLabel()
                 arrow.setPixmap(QIcon(str(icon_path("chevron_right.svg"))).pixmap(16, 16))
                 arrow.setAccessibleName("Next step")
                 arrow.setProperty("role", "workflow-arrow")
-                layout.addWidget(arrow)
-        layout.addStretch()
+                steps_layout.addWidget(arrow)
+        steps_layout.addStretch()
+        layout.addLayout(steps_layout)
         self.set_current_step(0)
         self.setMaximumHeight(self.sizeHint().height())
 
@@ -87,12 +121,20 @@ class WorkflowStepper(QFrame):
         )
 
     def set_step_states(
-        self, states: list[str] | tuple[str, ...], reasons: dict[int, str] | None = None
+        self,
+        states: list[str] | tuple[str, ...],
+        reasons: dict[int, str] | None = None,
+        *,
+        guidance: str = "",
     ) -> None:
         """Render independently reduced workflow states.
 
         Unlike a single chronological index, this can retain completed setup
         while identifying a stale or failed downstream result.
+
+        ``guidance`` is the sentence shown as the page's next action. Pass one
+        whenever the page knows something the step name does not — "Draw or
+        import a closed outline" beats "Next: Choose outline".
         """
         allowed = {"complete", "current", "pending", "stale", "error"}
         if len(states) != len(self._labels) or any(state not in allowed for state in states):
@@ -118,11 +160,61 @@ class WorkflowStepper(QFrame):
             label.setToolTip(reason)
             label.setAccessibleDescription(reason or f"{self._steps[item_index]} is {state}")
             refresh_style(label)
+        self._update_guidance(states, reasons, guidance)
+
+    def celebrate(self, message: str) -> None:
+        """Mark every step done and say so.
+
+        A finished job that ends on the same muted status line it started
+        with reads as "nothing happened". This is the deliberate end note:
+        the whole strip goes green and names the result.
+        """
+        self.set_step_states(["complete"] * len(self._labels), guidance=message)
+        if self._guidance is not None:
+            self._guidance.setProperty("tone", "success")
+            refresh_style(self._guidance)
+            announce_accessible(self._guidance)
+
+    def _update_guidance(
+        self,
+        states: list[str] | tuple[str, ...],
+        reasons: dict[int, str],
+        guidance: str = "",
+    ) -> None:
+        """Put the next relevant action in plain language at the top of the page."""
+        if self._guidance is None:
+            return
+        current = next((index for index, state in enumerate(states) if state == "current"), None)
+        issue = next(
+            (index for index, state in enumerate(states) if state in {"stale", "error"}),
+            None,
+        )
+        if issue is not None:
+            tone = "warn"
+            detail = reasons.get(issue, "")
+            text = guidance or detail or f"Check {self._steps[issue]}"
+        elif current is not None:
+            tone = ""
+            detail = reasons.get(current, "")
+            # A caller-supplied sentence, then a state reason, then the step
+            # name — most specific wins, so the label is worth reading.
+            text = guidance or detail or f"Next: {self._steps[current]}"
+        else:
+            tone = "success"
+            detail = ""
+            text = guidance or "Workflow complete"
+        self._guidance.setText(text)
+        self._guidance.setToolTip(detail if detail != text else "")
+        self._guidance.setAccessibleDescription(text)
+        self._guidance.setProperty("tone", tone)
+        refresh_style(self._guidance)
 
 
-def workflow_strip(steps: tuple[str, ...]) -> WorkflowStepper:
-    """Create the standard interactive page workflow stepper."""
-    return WorkflowStepper(steps)
+def workflow_strip(
+    steps: tuple[str, ...], *, title: str = "", description: str = ""
+) -> WorkflowStepper:
+    """Create a consistent page orientation and workflow-progress surface."""
+    return WorkflowStepper(steps, title=title, description=description)
 
 
 class StatusRegion(QFrame):

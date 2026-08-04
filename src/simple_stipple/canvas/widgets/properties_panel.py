@@ -47,6 +47,7 @@ def _num_edit(on_commit) -> QLineEdit:
     edit = QLineEdit()
     edit.setAlignment(Qt.AlignmentFlag.AlignRight)
     edit.setMinimumWidth(72)
+    edit.setMinimumHeight(30)
     edit.editingFinished.connect(on_commit)
     return edit
 
@@ -147,6 +148,8 @@ class CanvasPropertiesPanel(QWidget):
         self._aspect_lock_btn = QPushButton("Lock")
         self._aspect_lock_btn.setCheckable(True)
         self._aspect_lock_btn.setMinimumWidth(64)
+        self._aspect_lock_btn.setMinimumHeight(30)
+        self._aspect_lock_btn.setAccessibleName("Lock aspect ratio")
         self._aspect_lock_btn.setToolTip(
             "Lock aspect ratio\nKeeps width/height proportional for both "
             "typed W/H edits and gizmo-handle drags"
@@ -280,8 +283,9 @@ class CanvasPropertiesPanel(QWidget):
             ),
         ):
             button = QPushButton(text)
-            button.setMinimumHeight(28)
+            button.setMinimumHeight(30)
             button.setToolTip(tip)
+            button.setAccessibleName(text)
             button.clicked.connect(callback)
             self._context_buttons[key] = button
         constraints_layout.addWidget(self._context_buttons["constraints"], 0, 0)
@@ -302,7 +306,7 @@ class CanvasPropertiesPanel(QWidget):
             )
         ):
             button = QPushButton(text)
-            button.setMinimumHeight(28)
+            button.setMinimumHeight(30)
             button.setToolTip(tip)
             button.clicked.connect(callback)
             actions_layout.addWidget(button, 4, column)
@@ -469,15 +473,17 @@ class CanvasPropertiesPanel(QWidget):
             has_open = any(len(e.points) >= 3 and e.points[0] != e.points[-1] for e in selected)
             closed = [e for e in selected if len(e.points) >= 4 and e.points[0] == e.points[-1]]
             line_like = [e for e in selected if len(e.points) == 2]
+            edge_reference_count = len(getattr(self._canvas, "_constraint_segment_refs", []))
+            can_compare_edges = len(line_like) == 2 or edge_reference_count == 2
             self._context_buttons["constraints"].setVisible(constraint_count > 0)
             self._context_buttons["close"].setVisible(has_open)
             for key in ("parallel", "perpendicular", "equal_length"):
-                self._context_buttons[key].setVisible(len(line_like) == 2)
+                self._context_buttons[key].setVisible(can_compare_edges)
             self._context_buttons["offset"].setVisible(count == 1 and bool(selected))
             for key in ("union", "subtract", "intersect"):
                 self._context_buttons[key].setVisible(len(closed) >= 2)
             self._selection_constraints_section.setVisible(
-                constraint_count > 0 or has_open or len(line_like) == 2
+                constraint_count > 0 or has_open or can_compare_edges
             )
         finally:
             self._updating = False

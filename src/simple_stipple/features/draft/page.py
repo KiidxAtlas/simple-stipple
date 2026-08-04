@@ -56,6 +56,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
+from simple_stipple.ui.components.workflow import workflow_strip
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
 from simple_stipple.ui.dialogs.import_dialog import DxfImportPreviewDialog
@@ -91,6 +92,16 @@ class DraftPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+        self._workflow_strip = workflow_strip(
+            ("Start or import", "Draw and refine", "Organize layers", "Export"),
+            title="Draft workspace",
+            description="Create or import geometry, refine it, then export a production-ready vector.",
+        )
+        root.addWidget(self._workflow_strip)
+        # The application chrome and tool strip already communicate context.
+        # Keep workflow progress available to code/status updates without
+        # creating a third visual header above the drawing canvas.
+        self._workflow_strip.setVisible(False)
 
         canvas_host = self._build_canvas()
 
@@ -105,6 +116,7 @@ class DraftPage(BasePage):
 
         self._canvas_status = CanvasStatusStrip()
         self._canvas_status.set_zoom_callback(self._on_zoom_preset)
+        self._canvas_status.bind_canvas(self._canvas)
         root.addWidget(self._canvas_status)
         self.setAcceptDrops(True)
 
@@ -203,6 +215,8 @@ class DraftPage(BasePage):
             on_ghost_click=self._on_ghost_poly_click,
             draft_profile=True,
         )
+        self._canvas.set_context_menu_profile("draft")
+        self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
         self._canvas.set_selection_follows_geometry(True)
         self._canvas.set_empty_message(
             "Start a drawing\n1  Import or drop a vector\n"
@@ -258,9 +272,12 @@ class DraftPage(BasePage):
         inspector_splitter.setChildrenCollapsible(False)
         inspector_splitter.addWidget(props_scroll)
         inspector_splitter.addWidget(self._layer_module)
+        # Layers are the durable document navigator; start with enough room
+        # to manage them instead of letting a mostly-empty Properties panel
+        # monopolize the inspector.
         inspector_splitter.setStretchFactor(0, 1)
-        inspector_splitter.setStretchFactor(1, 1)
-        inspector_splitter.setSizes([360, 300])
+        inspector_splitter.setStretchFactor(1, 2)
+        inspector_splitter.setSizes([220, 440])
         side_layout.addWidget(inspector_splitter, stretch=1)
         self._inspector_splitter = inspector_splitter
         side_layout.addWidget(self._build_export_controls())
@@ -633,6 +650,9 @@ class DraftPage(BasePage):
                 extra_layer_records=extra_records or None,
             )
             self._last_out_path = out_path
+            self._workflow_strip.set_step_states(
+                ("complete", "complete", "complete", "complete")
+            )
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Export Failed", exc)
@@ -692,6 +712,14 @@ class DraftPage(BasePage):
 
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
+
+        if not n:
+            states = ("current", "pending", "pending", "pending")
+        elif self._last_out_path:
+            states = ("complete", "complete", "complete", "complete")
+        else:
+            states = ("complete", "current", "pending", "pending")
+        self._workflow_strip.set_step_states(states)
 
     def _update_action_buttons(self) -> None:
         """Update Explode, Merge, and Export button enabled states.
@@ -1029,7 +1057,7 @@ class DraftPage(BasePage):
 
     def load_outline_polys(
         self,
-        polys: list[list[tuple[float, float]]],
+        polys: list,
         *,
         source_label: str = "Pattern selection",
     ) -> None:
@@ -1038,8 +1066,29 @@ class DraftPage(BasePage):
         not a fresh load, so it must not discard the existing draft."""
         if not polys:
             return
-        incoming = [[(x, y) for x, y in poly] for poly in polys]
+        incoming: list[list[tuple[float, float]]] = []
+        layers: list[str | None] = []
+        for item in polys:
+            if isinstance(item, dict):
+                points = item.get("points", [])
+                layer = item.get("layer")
+            else:
+                points, layer = item, None
+            try:
+                poly = [(float(x), float(y)) for x, y in points]
+            except (TypeError, ValueError):
+                continue
+            if len(poly) >= 2:
+                incoming.append(poly)
+                layers.append(str(layer) if layer else None)
+        if not incoming:
+            return
+        before = set(self._canvas.get_entity_ids())
         self._rt().add_polys(incoming, fit=True)
+        added = [eid for eid in self._canvas.get_entity_ids() if eid not in before]
+        for entity_id, layer in zip(added, layers, strict=True):
+            if layer:
+                self._canvas.move_indices_to_layer([entity_id], layer)
         self._canvas._show_flash(f"Added {len(incoming)} from {source_label}", 1200)
         self._refresh_status()
         self._emit_state_changed()

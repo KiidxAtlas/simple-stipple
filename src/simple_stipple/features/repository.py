@@ -12,6 +12,7 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -29,7 +30,7 @@ from simple_stipple.ui.components.layout import (
     sidebar_panel,
     surface_frame,
 )
-from simple_stipple.ui.components.workflow import set_status_label
+from simple_stipple.ui.components.workflow import set_status_label, workflow_strip
 from simple_stipple.ui.files import reveal_label
 from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
 
@@ -46,10 +47,18 @@ class RepoPage(BasePage):
         self._git_process: subprocess.Popen[str] | None = None
         self._git_thread: threading.Thread | None = None
         self._git_op_done.connect(self._on_git_op_done)
+        self._completed_steps: set[int] = set()
+        self._workflow_repo_key: str | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
+        self._workflow_strip = workflow_strip(
+            ("Choose repository", "Pull changes", "Review and commit", "Push"),
+            title="Repository sync",
+            description="Bring changes in safely, review your work, then commit and publish it.",
+        )
+        root.addWidget(self._workflow_strip)
 
         # ── Left sidebar ──────────────────────────────────────────────────────
         left_w = QWidget()
@@ -242,6 +251,10 @@ class RepoPage(BasePage):
     def _refresh_repo_state(self) -> None:
         repo = self._repo_dir(show_dialogs=False)
         ready = repo is not None
+        repo_key = str(repo.resolve()) if repo is not None else None
+        if repo_key != self._workflow_repo_key:
+            self._workflow_repo_key = repo_key
+            self._completed_steps.clear()
         if not self._dir_edit.text().strip():
             message = "Choose a repository folder to enable git actions."
             color = STATUS_NEUTRAL
@@ -265,6 +278,20 @@ class RepoPage(BasePage):
         ):
             button.setEnabled(git_enabled)
         self._cancel_btn.setEnabled(self._git_busy)
+        self._update_workflow(ready)
+
+    def _update_workflow(self, repo_ready: bool) -> None:
+        """Make the safe next Git action visible without relaxing safeguards."""
+        if not repo_ready:
+            states = ("current", "pending", "pending", "pending")
+        else:
+            states = ["complete"]
+            for index in range(1, 4):
+                states.append("complete" if index in self._completed_steps else "pending")
+            next_step = next((index for index in range(1, 4) if index not in self._completed_steps), None)
+            if next_step is not None:
+                states[next_step] = "current"
+        self._workflow_strip.set_step_states(states)
 
     @staticmethod
     def _set_step_status(label: QLabel, text: str, color: str) -> None:
@@ -371,6 +398,8 @@ class RepoPage(BasePage):
             ok = results[-1][1] if results else False
             if ok:
                 self._set_step_status(self._pull_status, "Up to date", STATUS_OK)
+                self._completed_steps.add(1)
+                self._update_workflow(True)
             else:
                 self._set_step_status(self._pull_status, "Pull failed — check log", STATUS_ERR)
 
@@ -424,6 +453,33 @@ class RepoPage(BasePage):
         if repo is None:
             return
         try:
+            identity = {
+                key: subprocess.run(
+                    ["git", "config", "--get", key],
+                    cwd=str(repo),
+                    text=True,
+                    capture_output=True,
+                    timeout=3,
+                    check=False,
+                ).stdout.strip()
+                for key in ("user.name", "user.email")
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            QMessageBox.warning(self, "Commit", f"Could not read Git identity:\n{exc}")
+            return
+        setup_commands: list[list[str]] = []
+        if not identity["user.name"]:
+            name, ok = QInputDialog.getText(self, "Git author name", "Name for this repository:")
+            if not ok or not name.strip():
+                return
+            setup_commands.append(["config", "user.name", name.strip()])
+        if not identity["user.email"]:
+            email, ok = QInputDialog.getText(self, "Git author email", "Email for this repository:")
+            if not ok or not email.strip() or "@" not in email:
+                QMessageBox.warning(self, "Commit", "Enter a valid email address to create a commit.")
+                return
+            setup_commands.append(["config", "user.email", email.strip()])
+        try:
             status = subprocess.run(
                 ["git", "status", "--short"],
                 cwd=str(repo),
@@ -448,7 +504,7 @@ class RepoPage(BasePage):
             return
 
         def done(results: list[tuple[list[str], bool, str]]) -> None:
-            if len(results) < 2:
+            if len(results) < len(setup_commands) + 2:
                 return  # "git add" itself failed; already logged
             _, ok, out = results[-1]
             if not ok and "nothing to commit" in out.lower():
@@ -456,16 +512,20 @@ class RepoPage(BasePage):
                 QMessageBox.information(self, "Commit", "Nothing to commit.")
             elif ok:
                 self._set_step_status(self._commit_status, "Committed", STATUS_OK)
+                self._completed_steps.add(2)
+                self._update_workflow(True)
             else:
                 self._set_step_status(self._commit_status, "Commit failed — check log", STATUS_ERR)
 
-        self._run_git_async([["add", "-A"], ["commit", "-m", msg]], done)
+        self._run_git_async([*setup_commands, ["add", "-A"], ["commit", "-m", msg]], done)
 
     def _git_push(self) -> None:
         def done(results: list[tuple[list[str], bool, str]]) -> None:
             ok = results[-1][1] if results else False
             if ok:
                 self._set_step_status(self._push_status, "Pushed", STATUS_OK)
+                self._completed_steps.add(3)
+                self._update_workflow(True)
             else:
                 self._set_step_status(self._push_status, "Push failed — check log", STATUS_ERR)
 

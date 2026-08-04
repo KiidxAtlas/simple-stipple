@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSlider,
     QToolButton,
     QWidget,
 )
@@ -43,6 +44,14 @@ class ActionButton(QPushButton):
             raise ValueError(f"Unsupported action kind: {kind}")
         self.setProperty("role", kind)
         refresh_style(self)
+
+
+class NoWheelSlider(QSlider):
+    """Leave wheel scrolling to the inspector containing this slider."""
+
+    def wheelEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        # Ignoring lets Qt propagate the wheel event to the parent scroll area.
+        event.ignore()
 
 
 def primary_button(text: str, *, height: int = 34, tooltip: str = "") -> QPushButton:

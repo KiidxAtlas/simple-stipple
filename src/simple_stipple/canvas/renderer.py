@@ -232,7 +232,7 @@ class CanvasRenderer:
             _poly_rect = self._host._poly_rect_for_culling(poly)
             if not visible.intersects(_poly_rect):
                 continue
-            if not self._host._on_active_layer(ent):
+            if not self._host._on_active_layer(ent) and ent.id not in self._host._sel:
                 # Non-active layer: dimmed dashed outline, no handles. Uses
                 # the layer's assigned color (dimmed) when set, so switching
                 # the active layer doesn't lose the multi-layer color context.
@@ -313,7 +313,7 @@ class CanvasRenderer:
                 continue
             if not visible.intersects(self._host._poly_rect_for_culling(poly)):
                 continue
-            if not self._host._on_active_layer(ent):
+            if not self._host._on_active_layer(ent) and ent.id not in self._host._sel:
                 color = QColor(POLY)
                 color.setAlpha(140)
                 width = 1.2
@@ -1179,7 +1179,11 @@ class CanvasRenderer:
                 painter.drawLine(QPointF(_dsx, _dsy - 7), QPointF(_dsx, _dsy + 7))
             else:
                 painter.drawLine(QPointF(_dsx - 7, _dsy), QPointF(_dsx + 7, _dsy))
-        elif snap_t == "equal_length":
+        elif snap_t in {
+            "equal_length",
+            "parallel_equal_length",
+            "perpendicular_equal_length",
+        }:
             painter.drawLine(QPointF(_dsx - 5, _dsy - 2), QPointF(_dsx + 5, _dsy - 2))
             painter.drawLine(QPointF(_dsx - 5, _dsy + 2), QPointF(_dsx + 5, _dsy + 2))
         elif snap_t == "circle_rim":
@@ -1208,6 +1212,10 @@ class CanvasRenderer:
             _label = "Extension"
         elif snap_t == "equal_length":
             _label = "Equal Length"
+        elif snap_t == "parallel_equal_length":
+            _label = "Parallel + Equal Length"
+        elif snap_t == "perpendicular_equal_length":
+            _label = "Perpendicular + Equal Length"
         elif snap_t == "parallel":
             _label = "Parallel"
         elif snap_t == "perpendicular":
@@ -1307,7 +1315,10 @@ class CanvasRenderer:
         # its resize and rotate controls orbit around it; the geometry itself
         # supplies the orientation feedback.
         local_points: dict[str, tuple[float, float]] | None = None
-        rotate_center = QPointF(mid_x, top - 42.0)
+        # Keep controls reachable when a selection sits flush with the top
+        # edge.  The old fixed offset could draw the rotate handle entirely
+        # outside the viewport even though its hit target still existed.
+        rotate_center = QPointF(mid_x, max(18.0, top - 42.0))
 
         self._host._gizmo_scale_rect = None
         rotate_visual_rect = QRectF(
@@ -1452,23 +1463,29 @@ class CanvasRenderer:
                 )
             )
         self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
-        width = _to_display(max(xs) - min(xs), self._host._unit_system)
-        height = _to_display(max(ys) - min(ys), self._host._unit_system)
-        suffix = _unit_suffix(self._host._unit_system)
-        size_text = f"W {width:.2f}  H {height:.2f} {suffix}"
-        if self._host._gizmo_drag_mode and self._host._gizmo_drag_mode.startswith("scale-"):
-            size_text += "  ·  Shift lock  ·  Alt center"
-        painter.setFont(_FONT_HEL_9)
-        metrics = painter.fontMetrics()
-        badge_w = metrics.horizontalAdvance(size_text) + 16
-        badge_x = (bx0 + bx1 - badge_w) / 2.0
-        badge_y = max(by0, by1) + 18.0
-        badge = QRectF(badge_x, badge_y, badge_w, 22.0)
-        painter.setPen(QPen(QColor("#2f81f7"), 1.0))
-        painter.setBrush(QBrush(QColor(13, 17, 23, 235)))
-        painter.drawRoundedRect(badge, 5, 5)
-        painter.setPen(QColor("#b9d7ff"))
-        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, size_text)
+        # A two-point line already exposes its editable length and angle in
+        # the selection readout. Repeating an axis-aligned W/H badge here
+        # creates three overlapping measurements for one object.
+        if self._host._selected_single_line() is None:
+            width = _to_display(max(xs) - min(xs), self._host._unit_system)
+            height = _to_display(max(ys) - min(ys), self._host._unit_system)
+            suffix = _unit_suffix(self._host._unit_system)
+            size_text = f"W {width:.2f}  H {height:.2f} {suffix}"
+            if self._host._gizmo_drag_mode and self._host._gizmo_drag_mode.startswith("scale-"):
+                size_text += "  ·  Shift lock  ·  Alt center"
+            painter.setFont(_FONT_HEL_9)
+            metrics = painter.fontMetrics()
+            badge_w = metrics.horizontalAdvance(size_text) + 16
+            badge_x = (bx0 + bx1 - badge_w) / 2.0
+            # Prefer below the selection, but never let the size readout get
+            # clipped under the canvas/status boundary.
+            badge_y = min(self._host.height() - 26.0, max(by0, by1) + 18.0)
+            badge = QRectF(badge_x, badge_y, badge_w, 22.0)
+            painter.setPen(QPen(QColor("#2f81f7"), 1.0))
+            painter.setBrush(QBrush(QColor(13, 17, 23, 235)))
+            painter.drawRoundedRect(badge, 5, 5)
+            painter.setPen(QColor("#b9d7ff"))
+            painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, size_text)
         key = self._host._property_highlight
         if key:
             left, right = min(bx0, bx1), max(bx0, bx1)
@@ -1555,7 +1572,13 @@ class CanvasRenderer:
         # edge and lie about which relationship would be committed.
         relationship_type = getattr(self._host, "_draw_snap_type", None)
         reference = self._host._snap_engine.last_relationship_reference
-        if relationship_type in {"parallel", "perpendicular", "equal_length"} and reference:
+        if relationship_type in {
+            "parallel",
+            "perpendicular",
+            "equal_length",
+            "parallel_equal_length",
+            "perpendicular_equal_length",
+        } and reference:
             entity_id, _segment_index, first, second = reference
             entity = next((e for e in self._host._entities if e.id == entity_id), None)
             reference_points = (
@@ -1583,6 +1606,8 @@ class CanvasRenderer:
                     "parallel": "Parallel reference",
                     "perpendicular": "Perpendicular reference",
                     "equal_length": "Equal-length reference",
+                    "parallel_equal_length": "Parallel + equal-length reference",
+                    "perpendicular_equal_length": "Perpendicular + equal-length reference",
                 }[relationship_type],
                 9,
             )
@@ -1982,6 +2007,26 @@ class CanvasRenderer:
         canvas_x1, canvas_y1 = self._host._w2c(x1, y1)
         midpoint_x = (canvas_x0 + canvas_x1) / 2.0
         midpoint_y = (canvas_y0 + canvas_y1) / 2.0
+        line_id = self._host._selected_single_line()
+        line_entity = self._host._entity_for_id(line_id) if line_id is not None else None
+        self._host._sel_badge_l_rect = None
+        self._host._sel_badge_a_rect = None
+        if line_entity is not None:
+            # Lines have a clearer pair of direct-edit values (length and
+            # angle) than a redundant bounding-box width and height.
+            self._host._sel_badge_w_rect = None
+            self._host._sel_badge_h_rect = None
+            (ax, ay), (bx, by) = line_entity.points
+            length = math.hypot(bx - ax, by - ay)
+            angle = math.degrees(math.atan2(by - ay, bx - ax))
+            badge_y = max(canvas_y0, canvas_y1) + 20
+            self._host._sel_badge_l_rect = self._draw_badge(
+                painter, midpoint_x - 42, badge_y, f"L {_fmt_len(length, self._host._unit_system)}", 10
+            )
+            self._host._sel_badge_a_rect = self._draw_badge(
+                painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 10
+            )
+            return
         self._host._sel_badge_w_rect = self._draw_badge(
             painter,
             midpoint_x,
@@ -1995,22 +2040,6 @@ class CanvasRenderer:
             midpoint_y,
             f"H {_fmt_len(y1 - y0, self._host._unit_system)}",
             10,
-        )
-        self._host._sel_badge_l_rect = None
-        self._host._sel_badge_a_rect = None
-        line_id = self._host._selected_single_line()
-        line_entity = self._host._entity_for_id(line_id) if line_id is not None else None
-        if line_entity is None:
-            return
-        (ax, ay), (bx, by) = line_entity.points
-        length = math.hypot(bx - ax, by - ay)
-        angle = math.degrees(math.atan2(by - ay, bx - ax))
-        badge_y = max(canvas_y0, canvas_y1) + 20
-        self._host._sel_badge_l_rect = self._draw_badge(
-            painter, midpoint_x - 42, badge_y, f"L {_fmt_len(length, self._host._unit_system)}", 10
-        )
-        self._host._sel_badge_a_rect = self._draw_badge(
-            painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 10
         )
 
     def paintEvent(self, event, /):
@@ -2252,8 +2281,11 @@ class CanvasRenderer:
         if not self._host._entities and not self._host._draw_pts:
             message = getattr(self._host, "_empty_message", "No polylines loaded")
             title, _, hint = message.partition("\n")
-            painter.setPen(QColor("#3b4a6a"))
-            painter.setFont(QFont("Helvetica", 13))
+            # Empty canvases are an important onboarding moment. The former
+            # blue-grey copy was near-invisible against the fixed dark canvas,
+            # so the next action looked like there was no content at all.
+            painter.setPen(QColor("#d6e0ee"))
+            painter.setFont(_FONT_HEL_14_BOLD)
             offset = -10 if hint else 0
             painter.drawText(
                 QRectF(0, offset, w, h),
@@ -2261,7 +2293,7 @@ class CanvasRenderer:
                 title,
             )
             if hint:
-                painter.setPen(QColor("#2c3a55"))
+                painter.setPen(QColor("#9fadc0"))
                 painter.setFont(QFont("Helvetica", 10))
                 painter.drawText(
                     QRectF(0, 16, w, h),
@@ -2275,19 +2307,6 @@ class CanvasRenderer:
         self._paint_measure_button(painter, w)
         self._paint_dimension_button(painter, w)
         self._paint_active_precision_tool_panel(painter, w)
-
-        # Cursor position
-        if self._host._cursor_wx is not None and self._host._cursor_wy is not None:
-            painter.setPen(QColor(DIM))
-            painter.setFont(QFont("Helvetica", 10))
-            text = (
-                f"{_to_display(self._host._cursor_wx, self._host._unit_system):.2f}, "
-                f"{_to_display(self._host._cursor_wy, self._host._unit_system):.2f} "
-                f"{_unit_suffix(self._host._unit_system)}"
-            )
-            fm = QFontMetrics(painter.font())
-            tw = fm.horizontalAdvance(text)
-            painter.drawText(w - tw - 8, h - 8, text)
 
         # Flash indicator
         if self._host._flash_text:

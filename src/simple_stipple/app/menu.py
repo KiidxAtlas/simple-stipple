@@ -14,11 +14,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTextBrowser,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -281,6 +283,8 @@ class MenuController:
         self._app._save_workspace_action.setEnabled(has_content and self._app._workspace_dirty)
 
     def _build_shell_header(self) -> QWidget:
+        from simple_stipple.platform.updates import get_current_version
+
         self._app._shortcut_tooltip_specs = []
         shell = surface_frame("panel")
         shell.setProperty("role", "hero")
@@ -292,6 +296,17 @@ class MenuController:
         title = QLabel("Simple Stipple")
         title.setProperty("role", "shell-title")
         layout.addWidget(title)
+
+        # Show the version that is actually installed, rather than only
+        # exposing it through About / the updater.  This is especially useful
+        # when support reports compare Windows package versions.
+        installed_version = get_current_version()
+        version = QLabel(f"v{installed_version}")
+        version.setProperty("role", "shell-meta")
+        version.setToolTip(f"Installed version {installed_version}")
+        version.setAccessibleName("Installed application version")
+        version.setAccessibleDescription(f"Simple Stipple version {installed_version}")
+        layout.addWidget(version)
 
         # Separator
         sep = QLabel("·")
@@ -316,46 +331,48 @@ class MenuController:
 
         layout.addStretch()
 
-        # File actions — grouped tightly
-        for text, slot, role in [
-            ("New", self._app._new_workspace, None),
-            ("Open", self._app._open_workspace, None),
-            ("Workspaces", self._app._open_saved_workspaces, None),
-            ("Save", self._app._save_workspace, "primary"),
-        ]:
-            btn = QPushButton(text)
-            btn.setMinimumHeight(30)
-            if role:
-                btn.setProperty("role", role)
-            btn.clicked.connect(slot)
-            shortcut_hint = {
-                "New": "workspace.new",
-                "Open": "workspace.open",
-                "Save": "workspace.save",
-            }.get(text)
-            if shortcut_hint:
-                self._app._shortcut_tooltip_specs.append((btn, text, shortcut_hint))
-            elif text == "Workspaces":
-                # No rebindable shortcut backs this button — a plain
-                # tooltip, since it previously had none at all.
-                btn.setToolTip("Browse saved workspaces and recovery snapshots")
-            layout.addWidget(btn)
+        # Hick's Law: the header used to offer New, Open, Workspaces, Save,
+        # Updates, Commands, Settings and Help as eight peers, so choosing
+        # took a scan every time. The three that are not Save collapse into
+        # one menu each — the same actions, one decision.
+        workspace_btn = QToolButton()
+        workspace_btn.setText("Workspace")
+        workspace_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        workspace_btn.setAccessibleName("Workspace actions")
+        workspace_btn.setToolTip("New, open, and browse saved workspaces")
+        workspace_menu = QMenu(workspace_btn)
+        for text, slot, shortcut_id in (
+            ("New Workspace", self._app._new_workspace, "workspace.new"),
+            ("New Window", self._app._new_window, "workspace.new_window"),
+            ("Open…", self._app._open_workspace, "workspace.open"),
+            ("Save As…", self._app._save_workspace_as, "workspace.save_as"),
+        ):
+            action = workspace_menu.addAction(text, slot)
+            keys = _native_keys(self._app._shortcut(shortcut_id))
+            if keys:
+                action.setShortcut(QKeySequence(self._app._shortcut(shortcut_id)))
+        workspace_menu.addSeparator()
+        workspace_menu.addAction(
+            "Browse Saved Workspaces…", self._app._open_saved_workspaces
+        )
+        workspace_btn.setMenu(workspace_menu)
+        layout.addWidget(workspace_btn)
+
+        # Von Restorff: the single filled button in the whole shell. Its job
+        # is to be the thing you see without looking for it.
+        save_btn = QPushButton("Save")
+        save_btn.setProperty("role", "primary")
+        save_btn.clicked.connect(self._app._save_workspace)
+        self._app._shortcut_tooltip_specs.append((save_btn, "Save workspace", "workspace.save"))
+        layout.addWidget(save_btn)
 
         action_sep = QLabel("│")
         action_sep.setProperty("role", "toolbar-sep")
         action_sep.setToolTip("Application actions")
         layout.addWidget(action_sep)
 
-        # Application actions — visually separated from workspace file actions.
-        update_btn = QPushButton()
-        update_btn.setIcon(download_icon())
-        update_btn.setIconSize(QSize(18, 18))
-        update_btn.setFixedSize(30, 30)
-        update_btn.setToolTip("Check for updates")
-        update_btn.setAccessibleName("Check for updates")
-        update_btn.clicked.connect(self._app._open_update_check)
-        layout.addWidget(update_btn)
-
+        # The command palette reaches everything else, so it keeps its own
+        # affordance rather than hiding inside the overflow it duplicates.
         palette_btn = QPushButton(
             _native_keys(self._app._shortcut("app.command_palette")) or "Commands"
         )
@@ -367,19 +384,24 @@ class MenuController:
         palette_btn.clicked.connect(self._app._open_command_palette)
         layout.addWidget(palette_btn)
 
-        settings_btn = QPushButton()
-        settings_btn.setIcon(gear_icon())
-        settings_btn.setIconSize(QSize(18, 18))
-        settings_btn.setFixedSize(30, 30)
-        self._app._shortcut_tooltip_specs.append((settings_btn, "Settings", "app.settings"))
-        settings_btn.clicked.connect(self._app._open_settings)
-        layout.addWidget(settings_btn)
-
-        help_btn = QPushButton("?")
-        help_btn.setFixedSize(30, 30)
-        help_btn.setToolTip("User Manual")
-        help_btn.clicked.connect(self._app._show_help)
-        layout.addWidget(help_btn)
+        app_btn = QToolButton()
+        app_btn.setIcon(gear_icon())
+        app_btn.setIconSize(QSize(18, 18))
+        app_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        app_btn.setProperty("role", "overflow")
+        app_btn.setAccessibleName("Application menu")
+        app_menu = QMenu(app_btn)
+        settings_action = app_menu.addAction("Settings…", self._app._open_settings)
+        settings_keys = self._app._shortcut("app.settings")
+        if settings_keys:
+            settings_action.setShortcut(QKeySequence(settings_keys))
+        app_menu.addAction("User Manual", self._app._show_help)
+        app_menu.addSeparator()
+        update_action = app_menu.addAction("Check for Updates…", self._app._open_update_check)
+        update_action.setIcon(download_icon())
+        app_btn.setMenu(app_menu)
+        self._app._shortcut_tooltip_specs.append((app_btn, "Settings and help", "app.settings"))
+        layout.addWidget(app_btn)
 
         self._refresh_shortcut_tooltips()
         return shell
