@@ -1599,6 +1599,14 @@ class SelectTool(CanvasTool):
         v._band_additive = False
         v._lmb_press = pos
         v._lmb_prev = pos
+        # A preflight marker is the fastest route from "something is wrong" to
+        # the path that is wrong, so it gets first refusal on the click.
+        marker_handler = getattr(v, "_on_issue_marker_clicked", None)
+        if callable(marker_handler):
+            marker = v.issue_marker_at(pos.x(), pos.y())
+            if marker is not None and marker_handler(marker):
+                v._lmb_press = None
+                return True
         candidates = v._find_polys_at(pos.x(), pos.y())
         target = candidates[0] if candidates else None
         if (

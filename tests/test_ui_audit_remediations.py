@@ -202,17 +202,23 @@ def test_none_pattern_refreshes_and_keeps_export_action_available(
     page.close()
 
 
-def test_pattern_export_format_selection_does_not_execute_export(app: QApplication) -> None:
-    """Changing format must not also start a potentially expensive export."""
+def test_export_is_one_button_over_the_documents_operations(app: QApplication) -> None:
+    """There is no export "kind" to pick: the operations come from the
+    document, and one Export writes every enabled one."""
     page = PatternPage(settings={})
-    calls: list[bool] = []
-    page._run_remembered_export = lambda: calls.append(True)
+    for gone in ("_export_default", "_select_export_kind", "_export_actions", "_export_more"):
+        assert not hasattr(page, gone), f"{gone} is part of the deleted export fork"
+    assert page._gen_btn.text() == "Export"
 
-    page._select_export_kind("laserstar")
+    ring = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0), (0.0, 0.0)]
+    page.load_outline_polys([ring])
+    page._treatments[page._outline_ids[0]] = {"kind": "cut", "pattern": "— None —"}
+    page._refresh_output_panel()
+    assert [op.kind for op in page._enabled_operations()] == ["cut"]
 
-    assert page._export_default == "laserstar"
-    assert calls == []
-    assert "LaserStar" in page._gen_btn.text()
+    # Unticking a row leaves it out without touching the treatment.
+    page._output_list.item(0).setCheckState(Qt.CheckState.Unchecked)
+    assert page._enabled_operations() == []
     page.shutdown()
     page.close()
 
@@ -346,7 +352,6 @@ def test_image_engraving_actions_stay_visible_and_keyboard_reachable(
     page = PatternPage(settings={})
     page._update_preview_controls()
     assert page._engrave_export_btn.isEnabled()
-    assert page._export_actions["engraving"].isEnabled()
     assert not page._engrave_remove_btn.isEnabled()
 
     page._engraving_image_path = "source.png"
@@ -380,9 +385,10 @@ def test_image_engraving_has_one_export_terminal_and_safe_clip_choice(
     page._treatments[page._outline_ids[1]] = {"kind": "engrave", "pattern": "— None —"}
     assert page._engraving_mask_polys() == [list(circle)]
 
+    # The image is an Engrave operation in Output; Export is the one terminal.
     page._use_engraving_export()
-    assert page._export_default == "engraving"
-    assert "Export engraving assets" in page._gen_btn.text()
+    assert page._output_section.is_expanded()
+    assert page._gen_btn.text() == "Export"
     page.shutdown()
     page.close()
 

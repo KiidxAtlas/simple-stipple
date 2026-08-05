@@ -14,3 +14,6 @@ def paint_document_scene(renderer: Any, painter: Any, width: int, height: int, v
     renderer._paint_result_polys(painter, visible)
     renderer._paint_main_polys(painter, visible)
     renderer._paint_operation_preview(painter)
+    # Findings ride on top of everything: a problem you cannot see is
+    # a problem you will only meet at the machine.
+    renderer._paint_issue_markers(painter)

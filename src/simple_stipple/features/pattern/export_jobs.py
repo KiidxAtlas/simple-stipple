@@ -66,6 +66,7 @@ def export_laserstar_job(
     engraving_source: str | None = None,
     engraving_job: EngravingJob | None = None,
     engraving_mask: list[list[tuple[float, float]]] | None = None,
+    vector_format: str = "fvi",
 ) -> Path:
     """Write a complete LaserStar package from Pattern export inputs."""
     return export_laserstar_package(
@@ -75,6 +76,7 @@ def export_laserstar_job(
         raster_source=engraving_source,
         raster_spec=engraving_job.raster_spec() if engraving_job else None,
         raster_mask=engraving_mask,
+        vector_format=vector_format,
     )
 
 

@@ -981,6 +981,25 @@ class CanvasView(
         self._renderer.invalidate_result_cache()
         self._redraw()
 
+    def set_issue_markers(self, markers) -> None:
+        """Show preflight findings on the part, at their own coordinates.
+
+        Each marker needs ``.point`` and ``.severity`` — the shape
+        ``engine.cad.preflight.GeometryIssue`` already has.
+        """
+        self._issue_markers = tuple(markers or ())
+        self._redraw()
+
+    def issue_marker_at(self, cx: float, cy: float):
+        """The finding under the cursor, so clicking one can select its path."""
+        best, best_distance = None, 12.0
+        for marker in self._issue_markers:
+            mx, my = self._w2c(*marker.point)
+            distance = math.hypot(mx - cx, my - cy)
+            if distance < best_distance:
+                best, best_distance = marker, distance
+        return best
+
     def set_result_visible(self, visible: bool) -> None:
         if bool(visible) == self._result_visible:
             return

@@ -46,7 +46,6 @@ from simple_stipple.features.base import BasePage
 from simple_stipple.features.pattern.export_jobs import (
     EngravingJob,
     export_laserstar_job,
-    export_positioned_engraving,
 )
 from simple_stipple.ui.components.collapsible import CollapsibleSection
 from simple_stipple.ui.components.feedback import (
@@ -177,6 +176,12 @@ class PatternPage(BasePage):
         self._last_out_path: str | None = None
         self._export_is_current: bool = False
         self._preview_is_stale: bool = False
+        # Output-panel state: run order and the rows the user has switched off.
+        self._output_order: list[str] = []
+        self._output_disabled: set[str] = set()
+        # Set for the one solve that feeds an export, so the written geometry
+        # is never the fast preview approximation.
+        self._force_export_quality: bool = False
         self._pending_export_after_preview: Any | None = None
         self._zones_section: CollapsibleSection
         self._zone_output_combo: QComboBox
@@ -781,6 +786,123 @@ class PatternPage(BasePage):
     def _snapshot_zone_jobs(self) -> list[dict]:
         return snapshot_zone_jobs(self)
 
+    # ── Output ────────────────────────────────────────────────────────────────
+    #
+    # One panel listing what the document produces, in the order the machine
+    # runs it. There is no export "kind" to choose: the operations are derived
+    # from the treatments, and one Export writes every enabled one.
+
+    def _document_operations(self) -> list:
+        from simple_stipple.features.pattern.output import document_operations
+
+        operations = document_operations(self)
+        order = {key: index for index, key in enumerate(self._output_order)}
+        operations.sort(key=lambda op: order.get(op.key, len(order)))
+        self._output_order = [op.key for op in operations]
+        return operations
+
+    def _enabled_operations(self) -> list:
+        return [op for op in self._document_operations() if op.key not in self._output_disabled]
+
+    def _refresh_output_panel(self) -> None:
+        if not hasattr(self, "_output_list"):
+            return
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QListWidgetItem
+
+        operations = self._document_operations()
+        self._output_list.blockSignals(True)
+        self._output_list.clear()
+        for index, operation in enumerate(operations, start=1):
+            item = QListWidgetItem(f"{index}  {operation.label}")
+            item.setFlags(item.flags() | _Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                _Qt.CheckState.Unchecked
+                if operation.key in self._output_disabled
+                else _Qt.CheckState.Checked
+            )
+            item.setData(_Qt.ItemDataRole.UserRole, operation.key)
+            self._output_list.addItem(item)
+        self._output_list.blockSignals(False)
+        self._refresh_preflight_markers()
+
+    def _on_output_row_toggled(self, item) -> None:
+        from PySide6.QtCore import Qt as _Qt
+
+        key = str(item.data(_Qt.ItemDataRole.UserRole) or "")
+        if item.checkState() == _Qt.CheckState.Checked:
+            self._output_disabled.discard(key)
+        else:
+            self._output_disabled.add(key)
+        self._emit_state_changed()
+
+    def _move_output_row(self, delta: int) -> None:
+        row = self._output_list.currentRow()
+        target = row + delta
+        if row < 0 or not 0 <= target < len(self._output_order):
+            return
+        order = list(self._output_order)
+        order[row], order[target] = order[target], order[row]
+        self._output_order = order
+        self._refresh_output_panel()
+        self._output_list.setCurrentRow(target)
+        self._emit_state_changed()
+
+    # ── Continuous validation ─────────────────────────────────────────────────
+
+    def _refresh_preflight_markers(self, *_args) -> None:
+        """Put preflight findings on the part while it is being designed.
+
+        Preflight already produced records carrying a point and a severity; it
+        just ran at export, where a fix is expensive. It now runs on the same
+        debounce as the solver and draws on the canvas.
+        """
+        if not hasattr(self, "_output_preflight"):
+            return
+        from simple_stipple.engine.cad.preflight import analyze_geometry
+        from simple_stipple.features.pattern.output import density_issues
+
+        report = analyze_geometry([list(poly) for poly in self._edit_polys])
+        # An open endpoint is only informational when open paths are a valid
+        # output. When they are not, it is the finding the user most needs.
+        allow_open = self._export_open_paths_cb.isChecked()
+        issues = [
+            issue
+            for issue in report.issues
+            if issue.severity in {"warning", "error"}
+            or (not allow_open and issue.kind in {"open_start", "open_end"})
+        ]
+        try:
+            minimum = float(self._min_density_edit.text() or 0.0)
+        except (TypeError, ValueError):
+            minimum = 0.0
+        if minimum > 0:
+            try:
+                issues.extend(density_issues(self._snapshot_zone_jobs(), minimum))
+            except ValueError:
+                pass  # nothing solvable yet; geometry findings still stand
+        self._canvas.set_issue_markers(issues)
+        if not self._edit_polys:
+            text = "Preflight · Load an outline to begin"
+        elif issues:
+            errors = sum(1 for issue in issues if issue.severity == "error")
+            text = (
+                f"Preflight · {len(issues)} finding{'s' if len(issues) != 1 else ''}"
+                f"{f' ({errors} blocking)' if errors else ''} — marked on the canvas"
+            )
+        else:
+            text = f"Preflight · {report.paths} paths, no findings"
+        self._output_preflight.setText(text)
+
+    def _on_issue_marker_clicked(self, marker) -> bool:
+        """Select the path a finding belongs to, so the fix is one click away."""
+        index = int(getattr(marker, "path_index", -1))
+        if not 0 <= index < len(self._outline_ids):
+            return False
+        self._canvas.set_selection([self._outline_ids[index]])
+        self._set_status(marker.message, STATUS_WARN)
+        return True
+
     # ── Document pattern grid ─────────────────────────────────────────────────
 
     def _on_document_lattice_changed(self, *_args) -> None:
@@ -1173,10 +1295,11 @@ class PatternPage(BasePage):
         return engraving_mask_polys(self)
 
     def _use_engraving_export(self) -> None:
-        """Make the shared Export control the sole engraving export terminal."""
-        self._select_export_kind("engraving")
+        """Point at the one Export button; the image is already an operation."""
+        self._output_section.set_expanded(True)
         self._set_status(
-            "Engraving export selected — use the main Export button when placement is ready.",
+            "This image is an Engrave operation in Output — Export writes it with "
+            "everything else.",
             STATUS_OK,
         )
 
@@ -1193,107 +1316,48 @@ class PatternPage(BasePage):
                 return region_id, engraving
         return found[0]
 
-    def _export_pattern_engraving(self) -> None:
-        active = self._active_engraving()
-        if active is not None:
-            self._sync_engraving_widgets_from_region(active[0])
-        if not self._engraving_image_path:
-            self._set_status("Choose an engraving image first.", STATUS_WARN)
-            return
-        if self._engrave_min_power.value() > self._engrave_max_power.value():
-            self._engraving_process_section.set_expanded(True)
+    def _export_document_job(self) -> None:
+        """One Export: every enabled operation, written as one job.
+
+        Replaces the vector / engraving / LaserStar fork. The document already
+        knows what it produces; the user should not have to choose a "kind"
+        before they can write it, then reconcile two files at the machine.
+        """
+        operations = self._enabled_operations()
+        if not operations:
             self._set_status(
-                "Engraving output blocked: minimum power exceeds maximum power.", STATUS_ERR
+                "Nothing to export — give a region a treatment first.", STATUS_WARN
             )
             return
-        out = pick_save_file(
-            self,
-            self._settings,
-            "pattern_engraving_output",
-            "Export positioned engraving",
-            f"{Path(self._engraving_image_path).stem}_pattern_engraving.png",
-            "PNG image (*.png)",
-        )
-        if not out:
-            return
-        try:
-            job = EngravingJob(
-                x_mm=self._engrave_x.value(),
-                y_mm=self._engrave_y.value(),
-                width_mm=self._engrave_w.value(),
-                height_mm=self._engrave_h.value(),
-                line_interval_mm=self._engrave_interval.value(),
-                min_power_percent=self._engrave_min_power.value(),
-                max_power_percent=self._engrave_max_power.value(),
-                speed_mm_s=self._engrave_speed.value(),
-                gamma=self._engrave_gamma.value(),
-                invert=self._engrave_invert.isChecked(),
-                passes=self._engrave_passes.value(),
-                rotation_deg=self._engrave_rotation.value(),
-            )
-            png = export_positioned_engraving(
-                self._engraving_image_path, out, job, self._engraving_mask_polys()
-            )
-            self._set_status(f"Positioned engraving package exported → {png.name}", STATUS_OK)
-        except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Engraving Export", str(exc))
-
-    def _refresh_export_default_label(self) -> None:
-        labels = {
-            "vector": "Export reviewed DXF" if self._preview_polys_cache else "Export DXF",
-            "engraving": "Export engraving assets",
-            "laserstar": "Export LaserStar package",
-        }
-        self._gen_btn.setText(labels[self._export_default])
-
-    def _select_export_kind(self, kind: str) -> None:
-        self._export_default = kind
-        self._settings["pattern_export_default"] = kind
-        self._refresh_export_default_label()
-        self._emit_state_changed()
-        labels = {
-            "vector": "Vector DXF",
-            "engraving": "Engraving assets",
-            "laserstar": "LaserStar package",
-        }
-        self._set_status(f"Export format set to {labels[kind]}", STATUS_OK)
-
-    def _run_remembered_export(self) -> None:
-        if self._export_default == "engraving":
-            self._export_pattern_engraving()
-        elif self._export_default == "laserstar":
-            self._export_laserstar_package()
-        else:
-            self._generate()
-
-    def _with_current_preview(self, continuation) -> None:
-        """Run a preview-dependent export after automatic validation."""
-        if self._preview_polys_cache and not self._preview_is_stale:
-            continuation()
-            return
-        if not self._zones and not self._edit_polys:
-            self._set_status(
-                "Load an outline before exporting.", STATUS_WARN
-            )
-            return
-        self._pending_export_after_preview = continuation
-        self._set_status("Solving the pattern before export…", STATUS_WARN)
-        self._schedule_preview()
-
-    def _export_laserstar_package(self) -> None:
-        if (
-            self._engraving_image_path
-            and self._engrave_min_power.value() > self._engrave_max_power.value()
-        ):
+        engraving = any(op.kind == "engrave" for op in operations)
+        if engraving and self._engrave_min_power.value() > self._engrave_max_power.value():
             self._engraving_section.set_expanded(True)
             self._engraving_process_section.set_expanded(True)
             self._set_status(
-                "LaserStar output blocked: minimum power exceeds maximum power.", STATUS_ERR
+                "Export blocked: minimum engraving power exceeds maximum power.", STATUS_ERR
             )
             return
-        self._with_current_preview(self._perform_laserstar_export)
+        proceed, _report = export_preflight(
+            self,
+            [list(poly) for poly in self._edit_polys],
+            action="Export",
+            allow_open_paths=self._export_open_paths_cb.isChecked(),
+        )
+        if not proceed:
+            self._canvas.set_geometry_health_visible(True, announce=True)
+            self._set_status("Export paused — review highlighted geometry.", STATUS_WARN)
+            return
+        # Export solves at full quality regardless of the preview setting: the
+        # thing being written is the part, not a picture of it.
+        self._force_export_quality = True
+        self._preview_is_stale = True
+        self._with_current_preview(self._perform_document_export)
 
-    def _perform_laserstar_export(self) -> None:
+    def _perform_document_export(self) -> None:
+        self._force_export_quality = False
+        operations = self._enabled_operations()
+        wants_engraving = any(op.kind == "engrave" for op in operations)
+        wants_vectors = any(op.kind in {"mark", "cut"} for op in operations)
         active = self._active_engraving()
         if active is not None:
             self._sync_engraving_widgets_from_region(active[0])
@@ -1310,7 +1374,7 @@ class PatternPage(BasePage):
                 or self._settings.get("pattern_output_dir", "")
                 or Path.home()
             ),
-            has_engraving=bool(self._engraving_image_path),
+            has_engraving=wants_engraving and bool(self._engraving_image_path),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -1320,10 +1384,11 @@ class PatternPage(BasePage):
         destination = values["destination"]
         self._settings["laserstar_job_name"] = name
         self._settings["laserstar_output_dir"] = destination
+        self._settings["pattern_export_format"] = values["format"]
         engraving_job = None
         raster_source = None
         raster_mask = None
-        if self._engraving_image_path:
+        if wants_engraving and self._engraving_image_path:
             raster_source = self._engraving_image_path
             engraving_job = EngravingJob(
                 x_mm=self._engrave_x.value(),
@@ -1342,23 +1407,30 @@ class PatternPage(BasePage):
             try:
                 raster_mask = self._engraving_mask_polys()
             except ValueError as exc:
-                QMessageBox.warning(self, "LaserStar Export", str(exc))
+                QMessageBox.warning(self, "Export", str(exc))
                 return
+        vectors = list(self._preview_polys_cache) if wants_vectors else []
         try:
             folder = export_laserstar_job(
                 destination,
                 name,
-                list(self._preview_polys_cache),
+                vectors,
                 engraving_source=raster_source,
                 engraving_job=engraving_job,
                 engraving_mask=raster_mask,
+                vector_format=values["format"],
             )
             self._last_out_path = str(folder / "LaserStar-Setup.txt")
+            self._export_is_current = True
             self._reveal_btn.setVisible(True)
             self._operator_notes_btn.setVisible(True)
-            self._set_status(f"LaserStar operator package ready → {folder.name}", STATUS_OK)
+            self._set_status(
+                f"{len(operations)} operation{'s' if len(operations) != 1 else ''} "
+                f"exported as one job → {folder.name}",
+                STATUS_OK,
+            )
         except (FileExistsError, OSError, ValueError) as exc:
-            QMessageBox.critical(self, "LaserStar Export Failed", str(exc))
+            QMessageBox.critical(self, "Export Failed", str(exc))
 
     def _copy_operator_notes(self) -> None:
         instance = QApplication.instance()
@@ -1533,28 +1605,12 @@ class PatternPage(BasePage):
                 )
             else:
                 self._zones_section.set_subtitle(f"{n} zone{'s' if n != 1 else ''} assigned")
-        if hasattr(self, "_summary_chip"):
-            parts: list[str] = []
-            if pname and pname != "— None —":
-                parts.append(pname)
-            if (
-                hasattr(self, "_fill_mode_combo")
-                and (self._fill_mode_combo.currentData() or "none") != "none"
-            ):
-                parts.append(f"fill {self._fill_spacing.text().strip()} mm")
-            if hasattr(self, "_include_border_cb") and self._include_border_cb.isChecked():
-                parts.append("border layer")
-            self._summary_chip.setText(" · ".join(parts) if parts else "Empty output")
-            # Any settings change supersedes a prior export's success banner.
-            if self._summary_chip.property("tone") != "neutral":
-                self._summary_chip.setProperty("tone", "neutral")
-                refresh_style(self._summary_chip)
 
     def _install_pattern_shortcuts(self) -> None:
         modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
         QShortcut(QKeySequence(f"{modifier}+Z"), self, self._undo_pattern)
         QShortcut(QKeySequence(f"{modifier}+Shift+Z"), self, self._redo_pattern)
-        QShortcut(QKeySequence(f"{modifier}+E"), self, self._generate)
+        QShortcut(QKeySequence(f"{modifier}+E"), self, self._export_document_job)
         QShortcut(QKeySequence(f"{modifier}+R"), self, self._reload_dxf)
         QShortcut(QKeySequence(f"{modifier}+P"), self, self._apply_selected_preset)
 
@@ -1602,10 +1658,10 @@ class PatternPage(BasePage):
 
         commands: list[dict] = [
             {
-                "title": "Export DXF",
+                "title": "Export job",
                 "shortcut": shortcut("E"),
-                "subtitle": "Generate & save the current pattern + fill",
-                "run": self._generate,
+                "subtitle": "Write every enabled operation as one job",
+                "run": self._export_document_job,
             },
             {
                 "title": "Reload source DXF",
@@ -2067,6 +2123,9 @@ class PatternPage(BasePage):
         self._emit_state_changed()
         if not self._zones and not self._edit_polys:
             return
+        # Validation rides the solve debounce: a finding shows up while the
+        # geometry is being made, not at export where a fix is expensive.
+        self._refresh_preflight_markers()
         self._preview_revision += 1
         self._invalidate_preview_cache()
         if self._preview_task.running:
@@ -2102,7 +2161,11 @@ class PatternPage(BasePage):
         try:
             scale = self._collect_scale()
             params = self._collect_pattern_params(pattern) if pattern != "— None —" else {}
-            params["quality"] = self._preview_quality_combo.currentData() or DEFAULT_PREVIEW_QUALITY
+            params["quality"] = (
+                "high"
+                if self._force_export_quality
+                else (self._preview_quality_combo.currentData() or DEFAULT_PREVIEW_QUALITY)
+            )
             if not self._zones:
                 self._validate_outline_inputs(self._edit_polys)
         except ValueError as exc:
@@ -2354,39 +2417,7 @@ class PatternPage(BasePage):
             else:
                 export_tip = "Load an outline to export it, a fill, or a pattern  (⌘E)"
             self._gen_btn.setToolTip(export_tip)
-            if not self._generate_task.running:
-                self._refresh_export_default_label()
-            if hasattr(self, "_export_actions"):
-                # This action can explain what is missing, so do not turn it
-                # into a dead menu item before an image has been selected.
-                self._export_actions["engraving"].setEnabled(True)
-            open_outlines = sum(
-                1 for poly in self._edit_polys if len(poly) > 1 and poly[0] != poly[-1]
-            )
-            if not self._edit_polys:
-                preflight = "Preflight · Load an outline to begin"
-                preflight_tone = "neutral"
-            elif self._preview_task.running:
-                preflight = "Preflight · The pattern is still solving"
-                preflight_tone = "neutral"
-            elif open_outlines and not self._export_open_paths_cb.isChecked():
-                preflight = (
-                    f"Preflight · {open_outlines} open outline"
-                    f"{'s' if open_outlines != 1 else ''} require attention"
-                )
-                preflight_tone = "warn"
-            elif self._preview_polys_cache:
-                preflight = (
-                    f"Ready · {len(self._preview_polys_cache)} output paths · "
-                    f"{len(self._zones) or 1} zone{'s' if len(self._zones) != 1 else ''}"
-                )
-                preflight_tone = "success"
-            else:
-                preflight = "Preflight · Waiting for the pattern to solve"
-                preflight_tone = "warn"
-            self._summary_chip.setText(preflight)
-            self._summary_chip.setProperty("tone", preflight_tone)
-            refresh_style(self._summary_chip)
+        self._refresh_output_panel()
         # Keep the core Pattern controls discoverable in the empty state.
         # They serve as editable defaults before an outline or zone exists.
         # Zones are a core workflow step, not an expert-only panel. Keep the
@@ -2420,6 +2451,10 @@ class PatternPage(BasePage):
     # ── Generation ────────────────────────────────────────────────────────────
 
     def _generate(self) -> None:
+        # ponytail: the async high-quality DXF writer, with its own preflight,
+        # layer split and cleanup options. The one-job export writes the solved
+        # geometry directly instead; fold this in if a job ever needs the
+        # background-thread write.
         from simple_stipple.features.pattern.workers import run_generate, run_generate_zones
 
         if self._generate_task.running:
@@ -2569,11 +2604,6 @@ class PatternPage(BasePage):
         self._canvas.set_result_polylines(polys)
         self._set_preview_status(f"{count} shapes exported", "success")
         self._update_preview_controls()
-        if hasattr(self, "_summary_chip"):
-            fname = Path(out_path).name
-            self._summary_chip.setText(f"✓ {count} shapes exported → {fname}")
-            self._summary_chip.setProperty("tone", "success")
-            refresh_style(self._summary_chip)
         self._refresh_canvas_panels()
 
     def _handle_gen_error(self, payload: tuple) -> None:
@@ -2595,14 +2625,8 @@ class PatternPage(BasePage):
         self._update_preview_controls()
         if msg == CANCELLED_MESSAGE:
             self._set_status("Generation cancelled", STATUS_WARN)
-            summary_text, summary_tone = "Generation cancelled", "warn"
         else:
             self._set_status(f"Error: {msg}", STATUS_ERR)
-            summary_text, summary_tone = f"✗ Generation failed — {msg}", "danger"
-        if hasattr(self, "_summary_chip"):
-            self._summary_chip.setText(summary_text)
-            self._summary_chip.setProperty("tone", summary_tone)
-            refresh_style(self._summary_chip)
 
     def _cancel_generation(self) -> None:
         if not self._generate_task.running:

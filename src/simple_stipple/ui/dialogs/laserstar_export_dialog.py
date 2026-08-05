@@ -40,18 +40,19 @@ class LaserStarExportDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Create LaserStar Operator Package")
+        self.setWindowTitle("Export Job")
         self.setModal(True)
         self.resize(620, 430)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
         root.setSpacing(SPACE_MD)
-        title = QLabel("LaserStar operator package")
+        title = QLabel("Export job")
         title.setProperty("role", "page-title")
         root.addWidget(title)
         subtitle = QLabel(
-            "Review registration and operator metadata, then create all job assets together."
+            "Every enabled operation is written together, in run order. The "
+            "destination format is a field here, not a fork before you start."
         )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
@@ -74,6 +75,11 @@ class LaserStarExportDialog(QDialog):
         destination_layout.addWidget(self.destination, 1)
         destination_layout.addWidget(browse)
         form.addRow("Destination", destination_row)
+        self.output_format = QComboBox()
+        self.output_format.addItem("FVI — LaserStar / StarFX", "fvi")
+        self.output_format.addItem("DXF", "dxf")
+        self.output_format.setAccessibleName("Destination format")
+        form.addRow("Format", self.output_format)
         self.machine = QComboBox()
         self.machine.addItem("LaserStar 3602XL", "laserstar-3602xl")
         form.addRow("Machine", self.machine)
@@ -83,7 +89,7 @@ class LaserStarExportDialog(QDialog):
         self.registration = QLabel("Millimeters · preserved drawing origin")
         self.registration.setProperty("role", "hint-sm")
         form.addRow("Units / origin", self.registration)
-        contents = "FVI vectors + setup sheet + checklist + preview"
+        contents = "Vectors + setup sheet + checklist + preview"
         if has_engraving:
             contents += " + positioned engraving assets"
         self.contents = QLabel(contents)
@@ -101,7 +107,7 @@ class LaserStarExportDialog(QDialog):
         cancel = QPushButton("Cancel")
         cancel.setAutoDefault(False)
         cancel.clicked.connect(self.reject)
-        create = QPushButton("Create Package")
+        create = QPushButton("Export")
         create.setProperty("role", "primary")
         create.setDefault(True)
         create.clicked.connect(self._accept_if_valid)
@@ -146,4 +152,5 @@ class LaserStarExportDialog(QDialog):
             "destination": str(Path(self.destination.text().strip()).expanduser()),
             "machine": str(self.machine.currentData()),
             "material": self.material.currentText(),
+            "format": str(self.output_format.currentData()),
         }
