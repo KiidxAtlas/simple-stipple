@@ -268,6 +268,29 @@ class CanvasRenderer:
         painter.drawPath(self._result_path)
         painter.restore()
 
+    # Severity → marker colour. Preflight speaks in these two words already.
+    _ISSUE_COLORS = {"error": "#f85149", "warning": "#f2cc60"}
+    _ISSUE_RADIUS = 6.0
+
+    def _paint_issue_markers(self, painter: QPainter) -> None:
+        """Ring every preflight finding where it actually is on the part.
+
+        Preflight used to be a sentence in a collapsed panel, computed at
+        export. The records always carried a point and a severity; this draws
+        them so a problem is visible while it is still being made.
+        """
+        markers = getattr(self._host, "_issue_markers", ())
+        if not markers:
+            return
+        painter.save()
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for marker in markers:
+            color = QColor(self._ISSUE_COLORS.get(marker.severity, "#f2cc60"))
+            painter.setPen(QPen(color, 1.8))
+            cx, cy = self._host._w2c(*marker.point)
+            painter.drawEllipse(QPointF(cx, cy), self._ISSUE_RADIUS, self._ISSUE_RADIUS)
+        painter.restore()
+
     def _paint_operation_preview(self, painter: QPainter) -> None:
         """Paint transient geometry that is committed only when its HUD accepts."""
         if not self._host._operation_preview_polys:

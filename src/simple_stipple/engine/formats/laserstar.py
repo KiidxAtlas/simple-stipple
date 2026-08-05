@@ -35,20 +35,33 @@ def export_laserstar_package(
     raster_spec: RasterEngravingSpec | None = None,
     raster_mask: list[list[tuple[float, float]]] | None = None,
     profile: LaserStarProfile | None = None,
+    vector_format: str = "fvi",
 ) -> Path:
-    """Create a single folder that an operator can assemble safely in StarFX."""
+    """Create a single folder that an operator can assemble safely in StarFX.
+
+    ``vector_format`` picks the file the vectors are written as. It is a field
+    on the export dialog rather than a fork in the flow: whichever format is
+    chosen, one job folder comes out holding every operation.
+    """
     if not vector_polys:
         raise ValueError("Build a Pattern preview before exporting a LaserStar package.")
     profile = profile or LaserStarProfile()
     safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", job_name).strip(" .") or "LaserStar Job"
     folder = Path(destination) / safe_name
     folder.mkdir(parents=True, exist_ok=False)
-    vector_path = folder / "01_pattern-and-outline.fvi"
-    report = write_fvi(
-        _records(vector_polys),
-        vector_path,
-        FviExportOptions(origin="preserve", optimize_travel=True, include_comments=True),
-    )
+    if str(vector_format).lower() == "dxf":
+        from simple_stipple.engine.formats.dxf import write_polylines_dxf
+
+        vector_path = folder / "01_pattern-and-outline.dxf"
+        write_polylines_dxf(vector_polys, str(vector_path))
+        report = None
+    else:
+        vector_path = folder / "01_pattern-and-outline.fvi"
+        report = write_fvi(
+            _records(vector_polys),
+            vector_path,
+            FviExportOptions(origin="preserve", optimize_travel=True, include_comments=True),
+        )
 
     raster_files: list[str] = []
     if raster_source and raster_spec:
@@ -84,7 +97,7 @@ def export_laserstar_package(
         f"Lens: {profile.lens_mm} mm",
         "",
         "VECTOR IMPORT",
-        "1. Import 01_pattern-and-outline.fvi into StarFX.",
+        f"1. Import {vector_path.name} into StarFX.",
         "2. Preserve its coordinates/origin; do not center or auto-fit it.",
         f"3. Vector bounds: X {minx:.3f}..{maxx:.3f} mm; Y {miny:.3f}..{maxy:.3f} mm.",
     ]
@@ -119,12 +132,16 @@ def export_laserstar_package(
         "job": safe_name,
         "profile": asdict(profile),
         "vector_file": vector_path.name,
-        "vector_report": {
-            "paths": report.path_count,
-            "travel_mm": report.travel_mm,
-            "bounds_mm": report.bounds_mm,
-            "warnings": list(report.warnings),
-        },
+        "vector_report": (
+            {
+                "paths": report.path_count,
+                "travel_mm": report.travel_mm,
+                "bounds_mm": report.bounds_mm,
+                "warnings": list(report.warnings),
+            }
+            if report is not None
+            else {"paths": len(vector_polys)}
+        ),
         "raster_files": raster_files,
         "raster": asdict(raster_spec) if raster_spec else None,
     }

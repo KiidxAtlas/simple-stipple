@@ -119,6 +119,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         on_use_selected_as_custom_tile=page.use_custom_tile,
         on_pattern_cell_cutout_toggle=page._on_pattern_cell_cutout_toggle,
         on_result_cell_convert=page._on_result_cell_convert,
+        on_issue_marker_clicked=page._on_issue_marker_clicked,
         on_create_zone_from_selection=page._assign_zone,
         draft_profile=True,
     )
@@ -916,43 +917,58 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     )
     page._optimize_paths_cb.setChecked(True)
     card_layout.addWidget(page._optimize_paths_cb)
-    page._summary_chip = QLabel("Preflight · Load an outline to begin")
-    page._summary_chip.setProperty("role", "summary-banner")
-    page._summary_chip.setProperty("tone", "neutral")
-    page._summary_chip.setWordWrap(True)
-    page._summary_chip.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-    card_layout.addWidget(page._summary_chip)
+    density_row = QHBoxLayout()
+    density_row.addWidget(QLabel("Min fill spacing (mm)"))
+    page._min_density_edit = QLineEdit("0")
+    page._min_density_edit.setValidator(QDoubleValidator(0, 1e6, 4, page._min_density_edit))
+    page._min_density_edit.setFixedWidth(80)
+    page._min_density_edit.setToolTip(
+        "Warn on the canvas when a region's solved spacing falls below what the "
+        "machine can resolve. 0 disables the check."
+    )
+    page._min_density_edit.textChanged.connect(page._refresh_preflight_markers)
+    density_row.addWidget(page._min_density_edit)
+    density_row.addStretch()
+    card_layout.addLayout(density_row)
     layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
-    export_default = str(page._settings.get("pattern_export_default", "vector"))
-    if export_default not in {"vector", "engraving", "laserstar"}:
-        export_default = "vector"
-    page._export_default = export_default
+
+    # ── Output ────────────────────────────────────────────────────────────
+    # What the document produces, in run order. Not a format to pick before
+    # you can export — the operations are derived from the treatments, and
+    # one Export writes them all.
+    output_content, output_layout = collapsible_content_widget(spacing=6)
+    page._output_list = QListWidget()
+    page._output_list.setMinimumHeight(90)
+    page._output_list.setMaximumHeight(180)
+    page._output_list.setToolTip(
+        "Operations this document produces, in the order the machine runs them. "
+        "Untick a row to leave it out of the export."
+    )
+    page._output_list.itemChanged.connect(page._on_output_row_toggled)
+    output_layout.addWidget(page._output_list)
+    reorder_row = QHBoxLayout()
+    page._output_up_btn = QPushButton("Move up")
+    page._output_up_btn.clicked.connect(lambda: page._move_output_row(-1))
+    reorder_row.addWidget(page._output_up_btn)
+    page._output_down_btn = QPushButton("Move down")
+    page._output_down_btn.clicked.connect(lambda: page._move_output_row(1))
+    reorder_row.addWidget(page._output_down_btn)
+    output_layout.addLayout(reorder_row)
+    page._output_preflight = QLabel("Preflight · Load an outline to begin")
+    page._output_preflight.setWordWrap(True)
+    page._output_preflight.setProperty("role", "hint")
+    output_layout.addWidget(page._output_preflight)
+    page._output_section = CollapsibleSection("Output", output_content, expanded=True)
+    layout.addWidget(page._output_section)
+
     page._gen_btn = primary_button(
         "Export",
         height=38,
-        tooltip="Run the remembered export format  (⌘E)",
+        tooltip="Write every enabled operation as one job  (⌘E)",
     )
-    page._gen_btn.clicked.connect(page._run_remembered_export)
+    page._gen_btn.clicked.connect(page._export_document_job)
     export_action_row = QHBoxLayout()
     export_action_row.addWidget(page._gen_btn, stretch=1)
-    page._export_more = QToolButton()
-    page._export_more.setText("Format")
-    page._export_more.setMinimumSize(72, 38)
-    page._export_more.setToolTip("Choose the export format; exporting starts only from the primary button")
-    page._export_more.setAccessibleName("Choose export format")
-    page._export_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-    page._export_menu = QMenu(page._export_more)
-    page._export_actions = {
-        "vector": page._export_menu.addAction("Vector-only — Pattern and fill DXF"),
-        "engraving": page._export_menu.addAction("Engraving-only — Positioned image assets"),
-        "laserstar": page._export_menu.addAction("Combined job — LaserStar operator package"),
-    }
-    for kind, action in page._export_actions.items():
-        action.triggered.connect(
-            lambda _checked=False, export_kind=kind: page._select_export_kind(export_kind)
-        )
-    page._export_more.setMenu(page._export_menu)
-    export_action_row.addWidget(page._export_more)
     page._cancel_generate_btn = QToolButton()
     page._cancel_generate_btn.setText("Cancel")
     page._cancel_generate_btn.setToolTip("Cancel the current export")
@@ -986,4 +1002,4 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     page._operator_notes_btn.setVisible(False)
     page._operator_notes_btn.clicked.connect(page._copy_operator_notes)
     layout.addWidget(page._operator_notes_btn)
-    page._refresh_export_default_label()
+    page._refresh_output_panel()
