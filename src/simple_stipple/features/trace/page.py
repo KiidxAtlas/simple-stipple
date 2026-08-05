@@ -71,10 +71,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
-from simple_stipple.ui.components.workflow import (
-    set_status_label,
-    workflow_strip,
-)
+from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.files import pick_open_file, pick_save_file, reveal_label
 from simple_stipple.ui.recent import KIND_IMAGE, record_recent
@@ -143,14 +140,6 @@ class TracePage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
-        self._workflow_strip = workflow_strip(
-            ("Choose image", "Adjust trace", "Preview and edit", "Export"),
-            title="Image trace",
-            description="Turn a raster image into editable vector outlines with a live, reviewable preview.",
-        )
-        root.addWidget(self._workflow_strip)
-        self._workflow_strip.setVisible(False)
-
         left_w = QWidget()
         left = QVBoxLayout(left_w)
         left.setContentsMargins(12, 12, 12, 12)
@@ -802,12 +791,6 @@ class TracePage(BasePage):
         self._smooth_btn.setEnabled(has_polys)
         self._next_btn.setEnabled(has_polys)
         self._next_more.setEnabled(has_polys)
-        if has_polys:
-            self._workflow_strip.set_current_step(2)
-        elif has_image:
-            self._workflow_strip.set_current_step(1)
-        else:
-            self._workflow_strip.set_current_step(0)
 
     def _parse_float_field(
         self,
@@ -1407,7 +1390,6 @@ class TracePage(BasePage):
             self._last_out = out
             self._reveal_action.setEnabled(True)
             self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", STATUS_OK)
-            self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
             show_error(self, "Export Error", exc)
 
@@ -1443,7 +1425,6 @@ class TracePage(BasePage):
                 f"Exported {len(records)} selected shapes → {Path(out).name}",
                 STATUS_OK,
             )
-            self._workflow_strip.set_current_step(3)
         except (OSError, ValueError) as exc:
             show_error(self, "Export Error", exc)
 

@@ -30,9 +30,7 @@ from .tokens import MOTION_DURATION_MS, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, 
 from .workflow import (
     OperationProgress,
     StatusRegion,
-    WorkflowStepper,
     set_status_label,
-    workflow_strip,
 )
 
 __all__ = [
@@ -49,7 +47,6 @@ __all__ = [
     "SPACE_XL",
     "SPACE_XS",
     "StatusRegion",
-    "WorkflowStepper",
     "blur_focused_line_edit",
     "browse_row",
     "clear_line_edit_error",
@@ -73,5 +70,4 @@ __all__ = [
     "sidebar_panel",
     "surface_frame",
     "tool_icon",
-    "workflow_strip",
 ]

@@ -56,7 +56,6 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
-from simple_stipple.ui.components.workflow import workflow_strip
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
 from simple_stipple.ui.dialogs.import_dialog import DxfImportPreviewDialog, VectorImportModeDialog
@@ -93,17 +92,6 @@ class DraftPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        self._workflow_strip = workflow_strip(
-            ("Start or import", "Draw and refine", "Organize layers", "Export"),
-            title="Draft workspace",
-            description="Create or import geometry, refine it, then export a production-ready vector.",
-        )
-        root.addWidget(self._workflow_strip)
-        # The application chrome and tool strip already communicate context.
-        # Keep workflow progress available to code/status updates without
-        # creating a third visual header above the drawing canvas.
-        self._workflow_strip.setVisible(False)
-
         canvas_host = self._build_canvas()
 
         _toolbar_panel = surface_frame("panel")
@@ -652,9 +640,6 @@ class DraftPage(BasePage):
                 extra_layer_records=extra_records or None,
             )
             self._last_out_path = out_path
-            self._workflow_strip.set_step_states(
-                ("complete", "complete", "complete", "complete")
-            )
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Export Failed", exc)
@@ -722,13 +707,6 @@ class DraftPage(BasePage):
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
 
-        if not n:
-            states = ("current", "pending", "pending", "pending")
-        elif self._last_out_path:
-            states = ("complete", "complete", "complete", "complete")
-        else:
-            states = ("complete", "current", "pending", "pending")
-        self._workflow_strip.set_step_states(states)
 
     def _update_action_buttons(self) -> None:
         """Update Explode, Merge, and Export button enabled states.

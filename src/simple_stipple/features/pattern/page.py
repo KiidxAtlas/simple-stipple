@@ -61,10 +61,7 @@ from simple_stipple.ui.components.layout import (
     sidebar_panel,
     surface_frame,
 )
-from simple_stipple.ui.components.workflow import (
-    set_status_label,
-    workflow_strip,
-)
+from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
 from simple_stipple.features.pattern.session import (
     apply_pattern_workspace_state,
@@ -97,12 +94,10 @@ from simple_stipple.features.pattern.layout import (
 from simple_stipple.features.pattern.zones import (
     assign_zone,
     clear_zones,
-    collect_zone_editor,
     highlight_zone_on_canvas,
     invalidate_zones_for_geometry_change,
     live_update_selected_zone,
     on_zone_selected,
-    rebuild_zone_parameter_editor,
     refresh_zone_list,
     remove_selected_zone,
     select_zone_for_canvas_selection,
@@ -161,6 +156,8 @@ class PatternPage(BasePage):
     _preview_done = Signal(object)  # (display_polys, count)
     _preview_error = Signal(object)
     sendSelectedToDraftRequested = Signal(object)
+    # Emitted by the empty-state buttons; the window routes it to that page.
+    openPageRequested = Signal(str)
     repairTileRequested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
@@ -234,13 +231,6 @@ class PatternPage(BasePage):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.setSpacing(0)
-        self._workflow_strip = workflow_strip(
-            ("Choose outline", "Define zones", "Choose treatment", "Preview", "Export"),
-            title="Pattern generator",
-            description="Turn closed outlines into adjustable fills, then inspect the result before export.",
-        )
-        root.addWidget(self._workflow_strip)
-
         left_w = QWidget()
         left = QVBoxLayout(left_w)
         left.setContentsMargins(12, 12, 12, 12)
@@ -904,21 +894,17 @@ class PatternPage(BasePage):
         self._set_status("Engraving image fitted to the outline bounds.", STATUS_OK)
 
     def _on_engraving_canvas_key(self, action: str, reverse: bool = False) -> None:
-        """Make an image selected on canvas keyboard-editable and removable."""
+        """Hand a canvas-selected image over to the inspector, or remove it.
+
+        Tab moves focus into the placement fields once; from there Qt's own
+        focus chain walks them, which is what the hand-rolled index cycle was
+        badly reimplementing.
+        """
         if action == "remove":
             self._remove_engraving_image()
             return
         self._engraving_section.set_expanded(True)
-        fields = (
-            self._engrave_x,
-            self._engrave_y,
-            self._engrave_w,
-            self._engrave_h,
-            self._engrave_rotation,
-        )
-        current = getattr(self, "_engrave_tab_index", 1)
-        self._engrave_tab_index = (current - 1 if reverse else current + 1) % len(fields)
-        target = fields[self._engrave_tab_index]
+        target = self._engrave_rotation if reverse else self._engrave_x
         target.setFocus()
         target.selectAll()
 
@@ -1377,7 +1363,7 @@ class PatternPage(BasePage):
             self._pattern_widgets[pattern_key].show()
         # “None” is a valid treatment: it produces fill-only or outline-only
         # output. Refresh it exactly as we do every other pattern choice.
-        self._schedule_preview()
+        self._on_inspector_edit()
         has_pattern = pattern_key != "— None —" and pattern_key in self._pattern_widgets
         self._modifiers_label.setVisible(has_pattern)
         self._modifiers_widget.setVisible(has_pattern)
@@ -1980,8 +1966,6 @@ class PatternPage(BasePage):
         if not hasattr(self, "_pattern_combo"):
             return
         self._populate_pattern_combo(self._pattern_combo, current)
-        if hasattr(self, "_zone_pattern_combo"):
-            self._populate_pattern_combo(self._zone_pattern_combo)
 
     def _populate_pattern_combo(self, combo: QComboBox, current: str | None = None) -> None:
         current = combo.currentText() if current is None else current
@@ -2001,16 +1985,18 @@ class PatternPage(BasePage):
         if combo is getattr(self, "_pattern_combo", None):
             self._update_custom_pattern_actions(target)
 
-    def _rebuild_zone_parameter_editor(
-        self, _label: str | None = None, params: dict | None = None
-    ) -> None:
-        return rebuild_zone_parameter_editor(self, _label, params)
-
-    def _collect_zone_editor(self) -> tuple[str, dict, dict | None]:
-        return collect_zone_editor(self)
-
-    def _live_update_selected_zone(self, *_args) -> None:
+    def _live_update_selected_zone(self, *_args) -> bool:
         return live_update_selected_zone(self, *_args)
+
+    def _on_inspector_edit(self, *_args) -> None:
+        """One editor, two possible targets.
+
+        With a region selected the edit lands on that region's treatment;
+        with nothing selected the same widgets are the document defaults.
+        Either way the pattern re-solves — there is no scope to remember.
+        """
+        if not self._live_update_selected_zone():
+            self._schedule_preview()
 
     def _show_zone_context_menu(self, pos) -> None:
         return show_zone_context_menu(self, pos)
@@ -2316,37 +2302,7 @@ class PatternPage(BasePage):
         return invalidate_zones_for_geometry_change(self, valid_outline_ids)
 
     def _update_preview_controls(self) -> None:
-        has_preview = bool(self._preview_polys_cache)
         is_computing = self._preview_task.running
-        has_outline = bool(self._edit_polys or self._zones)
-        # Pattern and fill are optional treatments layered on a valid outline.
-        has_treatment = has_outline
-        if self._export_is_current:
-            workflow_states = ["complete", "complete", "complete", "complete", "current"]
-        elif self._preview_is_stale and has_treatment:
-            workflow_states = ["complete", "complete", "complete", "stale", "pending"]
-        elif has_preview:
-            workflow_states = ["complete", "complete", "complete", "current", "pending"]
-        elif has_treatment:
-            workflow_states = ["complete", "complete", "current", "pending", "pending"]
-        elif has_outline:
-            workflow_states = ["complete", "current", "pending", "pending", "pending"]
-        else:
-            workflow_states = ["current", "pending", "pending", "pending", "pending"]
-        reasons = {}
-        if self._preview_is_stale:
-            reasons[3] = "The pattern is re-solving after an outline or treatment change"
-            reasons[4] = "Export is unavailable until the pattern finishes solving"
-        guidance = (
-            "Import or transfer a closed outline"
-            if not has_outline
-            else "Choose a treatment and review the solved pattern"
-            if not has_preview
-            else "Export the solved pattern"
-            if not self._export_is_current
-            else "Export complete — reveal the output or continue editing"
-        )
-        self._workflow_strip.set_step_states(workflow_states, reasons, guidance=guidance)
         self._cancel_preview_btn.setVisible(is_computing)
         if hasattr(self, "_gen_btn"):
             can_export = bool(self._edit_polys or self._zones)
