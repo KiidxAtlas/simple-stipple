@@ -88,6 +88,9 @@ class CanvasStatusStrip(QFrame):
             layout.addWidget(button)
             self._context_buttons.append(button)
 
+        # Page-specific transient controls (e.g. "cancel the solve in flight")
+        # mount here, before the stretch, so they read as part of the status.
+        self._extras_index = layout.count()
         layout.addStretch()
 
         self._cursor_label = QLabel("")
@@ -115,6 +118,11 @@ class CanvasStatusStrip(QFrame):
         layout.addWidget(self._readiness_chip)
         self._readiness_dot.hide()
         self._update_responsive_visibility()
+
+    def add_status_widget(self, widget) -> None:  # type: ignore[no-untyped-def]
+        """Mount a page-specific transient control in the strip."""
+        self.layout().insertWidget(self._extras_index, widget)
+        self._extras_index += 1
 
     @staticmethod
     def _dot() -> QLabel:

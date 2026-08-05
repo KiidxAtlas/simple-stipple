@@ -466,7 +466,6 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         canvas_status: Any,
         precision_bar: Any,
         get_orig_polys: Callable[[], list[list[tuple[float, float]]]],
-        get_showing_preview: Callable[[], bool],
         is_preview_running: Callable[[], bool],
         has_preview_cache: Callable[[], bool],
         has_zones: Callable[[], bool],
@@ -478,7 +477,6 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         self._canvas_status = canvas_status
         self._precision_bar = precision_bar
         self._get_orig_polys = get_orig_polys
-        self._get_showing_preview = get_showing_preview
         self._is_preview_running = is_preview_running
         self._has_preview_cache = has_preview_cache
         self._has_zones = has_zones
@@ -529,150 +527,25 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
         hidden = layer_view_state.setdefault(layer_name, {}).setdefault("hidden", set())
-        # Outline rows are editable/draggable; preview rows are deliberately
-        # read-only because they are regenerated from the source outline.
-        is_outline = not self._get_showing_preview()
-        label_fn = (
-            self._shape_label_builder(layer_name, prefix="Outline")
-            if is_outline
-            else describe_polyline
-        )
-        groups = self._canvas._group_map() if is_outline else None
         return build_shape_rows(
             entity_ids,
             polylines,
             hidden,
-            label_fn,
-            editable=is_outline,
-            draggable=is_outline,
-            groups=groups,
+            self._shape_label_builder(layer_name, prefix="Outline"),
+            editable=True,
+            draggable=True,
+            groups=self._canvas._group_map(),
             group_labels=dict(getattr(self._canvas, "_group_labels", {})),
-        )
-
-    @staticmethod
-    def _preview_label_builder(prefix: str):
-        counter = 0
-
-        def _label(_entity_id: str, poly: list[tuple[float, float]]) -> str:
-            nonlocal counter
-            counter += 1
-            point_count = len(poly)
-            if point_count > 1 and poly[0] == poly[-1]:
-                point_count -= 1
-            return f"{prefix} {counter}  ·  {point_count} pts"
-
-        return _label
-
-    def _build_preview_tree_shape_rows(
-        self,
-        layer_name: str,
-        prefix: str,
-        entity_ids: list[str],
-        polylines: list[list[tuple[float, float]]],
-        layer_view_state: dict[str, dict[str, set[str]]],
-    ) -> list[dict[str, Any]]:
-        """Build preview rows using the canvas' actual runtime IDs.
-
-        Preview geometry is reloaded into the same canvas as the source
-        outlines. Synthetic ``preview_0``/``fill_0`` keys looked plausible but
-        could never be selected because CanvasView only accepts its entity IDs.
-        """
-        hidden = layer_view_state.setdefault(layer_name, {}).setdefault("hidden", set())
-        return build_shape_rows(
-            entity_ids,
-            polylines,
-            hidden,
-            self._preview_label_builder(prefix),
-            editable=False,
-            draggable=False,
         )
 
     def build_layer_tree_rows(
         self,
         layer_view_state: dict[str, dict[str, set[str]]],
     ) -> list[dict[str, Any]]:
-        showing_preview = self._get_showing_preview()
         rows: list[dict[str, Any]] = []
-        # While previewing the pattern fill, split the layer tree into the
-        # three DXF export categories (outline / pattern / fill) so the user
-        # sees exactly what each layer of the export will contain.
-        if showing_preview:
-            categories: dict[str, list[list[tuple[float, float]]]] = {}
-            if self._get_preview_categories is not None:
-                try:
-                    categories = self._get_preview_categories() or {}
-                except Exception:
-                    LOGGER.exception("Preview-category callback failed")
-                    categories = {}
-
-            outline_polys = categories.get("outline") or self._get_orig_polys()
-            pattern_polys = categories.get("pattern", [])
-            fill_polys = categories.get("fill", [])
-            canvas_entity_ids = self._canvas.get_entity_ids()
-            outline_entity_ids = canvas_entity_ids[: len(outline_polys)]
-            pattern_start = len(outline_polys)
-            pattern_entity_ids = canvas_entity_ids[
-                pattern_start : pattern_start + len(pattern_polys)
-            ]
-            fill_start = pattern_start + len(pattern_polys)
-            fill_entity_ids = canvas_entity_ids[fill_start : fill_start + len(fill_polys)]
-
-            if outline_polys:
-                rows.append(
-                    build_layer_row(
-                        name="pattern_outline",
-                        display_name="Outline",
-                        active=False,
-                        visible=True,
-                        editable=False,
-                        shapes=self._build_preview_tree_shape_rows(
-                            "pattern_outline",
-                            "Outline",
-                            outline_entity_ids,
-                            outline_polys,
-                            layer_view_state,
-                        ),
-                    )
-                )
-            rows.append(
-                build_layer_row(
-                    name="pattern_preview",
-                    display_name="Pattern",
-                    active=True,
-                    visible=True,
-                    editable=False,
-                    shapes=self._build_preview_tree_shape_rows(
-                        "pattern_preview",
-                        "Pattern",
-                        pattern_entity_ids,
-                        pattern_polys if categories else self._canvas.get_polylines_state(),
-                        layer_view_state,
-                    ),
-                )
-            )
-            if fill_polys:
-                rows.append(
-                    build_layer_row(
-                        name="pattern_fill",
-                        display_name="Fill",
-                        active=False,
-                        visible=True,
-                        editable=False,
-                        shapes=self._build_preview_tree_shape_rows(
-                            "pattern_fill",
-                            "Fill",
-                            fill_entity_ids,
-                            fill_polys,
-                            layer_view_state,
-                        ),
-                    )
-                )
-            return rows
-
-        # Edit mode is the real source document, so preserve and expose its
-        # actual layers. This makes move-to-layer, cutouts, and layer edits
-        # work exactly as they do in Draft instead of presenting a fake
-        # single "Outline" category.
+        # The canvas always holds the real source document, so expose its
+        # actual layers. This makes move-to-layer and layer edits work exactly
+        # as they do in Draft instead of presenting a fake "Outline" category.
         entities = list(self._canvas._entities_by_id.values())
         layer_names = self._canvas.layer_names() or ["Outline"]
         for layer_name in layer_names:
@@ -697,34 +570,48 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
                     color=self._canvas.layer_color(layer_name),
                 )
             )
+        result_row = self._result_layer_row()
+        if result_row is not None:
+            rows.append(result_row)
         return rows
+
+    def _result_layer_row(self) -> dict[str, Any] | None:
+        """One row for the solved pattern — the old Show Preview toggle.
+
+        The result renders as an overlay rather than entities, so it has no
+        per-shape rows: its eye is a visibility control and nothing else.
+        """
+        if self._get_preview_categories is None:
+            return None
+        try:
+            categories = self._get_preview_categories() or {}
+        except Exception:
+            LOGGER.exception("Preview-category callback failed")
+            return None
+        count = len(categories.get("pattern") or []) + len(categories.get("fill") or [])
+        if not count:
+            return None
+        return build_layer_row(
+            name="pattern_result",
+            display_name=f"Pattern result  ·  {count} paths",
+            active=False,
+            visible=self._canvas.result_visible(),
+            editable=False,
+            shapes=[],
+        )
 
     def refresh_canvas_panels(self) -> None:
         self._layer_sidebar.apply_current_visibility()
-        # Sync ghost-overlay visibility with the outline_source row in the
-        # layer tree (only present while previewing the pattern). The ghost
-        # respects both per-shape toggles and the layer-level eye.
-        if hasattr(self._canvas, "set_ghost_polylines") and self._get_showing_preview():
-            orig_polys = self._get_orig_polys()
-            if orig_polys:
-                outline_hidden = self._layer_sidebar.hidden_for("pattern_outline")
-                visible_polys = [
-                    poly for idx, poly in enumerate(orig_polys) if idx not in outline_hidden
-                ]
-                self._canvas.set_ghost_polylines(visible_polys, visible=True)
         summary = self._canvas.get_status_summary()
         topo = self._canvas.get_topology_summary()
         if self._is_preview_running():
-            readiness_text = "Previewing"
+            readiness_text = "Solving"
             readiness_tone = "warn"
-        elif self._get_showing_preview():
-            readiness_text = "Preview"
-            readiness_tone = "success"
         elif topo["open"] > 0 and not self._has_zones():
             readiness_text = f"{topo['open']} open outline(s)"
             readiness_tone = "warn"
         elif self._has_preview_cache():
-            readiness_text = "Preview ready"
+            readiness_text = "Pattern solved"
             readiness_tone = "success"
         elif self._canvas.poly_count:
             readiness_text = "Outline ready"

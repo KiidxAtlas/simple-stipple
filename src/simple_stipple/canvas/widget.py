@@ -223,6 +223,7 @@ class DxfCanvas(CanvasView):
         on_send_selected_to_draft=None,
         on_use_selected_as_custom_tile=None,
         on_pattern_cell_cutout_toggle=None,
+        on_result_cell_convert=None,
         on_create_zone_from_selection=None,
         on_ghost_click=None,
         draft_profile: bool = False,
@@ -238,6 +239,7 @@ class DxfCanvas(CanvasView):
         self._send_selected_to_draft_cb = on_send_selected_to_draft
         self._use_selected_as_custom_tile_cb = on_use_selected_as_custom_tile
         self._on_pattern_cell_cutout_toggle = on_pattern_cell_cutout_toggle
+        self._on_result_cell_convert = on_result_cell_convert
         self._on_create_zone_from_selection = on_create_zone_from_selection
         self._on_ghost_click = on_ghost_click
         self._pattern_cell_indices: set[str] = set()

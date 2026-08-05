@@ -73,6 +73,7 @@ def handle_right_click(host: Any, cx: float, cy: float) -> bool:
     # result layer so removing one never touches the editable document.
     result_cell = host.result_cell_at(cx, cy) if hasattr(host, "result_cell_at") else None
     toggle_cell = getattr(host, "_on_pattern_cell_cutout_toggle", None)
+    convert_cell = getattr(host, "_on_result_cell_convert", None)
     if result_cell is not None and callable(toggle_cell):
         cell_menu = menu.addMenu("Remove Cell")
         cell_menu.addAction(
@@ -83,6 +84,14 @@ def handle_right_click(host: Any, cx: float, cy: float) -> bool:
             "Every matching tile",
             lambda _checked=False, index=result_cell: toggle_cell(index, "repeat"),
         )
+    if result_cell is not None and callable(convert_cell):
+        # Promoting a generated cell to a real, editable outline used to be a
+        # side effect of assigning a zone while previewing. It is an action.
+        menu.addAction(
+            "Convert to outline",
+            lambda _checked=False, index=result_cell: convert_cell(index),
+        )
+    if result_cell is not None and (callable(toggle_cell) or callable(convert_cell)):
         menu.addSeparator()
     host._add_context_section(
         menu,

@@ -392,13 +392,13 @@ class PatternPage(BasePage):
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
-    def _on_preview_clicked(self, checked: bool) -> None:
-        if self._preview_task.running:
-            self._preview_task.cancel()
-            self._preview_task.pending = False
-            self._set_preview_status("Cancelling preview; last completed result retained…")
+    def _cancel_solve(self) -> None:
+        """Stop the solve in flight; the last completed result stays on screen."""
+        if not self._preview_task.running:
             return
-        self._set_result_visible(checked)
+        self._preview_task.cancel()
+        self._preview_task.pending = False
+        self._set_preview_status("Cancelled — showing the last completed result.")
 
     def _set_result_visible(self, visible: bool) -> None:
         """Show or hide the solved pattern.
@@ -407,11 +407,8 @@ class PatternPage(BasePage):
         there is no mode to leave and every edit is an edit of the document.
         """
         self._canvas.set_result_visible(visible)
-        self._preview_btn.setChecked(visible)
-        self._preview_btn.setProperty("active", visible)
-        refresh_style(self._preview_btn)
         if not self._preview_polys_cache:
-            self._set_preview_status("Adjust settings to build a preview")
+            self._set_preview_status("Choose a treatment to solve a pattern")
         elif visible:
             self._set_preview_status(
                 f"{len(self._preview_polys_cache)} shapes — pattern shown", "success"
@@ -444,6 +441,26 @@ class PatternPage(BasePage):
             1000,
         )
         self._schedule_preview()
+
+    def _on_result_cell_convert(self, result_index: int) -> None:
+        """Promote a generated cell to a real, editable outline."""
+        polys = self._canvas._result_polys
+        if not 0 <= result_index < len(polys):
+            return
+        poly = [tuple(point) for point in polys[result_index]]
+        if len(poly) < 2:
+            return
+        new_id = self._fresh_outline_ids(1)[0]
+        self._edit_polys = list(self._edit_polys) + [poly]
+        self._outline_ids = list(self._outline_ids) + [new_id]
+        self._outline_layers[new_id] = self._canvas.active_layer or "Outline"
+        self._load_outline_canvas(fit=False)
+        self._canvas.set_selection([new_id])
+        self._set_status("Cell converted to an editable outline.", STATUS_OK)
+        self._update_zone_actions()
+        self._refresh_canvas_panels()
+        self._schedule_preview()
+        self._emit_state_changed()
 
     def _toggle_pattern_cell_cutout_poly(self, poly: list[tuple[float, float]]) -> bool:
         signature = self._pattern_service._poly_repeat_signature(poly)
@@ -484,14 +501,14 @@ class PatternPage(BasePage):
         # holds outlines: geometry and its parallel id list must stay aligned.
         if self._canvas.get_entity_ids() == self._outline_ids:
             self._edit_polys = self._canvas.get_polylines_state()
-        self._select_zone_for_canvas_selection(preview=False)
+        self._select_zone_for_canvas_selection()
         self._update_zone_actions()
         # Update status strip selection count without rebuilding the tree.
         if hasattr(self, "_canvas_status"):
             self._canvas_status.set_selection_count(count)
 
-    def _select_zone_for_canvas_selection(self, *, preview: bool) -> None:
-        return select_zone_for_canvas_selection(self, preview=preview)
+    def _select_zone_for_canvas_selection(self) -> None:
+        return select_zone_for_canvas_selection(self)
 
     def _build_layer_tree_rows(
         self,
@@ -500,30 +517,16 @@ class PatternPage(BasePage):
         return self._canvas_runtime.build_layer_tree_rows(layer_view_state)
 
     def _open_pattern_layer_settings(self, layer: str) -> None:
-        """Turn a virtual export layer into a useful shortcut, not a dead row."""
-        if layer == "pattern_fill":
-            self._fill_section.set_expanded(True)
-            self._fill_mode_combo.setFocus()
-            self._set_status("Fill settings are ready to edit.", STATUS_OK)
-        elif layer == "pattern_preview":
+        """Turn the virtual result layer into a useful shortcut, not a dead row."""
+        if layer == "pattern_result":
             self._pattern_section.set_expanded(True)
             self._pattern_combo.setFocus()
             self._set_status("Pattern settings are ready to edit.", STATUS_OK)
-        elif layer == "pattern_outline":
-            self._shape_section.set_expanded(True)
-            self._set_status("Outline source settings are ready to edit.", STATUS_OK)
 
     def _on_pattern_layer_visibility_changed(self, layer: str, visible: bool) -> None:
-        """Make the Fill eye a real output toggle, including from the tree menu."""
-        if layer != "pattern_fill":
-            return
-        current = self._fill_mode_combo.currentData() or "none"
-        if visible and current == "none":
-            self._fill_mode_combo.setCurrentIndex(1)  # Lines: predictable default
-            self._set_status("Fill enabled from Layers — adjust its settings if needed.", STATUS_OK)
-        elif not visible and current != "none":
-            self._fill_mode_combo.setCurrentIndex(0)
-            self._set_status("Fill disabled from Layers.", STATUS_OK)
+        """The result row's eye is the only control over showing the pattern."""
+        if layer == "pattern_result":
+            self._set_result_visible(visible)
 
     def _on_toolbar_mode(self, value: str) -> None:
         self._canvas_runtime.on_toolbar_mode(value)
@@ -797,7 +800,7 @@ class PatternPage(BasePage):
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._preview_zone_owners = []
         self._canvas.set_result_polylines([])
-        self._set_preview_status("Adjust settings to build a preview")
+        self._set_preview_status("Choose a treatment to solve a pattern")
         self._update_preview_controls()
         self._schedule_preview()
         self._emit_state_changed()
@@ -1247,11 +1250,11 @@ class PatternPage(BasePage):
             return
         if not self._zones and not self._edit_polys:
             self._set_status(
-                "Load an outline before preview validation.", STATUS_WARN
+                "Load an outline before exporting.", STATUS_WARN
             )
             return
         self._pending_export_after_preview = continuation
-        self._set_status("Validating current preview before export…", STATUS_WARN)
+        self._set_status("Solving the pattern before export…", STATUS_WARN)
         self._schedule_preview()
 
     def _export_laserstar_package(self) -> None:
@@ -2091,7 +2094,7 @@ class PatternPage(BasePage):
             border_fade = 0.0
         excl_polys = None
         fill_options = self._collect_fill_options()
-        self._set_preview_status("Previewing…")
+        self._set_preview_status("Solving…")
         if self._zones:
             try:
                 zones_snap = self._snapshot_zone_jobs()
@@ -2240,7 +2243,9 @@ class PatternPage(BasePage):
         if self._canvas.result_visible():
             self._set_preview_status(f"{status_text} — pattern shown", "success")
         else:
-            self._set_preview_status(f"{status_text} ready — click Show Pattern", "success")
+            self._set_preview_status(
+                f"{status_text} ready — hidden by the Pattern result layer", "success"
+            )
         self._refresh_section_subtitles()
         self._update_preview_controls()
         self._refresh_canvas_panels()
@@ -2269,11 +2274,11 @@ class PatternPage(BasePage):
             if restart and (self._edit_polys or self._zones):
                 self._preview_timer.start(0)
             return
-        self._set_preview_status(f"Preview error: {msg}", "error")
+        self._set_preview_status(f"Solve failed: {msg}", "error")
         if self._pending_export_after_preview is not None:
             self._pending_export_after_preview = None
-            self._set_status(f"Export blocked — preview validation failed: {msg}", STATUS_ERR)
-        self._canvas.setToolTip("Preview refresh failed; showing the last completed result.")
+            self._set_status(f"Export blocked — the pattern failed to solve: {msg}", STATUS_ERR)
+        self._canvas.setToolTip("Solve failed; showing the last completed result.")
         self._update_preview_controls()
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
@@ -2302,7 +2307,7 @@ class PatternPage(BasePage):
         # Both are replaced atomically when the worker completes.
         if had_cache:
             self._canvas.setToolTip(
-                "Refreshing pattern — the geometry shown is the last completed result."
+                "Re-solving — the geometry shown is the last completed result."
             )
             self._set_preview_status("Refreshing pattern…")
         self._update_preview_controls()
@@ -2330,29 +2335,18 @@ class PatternPage(BasePage):
             workflow_states = ["current", "pending", "pending", "pending", "pending"]
         reasons = {}
         if self._preview_is_stale:
-            reasons[3] = "Preview is stale because an outline or treatment input changed"
-            reasons[4] = "Export is unavailable until preview validation completes"
+            reasons[3] = "The pattern is re-solving after an outline or treatment change"
+            reasons[4] = "Export is unavailable until the pattern finishes solving"
         guidance = (
             "Import or transfer a closed outline"
             if not has_outline
-            else "Choose a pattern and review the live preview"
+            else "Choose a treatment and review the solved pattern"
             if not has_preview
-            else "Export the reviewed preview"
+            else "Export the solved pattern"
             if not self._export_is_current
             else "Export complete — reveal the output or continue editing"
         )
         self._workflow_strip.set_step_states(workflow_states, reasons, guidance=guidance)
-        self._preview_btn.setText("Show Pattern")
-        if is_computing:
-            self._preview_btn.setEnabled(False)
-            self._preview_btn.setToolTip("Pattern is solving")
-        else:
-            self._preview_btn.setEnabled(has_preview)
-            self._preview_btn.setToolTip(
-                "Show or hide the solved pattern. Outlines stay editable either way."
-                if has_preview
-                else "Choose a pattern to solve one"
-            )
         self._cancel_preview_btn.setVisible(is_computing)
         if hasattr(self, "_gen_btn"):
             can_export = bool(self._edit_polys or self._zones)
@@ -2380,7 +2374,7 @@ class PatternPage(BasePage):
                 preflight = "Preflight · Load an outline to begin"
                 preflight_tone = "neutral"
             elif self._preview_task.running:
-                preflight = "Preflight · Preview is still computing"
+                preflight = "Preflight · The pattern is still solving"
                 preflight_tone = "neutral"
             elif open_outlines and not self._export_open_paths_cb.isChecked():
                 preflight = (
@@ -2395,7 +2389,7 @@ class PatternPage(BasePage):
                 )
                 preflight_tone = "success"
             else:
-                preflight = "Preflight · Update the preview before export"
+                preflight = "Preflight · Waiting for the pattern to solve"
                 preflight_tone = "warn"
             self._summary_chip.setText(preflight)
             self._summary_chip.setProperty("tone", preflight_tone)
