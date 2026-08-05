@@ -62,7 +62,7 @@ def test_every_lattice_pattern_accepts_a_repeat_mode(name: str, mode: str) -> No
 
 @pytest.mark.parametrize("name", LATTICE_PATTERNS)
 def test_lattice_origin_shifts_the_pattern(name: str) -> None:
-    """The origin is a phase offset, so adjacent regions can be kept in step."""
+    """The document origin moves the whole grid, so every region moves with it."""
     service = PatternProcessor()
     base = service._generate_base_pattern(PANEL, name, dict(DEFAULTS[name]))
     shifted = service._generate_base_pattern(
@@ -73,8 +73,11 @@ def test_lattice_origin_shifts_the_pattern(name: str) -> None:
 
 @pytest.mark.parametrize("name", LATTICE_PATTERNS)
 def test_lattice_patterns_expose_their_controls_in_the_form(name: str) -> None:
+    """The grid origin is a document control, so a region only chooses its
+    repeat mode and whether to leave the document grid at all."""
     keys = {field.param_key or field.attr[1:] for field in PARAM_SPECS[name]}
-    assert {"repeat_mode", "origin_x", "origin_y"} <= keys
+    assert {"repeat_mode", "align_to_region"} <= keys
+    assert not {"origin_x", "origin_y"} & keys
 
 
 def test_every_pattern_has_a_form_spec_and_no_retired_ones_remain() -> None:

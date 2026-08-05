@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDoubleValidator, QIcon
+from PySide6.QtGui import QDoubleValidator, QIcon, QIntValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -337,6 +337,40 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     page._ar_lock_btn = QToolButton()
     page._ar_lock_btn.setCheckable(True)
     page._ar_lock_btn.setChecked(True)
+    # ── Document pattern grid ─────────────────────────────────────────────
+    # One grid for the whole document is what makes two adjacent regions with
+    # the same settings meet without a seam. It lives here, at document scope,
+    # rather than as a phase offset the user has to retype per region.
+    section_label(shape_layout, "Pattern grid")
+    grid_row = QGridLayout()
+    grid_row.addWidget(QLabel("Origin X (mm)"), 0, 0)
+    page._lattice_origin_x = QLineEdit("0")
+    page._lattice_origin_y = QLineEdit("0")
+    for field in (page._lattice_origin_x, page._lattice_origin_y):
+        field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
+        field.setFixedWidth(80)
+        field.textChanged.connect(page._on_document_lattice_changed)
+    grid_row.addWidget(page._lattice_origin_x, 0, 1)
+    grid_row.addWidget(QLabel("Origin Y (mm)"), 1, 0)
+    grid_row.addWidget(page._lattice_origin_y, 1, 1)
+    grid_row.addWidget(QLabel("Seed"), 2, 0)
+    page._lattice_seed = QLineEdit("1")
+    page._lattice_seed.setValidator(QIntValidator(0, 2_147_483_647, page._lattice_seed))
+    page._lattice_seed.setFixedWidth(80)
+    page._lattice_seed.setToolTip(
+        "Fixes the random generators (Voronoi, Truchet, Stipple) so re-solving "
+        "reproduces the same result instead of reshuffling it"
+    )
+    page._lattice_seed.textChanged.connect(page._on_document_lattice_changed)
+    grid_row.addWidget(page._lattice_seed, 2, 1)
+    shape_layout.addLayout(grid_row)
+    page._lattice_snap_btn = QPushButton("Snap grid to selection")
+    page._lattice_snap_btn.setToolTip(
+        "Move the document grid origin to the corner of the current selection"
+    )
+    page._lattice_snap_btn.clicked.connect(page._snap_lattice_to_selection)
+    shape_layout.addWidget(page._lattice_snap_btn)
+
     page._shape_section = CollapsibleSection(
         "Shape", shape_content, expanded=True, subtitle="No file loaded"
     )

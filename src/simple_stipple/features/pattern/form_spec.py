@@ -31,11 +31,13 @@ class ParamField:
 
 
 def _lattice_fields(prefix: str, *, default_mode: str = "Half drop") -> list[ParamField]:
-    """Repeat mode and lattice origin, shared by every tiling pattern.
+    """Repeat mode and the align-to-region opt-out, shared by every tiling
+    pattern.
 
-    These used to exist only on Custom Tile, so most patterns had no way to
-    change their stagger at all. Building them once keeps every pattern
-    customizable in the same vocabulary.
+    The lattice origin is a *document* setting, not a per-pattern one: two
+    regions line up because they share one grid, not because the user typed
+    the same phase offset into both. All that is left per region is whether to
+    leave that grid.
     """
     return [
         ParamField(
@@ -48,18 +50,13 @@ def _lattice_fields(prefix: str, *, default_mode: str = "Half drop") -> list[Par
             param_key="repeat_mode",
         ),
         ParamField(
-            f"_{prefix}_origin_x",
-            "Origin X (mm)",
-            "0",
-            "Horizontal phase offset — match it across regions for a seamless lattice",
-            param_key="origin_x",
-        ),
-        ParamField(
-            f"_{prefix}_origin_y",
-            "Origin Y (mm)",
-            "0",
-            "Vertical phase offset — match it across regions for a seamless lattice",
-            param_key="origin_y",
+            f"_{prefix}_align_region",
+            "Align to region",
+            "false",
+            "Anchor the lattice to this shape instead of the document grid — "
+            "use it to centre a motif in one region",
+            kind="checkbox",
+            param_key="align_to_region",
         ),
     ]
 
@@ -96,18 +93,12 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             param_key="repeat_mode",
         ),
         ParamField(
-            "_custom_tile_origin_x",
-            "Origin X (mm)",
-            "0",
-            "Horizontal phase offset for the repeat lattice",
-            param_key="origin_x",
-        ),
-        ParamField(
-            "_custom_tile_origin_y",
-            "Origin Y (mm)",
-            "0",
-            "Vertical phase offset for the repeat lattice",
-            param_key="origin_y",
+            "_custom_tile_align_region",
+            "Align to region",
+            "false",
+            "Anchor the repeat to this shape instead of the document grid",
+            kind="checkbox",
+            param_key="align_to_region",
         ),
     ],
     "Honeycomb": [
@@ -348,11 +339,12 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             param_key="cross",
         ),
         ParamField(
-            "_knurl_origin_x",
-            "Origin offset (mm)",
-            "0",
-            "Phase offset across the groove direction",
-            param_key="origin_x",
+            "_knurl_align_region",
+            "Align to region",
+            "false",
+            "Anchor the grooves to this shape instead of the document grid",
+            kind="checkbox",
+            param_key="align_to_region",
         ),
     ],
     "Voronoi": [
