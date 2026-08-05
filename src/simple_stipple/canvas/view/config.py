@@ -93,6 +93,17 @@ def _initialize_view(
 
     # construction/hidden/locked/group flags live on EntityRecord.
     self._accent_polys = {}  # entity_id → color hex for role overlays
+    self._region_tint: dict = {}  # entity_id → color hex, filled translucently
+    self._region_picking = False  # click inside a closed shape selects it
+    # Solved pattern/fill, rendered beneath the editable outlines. This is a
+    # render channel, not an entity set — the canvas never stops holding the
+    # real outlines, so editing is always editing the document.
+    self._result_polys = []
+    self._result_visible = True
+    self._result_pattern_span = (0, 0)  # slice of _result_polys that is cells
+    # Optional owner-supplied undo/redo that runs before the canvas history.
+    self._undo_hook = None
+    self._redo_hook = None
     # Generated preview strokes may be rendered faithfully without becoming
     # selectable editor geometry (for example, dense pattern-fill hatch rows).
     self._render_only_entity_ids = set()

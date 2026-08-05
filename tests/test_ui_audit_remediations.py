@@ -32,9 +32,9 @@ from simple_stipple.engine.patterns.processing import PatternProcessor
 from simple_stipple.features.convert import ConvertPage
 from simple_stipple.features.help import HelpDialog
 from simple_stipple.features.pattern.page import PatternPage
+from simple_stipple.features.pattern.treatments import treatment_kind
 from simple_stipple.features.pattern.workers import compute_preview
 from simple_stipple.features.pattern.zones import (
-    _restore_preview_poly_to_source,
     highlight_zone_on_canvas,
     select_zone_for_canvas_selection,
 )
@@ -369,9 +369,15 @@ def test_image_engraving_has_one_export_terminal_and_safe_clip_choice(
 ) -> None:
     page = PatternPage(settings={})
     assert page._engrave_export_btn.text() == "Use engraving export"
-    assert page._engrave_target.currentData() == "outline"
-    zone_index = page._engrave_target.findData("zone")
-    assert not page._engrave_target.model().item(zone_index).isEnabled()
+
+    # The clip mask is the region carrying the Engrave treatment — no target
+    # combo, and no need to duplicate the shape to use it as both.
+    ring = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0), (0.0, 0.0)]
+    circle = [(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0), (10.0, 10.0)]
+    page.load_outline_polys([ring, circle])
+    assert page._engraving_mask_polys() == [list(ring), list(circle)]
+    page._treatments[page._outline_ids[1]] = {"kind": "engrave", "pattern": "— None —"}
+    assert page._engraving_mask_polys() == [list(circle)]
 
     page._use_engraving_export()
     assert page._export_default == "engraving"
@@ -1052,7 +1058,8 @@ def test_context_menu_customizer_filters_catalogue_and_covers_static_actions(
     assert visible == ["context.create.dovetail_box"]
     assert set(_CONTEXT_STATIC_ACTION_IDS.values()).issubset(_CONTEXT_ACTION_LABELS)
     assert "context.share.move_to_layer" in _CONTEXT_ACTION_LABELS
-    assert "context.cutout.toggle" in _CONTEXT_ACTION_LABELS
+    assert "context.pattern_cell.repeat" in _CONTEXT_ACTION_LABELS
+    assert not any(key.startswith("context.outline_role.") for key in _CONTEXT_ACTION_LABELS)
     dialog.close()
 
 
@@ -1400,19 +1407,18 @@ def test_pattern_zone_highlight_and_preview_selection_use_canvas_entity_ids(
     page._canvas.load(polys, fit=False)
     entity_ids = page._canvas.get_entity_ids()
     page._outline_ids = entity_ids[:2]
-    page._zones = [
-        {"outline_ids": [entity_ids[0]], "pattern": "Lines"},
-        {"outline_ids": [entity_ids[1]], "pattern": "Dots"},
-    ]
+    page._edit_polys = polys[:2]
+    page._treatments = {
+        entity_ids[0]: {"kind": "pattern", "pattern": "Lines"},
+        entity_ids[1]: {"kind": "pattern", "pattern": "Dots"},
+    }
     page._refresh_zone_list()
 
     highlight_zone_on_canvas(page, 1)
     assert page._canvas._accent_polys == {entity_ids[1]: "#f5a623"}
 
-    page._showing_preview = True
-    page._preview_zone_owners = [0, 1, 1]
-    page._canvas.set_selection([entity_ids[2]])
-    select_zone_for_canvas_selection(page, preview=True)
+    page._canvas.set_selection([entity_ids[1]])
+    select_zone_for_canvas_selection(page)
     assert page._zone_list.currentRow() == 1
     page.shutdown()
     page.close()
@@ -1824,22 +1830,6 @@ def test_nested_zone_exclusion_uses_repaired_coverage() -> None:
     assert processor._zone_nested_exclusions(zones, 1) == []
 
 
-def test_preview_cell_promotion_restores_zone_source_coordinates() -> None:
-    outer = [(10.0, 10.0), (30.0, 10.0), (30.0, 30.0), (10.0, 30.0), (10.0, 10.0)]
-    page = SimpleNamespace(
-        _preview_categories={"outline": [outer], "zone_owners": [0, 0]},
-        _zones=[{"outline_ids": ["outer"], "scale": (40.0, 40.0)}],
-        _orig_w=20.0,
-        _orig_h=20.0,
-        _outline_ids=["outer"],
-        _edit_polys=[outer],
-    )
-    # Preview coordinates are scaled from the source bbox by 2x.
-    preview_cell = [(10.0, 10.0), (18.0, 10.0), (18.0, 18.0), (10.0, 18.0)]
-    restored = _restore_preview_poly_to_source(page, "cell", preview_cell, {"cell": 1})
-    assert restored == [(10.0, 10.0), (14.0, 10.0), (14.0, 14.0), (10.0, 14.0)]
-
-
 def test_preview_fill_quality_does_not_change_fill_geometry() -> None:
     base = FillSpec.from_dict({"mode": "lines", "spacing": 2.0})
     fast = FillSpec.from_dict(
@@ -1892,7 +1882,7 @@ def test_pattern_layer_tree_group_move_keeps_group_and_rows_in_sync(app: QApplic
     page.close()
 
 
-def test_pattern_outline_transfer_retains_layers_through_preview_toggle(
+def test_pattern_outline_layers_survive_showing_and_hiding_the_pattern(
     app: QApplication,
 ) -> None:
     page = PatternPage(settings={})
@@ -1907,8 +1897,10 @@ def test_pattern_outline_transfer_retains_layers_through_preview_toggle(
         "Mark",
     ]
     page._preview_polys_cache = [[(0.0, 0.0), (1.0, 0.0)]]
-    page._on_preview_toggled(True)
-    page._on_preview_toggled(False)
+    # Showing and hiding the solved pattern is visibility only — it must never
+    # disturb the entities or their layers.
+    page._set_result_visible(True)
+    page._set_result_visible(False)
     assert [page._canvas._entity_for_id(entity_id).layer for entity_id in page._outline_ids] == [
         "Cut",
         "Mark",
@@ -2024,60 +2016,7 @@ def test_extended_line_and_point_constraints_are_persistent_and_deterministic() 
     assert solved["curve_b"][:3] == pytest.approx([(3.0, 1.0), (4.0, 1.0), (5.0, 0.0)])
 
 
-def test_pattern_preview_layer_tree_uses_selectable_canvas_ids(app: QApplication) -> None:
-    page = PatternPage(settings={})
-    outline = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]
-    pattern = [(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 2.0)]
-    fill = [(4.0, 4.0), (5.0, 4.0), (5.0, 5.0), (4.0, 4.0)]
-    page._preview_categories = {"outline": [outline], "pattern": [pattern], "fill": [fill]}
-    page._preview_polys_cache = [outline, pattern, fill]
-    page._showing_preview = True
-    page._canvas.load(page._preview_polys_cache, fit=False)
-    page._refresh_canvas_panels()
-
-    ids = page._canvas.get_entity_ids()
-    rows = page._layer_module.controller._build_rows(page._layer_module.state)
-    assert [row["key"] for row in rows[1]["shapes"]] == [ids[1]]
-    pattern_item = page._layers_tree._tree.topLevelItem(1).child(0)
-    assert pattern_item is not None
-    page._layers_tree._tree.clearSelection()
-    pattern_item.setSelected(True)
-    page._layers_tree._emit_selection_request()
-    assert page._canvas.get_selected_ids() == [ids[1]]
-    page.shutdown()
-    page.close()
-
-
-def test_pattern_preview_outline_rows_keep_source_order_and_ids(app: QApplication) -> None:
-    page = PatternPage(settings={})
-    outlines = [
-        [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)],
-        [(20.0, 0.0), (30.0, 0.0), (30.0, 10.0), (20.0, 0.0)],
-    ]
-    pattern = [[(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 2.0)]]
-    page._preview_categories = {"outline": outlines, "pattern": pattern, "fill": []}
-    page._preview_polys_cache = outlines + pattern
-    page._showing_preview = True
-    page._canvas.load(page._preview_polys_cache, fit=False)
-    page._refresh_canvas_panels()
-    ids = page._canvas.get_entity_ids()
-    rows = page._layer_module.controller._build_rows(page._layer_module.state)
-    assert [shape["key"] for shape in rows[0]["shapes"]] == ids[:2]
-    assert [shape["label"] for shape in rows[0]["shapes"]] == [
-        "Outline 1  ·  3 pts",
-        "Outline 2  ·  3 pts",
-    ]
-    outline_item = page._layers_tree._tree.topLevelItem(0).child(1)
-    assert outline_item is not None
-    page._layers_tree._tree.clearSelection()
-    outline_item.setSelected(True)
-    page._layers_tree._emit_selection_request()
-    assert page._canvas.get_selected_ids() == [ids[1]]
-    page.shutdown()
-    page.close()
-
-
-def test_pattern_tree_remains_selectable_across_repeated_preview_toggles(
+def test_pattern_tree_remains_selectable_across_repeated_show_hide(
     app: QApplication,
 ) -> None:
     page = PatternPage(settings={})
@@ -2087,43 +2026,16 @@ def test_pattern_tree_remains_selectable_across_repeated_preview_toggles(
     page._preview_polys_cache = [outline]
     source_id = page._outline_ids[0]
     for _ in range(3):
-        page._on_preview_toggled(True)
-        page._refresh_canvas_panels()
-        preview_child = page._layers_tree._tree.topLevelItem(0).child(0)
-        assert preview_child is not None
-        preview_child.setSelected(True)
-        page._layers_tree._emit_selection_request()
-        assert page._canvas.get_selected_ids()
-        page._on_preview_toggled(False)
-        page._refresh_canvas_panels()
-        edit_child = page._layers_tree._tree.topLevelItem(0).child(0)
-        assert edit_child is not None
-        edit_child.setSelected(True)
-        page._layers_tree._emit_selection_request()
-        assert page._canvas.get_selected_ids() == [source_id]
-    page.shutdown()
-    page.close()
-
-
-def test_assigning_preview_outline_reuses_source_without_duplicate(app: QApplication) -> None:
-    page = PatternPage(settings={})
-    outline = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]
-    cell = [(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 2.0)]
-    page.load_outline_polys([outline])
-    source_id = page._outline_ids[0]
-    page._preview_categories = {"outline": [outline], "pattern": [cell], "fill": []}
-    page._preview_polys_cache = [outline, cell]
-    page._showing_preview = True
-    page._canvas.load([outline, cell], fit=False)
-    page._canvas.set_selection([page._canvas.get_entity_ids()[0]])
-    page._assign_zone()
-    assert page._outline_ids == [source_id]
-    page._on_preview_toggled(False)
-    assert page._canvas.get_entity_ids() == [source_id]
-    page._canvas.set_selection([source_id])
-    page._refresh_canvas_panels()
-    page._layers_tree.select_shape_keys([source_id])
-    assert page._canvas.get_selected_ids() == [source_id]
+        for visible in (True, False):
+            page._set_result_visible(visible)
+            page._refresh_canvas_panels()
+            child = page._layers_tree._tree.topLevelItem(0).child(0)
+            assert child is not None
+            child.setSelected(True)
+            page._layers_tree._emit_selection_request()
+            # The outline stays the selectable thing whether the pattern is
+            # shown or hidden — there is no second entity set to switch to.
+            assert page._canvas.get_selected_ids() == [source_id]
     page.shutdown()
     page.close()
 
@@ -2156,7 +2068,6 @@ def test_post_zone_edit_tree_child_selection_and_delete(app: QApplication) -> No
     entity_id = page._outline_ids[0]
     page._canvas.set_selection([entity_id])
     page._assign_zone()
-    page._on_preview_toggled(False)
     page._refresh_canvas_panels()
     tree = page._layers_tree
     child = tree._tree.topLevelItem(0).child(0)
@@ -2191,40 +2102,23 @@ def test_layer_tree_refresh_mutates_existing_rows_when_structure_is_unchanged(
     page.close()
 
 
-def test_preview_cell_zone_materializes_base_without_dropping_pattern(app: QApplication) -> None:
-    page = PatternPage(settings={})
-    outer = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 0.0)]
-    cell = [(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 4.0)]
-    page.load_outline_polys([outer])
-    page._advanced_mode_cb.setChecked(True)
-    page._pattern_combo.setCurrentText("Lines")
-    page._preview_categories = {"outline": [outer], "pattern": [cell], "fill": []}
-    page._preview_polys_cache = [outer, cell]
-    page._showing_preview = True
-    page._canvas.load([outer, cell], fit=False)
-    page._canvas.set_selection([page._canvas.get_entity_ids()[1]])
-    page._assign_zone()
-    assert len(page._zones) == 2
-    assert page._zones[0]["outline_ids"] == [page._outline_ids[0]]
-    assert page._zones[1]["outline_ids"] == [page._outline_ids[1]]
-    page.shutdown()
-    page.close()
-
-
 def test_pattern_zone_list_preserves_editor_scope_and_allows_outline_only_zone(
     app: QApplication,
 ) -> None:
     page = PatternPage(settings={})
     page._advanced_mode_cb.setChecked(True)
-    poly = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0)]
-    page._canvas.load([poly], fit=False)
-    entity_id = page._canvas.get_entity_ids()[0]
-    page._edit_polys = [poly]
-    page._outline_ids = [entity_id]
-    page._zones = [
-        {"outline_ids": [entity_id], "pattern": "Lines"},
-        {"outline_ids": [entity_id], "pattern": "Dots"},
+    polys = [
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0)],
+        [(6.0, 0.0), (10.0, 0.0), (10.0, 4.0), (6.0, 0.0)],
     ]
+    page._canvas.load(polys, fit=False)
+    entity_ids = page._canvas.get_entity_ids()
+    page._edit_polys = polys
+    page._outline_ids = entity_ids
+    page._treatments = {
+        entity_ids[0]: {"kind": "pattern", "pattern": "Lines"},
+        entity_ids[1]: {"kind": "cut", "pattern": "— None —"},
+    }
     page._refresh_zone_list()
     page._zone_list.setCurrentRow(1)
     page._refresh_zone_list()
@@ -2234,14 +2128,572 @@ def test_pattern_zone_list_preserves_editor_scope_and_allows_outline_only_zone(
     page.close()
 
 
+def test_regions_list_scrolls_and_keeps_every_row_reachable(app: QApplication) -> None:
+    """The list holds one row per region, so it must scroll, not clip.
+
+    Sizing it to its contents with the scrollbar forced off hid rows as soon
+    as a document had more shapes than fit, and selecting a later row scrolled
+    the earlier ones permanently out of reach.
+    """
+    page = PatternPage(settings={})
+    squares = [
+        [(i * 10.0, 0.0), (i * 10.0 + 8, 0.0), (i * 10.0 + 8, 8.0), (i * 10.0, 8.0), (i * 10.0, 0.0)]
+        for i in range(12)
+    ]
+    page.load_outline_polys(squares)
+    widget = page._zone_list
+    assert widget.count() == 12
+    assert widget.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert widget.height() <= widget.maximumHeight()
+
+    # Selecting a late row must not remove earlier rows from the list.
+    widget.setCurrentRow(11)
+    assert widget.count() == 12
+    widget.setCurrentRow(0)
+    assert widget.count() == 12
+    page.shutdown()
+    page.close()
+
+
+def test_a_region_can_be_treated_from_either_selection_surface(app: QApplication) -> None:
+    """Both the canvas and the Regions list must be able to treat a region.
+
+    The Treatment combo is how a region stops being untreated, so it cannot
+    require the region to already carry a treatment, and Apply cannot require
+    a canvas selection when the list is the surface the user just used.
+    """
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
+    page = PatternPage(settings={})
+    page.load_outline_polys([outer, circle])
+    outer_id, circle_id = page._outline_ids
+
+    assert not page._assign_zone_btn.isEnabled()
+
+    # Regions list → choose a pattern. This is the flow that did nothing.
+    page._zone_list.setCurrentRow(1)
+    assert page._assign_zone_btn.isEnabled()
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    assert treatment_kind(page, circle_id) == "pattern_fill"
+
+    # "None" still clears it.
+    page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("none"))
+    assert treatment_kind(page, circle_id) == "none"
+
+    # Canvas selection → Apply.
+    page._canvas.set_selection([outer_id])
+    page._on_sel_change(1)
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("pattern"))
+    page._assign_zone()
+    assert treatment_kind(page, outer_id) == "pattern"
+
+    # Apply with only a list row selected.
+    page._canvas.deselect_all()
+    page._on_sel_change(0)
+    page._zone_list.setCurrentRow(1)
+    page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("engrave"))
+    page._assign_zone()
+    assert treatment_kind(page, circle_id) == "engrave"
+    page.shutdown()
+    page.close()
+
+
+def test_multi_region_canvas_selection_shows_every_row(app: QApplication) -> None:
+    """A two-shape canvas selection must read as two regions in the list."""
+    polys = [
+        [(0.0, 0.0), (40.0, 0.0), (40.0, 25.0), (0.0, 25.0), (0.0, 0.0)],
+        [(60.0, 0.0), (100.0, 0.0), (100.0, 25.0), (60.0, 25.0), (60.0, 0.0)],
+        [(120.0, 0.0), (160.0, 0.0), (160.0, 25.0), (120.0, 25.0), (120.0, 0.0)],
+    ]
+    page = PatternPage(settings={})
+    page.load_outline_polys(polys)
+    ids = list(page._outline_ids)
+
+    page._canvas.set_selection([ids[1], ids[2]])
+    page._on_sel_change(2)
+    assert sorted(i.row() for i in page._zone_list.selectedIndexes()) == [1, 2]
+
+    # Apply reaches every selected region, not just the current row.
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("pattern"))
+    page._assign_zone()
+    assert treatment_kind(page, ids[1]) == "pattern"
+    assert treatment_kind(page, ids[2]) == "pattern"
+    page.shutdown()
+    page.close()
+
+
+def test_treatment_undo_reaches_every_undo_route(app: QApplication) -> None:
+    """Undo is invoked from the Edit menu, palette and radial menu, all of
+    which call straight into the canvas. A page-level shortcut alone left
+    those routes reporting "Nothing to undo" after a treatment change."""
+    from simple_stipple.canvas import commands as canvas_commands
+
+    polys = [
+        [(0.0, 0.0), (40.0, 0.0), (40.0, 25.0), (0.0, 25.0), (0.0, 0.0)],
+        [(60.0, 0.0), (100.0, 0.0), (100.0, 25.0), (60.0, 25.0), (60.0, 0.0)],
+    ]
+    page = PatternPage(settings={})
+    page.load_outline_polys(polys)
+    region_id = page._outline_ids[0]
+    page._zone_list.setCurrentRow(0)
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    assert treatment_kind(page, region_id) == "pattern_fill"
+
+    canvas_commands.run(page._canvas, "edit.undo")
+    assert treatment_kind(page, region_id) == "none"
+    canvas_commands.run(page._canvas, "edit.redo")
+    assert treatment_kind(page, region_id) == "pattern_fill"
+
+    # A geometry edit made afterwards still undoes first.
+    page._canvas.set_selection([page._outline_ids[1]])
+    page._canvas._ctx_delete_poly(page._outline_ids[1])
+    page._canvas.undo()
+    assert treatment_kind(page, region_id) == "pattern_fill"
+    page._canvas.undo()
+    assert treatment_kind(page, region_id) == "none"
+    page.shutdown()
+    page.close()
+
+
+def test_treatment_changes_undo_and_redo(app: QApplication) -> None:
+    """Applying a treatment must be undoable; canvas undo never saw it."""
+    polys = [
+        [(0.0, 0.0), (40.0, 0.0), (40.0, 25.0), (0.0, 25.0), (0.0, 0.0)],
+        [(60.0, 0.0), (100.0, 0.0), (100.0, 25.0), (60.0, 25.0), (60.0, 0.0)],
+    ]
+    page = PatternPage(settings={})
+    page.load_outline_polys(polys)
+    ids = list(page._outline_ids)
+
+    page._canvas.set_selection([ids[0]])
+    page._on_sel_change(1)
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("pattern"))
+    page._assign_zone()
+    assert treatment_kind(page, ids[0]) == "pattern"
+
+    page._undo_pattern()
+    assert treatment_kind(page, ids[0]) == "none"
+    page._redo_pattern()
+    assert treatment_kind(page, ids[0]) == "pattern"
+
+    # Undo survives repeated application and leaves the region list intact.
+    page._undo_pattern()
+    assert page._zone_list.count() == 2
+    page.shutdown()
+    page.close()
+
+
+def test_drawing_shapes_populates_the_regions_list(app: QApplication) -> None:
+    """A region is derived from geometry, so drawing a shape creates one.
+
+    The list only refreshed when a treatment already existed, so a fresh
+    document sat on "No closed regions yet" no matter how much was drawn.
+    """
+    polys = [
+        [(0.0, 0.0), (40.0, 0.0), (40.0, 25.0), (0.0, 25.0), (0.0, 0.0)],
+        [(60.0, 0.0), (100.0, 0.0), (100.0, 25.0), (60.0, 25.0), (60.0, 0.0)],
+        [(120.0, 0.0), (160.0, 0.0), (160.0, 25.0), (120.0, 25.0), (120.0, 0.0)],
+    ]
+    page = PatternPage(settings={})
+    page.load_outline_polys(polys)
+    assert not page._treatments  # nothing treated yet
+
+    page._canvas.load(polys, fit=False)
+    page._on_canvas_geometry_change()
+    assert page._zone_list.count() == 3
+    assert "No closed regions" not in page._zone_list.item(0).text()
+    page.shutdown()
+    page.close()
+
+
+def test_editing_applies_to_every_region_selected_in_the_list(app: QApplication) -> None:
+    """Selecting three regions and changing the pattern must change three."""
+    polys = [
+        [(0.0, 0.0), (40.0, 0.0), (40.0, 25.0), (0.0, 25.0), (0.0, 0.0)],
+        [(60.0, 0.0), (100.0, 0.0), (100.0, 25.0), (60.0, 25.0), (60.0, 0.0)],
+        [(120.0, 0.0), (160.0, 0.0), (160.0, 25.0), (120.0, 25.0), (120.0, 0.0)],
+    ]
+    page = PatternPage(settings={})
+    page.load_outline_polys(polys)
+    ids = list(page._outline_ids)
+
+    page._zone_list.setCurrentRow(0)
+    for row in range(3):
+        item = page._zone_list.item(row)
+        if item is not None:
+            item.setSelected(True)
+
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    assert [treatment_kind(page, i) for i in ids] == ["pattern_fill"] * 3
+
+    # One undo step for the whole multi-region edit, not one per region.
+    page._undo_pattern()
+    assert [treatment_kind(page, i) for i in ids] == ["none"] * 3
+    page.shutdown()
+    page.close()
+
+
+def test_selection_change_never_desyncs_outline_ids_from_polys(app: QApplication) -> None:
+    """Tearing down a preview clears the flag before the canvas is reloaded.
+
+    For that moment the page thinks it is editing while the canvas still holds
+    generated geometry. Mirroring it into ``_edit_polys`` desynced the parallel
+    id list, and the next outline load died on ``zip(..., strict=True)``.
+    """
+    outlines = [
+        [(0.0, 0.0), (40.0, 0.0), (40.0, 25.0), (0.0, 25.0), (0.0, 0.0)],
+        [(60.0, 0.0), (100.0, 0.0), (100.0, 25.0), (60.0, 25.0), (60.0, 0.0)],
+    ]
+    cells = [[(i, 0.0), (i + 1.0, 0.0), (i + 1.0, 1.0), (i, 1.0)] for i in range(5)]
+    page = PatternPage(settings={})
+    page.load_outline_polys(outlines)
+
+    page._canvas.load(outlines + cells, fit=False)
+    page._on_sel_change(1)
+    assert len(page._edit_polys) == len(page._outline_ids) == 2
+
+    page._load_outline_canvas(fit=False)  # used to raise ValueError
+
+    # A desync from any other source reconciles instead of crashing.
+    page._edit_polys = outlines + [outlines[0]]
+    page._load_outline_canvas(fit=False)
+    assert len(page._outline_ids) == len(page._edit_polys) == 3
+    page.shutdown()
+    page.close()
+
+
+def test_every_pattern_builds_its_form_fields(app: QApplication) -> None:
+    """Adding a pattern must not require editing a second hand-written list.
+
+    The pattern widgets were built from a hardcoded list of names. A pattern
+    added to PARAM_SPECS but missed there got no widgets, and the first preview
+    died in collect_pattern_params on the missing page attribute.
+    """
+    from simple_stipple.features.pattern.form_spec import PARAM_SPECS
+
+    page = PatternPage(settings={})
+    missing = [
+        (name, field.attr)
+        for name, fields in PARAM_SPECS.items()
+        for field in fields
+        if not hasattr(page, field.attr)
+    ]
+    assert not missing, f"patterns with unbuilt form fields: {missing}"
+    assert set(page._pattern_widgets) == set(PARAM_SPECS)
+    page.shutdown()
+    page.close()
+
+
+def test_editing_a_region_parameter_keeps_the_field_alive(app: QApplication) -> None:
+    """Typing must not destroy the field being typed into.
+
+    Committing an edit refreshed the whole Regions list, which re-entered
+    on_zone_selected and rebuilt every parameter widget — so the caret was
+    lost on every keystroke. Only the row text needs restating.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    poly = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0), (0.0, 0.0)]
+    page = PatternPage(settings={})
+    page.show()
+    page.load_outline_polys([poly])
+    page._zone_list.setCurrentRow(0)
+    page._zone_pattern_combo.setCurrentText("Honeycomb")
+
+    key = next(iter(page._zone_param_inputs))
+    field = page._zone_param_inputs[key]
+    field.setFocus(Qt.FocusReason.MouseFocusReason)
+    QTest.keyClicks(field, "5")
+
+    # Widget identity is the real guard: a rebuilt field cannot hold the caret.
+    # hasFocus() itself is not asserted — it depends on the window being active,
+    # which is not reliable under a batch test run.
+    assert page._zone_param_inputs[key] is field, "parameter widget was rebuilt mid-edit"
+    assert not field.isHidden()
+    # The row label still reflects the change.
+    assert "Honeycomb" in page._zone_list.item(0).text()
+    page.shutdown()
+    page.close()
+
+
+def test_engraving_preview_is_shown_whole_and_clipped_only_on_export(
+    app: QApplication, tmp_path
+) -> None:
+    """The canvas shows the whole image; the region clips it at export.
+
+    Masking the preview cropped the artwork to its region on screen, which hid
+    the edges you need in order to move and resize it.
+    """
+    from PIL import Image
+
+    source = tmp_path / "swatch.png"
+    Image.new("RGB", (64, 64), (200, 80, 40)).save(source)
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
+
+    page = PatternPage(settings={})
+    page.load_outline_polys([outer, circle])
+    page._zone_list.setCurrentRow(1)
+    page._engraving_image_path = str(source)
+    page._attach_image_to_selected_region(str(source))
+    page._update_engraving_overlay()
+
+    # The canvas holds the image uncropped — a uniform alpha, no cut-out.
+    assert page._canvas._bg_pil is not None
+    assert page._canvas._bg_pil.getchannel("A").getextrema() == (125, 125)
+    # The export mask is still the region that owns it.
+    assert page._engraving_mask_polys() == [list(circle)]
+    page.shutdown()
+    page.close()
+
+
+def test_image_belongs_to_a_region_and_is_undoable(app: QApplication) -> None:
+    """The image is owned by the region that masks it.
+
+    It used to be page-global — one path and one placement for the whole
+    document, with a separate combo to pick a target. Attaching it to a region
+    removes that choice, allows more than one engraved region, and makes the
+    whole thing undoable like every other treatment change.
+    """
+    from simple_stipple.features.pattern.treatments import region_engraving, treatment_kind
+
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
+    page = PatternPage(settings={})
+    page.load_outline_polys([outer, circle])
+    region_id = page._outline_ids[1]
+
+    page._zone_list.setCurrentRow(1)
+    page._engrave_x.setValue(30.0)
+    page._engrave_y.setValue(30.0)
+    page._engrave_w.setValue(40.0)
+    page._engrave_h.setValue(40.0)
+    page._attach_image_to_selected_region("/tmp/logo.png")
+
+    # Choosing an image makes the region an Engrave region and masks to it.
+    assert treatment_kind(page, region_id) == "engrave"
+    assert region_engraving(page, region_id)["path"] == "/tmp/logo.png"
+    assert page._engraving_mask_polys() == [list(circle)]
+
+    # Selecting another region and coming back re-points the placement fields.
+    page._zone_list.setCurrentRow(0)
+    page._zone_list.setCurrentRow(1)
+    assert page._engrave_x.value() == 30.0
+    assert page._engrave_w.value() == 40.0
+
+    page._undo_pattern()
+    assert treatment_kind(page, region_id) == "none"
+    assert region_engraving(page, region_id) is None
+    page._redo_pattern()
+    assert treatment_kind(page, region_id) == "engrave"
+    page.shutdown()
+    page.close()
+
+
+def test_image_flow_is_region_owned_end_to_end(app: QApplication, tmp_path) -> None:
+    """Attach, drag, undo, export, save/reload and legacy migration."""
+    from PIL import Image
+
+    from simple_stipple.features.pattern.treatments import (
+        engraving_regions,
+        region_engraving,
+        treatment_kind,
+    )
+
+    source = tmp_path / "logo.png"
+    Image.new("RGB", (64, 64), (200, 80, 40)).save(source)
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
+
+    page = PatternPage(settings={})
+    page.load_outline_polys([outer, circle])
+    region_id = page._outline_ids[1]
+    page._zone_list.setCurrentRow(1)
+    for widget, value in (
+        (page._engrave_x, 30.0),
+        (page._engrave_y, 30.0),
+        (page._engrave_w, 40.0),
+        (page._engrave_h, 40.0),
+    ):
+        widget.setValue(value)
+    page._attach_image_to_selected_region(str(source))
+
+    assert treatment_kind(page, region_id) == "engrave"
+    assert page._engraving_mask_polys() == [list(circle)]
+
+    # Dragging on canvas is a placement edit on the region, and undoes.
+    page._on_engraving_canvas_transform(35.0, 35.0, 30.0, 30.0, 0.0)
+    assert region_engraving(page, region_id)["x"] == 35.0
+    page._undo_pattern()
+    assert region_engraving(page, region_id)["x"] == 30.0
+
+    # Export targets the region that owns the image.
+    assert page._active_engraving()[0] == region_id
+
+    # It survives a workspace round-trip.
+    restored = PatternPage(settings={})
+    restored.apply_workspace_state(page.get_workspace_state())
+    assert len(engraving_regions(restored)) == 1
+
+    # A pre-region workspace stored one page-global image; it lands on the
+    # innermost region containing it rather than being dropped.
+    legacy = PatternPage(settings={})
+    legacy.apply_workspace_state(
+        {
+            "edit_polys": [outer, circle],
+            "orig_polys": [outer, circle],
+            "outline_ids": ["a", "b"],
+            "orig_w": 100.0,
+            "orig_h": 100.0,
+            "zones": [
+                {
+                    "outline_ids": ["b"],
+                    "pattern": "— None —",
+                    "output_mode": "outline",
+                    "scale": (100.0, 100.0),
+                }
+            ],
+            "engraving_image_path": str(source),
+            "engraving_options": {"x": 30, "y": 30, "width": 40, "height": 40},
+        }
+    )
+    assert treatment_kind(legacy, "b") == "engrave"
+    assert legacy._engraving_mask_polys() == [list(circle)]
+    for instance in (page, restored, legacy):
+        instance.shutdown()
+        instance.close()
+
+
+def test_image_is_a_pattern_choice_not_a_sidebar_section(app: QApplication) -> None:
+    """A region either carries a generated pattern or an image, so both live in
+    the same dropdown and the image controls belong to the selected region."""
+    from simple_stipple.features.pattern.treatments import IMAGE_PATTERN, treatment_kind
+
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
+    page = PatternPage(settings={})
+    page.show()
+    page._zones_section.set_expanded(True)
+    page.load_outline_polys([outer, circle])
+    region_id = page._outline_ids[1]
+
+    items = [page._zone_pattern_combo.itemText(i) for i in range(page._zone_pattern_combo.count())]
+    assert IMAGE_PATTERN in items
+
+    # The image controls are mounted inside the region editor, not the sidebar.
+    assert page._engraving_section.isHidden()
+
+    page._zone_list.setCurrentRow(1)
+    page._zone_pattern_combo.setCurrentText(IMAGE_PATTERN)
+    assert treatment_kind(page, region_id) == "engrave"
+    assert not page._engraving_section.isHidden()
+    # Image is a UI choice; the engine emits the region outline, not a pattern.
+    assert page._zones[0]["pattern"] == "— None —"
+
+    page._zone_list.setCurrentRow(0)
+    assert page._engraving_section.isHidden()
+    page._zone_list.setCurrentRow(1)
+    assert not page._engraving_section.isHidden()
+
+    page._undo_pattern()
+    assert treatment_kind(page, region_id) == "none"
+    page.shutdown()
+    page.close()
+
+
+def test_image_lands_at_natural_size_and_stays_masked(app: QApplication, tmp_path) -> None:
+    """The image arrives at the size it actually is.
+
+    Auto-fitting it to the outline silently rescaled the artwork before the
+    user had seen it. The region still masks the image; only the sizing is
+    the user's to choose.
+    """
+    from PIL import Image
+
+    source = tmp_path / "art.png"
+    Image.new("RGB", (300, 150), (9, 9, 9)).save(source, dpi=(300, 300))  # 25.4 x 12.7 mm
+
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    page = PatternPage(settings={})
+    page.load_outline_polys([outer])
+
+    # PIL round-trips the DPI rational as 299.9994, so allow 0.01 mm.
+    assert page._natural_image_size_mm(str(source)) == pytest.approx((25.4, 12.7), abs=0.01)
+
+    page._zone_list.setCurrentRow(0)
+    page._engraving_image_path = str(source)
+    width_mm, height_mm = page._natural_image_size_mm(str(source))
+    page._engrave_w.setValue(width_mm)
+    page._engrave_h.setValue(height_mm)
+    page._attach_image_to_selected_region(str(source))
+
+    # Not stretched to the 100 mm outline.
+    assert page._engrave_w.value() == pytest.approx(25.4, abs=0.01)
+    assert page._engrave_h.value() == pytest.approx(12.7, abs=0.01)
+    # Still clipped to the region that owns it.
+    assert page._engraving_mask_polys() == [list(outer)]
+    page.shutdown()
+    page.close()
+
+
+def test_pre_phase1_workspace_migrates_zones_and_cutouts(app: QApplication) -> None:
+    """A workspace written before region treatments opens with the same output."""
+    outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
+    page = PatternPage(settings={})
+    page.apply_workspace_state(
+        {
+            "edit_polys": [outer, circle],
+            "orig_polys": [outer, circle],
+            "outline_ids": ["outer", "circle"],
+            "orig_w": 100.0,
+            "orig_h": 100.0,
+            "outline_roles": {"outer": "boundary", "circle": "cutout"},
+            "zones": [
+                {
+                    "outline_ids": ["outer"],
+                    "pattern": "Honeycomb",
+                    "params": {"r": 4.0, "gap": 0.5},
+                    "scale": (100.0, 100.0),
+                    "output_mode": "pattern",
+                }
+            ],
+            "exclusion_ids": ["circle"],
+        }
+    )
+
+    assert treatment_kind(page, "outer") == "pattern"
+    # A cutout always meant "subtract this area but do not fill it".
+    assert treatment_kind(page, "circle") == "cut"
+    zones = page._zones
+    assert zones[0]["pattern"] == "Honeycomb"
+    assert [zone["outline_ids"] for zone in zones] == [["outer"], ["circle"]]
+
+    # Round-tripping keeps the treatments verbatim rather than re-migrating.
+    assert page.get_workspace_state()["treatments"]["circle"]["kind"] == "cut"
+    page.shutdown()
+    page.close()
+
+
 def test_pattern_zone_list_delete_key_removes_selected_zone(app: QApplication) -> None:
     page = PatternPage(settings={})
     page._advanced_mode_cb.setChecked(True)
-    ids = ["zone-a", "zone-b"]
-    page._zones = [
-        {"outline_ids": [ids[0]], "pattern": "Lines"},
-        {"outline_ids": [ids[1]], "pattern": "Dots"},
+    polys = [
+        [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0)],
+        [(6.0, 0.0), (10.0, 0.0), (10.0, 4.0), (6.0, 0.0)],
     ]
+    page._canvas.load(polys, fit=False)
+    ids = page._canvas.get_entity_ids()
+    page._edit_polys = polys
+    page._outline_ids = ids
+    page._treatments = {
+        ids[0]: {"kind": "pattern", "pattern": "Lines"},
+        ids[1]: {"kind": "pattern", "pattern": "Dots"},
+    }
     page._refresh_zone_list()
     page._zone_list.setCurrentRow(1)
     event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier)
@@ -2249,6 +2701,8 @@ def test_pattern_zone_list_delete_key_removes_selected_zone(app: QApplication) -
     assert event.isAccepted()
     assert len(page._zones) == 1
     assert page._zones[0]["outline_ids"] == [ids[0]]
+    # The region itself survives; only its treatment was cleared.
+    assert page._zone_list.count() == 2
     page.shutdown()
     page.close()
 

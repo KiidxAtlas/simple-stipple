@@ -307,7 +307,6 @@ class PatternTabState(TabStateBase):
     # The Pattern tab keeps the source document's layer assignment while an
     # outline is being edited.  Preview/export layers are derived separately.
     outline_layers: dict[str, str] = Field(default_factory=dict)
-    outline_roles: dict[str, str] = Field(default_factory=dict)
     pattern_cell_cutouts: list[list[tuple[float, float]]] = Field(default_factory=list)
     pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = Field(default_factory=list)
     orig_w: float = 0.0
@@ -315,6 +314,11 @@ class PatternTabState(TabStateBase):
     canvas_view: dict[str, Any] = Field(default_factory=dict)
     preview_polys: list[list[tuple[float, float]]] = Field(default_factory=list)
     showing_preview: bool = False
+    # One treatment per region, keyed by outline id. ``zones`` and
+    # ``exclusion_ids`` are read-only legacy inputs: pre-Phase-1 workspaces
+    # are migrated onto ``treatments`` at load (see treatments.py), and
+    # ``zones`` is still written out as a derived view for older builds.
+    treatments: dict[str, dict[str, Any]] = Field(default_factory=dict)
     zones: list[dict[str, Any]] = Field(default_factory=list)
     exclusion_ids: list[str] = Field(default_factory=list)
     custom_tile_polys: list[list[tuple[float, float]]] = Field(default_factory=list)

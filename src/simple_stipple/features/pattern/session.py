@@ -15,9 +15,8 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from simple_stipple.document.model import PatternTabState
-from simple_stipple.engine.patterns.fill import NULL_PATTERN
 from simple_stipple.features.pattern.params import collect_form_state, restore_form_state
-from simple_stipple.ui.components.feedback import refresh_style
+from simple_stipple.features.pattern.treatments import migrate_workspace_zones
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,10 +35,7 @@ def _coerce_to_pattern_state(state: dict | None) -> PatternTabState:
 
 
 def get_pattern_workspace_state(page: Any) -> dict:
-    # If showing preview, the canvas has preview polys — save edit_polys from our snapshot
-    polys_to_save = (
-        page._edit_polys if page._showing_preview else page._canvas.get_polylines_state()
-    )
+    polys_to_save = page._canvas.get_polylines_state() or page._edit_polys
     state_dict = {
         "dxf_path": page._dxf_edit.text(),
         "params": collect_form_state(page),
@@ -47,7 +43,6 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "edit_polys": polys_to_save,
         "outline_ids": list(page._outline_ids),
         "outline_layers": dict(page._outline_layers),
-        "outline_roles": dict(page._outline_roles),
         "pattern_cell_cutouts": [list(poly) for poly in page._pattern_cell_cutouts],
         "pattern_cell_instance_cutouts": [
             list(poly) for poly in page._pattern_cell_instance_cutouts
@@ -61,7 +56,7 @@ def get_pattern_workspace_state(page: Any) -> dict:
         "preview_polys": [],
         "showing_preview": False,
         "zones": list(page._zones),
-        "exclusion_ids": list(page._exclusion_ids),
+        "treatments": {key: dict(value) for key, value in page._treatments.items()},
         "custom_tile_polys": page._custom_tile_polys,
         "engraving_image_path": page._engraving_image_path,
         "engraving_options": {
@@ -77,7 +72,6 @@ def get_pattern_workspace_state(page: Any) -> dict:
             "gamma": page._engrave_gamma.value(),
             "passes": page._engrave_passes.value(),
             "invert": page._engrave_invert.isChecked(),
-            "target": page._engrave_target.currentData(),
             "material": page._engrave_material.currentData(),
         },
     }
@@ -104,12 +98,6 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     }
     for outline_id in page._outline_ids:
         page._outline_layers.setdefault(outline_id, "Outline")
-    raw_roles = pattern_state.outline_roles
-    page._outline_roles = {
-        str(key): str(value)
-        for key, value in raw_roles.items()
-        if str(value) in {"boundary", "cutout", "open_path", "ignore"}
-    }
     page._pattern_cell_cutouts = [list(poly) for poly in pattern_state.pattern_cell_cutouts]
     page._pattern_cell_instance_cutouts = [
         list(poly) for poly in pattern_state.pattern_cell_instance_cutouts
@@ -121,39 +109,35 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     else:
         page._orig_dims_label.setText("—")
     page._preview_polys_cache = [list(poly) for poly in pattern_state.preview_polys]
-    show_preview = bool(pattern_state.showing_preview) and bool(page._preview_polys_cache)
-    if show_preview:
-        page._canvas.set_polylines_state(page._preview_polys_cache, fit=True)
-        page._showing_preview = True
-        page._preview_btn.setChecked(True)
-        page._preview_btn.setProperty("active", True)
-        refresh_style(page._preview_btn)
-    else:
-        page._load_outline_canvas(fit=bool(page._edit_polys))
-        page._showing_preview = False
-        page._preview_btn.setChecked(False)
-        page._preview_btn.setProperty("active", False)
-        refresh_style(page._preview_btn)
+    # The canvas only ever holds the editable outlines; the solved pattern is
+    # an overlay rebuilt after restore.
+    page._load_outline_canvas(fit=bool(page._edit_polys))
+    page._canvas.set_result_polylines([])
     if pattern_state.canvas_view:
         page._canvas.set_view_state(pattern_state.canvas_view)
     page._suspend_state = False
     page._refresh_canvas_panels()
-    page._zones = []
-    for raw_zone in pattern_state.zones:
-        zone = dict(raw_zone)
-        zone["pattern"] = str(zone.get("pattern") or NULL_PATTERN).strip() or NULL_PATTERN
-        zone["pattern_label"] = (
-            str(zone.get("pattern_label") or zone["pattern"]).strip() or zone["pattern"]
+    # Workspaces written before region treatments carry zones plus explicit
+    # cutout ids; both map onto treatments, so a pre-Phase-1 file opens with
+    # the same output and nothing to reassign.
+    stored = pattern_state.treatments
+    if stored:
+        page._treatments = {
+            str(key): dict(value) for key, value in stored.items() if isinstance(value, dict)
+        }
+    else:
+        page._treatments = migrate_workspace_zones(
+            page._outline_ids,
+            [dict(zone) for zone in pattern_state.zones],
+            [str(v) for v in pattern_state.exclusion_ids],
         )
-        zone.setdefault("params", {})
-        page._zones.append(zone)
     page._refresh_zone_list()
-    page._exclusion_ids = [str(v) for v in pattern_state.exclusion_ids]
-    # Migrate legacy workspaces whose explicit cutouts predate outline roles.
-    for outline_id in page._exclusion_ids:
-        page._outline_roles[outline_id] = "cutout"
     page._custom_tile_polys = [list(poly) for poly in pattern_state.custom_tile_polys]
     page._engraving_image_path = pattern_state.engraving_image_path
+    # A pre-region workspace stored one image for the whole document. Give it
+    # to whichever region already engraves, so it keeps its mask and becomes
+    # editable like any other region property.
+    _migrate_page_engraving_to_region(page, pattern_state)
     engraving = pattern_state.engraving_options
     if engraving:
         page._engrave_x.setValue(float(engraving.get("x", 0)))
@@ -168,8 +152,6 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._engrave_gamma.setValue(float(engraving.get("gamma", 1)))
         page._engrave_passes.setValue(int(engraving.get("passes", 1)))
         page._engrave_invert.setChecked(bool(engraving.get("invert", False)))
-        target_index = page._engrave_target.findData(str(engraving.get("target", "outline")))
-        page._engrave_target.setCurrentIndex(max(0, target_index))
         material_index = page._engrave_material.findData(str(engraving.get("material", "custom")))
         page._engrave_material.blockSignals(True)
         page._engrave_material.setCurrentIndex(max(0, material_index))
@@ -179,13 +161,69 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     else:
         page._canvas.clear_background_image()
     page._refresh_engraving_ui()
-    page._sync_canvas_cutout_highlight()
-    page._refresh_cutout_status()
+
+
+def _region_under_image(page: Any, options: dict) -> str | None:
+    """Innermost region containing the legacy image's placement centre.
+
+    Nothing in an old workspace records which region an image belonged to, so
+    the smallest region it sits inside is the best available answer — and it
+    matches what the user drew.
+    """
+    from shapely.geometry import Point, Polygon
+
+    centre = Point(
+        float(options.get("x", 0.0)) + float(options.get("width", 0.0)) / 2.0,
+        float(options.get("y", 0.0)) + float(options.get("height", 0.0)) / 2.0,
+    )
+    best: tuple[float, str] | None = None
+    for region_id, poly in zip(page._outline_ids, page._edit_polys):
+        if len(poly) < 3:
+            continue
+        try:
+            shape = Polygon(poly)
+            if not shape.is_valid:
+                shape = shape.buffer(0)
+        except (TypeError, ValueError):
+            continue
+        if shape.is_empty or not shape.covers(centre):
+            continue
+        if best is None or shape.area < best[0]:
+            best = (shape.area, region_id)
+    return best[1] if best else None
+
+
+def _migrate_page_engraving_to_region(page: Any, pattern_state: Any) -> None:
+    from simple_stipple.features.pattern.treatments import engraving_regions, treatment_kind
+
+    path = str(pattern_state.engraving_image_path or "")
+    if not path or engraving_regions(page):
+        return
+    options = pattern_state.engraving_options or {}
+    target = next(
+        (rid for rid in page._outline_ids if treatment_kind(page, rid) == "engrave"),
+        None,
+    )
+    if target is None:
+        target = _region_under_image(page, options)
+    if target is None:
+        return
+    treatment = dict(page._treatments.get(target) or {})
+    treatment["kind"] = "engrave"
+    treatment["engraving"] = {
+        "path": path,
+        "x": float(options.get("x", 0.0)),
+        "y": float(options.get("y", 0.0)),
+        "width": float(options.get("width", 0.0)),
+        "height": float(options.get("height", 0.0)),
+        "rotation": float(options.get("rotation", 0.0)),
+    }
+    page._treatments[target] = treatment
 
 
 def clear_pattern_workspace_state(page: Any) -> None:
     apply_pattern_workspace_state(page, {})
     page._outline_ids = []
-    page._outline_roles = {}
+    page._treatments = {}
     page._set_status("")
     page._refresh_canvas_panels()

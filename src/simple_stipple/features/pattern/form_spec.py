@@ -30,47 +30,45 @@ class ParamField:
             )
 
 
+def _lattice_fields(prefix: str, *, default_mode: str = "Half drop") -> list[ParamField]:
+    """Repeat mode and lattice origin, shared by every tiling pattern.
+
+    These used to exist only on Custom Tile, so most patterns had no way to
+    change their stagger at all. Building them once keeps every pattern
+    customizable in the same vocabulary.
+    """
+    return [
+        ParamField(
+            f"_{prefix}_repeat",
+            "Repeat mode",
+            default_mode,
+            "How each row of the lattice is offset from the one below it",
+            kind="combobox",
+            items=["Straight", "Half drop", "Brick offset"],
+            param_key="repeat_mode",
+        ),
+        ParamField(
+            f"_{prefix}_origin_x",
+            "Origin X (mm)",
+            "0",
+            "Horizontal phase offset — match it across regions for a seamless lattice",
+            param_key="origin_x",
+        ),
+        ParamField(
+            f"_{prefix}_origin_y",
+            "Origin Y (mm)",
+            "0",
+            "Vertical phase offset — match it across regions for a seamless lattice",
+            param_key="origin_y",
+        ),
+    ]
+
+
 # ── Parameter specs for each named pattern ────────────────────────────────────
 # Each list entry maps directly to a row in the param grid widget.
 # Fields marked hint="..." render a small muted label below them.
 
 PARAM_SPECS: dict[str, list[ParamField]] = {
-    "Flow Lines": [
-        ParamField(
-            "_flow_spacing",
-            "Line spacing (mm)",
-            "3",
-            "Distance between neighboring flow lines",
-            param_key="spacing",
-            minimum=0.01,
-            maximum=1000,
-        ),
-        ParamField(
-            "_flow_amplitude",
-            "Wave amplitude (mm)",
-            "2",
-            "Side-to-side movement of each flowing line",
-            param_key="amplitude",
-            minimum=0.0,
-            maximum=1000,
-        ),
-        ParamField(
-            "_flow_wavelength",
-            "Wavelength (mm)",
-            "18",
-            "Distance over one complete wave",
-            param_key="wavelength",
-            minimum=0.01,
-            maximum=10000,
-        ),
-        ParamField(
-            "_flow_angle",
-            "Direction (°)",
-            "0",
-            "Overall flow direction",
-            param_key="angle",
-        ),
-    ],
     "Custom Tile": [
         ParamField(
             "_custom_tile_gap",
@@ -131,43 +129,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             minimum=0.0,
             maximum=20,
         ),
-    ],
-    "Gradient Honeycomb": [
-        ParamField(
-            "_grad_r_min",
-            "Min size (mm)",
-            "0.8",
-            "Smallest hex cell size at one end of the gradient",
-            param_key="r_min",
-            minimum=0.0,
-            maximum=20,
-        ),
-        ParamField(
-            "_grad_r_max",
-            "Max size (mm)",
-            "2.5",
-            "Largest hex cell size at the other end",
-            param_key="r_max",
-            minimum=0.001,
-            maximum=20,
-        ),
-        ParamField(
-            "_grad_gap",
-            "Gap (mm)",
-            "0.5",
-            "Spacing between hexagons",
-            param_key="gap",
-            minimum=0.0,
-            maximum=1000,
-        ),
-        ParamField(
-            "_grad_angle",
-            "Direction (°)",
-            "0",
-            "Gradient direction in degrees (0 = left to right)",
-            hint="0° = left→right  ·  90° = vertical",
-            param_key="angle",
-        ),
+        *_lattice_fields("hex", default_mode="Half drop"),
     ],
     "Basketweave": [
         ParamField(
@@ -197,6 +159,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             minimum=0.0,
             maximum=1000,
         ),
+        *_lattice_fields("weave", default_mode="Straight"),
     ],
     "Stipple Dots": [
         ParamField(
@@ -254,6 +217,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             minimum=0.0,
             maximum=1000,
         ),
+        *_lattice_fields("brick", default_mode="Half drop"),
     ],
     "Mesh": [
         ParamField(
@@ -273,6 +237,122 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             param_key="spacing",
             minimum=0.001,
             maximum=1000,
+        ),
+        *_lattice_fields("mesh", default_mode="Straight"),
+    ],
+    "Truchet": [
+        ParamField(
+            "_truchet_tile",
+            "Tile size (mm)",
+            "6",
+            "Edge length of each square tile; arcs meet exactly at tile edges",
+            param_key="tile",
+            minimum=0.2,
+            maximum=20,
+        ),
+        ParamField(
+            "_truchet_gap",
+            "Cell gap (mm)",
+            "0.3",
+            "Space between cells; 0 tiles the surface with no room to fill around them",
+            param_key="gap",
+            minimum=0.0,
+            maximum=20,
+        ),
+        ParamField(
+            "_truchet_seed",
+            "Seed",
+            "1",
+            "Fixes the random tile rotations so a re-solve is reproducible",
+            kind="int",
+            param_key="seed",
+            minimum=0,
+            maximum=999999,
+        ),
+        *_lattice_fields("truchet", default_mode="Straight"),
+    ],
+    "Seigaiha": [
+        ParamField(
+            "_seigaiha_r",
+            "Scale radius (mm)",
+            "6",
+            "Radius of each wave scale; rows overlap by half this value",
+            param_key="r",
+            minimum=0.2,
+            maximum=20,
+        ),
+        ParamField(
+            "_seigaiha_rings",
+            "Rings per scale",
+            "3",
+            "Concentric arcs drawn inside each scale",
+            kind="int",
+            param_key="rings",
+            minimum=1,
+            maximum=12,
+        ),
+        ParamField(
+            "_seigaiha_ring_gap",
+            "Ring spacing (mm)",
+            "1.2",
+            "Distance between concentric arcs within one scale",
+            param_key="ring_gap",
+            minimum=0.05,
+            maximum=20,
+        ),
+        ParamField(
+            "_seigaiha_gap",
+            "Scale spacing (mm)",
+            "0.3",
+            "Gap between neighbouring scales; 0 tiles the surface completely",
+            param_key="gap",
+            minimum=0.0,
+            maximum=20,
+        ),
+        *_lattice_fields("seigaiha"),
+    ],
+    "Knurling": [
+        ParamField(
+            "_knurl_pitch",
+            "Groove pitch (mm)",
+            "1.5",
+            "Spacing between grooves — the diamond size follows from pitch and angle",
+            param_key="pitch",
+            minimum=0.1,
+            maximum=20,
+        ),
+        ParamField(
+            "_knurl_angle",
+            "Groove angle (°)",
+            "30",
+            "Angle of each groove family from horizontal",
+            param_key="angle",
+            minimum=-89.0,
+            maximum=89.0,
+        ),
+        ParamField(
+            "_knurl_groove",
+            "Groove width (mm)",
+            "0.3",
+            "Gap between raised pads — this is the cut groove itself",
+            param_key="groove",
+            minimum=0.0,
+            maximum=20,
+        ),
+        ParamField(
+            "_knurl_cross",
+            "Cross-hatch (diamond)",
+            "true",
+            "Off gives a single straight-knurl family instead of diamonds",
+            kind="checkbox",
+            param_key="cross",
+        ),
+        ParamField(
+            "_knurl_origin_x",
+            "Origin offset (mm)",
+            "0",
+            "Phase offset across the groove direction",
+            param_key="origin_x",
         ),
     ],
     "Voronoi": [
@@ -302,18 +382,6 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             "Random seed for reproducible cell placement",
             kind="int",
             param_key="seed",
-        ),
-    ],
-    "Topographic": [
-        ParamField(
-            "_topo_spacing",
-            "Contour spacing (mm)",
-            "1.5",
-            "Distance between successive contour lines",
-            hint="Inward offset contours from the outline edge",
-            param_key="spacing",
-            minimum=0.1,
-            maximum=500,
         ),
     ],
 }

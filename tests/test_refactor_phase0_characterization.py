@@ -150,6 +150,9 @@ def test_renderer_scene_and_selection_passes_keep_internal_layer_order() -> None
         "_paint_guides",
         "_paint_dimensions",
         "_paint_ghost_polys",
+        # Solved pattern sits under the editable outlines: the user edits
+        # geometry, never output.
+        "_paint_result_polys",
         "_paint_main_polys",
         "_paint_operation_preview",
         "_paint_selection_bbox",
@@ -281,3 +284,30 @@ def _set_event() -> threading.Event:
     event = threading.Event()
     event.set()
     return event
+
+
+def test_parametric_gizmo_handle_drag_updates_the_live_entity(app: QApplication) -> None:
+    """Dragging a parametric shape's scale handle must not call a phantom method.
+
+    The parametric branch committed through ``_update_entity_in_storage``,
+    which has never existed on the canvas, so every such drag raised
+    AttributeError mid-gesture. It mutates the live entity in place like the
+    uniform-scale branch and commits on release.
+    """
+    from PySide6.QtCore import QPoint, QPointF, Qt
+
+    canvas = DxfCanvas(selectable=True)
+    canvas.resize(800, 600)
+    canvas.set_quick_shape_mode("ring", flash=False)
+    canvas._start_shape_drag("ring", QPointF(200.0, 200.0))
+    canvas._finish_shape_drag(QPoint(320, 300))
+    entity_id = canvas._entities[0].id
+    canvas._sel = {entity_id}
+
+    wx, wy = canvas._c2w(320, 300)
+    assert canvas._start_gizmo_drag("scale-e", wx, wy)
+    for offset in (10, 20, 30):
+        moved_x, moved_y = canvas._c2w(320 + offset, 300)
+        canvas._apply_gizmo_drag(moved_x, moved_y, Qt.KeyboardModifier.NoModifier)
+    assert canvas._gizmo_drag_moved
+    canvas.close()

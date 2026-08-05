@@ -45,18 +45,13 @@ _CONTEXT_STATIC_ACTION_IDS = {
     "Deselect": "context.entity.deselect",
     "Delete": "context.entity.delete",
     "Edit text…": "context.entity.edit_text",
-    "This cell only": "context.pattern_cell_cutout.instance",
-    "Every matching tile": "context.pattern_cell_cutout.repeat",
-    "Boundary (fillable)": "context.outline_role.boundary",
-    "Cutout (subtract)": "context.outline_role.cutout",
-    "Open path (do not fill)": "context.outline_role.open_path",
-    "Ignore in generation": "context.outline_role.ignore",
-    "Explain this role…": "context.outline_role.explain",
+    "This cell only": "context.pattern_cell.instance",
+    "Every matching tile": "context.pattern_cell.repeat",
     "Move to Coordinate…": "context.selection.move",
     "Frame selection": "context.selection.fit",
     "Smooth": "context.selection.smooth",
     "Simplify…": "context.selection.simplify",
-    "Create Zone from Selection": "context.selection.create_zone",
+    "Apply treatment to selection": "context.selection.create_zone",
     "Grid array…": "context.selection.array_grid",
     "Radial array…": "context.selection.array_radial",
     "Select all": "select.all",
@@ -227,9 +222,6 @@ class DxfCanvas(CanvasView):
         on_send_selected_to_pattern=None,
         on_send_selected_to_draft=None,
         on_use_selected_as_custom_tile=None,
-        on_cutout_toggle=None,
-        on_outline_role_change=None,
-        on_outline_role_explain=None,
         on_pattern_cell_cutout_toggle=None,
         on_create_zone_from_selection=None,
         on_ghost_click=None,
@@ -245,14 +237,9 @@ class DxfCanvas(CanvasView):
         self._send_selected_to_pattern_cb = on_send_selected_to_pattern
         self._send_selected_to_draft_cb = on_send_selected_to_draft
         self._use_selected_as_custom_tile_cb = on_use_selected_as_custom_tile
-        self._on_cutout_toggle = on_cutout_toggle
-        self._on_outline_role_change = on_outline_role_change
-        self._on_outline_role_explain = on_outline_role_explain
         self._on_pattern_cell_cutout_toggle = on_pattern_cell_cutout_toggle
         self._on_create_zone_from_selection = on_create_zone_from_selection
         self._on_ghost_click = on_ghost_click
-        self._cutout_indices: set[str] = set()
-        self._outline_roles: dict[str, str] = {}
         self._pattern_cell_indices: set[str] = set()
         self._pattern_cell_cutout_indices: set[str] = set()
         self._draft_profile = bool(draft_profile or selectable)
@@ -353,26 +340,10 @@ class DxfCanvas(CanvasView):
         self.set_mode("draw")
         self._set_draw_primitive(primitive)
 
-    def set_cutout_indices(self, indices: set[str]) -> None:
-        """Mark entities as cutout shapes, rendering them in amber."""
-        self._cutout_indices = set(indices)
-        self.set_accent_polys({eid: self._CUTOUT_COLOR for eid in indices})
-
-    def set_outline_roles(self, roles: dict[str, str]) -> None:
-        self._outline_roles = dict(roles)
-        colors = {
-            "cutout": self._CUTOUT_COLOR,
-            "open_path": "#79c0ff",
-            "ignore": "#6e7681",
-        }
-        self.set_accent_polys(
-            {index: colors[role] for index, role in roles.items() if role in colors}
-        )
-
     def set_pattern_cell_context(
         self, entity_ids: set[str], cutout_indices: set[str] | None = None
     ) -> None:
-        """Identify generated preview cells that can be toggled as fill cutouts."""
+        """Identify generated preview cells that can be removed from the fill."""
         self._pattern_cell_indices = set(entity_ids)
         cutout_ids = cutout_indices or set()
         self._pattern_cell_cutout_indices = cutout_ids
@@ -489,63 +460,6 @@ class DxfCanvas(CanvasView):
         elif entity_id:
             menu.addAction("Select", lambda eid=entity_id: self._ctx_select(eid))
         menu.addAction("Delete", lambda: self._ctx_delete_poly(entity_id))
-        if poly_hit in self._pattern_cell_indices and callable(self._on_pattern_cell_cutout_toggle):
-            is_cutout = poly_hit in self._pattern_cell_cutout_indices
-            toggle_pattern_cutout = self._on_pattern_cell_cutout_toggle
-            cutout_menu = menu.addMenu(
-                "Restore Pattern Cell Fill" if is_cutout else "Mark Pattern Cell as Cutout"
-            )
-            cutout_menu.addAction(
-                "This cell only",
-                lambda _checked=False, target=poly_hit: toggle_pattern_cutout(target, "instance"),
-            )
-            cutout_menu.addAction(
-                "Every matching tile",
-                lambda _checked=False, target=poly_hit: toggle_pattern_cutout(target, "repeat"),
-            )
-        elif callable(self._on_outline_role_change):
-            change_outline_role = self._on_outline_role_change
-            role_menu = menu.addMenu("Outline role")
-            current_role = self._outline_roles.get(poly_hit, "boundary")
-            for role, label in (
-                ("boundary", "Boundary (fillable)"),
-                ("cutout", "Cutout (subtract)"),
-                ("open_path", "Open path (do not fill)"),
-                ("ignore", "Ignore in generation"),
-            ):
-                action = role_menu.addAction(label)
-                action.setCheckable(True)
-                action.setChecked(role == current_role)
-                action.triggered.connect(
-                    lambda _checked=False, value=role, target=poly_hit: change_outline_role(
-                        target, value
-                    )
-                )
-            if callable(self._on_outline_role_explain):
-                explain_outline_role = self._on_outline_role_explain
-                role_menu.addSeparator()
-                role_menu.addAction(
-                    "Explain this role…",
-                    lambda _checked=False, target=poly_hit: explain_outline_role(target),
-                )
-        if callable(self._on_cutout_toggle) and not callable(self._on_outline_role_change):
-            is_cutout = poly_hit in self._cutout_indices
-            cutout_label = "Remove Cutout" if is_cutout else "Mark as Cutout"
-            cutout_toggle = self._on_cutout_toggle
-            if callable(cutout_toggle):
-                menu.addAction(cutout_label, lambda _idx=poly_hit: cutout_toggle(_idx))
-            if len(self._sel) > 1 and entity_id and entity_id in self._sel:
-                all_cutout = all(eid in self._cutout_indices for eid in self._selected_ids())
-                bulk_label = (
-                    "Remove Cutout for all selected"
-                    if all_cutout
-                    else "Mark all selected as Cutout"
-                )
-                sel_snapshot = set(self._sel)
-                menu.addAction(
-                    bulk_label,
-                    lambda _cb=cutout_toggle, _sel=sel_snapshot: [_cb(i) for i in _sel],
-                )
         menu.addSeparator()
 
     def _build_selection_actions(
@@ -560,7 +474,7 @@ class DxfCanvas(CanvasView):
         if not section_enabled("selected"):
             return
         if callable(self._on_create_zone_from_selection):
-            menu.addAction("Create Zone from Selection", self._on_create_zone_from_selection)
+            menu.addAction("Apply treatment to selection", self._on_create_zone_from_selection)
             menu.addSeparator()
         for command_id in ("clipboard.cut", "clipboard.copy", "clipboard.paste"):
             action = menu.addAction(canvas_commands.menu_text(command_id))

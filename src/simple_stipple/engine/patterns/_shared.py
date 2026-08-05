@@ -467,6 +467,60 @@ def _serpentine_connect(
     return [path] if len(path) >= 2 else []
 
 
+# Every lattice pattern offsets its rows the same way, so the choice belongs
+# in one place rather than being reinvented (or omitted) per generator.
+REPEAT_MODES = ("Straight", "Half drop", "Brick offset")
+
+
+def row_offset(repeat_mode: str, col_step: float, row: int) -> float:
+    """Horizontal shift applied to a lattice row."""
+    mode = str(repeat_mode or "Straight").strip().lower().replace("_", " ")
+    if row % 2 == 0:
+        return 0.0
+    if mode == "half drop":
+        return col_step / 2.0
+    if mode == "brick offset":
+        return col_step / 3.0
+    return 0.0
+
+
+def lattice_cells(
+    outline_poly,
+    col_step: float,
+    row_step: float,
+    *,
+    pad: float,
+    repeat_mode: str = "Straight",
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+):
+    """Yield ``(cx, cy, row, col)`` cell centres covering the outline's bounds.
+
+    One walker for every tiling pattern, so repeat mode, gap and the document
+    pattern origin behave identically everywhere instead of each generator
+    hard-coding its own stagger. ``origin_*`` is applied as a phase offset, so
+    two regions sharing settings stay in step across their shared edge.
+    """
+    if col_step <= 0 or row_step <= 0:
+        return
+    minx, miny, maxx, maxy = outline_poly.bounds
+    phase_x = float(origin_x or 0.0) % col_step
+    phase_y = float(origin_y or 0.0) % row_step
+    row = 0
+    y = miny - pad + phase_y
+    while y <= maxy + pad:
+        cancellation_checkpoint()
+        offset = row_offset(repeat_mode, col_step, row)
+        col = 0
+        x = minx - pad + phase_x + offset
+        while x <= maxx + pad:
+            yield x, y, row, col
+            x += col_step
+            col += 1
+        y += row_step
+        row += 1
+
+
 def gen_custom_tile(
     outline_poly,
     tile_polys: list[list[tuple[float, float]]],

@@ -225,6 +225,49 @@ class CanvasRenderer:
                 gpath.closeSubpath()
             painter.drawPath(gpath)
 
+    # The solved pattern is the point of the page — it reads at full strength,
+    # distinct in hue from editable linework rather than dimmer than it.
+    _RESULT_COLOR = "#56d364"
+
+    def invalidate_result_cache(self) -> None:
+        self._result_path = None
+
+    def _paint_result_polys(self, painter: QPainter, _visible: QRectF) -> None:
+        """Paint the solved pattern beneath the editable outlines.
+
+        Built once in world space and drawn through the view transform, so
+        panning and zooming a dense result costs no geometry work. It is a
+        pure overlay: nothing here is selectable, so a result can never be
+        edited, duplicated or left behind as an undeletable ghost.
+        """
+        host = self._host
+        if not host._result_polys or not host._result_visible:
+            return
+        if getattr(self, "_result_path", None) is None:
+            path = QPainterPath()
+            for poly in host._result_polys:
+                if len(poly) < 2:
+                    continue
+                path.moveTo(poly[0][0], poly[0][1])
+                for point in poly[1:]:
+                    path.lineTo(point[0], point[1])
+                if (
+                    len(poly) >= 3
+                    and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
+                ):
+                    path.closeSubpath()
+            self._result_path = path
+        painter.save()
+        painter.setWorldTransform(
+            QTransform(host._scale, 0.0, 0.0, -host._scale, host._ox, host._oy)
+        )
+        pen = QPen(QColor(self._RESULT_COLOR), 1.2)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(self._result_path)
+        painter.restore()
+
     def _paint_operation_preview(self, painter: QPainter) -> None:
         """Paint transient geometry that is committed only when its HUD accepts."""
         if not self._host._operation_preview_polys:
@@ -303,7 +346,13 @@ class CanvasRenderer:
             if is_construction or is_locked:
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
+            tint = self._host._region_tint.get(ent.id)
+            if tint:
+                tint_color = QColor(tint)
+                tint_color.setAlpha(48)
+                painter.setBrush(QBrush(tint_color))
+            else:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
             render_poly = self._host._flattened_points_by_id(ent.id)
             if len(render_poly) < 2:
                 continue

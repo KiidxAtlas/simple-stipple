@@ -1,12 +1,14 @@
-"""Pattern zone management — extracted from ``pattern/tab.py``.
+"""Region treatment UI for the Pattern page.
 
-Zones let a user assign a different pattern/fill configuration to a subset
-of a document's outlines instead of one pattern for the whole document. This
-module owns the zone list widget's data flow (create/edit/remove/highlight)
-and the per-zone parameter editor. See ``domain/outlines.py`` for the
-neighboring cutout/exclusion-role logic these functions call into
-(``page._refresh_zone_list()`` etc., via the wrapper methods kept on
-``PatternPage`` — see plan.md Section 9.1).
+Every closed outline is a region; the Regions list shows all of them and the
+editor below it edits whichever one is selected. A region carries at most one
+treatment (``simple_stipple.features.pattern.treatments``), and a treated
+region subtracts itself from the region containing it — no cutout role, no
+zone-membership step.
+
+The engine still consumes zone dicts; ``page._zones`` is a read-only
+projection of the treatments, which is what keeps ``engine/patterns``
+untouched by this change.
 """
 
 from __future__ import annotations
@@ -27,7 +29,57 @@ from simple_stipple.features.pattern.defaults import (
 from simple_stipple.features.pattern.form_spec import PARAM_SPECS
 from simple_stipple.features.pattern.layout import refresh_pattern_properties_panel
 from simple_stipple.features.pattern.params import collect_form_state
-from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_WARN
+from simple_stipple.features.pattern.treatments import (
+    IMAGE_PATTERN,
+    TREATMENT_LABELS,
+    begin_treatment_change,
+    commit_treatment_change,
+    prune_treatments,
+    region_ids,
+    region_row_label,
+    region_tree,
+    set_treatment,
+    treatment_kind,
+)
+from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
+
+# ── Row ↔ region ↔ engine-zone index ──────────────────────────────────────
+
+
+def region_id_for_row(page: Any, row: int) -> str | None:
+    ids = region_ids(page)
+    return ids[row] if 0 <= row < len(ids) else None
+
+
+def row_for_region_id(page: Any, region_id: str) -> int:
+    ids = region_ids(page)
+    return ids.index(region_id) if region_id in ids else -1
+
+
+def selected_region_id(page: Any) -> str | None:
+    if not hasattr(page, "_zone_list"):
+        return None
+    return region_id_for_row(page, page._zone_list.currentRow())
+
+
+def selected_region_ids(page: Any) -> list[str]:
+    """Every region highlighted in the list, current row first.
+
+    The canvas allows a multi-shape selection, so the list has to represent
+    one; showing a single row made a two-region selection look like a
+    one-region selection.
+    """
+    if not hasattr(page, "_zone_list"):
+        return []
+    ids = region_ids(page)
+    rows = sorted(index.row() for index in page._zone_list.selectedIndexes())
+    current = page._zone_list.currentRow()
+    if current not in rows and 0 <= current < len(ids):
+        rows.insert(0, current)
+    elif current in rows:
+        rows.remove(current)
+        rows.insert(0, current)
+    return [ids[row] for row in rows if 0 <= row < len(ids)]
 
 
 def preview_outline_indices_for_zone(page: Any, zone_row: int) -> list[int]:
@@ -40,76 +92,66 @@ def preview_outline_indices_for_zone(page: Any, zone_row: int) -> list[int]:
     ]
 
 
-def highlight_zone_on_canvas(page: Any, zone_row: int) -> None:
-    """Highlight a zone without changing canvas/layer-tree selection."""
-    if not 0 <= zone_row < len(page._zones):
+def highlight_zone_on_canvas(page: Any, row: int) -> None:
+    """Highlight a region without changing canvas/layer-tree selection."""
+    region_id = region_id_for_row(page, row)
+    if region_id is None:
         page._canvas.set_accent_polys({})
+        page._canvas.set_region_tint({})
         return
-    if page._showing_preview:
-        indices = [
-            index for index, owner in enumerate(page._preview_zone_owners) if owner == zone_row
-        ]
-    else:
-        zone_ids = set(page._zones[zone_row].get("outline_ids", []))
-        indices = [
-            index for index, outline_id in enumerate(page._outline_ids) if outline_id in zone_ids
-        ]
+    indices = [
+        index for index, outline_id in enumerate(page._outline_ids) if outline_id == region_id
+    ]
     entity_ids = page._canvas.get_entity_ids()
-    page._canvas.set_accent_polys(
-        {entity_ids[index]: "#f5a623" for index in indices if index < len(entity_ids)}
-    )
+    highlighted = {entity_ids[index]: "#f5a623" for index in indices if index < len(entity_ids)}
+    page._canvas.set_accent_polys(highlighted)
+    page._canvas.set_region_tint(highlighted)
 
 
-def select_zone_for_canvas_selection(page: Any, *, preview: bool) -> None:
+def select_zone_for_canvas_selection(page: Any, *, preview: bool = False) -> None:
+    """Follow the canvas selection with the Regions list."""
     entity_ids = page._canvas.get_selected_ids()
     if not entity_ids:
+        # Clicking empty space deselects on the canvas; the Regions list and
+        # its area tint have to follow or the sidebar keeps editing a region
+        # the user can no longer see selected.
+        page._zone_list.blockSignals(True)
+        page._zone_list.clearSelection()
+        page._zone_list.setCurrentRow(-1)
+        page._zone_list.blockSignals(False)
+        page._canvas.set_accent_polys({})
+        page._canvas.set_region_tint({})
+        page._update_zone_actions()
+        refresh_pattern_properties_panel(page)
         return
-    zone_rows: list[int] = []
-    if preview:
-        entity_index = {
-            entity_id: index for index, entity_id in enumerate(page._canvas.get_entity_ids())
-        }
-        zone_rows = []
-        for entity_id in entity_ids:
-            index = entity_index.get(entity_id)
-            if index is None or index >= len(page._preview_zone_owners):
-                continue
-            owner = page._preview_zone_owners[index]
-            if owner is not None and owner not in zone_rows:
-                zone_rows.append(owner)
-    else:
-        selected_ids = set(entity_ids)
-        zone_rows = [
-            row
-            for row, zone in enumerate(page._zones)
-            if selected_ids.intersection(zone.get("outline_ids", []))
-        ]
-    if zone_rows:
-        # A canvas marquee/Shift-click can span multiple zones. Keep the
-        # current editor when it is part of that selection; otherwise choose
-        # the zone with the strongest overlap instead of depending on set
-        # iteration order.
-        current_row = page._zone_list.currentRow()
-        if current_row in zone_rows:
-            return
-        if preview:
-            page._zone_list.setCurrentRow(zone_rows[0])
-        else:
-            selected_ids = set(entity_ids)
-            best_row = max(
-                zone_rows,
-                key=lambda row: len(
-                    selected_ids.intersection(page._zones[row].get("outline_ids", []))
-                ),
-            )
-            page._zone_list.setCurrentRow(best_row)
+    # One tree build for the whole selection: a marquee over a dense preview
+    # can select thousands of entities, and rebuilding the containment tree
+    # per entity made that selection hang.
+    ids = region_ids(page)
+    rows = [ids.index(eid) for eid in entity_ids if eid in ids]
+    if not rows:
+        return
+    if page._zone_list.currentRow() not in rows:
+        page._zone_list.setCurrentRow(rows[0])
+    # Mirror the whole canvas selection, not just its first shape.
+    page._zone_list.blockSignals(True)
+    for row in range(page._zone_list.count()):
+        item = page._zone_list.item(row)
+        if item is not None:
+            item.setSelected(row in rows)
+    page._zone_list.blockSignals(False)
+    page._zone_list.scrollToItem(page._zone_list.currentItem())
+
+
+# ── Snapshot for the engine ───────────────────────────────────────────────
 
 
 def snapshot_zone_jobs(page: Any) -> list[dict]:
     # Pattern-cell cutouts are document-wide motif assignments. Inject the
-    # current list at snapshot time so zones created before a cutout was
-    # marked cannot retain a stale empty list and fill that cell anyway.
-    for zone in page._zones:
+    # current list at snapshot time so a treatment configured before a cell
+    # was removed cannot retain a stale empty list and fill that cell anyway.
+    zone_list = page._zones
+    for zone in zone_list:
         fill = zone.get("fill")
         if isinstance(fill, dict):
             fill["cell_cutouts"] = [list(poly) for poly in page._pattern_cell_cutouts]
@@ -117,7 +159,7 @@ def snapshot_zone_jobs(page: Any) -> list[dict]:
                 list(poly) for poly in page._pattern_cell_instance_cutouts
             ]
     jobs, warnings = page._pattern_service.snapshot_zone_jobs(
-        page._zones,
+        zone_list,
         page._outline_ids,
         page._edit_polys,
     )
@@ -126,55 +168,7 @@ def snapshot_zone_jobs(page: Any) -> list[dict]:
     return jobs
 
 
-def zone_output_label(mode: str) -> str:
-    return {
-        "pattern_fill": "Pattern + Fill",
-        "pattern": "Pattern",
-        "fill": "Fill",
-        "outline": "Outline",
-        "none": "Disabled",
-    }.get(mode, "Pattern + Fill")
-
-
-def zone_label(page: Any, zone: dict, index: int) -> str:
-    count = len(zone.get("outline_ids", []))
-    mode = str(zone.get("output_mode", "pattern_fill"))
-    detail = page._zone_output_label(mode)
-    if mode in {"pattern", "pattern_fill"}:
-        detail = f"{detail}: {zone.get('pattern', '— None —')}"
-    return f"Zone {index + 1} · {detail} · {count} outline{'s' if count != 1 else ''}"
-
-
-def sync_selected_zone_from_controls(page: Any) -> None:
-    if page._loading_zone or not hasattr(page, "_zone_list"):
-        return
-    row = page._zone_list.currentRow()
-    if not (0 <= row < len(page._zones)):
-        return
-    pattern = page._current_pattern_key()
-    try:
-        params = page._collect_pattern_params(pattern) if pattern != "— None —" else {}
-        scale = page._collect_scale()
-    except ValueError:
-        # Keep the last valid zone state while a numeric field is midway
-        # through an edit; the next valid change will commit it.
-        return
-    zone = page._zones[row]
-    zone.update(
-        {
-            "pattern": pattern,
-            "params": params,
-            "scale": scale,
-            "fill": page._collect_fill_options(),
-            "output_mode": page._zone_output_combo.currentData() or "pattern_fill",
-            "form_state": collect_form_state(page),
-        }
-    )
-    zone["label"] = page._zone_label(zone, row)
-    item = page._zone_list.item(row)
-    if item is not None:
-        item.setText(zone["label"])
-    refresh_pattern_properties_panel(page)
+# ── Editor ────────────────────────────────────────────────────────────────
 
 
 def rebuild_zone_parameter_editor(
@@ -323,70 +317,115 @@ def collect_zone_editor(page: Any) -> tuple[str, dict, dict | None]:
     return pattern, params, fill
 
 
-def apply_selected_zone_edits(page: Any) -> None:
-    """Compatibility entry point; zone controls now commit live."""
-    page._live_update_selected_zone()
+def collect_treatment(page: Any) -> dict:
+    """Read the whole editor into one treatment dict."""
+    pattern, params, fill = collect_zone_editor(page)
+    kind = str(page._zone_output_combo.currentData() or "pattern_fill")
+    if pattern == IMAGE_PATTERN:
+        # Choosing Image *is* choosing the Engrave treatment.
+        return {
+            "kind": "engrave",
+            "pattern": IMAGE_PATTERN,
+            "pattern_label": IMAGE_PATTERN,
+            "params": {},
+            "scale": page._collect_scale(),
+            "fill": None,
+            "form_state": collect_form_state(page),
+        }
+    # A kind that needs a treatment the editor does not supply is not
+    # meaningful; normalize instead of silently generating nothing.
+    if kind in {"pattern", "pattern_fill"} and pattern == "— None —":
+        kind = "fill" if fill else "cut"
+    elif kind == "fill" and fill is None:
+        kind = "pattern" if pattern != "— None —" else "cut"
+    return {
+        "kind": kind,
+        "pattern": pattern,
+        "pattern_label": page._zone_pattern_combo.currentText(),
+        "params": params,
+        "scale": page._collect_scale(),
+        "fill": fill,
+        "form_state": collect_form_state(page),
+    }
 
 
 def live_update_selected_zone(page: Any, *_args) -> None:
+    """Commit editor changes to the selected region's treatment."""
     if page._loading_zone or page._suspend_state:
         return
-    row = page._zone_list.currentRow()
-    if not (0 <= row < len(page._zones)):
+    # Editing applies to every selected region, not just the current row —
+    # selecting three and changing the pattern has to change three.
+    targets = selected_region_ids(page)
+    if not targets:
         return
     try:
-        pattern, params, fill = page._collect_zone_editor()
+        treatment = collect_treatment(page)
     except (KeyError, TypeError, ValueError):
         # A line edit can briefly contain an incomplete number while the
-        # user types. Keep the last valid zone state until it is complete.
+        # user types. Keep the last valid treatment until it is complete.
         return
-    zone = page._zones[row]
-    page._preview_user_opt_out = False
-    zone.update(
-        {
-            "pattern": pattern,
-            "pattern_label": page._zone_pattern_combo.currentText(),
-            "params": params,
-            "fill": fill,
-            "output_mode": page._zone_output_combo.currentData() or "pattern_fill",
-        }
-    )
-    zone["label"] = page._zone_label(zone, row)
-    item = page._zone_list.item(row)
-    if item is not None:
-        item.setText(zone["label"])
+    before = begin_treatment_change(page)
+    for region_id in targets:
+        set_treatment(page, region_id, treatment)
+    commit_treatment_change(page, before, targets[0])
+    sync_engraving_visibility(page)
+    # Only the row text changes here. A full rebuild re-enters on_zone_selected,
+    # which destroys and recreates every parameter widget — including the field
+    # being typed into, so the caret was lost on every keystroke.
+    refresh_row_labels(page)
     page._schedule_preview()
     page._emit_state_changed()
 
 
 def show_zone_context_menu(page: Any, pos) -> None:
     item = page._zone_list.itemAt(pos)
-    if item is None or not page._zones:
+    if item is None or not region_ids(page):
         return
     page._zone_list.setCurrentItem(item)
     menu = QMenu(page._zone_list)
-    delete_action = menu.addAction("Delete Zone")
-    delete_action.setShortcut(QKeySequence.StandardKey.Delete)
+    clear_action = menu.addAction("Clear treatment")
+    clear_action.setShortcut(QKeySequence.StandardKey.Delete)
     chosen = menu.exec(page._zone_list.viewport().mapToGlobal(pos))
-    if chosen is delete_action:
+    if chosen is clear_action:
         page._remove_selected_zone()
 
 
+def sync_engraving_visibility(page: Any) -> None:
+    """Show the image controls only for the region that carries an image."""
+    if not hasattr(page, "_engraving_section"):
+        return
+    region_id = selected_region_id(page)
+    is_image = region_id is not None and treatment_kind(page, region_id) == "engrave"
+    page._engraving_section.setVisible(is_image)
+    if is_image:
+        page._engraving_section.set_expanded(True)
+
+
 def on_zone_selected(page: Any, row: int) -> None:
-    valid = 0 <= row < len(page._zones)
-    if not valid:
+    """Load the selected region's treatment into the editor."""
+    region_id = region_id_for_row(page, row)
+    if region_id is None:
         page._canvas.set_accent_polys({})
+        page._canvas.set_region_tint({})
         refresh_pattern_properties_panel(page)
         return
-    zone = page._zones[row]
-    page._highlight_zone_on_canvas(row)
+    treatment = page._treatments.get(region_id) or {}
+    highlight_zone_on_canvas(page, row)
     page._loading_zone = True
     page._suspend_state = True
     try:
-        pattern_label = str(zone.get("pattern_label") or zone.get("pattern", "— None —"))
+        kind = treatment_kind(page, region_id)
+        # An untreated region opens on the default treatment: the combo says
+        # what an edit *will* apply, and "None" stays available to clear it.
+        page._zone_output_combo.setCurrentIndex(
+            max(0, page._zone_output_combo.findData("pattern_fill" if kind == "none" else kind))
+        )
+        pattern_label = str(treatment.get("pattern_label") or treatment.get("pattern") or "— None —")
+        if kind == "engrave":
+            pattern_label = IMAGE_PATTERN
         page._populate_pattern_combo(page._zone_pattern_combo, pattern_label)
-        page._rebuild_zone_parameter_editor(params=dict(zone.get("params", {})))
-        fill = zone.get("fill")
+        rebuild_zone_parameter_editor(page, params=dict(treatment.get("params", {})))
+        fill = treatment.get("fill")
         fill_mode = str(fill.get("mode", "none")) if isinstance(fill, dict) else "none"
         page._zone_fill_mode.setCurrentIndex(max(0, page._zone_fill_mode.findData(fill_mode)))
         if isinstance(fill, dict):
@@ -398,342 +437,193 @@ def on_zone_selected(page: Any, row: int) -> None:
         else:
             page._zone_fill_target_outline.setChecked(True)
             page._zone_fill_target_pattern.setChecked(False)
-        mode = str(zone.get("output_mode", "pattern_fill"))
-        page._zone_output_combo.setCurrentIndex(max(0, page._zone_output_combo.findData(mode)))
     finally:
         page._suspend_state = False
         page._loading_zone = False
     page._refresh_section_subtitles()
+    # The image controls follow the selection: they edit whichever region owns
+    # an image, rather than a single page-global engraving, and only appear
+    # when this region is actually an image region.
+    page._sync_engraving_widgets_from_region(region_id)
+    sync_engraving_visibility(page)
+    # Picking a row is a selection change, so Apply's enabled state has to
+    # follow it — otherwise the button stays stale until an unrelated refresh.
+    page._update_zone_actions()
     refresh_pattern_properties_panel(page)
 
 
-def _resolve_preview_zone_selection(
-    page: Any,
-    sel_polys: list[list[tuple[float, float]]],
-) -> tuple[list[str], list[list[tuple[float, float]]], list[str]]:
-    """Map preview selection to durable IDs and promote generated cells only."""
-    entity_index = {
-        entity_id: index for index, entity_id in enumerate(page._canvas.get_entity_ids())
-    }
-    outline_count = len(page._preview_categories.get("outline", []))
-    source_by_signature: dict[tuple, list[str]] = {}
-    for source_id, source_poly in zip(page._outline_ids, page._edit_polys):
-        source_by_signature.setdefault(page._pattern_service._poly_signature(source_poly), []).append(
-            source_id
-        )
-    selected_ids: list[str] = []
-    promoted: list[list[tuple[float, float]]] = []
-    promoted_ids: list[str] = []
-    for entity_id, poly in zip(sorted(page._canvas.get_selected_ids()), sel_polys):
-        # Generated preview geometry lives in the zone's scaled coordinate
-        # space.  Promoted outlines must return to document/source space or
-        # later zone containment checks see the child outside its parent and
-        # the parent's pattern bleeds through it.
-        source_poly = _restore_preview_poly_to_source(page, entity_id, poly, entity_index)
-        signature = page._pattern_service._poly_signature(poly)
-        reusable = source_by_signature.get(signature, []) if entity_index.get(entity_id, -1) < outline_count else []
-        if reusable:
-            selected_ids.append(reusable.pop(0))
-            continue
-        promoted_id = page._fresh_outline_ids(1)[0]
-        selected_ids.append(promoted_id)
-        promoted_ids.append(promoted_id)
-        promoted.append(source_poly)
-    return selected_ids, promoted, promoted_ids
-
-
-def _restore_preview_poly_to_source(
-    page: Any,
-    entity_id: str,
-    poly: list[tuple[float, float]],
-    entity_index: dict[str, int],
-) -> list[tuple[float, float]]:
-    """Undo the owning zone's scale for a cell promoted from Preview.
-
-    ``PatternProcessor.apply_scale`` scales around the bounding box of all
-    outlines in that zone.  Reversing that same affine transform preserves
-    the cell's position and makes it compatible with ``_edit_polys`` and
-    durable zone IDs.
-    """
-    index = entity_index.get(entity_id, -1)
-    outline_count = len(page._preview_categories.get("outline", []))
-    if index < outline_count:
-        return [(float(x), float(y)) for x, y in poly]
-    owners = page._preview_categories.get("zone_owners", [])
-    owner = owners[index] if isinstance(owners, list) and index < len(owners) else None
-    if not isinstance(owner, int) or not 0 <= owner < len(page._zones):
-        return [(float(x), float(y)) for x, y in poly]
-    zone = page._zones[owner]
-    try:
-        sw, sh = (float(zone["scale"][0]), float(zone["scale"][1]))
-        ow, oh = float(page._orig_w), float(page._orig_h)
-    except (KeyError, TypeError, ValueError, IndexError):
-        return [(float(x), float(y)) for x, y in poly]
-    if ow <= 0 or oh <= 0 or sw <= 0 or sh <= 0:
-        return [(float(x), float(y)) for x, y in poly]
-    sx, sy = sw / ow, sh / oh
-    if abs(sx - 1.0) < 1e-9 and abs(sy - 1.0) < 1e-9:
-        return [(float(x), float(y)) for x, y in poly]
-    source_ids = {str(v) for v in zone.get("outline_ids", [])}
-    source_polys = [
-        source_poly
-        for source_id, source_poly in zip(page._outline_ids, page._edit_polys)
-        if str(source_id) in source_ids
-    ]
-    points = [point for source_poly in source_polys for point in source_poly]
-    if not points:
-        return [(float(x), float(y)) for x, y in poly]
-    ox = min(point[0] for point in points)
-    oy = min(point[1] for point in points)
-    return [
-        (ox + (float(x) - ox) / sx, oy + (float(y) - oy) / sy)
-        for x, y in poly
-    ]
+# ── Applying a treatment ──────────────────────────────────────────────────
 
 
 def assign_zone(page: Any) -> None:
+    """Apply the editor's treatment to every selected region."""
     sel_polys = page._canvas.get_selected()
-    source_outline_ids = list(page._outline_ids)
-    if page._showing_preview:
-        # Reuse source IDs for Outline rows; promote generated cells only.
-        sel_ids, promoted, promoted_ids = _resolve_preview_zone_selection(page, sel_polys)
-    else:
-        promoted = []
-        promoted_ids = []
-        sel_ids = [eid for eid in page._canvas.get_selected_ids() if eid in page._outline_ids]
     if not sel_polys:
-        QMessageBox.information(
-            page,
-            "No Selection",
-            "Select one or more outlines on the canvas first, then click 'Assign'.",
-        )
+        listed = selected_region_ids(page)
+        if not listed:
+            QMessageBox.information(
+                page,
+                "No Selection",
+                "Select a region on the canvas or in the Regions list, then click 'Apply'.",
+            )
+            return
+        _apply_treatment_to(page, listed)
         return
+    sel_ids = [eid for eid in page._canvas.get_selected_ids() if eid in page._outline_ids]
     try:
-        scale = page._collect_scale()
-        pattern, params, fill_snapshot = page._collect_zone_editor()
+        treatment = collect_treatment(page)
         page._validate_outline_inputs(sel_polys)
     except ValueError as exc:
         page._set_status(str(exc), STATUS_ERR)
         return
-    if promoted:
-        page._edit_polys.extend(promoted)
-        page._outline_ids.extend(promoted_ids)
-    if set(sel_ids).intersection(page._exclusion_ids):
+    _apply_treatment_to(page, sel_ids, treatment=treatment)
+
+
+def _apply_treatment_to(
+    page: Any,
+    sel_ids: list[str],
+    *,
+    inherited: list[str] | None = None,
+    treatment: dict | None = None,
+) -> None:
+    """Write the editor's treatment onto every selected region."""
+    if treatment is None:
+        try:
+            treatment = collect_treatment(page)
+        except (KeyError, TypeError, ValueError) as exc:
+            page._set_status(str(exc), STATUS_ERR)
+            return
+    ids = region_ids(page)
+    targets = [rid for rid in sel_ids if rid in ids]
+    if not targets:
         page._set_status(
-            "Remove Cutout from the selected shape before assigning a zone.",
+            "Select a closed shape — an open path is linework and carries no treatment.",
             STATUS_WARN,
         )
         return
-    if any(
-        set(zone.get("outline_ids", [])) == set(sel_ids)
-        and zone["pattern"] == pattern
-        and zone["params"] == params
-        and zone["scale"] == scale
-        and zone.get("fill") == fill_snapshot
-        for zone in page._zones
-    ):
-        page._set_status("Matching zone already exists.", STATUS_WARN)
-        return
-    requested_mode = page._zone_output_combo.currentData()
-    if requested_mode in {"pattern_fill", "pattern", "fill", "outline", "none"}:
-        output_mode = str(requested_mode)
-    elif pattern == "— None —" and fill_snapshot:
-        output_mode = "fill"
-    elif pattern == "— None —":
-        output_mode = "outline"
-    elif fill_snapshot:
-        output_mode = "pattern_fill"
-    else:
-        output_mode = "pattern"
-    # A mode that requires a missing treatment is not a meaningful zone. The
-    # combo defaults to Pattern + Fill, so normalize the common "fill-only"
-    # and "outline-only" cases instead of silently generating an empty result.
-    if pattern == "— None —" and output_mode in {"pattern_fill", "pattern"}:
-        output_mode = "fill" if fill_snapshot else "outline"
-    elif pattern != "— None —" and output_mode == "fill" and fill_snapshot is None:
-        output_mode = "pattern"
-
-    _materialize_preview_base_zone(
-        page,
-        source_outline_ids,
-        pattern,
-        params,
-        fill_snapshot,
-        scale,
-        output_mode,
-        enabled=bool(promoted and not page._zones and source_outline_ids),
-    )
-    # An outline belongs to at most one zone. Reassignment moves selected
-    # outlines out of older zones instead of producing overlapping output.
-    selected_ids = set(sel_ids)
-    retained_zones: list[dict] = []
-    for existing in page._zones:
-        remaining = [oid for oid in existing.get("outline_ids", []) if oid not in selected_ids]
-        if remaining:
-            existing["outline_ids"] = remaining
-            retained_zones.append(existing)
-    page._zones = retained_zones
-    zone = {
-        "outline_ids": list(sel_ids),
-        "pattern": pattern,
-        "pattern_label": page._zone_pattern_combo.currentText(),
-        "params": params,
-        "scale": scale,
-        "fill": fill_snapshot,
-        "output_mode": output_mode,
-        "form_state": collect_form_state(page),
-    }
-    zone["label"] = page._zone_label(zone, len(page._zones))
-    page._zones.append(zone)
+    before = begin_treatment_change(page)
+    for region_id in (inherited or []) + targets:
+        set_treatment(page, region_id, treatment)
+    commit_treatment_change(page, before)
     page._preview_user_opt_out = False
-    page._refresh_zone_list()
-    page._zone_list.setCurrentRow(len(page._zones) - 1)
+    refresh_zone_list(page)
+    page._zone_list.setCurrentRow(row_for_region_id(page, targets[-1]))
+    sync_engraving_visibility(page)
+    page._set_status(
+        f"{TREATMENT_LABELS[treatment['kind']]} applied to "
+        f"{len(targets)} region{'s' if len(targets) != 1 else ''}.",
+        STATUS_OK,
+    )
     page._schedule_preview()
     page._emit_state_changed()
 
 
-def _materialize_preview_base_zone(
-    page: Any,
-    outline_ids: list[str],
-    pattern: str,
-    params: dict,
-    fill: dict | None,
-    scale: tuple[float, float],
-    output_mode: str,
-    *,
-    enabled: bool,
-) -> None:
-    """Materialize the implicit global preview treatment before an exception."""
-    if not enabled:
-        return
-    base_zone = {
-        "outline_ids": list(outline_ids),
-        "pattern": pattern,
-        "pattern_label": page._zone_pattern_combo.currentText(),
-        "params": dict(params),
-        "scale": scale,
-        "fill": fill,
-        "output_mode": output_mode,
-        "form_state": collect_form_state(page),
-    }
-    base_zone["label"] = page._zone_label(base_zone, 0)
-    page._zones.append(base_zone)
-
-
 def remove_selected_zone(page: Any) -> None:
+    region_id = selected_region_id(page)
+    if region_id is None or treatment_kind(page, region_id) == "none":
+        return
     row = page._zone_list.currentRow()
-    if 0 <= row < len(page._zones):
-        del page._zones[row]
-        page._refresh_zone_list()
-        if page._zones:
-            page._zone_list.setCurrentRow(min(row, len(page._zones) - 1))
-        page._schedule_preview()
-        page._emit_state_changed()
+    before = begin_treatment_change(page)
+    page._treatments.pop(region_id, None)
+    commit_treatment_change(page, before)
+    refresh_zone_list(page)
+    page._zone_list.setCurrentRow(row)
+    page._schedule_preview()
+    page._emit_state_changed()
 
 
 def clear_zones(page: Any) -> None:
-    if not page._zones:
+    if not page._treatments:
         return
     reply = QMessageBox.question(
         page,
-        "Clear All Zones?",
-        "This removes every assigned pattern zone. Continue?",
+        "Clear All Treatments?",
+        "This removes every region treatment. Continue?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         QMessageBox.StandardButton.Cancel,
     )
     if reply != QMessageBox.StandardButton.Yes:
         return
-    page._zones.clear()
-    page._refresh_zone_list()
+    before = begin_treatment_change(page)
+    page._treatments = {}
+    commit_treatment_change(page, before)
+    refresh_zone_list(page)
     page._schedule_preview()
     page._emit_state_changed()
+
+
+def refresh_row_labels(page: Any) -> None:
+    """Restate the Regions rows in place, leaving the editor widgets alone."""
+    if not hasattr(page, "_zone_list"):
+        return
+    tree = region_tree(page)
+    ids = [outline_id for outline_id in page._outline_ids if outline_id in tree]
+    if page._zone_list.count() != len(ids):
+        refresh_zone_list(page)
+        return
+    for row, region_id in enumerate(ids):
+        item = page._zone_list.item(row)
+        if item is not None:
+            item.setText(region_row_label(page, region_id, row, tree))
+    page._refresh_section_subtitles()
+    refresh_pattern_properties_panel(page)
 
 
 def refresh_zone_list(page: Any) -> None:
     if not hasattr(page, "_zone_list"):
         return
-    selected_row = page._zone_list.currentRow()
-    selected_zone = page._zones[selected_row] if 0 <= selected_row < len(page._zones) else None
+    tree = region_tree(page)
+    ids = [outline_id for outline_id in page._outline_ids if outline_id in tree]
+    current = page._zone_list.currentRow()
+    previous = ids[current] if 0 <= current < len(ids) else None
+    # Rebuilding must not collapse a multi-region selection down to one row.
+    also_selected = {
+        ids[index.row()] for index in page._zone_list.selectedIndexes() if index.row() < len(ids)
+    }
     page._zone_list.blockSignals(True)
     page._zone_list.clear()
-    if page._zones:
-        for index, zone in enumerate(page._zones):
-            zone["label"] = page._zone_label(zone, index)
-            page._zone_list.addItem(zone["label"])
+    if ids:
+        for index, region_id in enumerate(ids):
+            page._zone_list.addItem(region_row_label(page, region_id, index, tree))
     else:
-        page._zone_list.addItem("No zones assigned yet")
+        page._zone_list.addItem("No closed regions yet")
     page._zone_list.blockSignals(False)
-    row_height = page._zone_list.sizeHintForRow(0)
-    if row_height <= 0:
-        row_height = page._zone_list.fontMetrics().height() + 8
-    page._zone_list.setFixedHeight(max(44, row_height * max(1, page._zone_list.count()) + 6))
-    if not page._zones and page._zone_list.count() > 0:
+    if not ids and page._zone_list.count() > 0:
         item = page._zone_list.item(0)
         if item is not None:
             item.setFlags(Qt.ItemFlag.NoItemFlags)
-    elif selected_zone is not None:
-        selected_index = next(
-            (index for index, zone in enumerate(page._zones) if zone is selected_zone),
-            -1,
-        )
-        if selected_index >= 0:
-            page._zone_list.setCurrentRow(selected_index)
+    elif previous in ids:
+        page._zone_list.setCurrentRow(ids.index(previous))
+        page._zone_list.blockSignals(True)
+        for row, region_id in enumerate(ids):
+            item = page._zone_list.item(row)
+            if item is not None and region_id in also_selected:
+                item.setSelected(True)
+        page._zone_list.blockSignals(False)
+        page._zone_list.scrollToItem(page._zone_list.currentItem())
     page._update_zone_actions()
     page._refresh_section_subtitles()
     refresh_pattern_properties_panel(page)
 
 
 def invalidate_zones_for_geometry_change(page: Any, valid_outline_ids: set[str]) -> None:
-    if not page._zones:
-        return
-    retained: list[dict] = []
-    removed_assignments = 0
-    for zone in page._zones:
-        previous_ids = list(zone.get("outline_ids", []))
-        remaining_ids = [oid for oid in previous_ids if oid in valid_outline_ids]
-        removed_assignments += len(previous_ids) - len(remaining_ids)
-        if remaining_ids:
-            zone["outline_ids"] = remaining_ids
-            retained.append(zone)
-    if not removed_assignments:
-        return
-    page._zones = retained
-    page._refresh_zone_list()
-    page._set_status(
-        f"Outline changed — removed {removed_assignments} affected zone "
-        f"assignment{'s' if removed_assignments != 1 else ''}; unaffected zones were kept.",
-        STATUS_WARN,
-    )
+    dropped = prune_treatments(page, valid_outline_ids)
+    refresh_zone_list(page)
+    if dropped:
+        page._set_status(
+            f"Outline changed — dropped {dropped} region treatment"
+            f"{'s' if dropped != 1 else ''}; the rest were kept.",
+            STATUS_WARN,
+        )
 
 
 def update_zone_actions(page: Any) -> None:
-    has_selection = bool(getattr(page._canvas, "sel_count", 0))
-    zone_pattern = (
-        page._pattern_key(page._zone_pattern_combo.currentText())
-        if hasattr(page, "_zone_pattern_combo")
-        else "— None —"
-    )
-    fill_mode = (
-        str(page._zone_fill_mode.currentData() or "none")
-        if hasattr(page, "_zone_fill_mode")
-        else "none"
-    )
-    output_mode = (
-        str(page._zone_output_combo.currentData() or "pattern_fill")
-        if hasattr(page, "_zone_output_combo")
-        else "pattern_fill"
-    )
-    treatment_is_valid = (
-        zone_pattern != "— None —" or fill_mode != "none" or output_mode in {"outline", "none"}
-    )
-    can_assign = has_selection and treatment_is_valid
-    page._assign_zone_btn.setEnabled(can_assign)
+    # A region can be picked on the canvas or in the Regions list. Requiring
+    # the canvas made the list a dead end.
+    has_selection = bool(getattr(page._canvas, "sel_count", 0)) or selected_region_id(page) is not None
+    page._assign_zone_btn.setEnabled(has_selection)
     page._assign_zone_btn.setToolTip(
-        "Select outlines and choose a pattern, fill, outline-only, or disabled output"
-        if not can_assign
-        else "Create a zone from the selected outlines using these settings"
+        "Select a region on the canvas or in the Regions list"
+        if not has_selection
+        else "Apply these settings to the selected region(s)"
     )
-    if hasattr(page, "_mark_cutout_btn"):
-        page._mark_cutout_btn.setEnabled(
-            (not page._showing_preview) or bool(getattr(page._canvas, "sel_count", 0))
-        )

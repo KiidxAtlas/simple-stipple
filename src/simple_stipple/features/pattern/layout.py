@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -55,6 +54,7 @@ from simple_stipple.features.pattern.defaults import (
     SCALE_MIN_MM,
 )
 from simple_stipple.features.pattern.form import build_param_widget
+from simple_stipple.features.pattern.form_spec import PARAM_SPECS
 from simple_stipple.ui.components.collapsible import (
     CollapsibleSection,
     collapsible_content_widget,
@@ -105,12 +105,6 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._cancel_preview_btn.setAccessibleName("Cancel preview")
     page._cancel_preview_btn.setVisible(False)
     page._cancel_preview_btn.clicked.connect(lambda: page._on_preview_clicked(False))
-    page._auto_preview_cb = QCheckBox("Auto-preview")
-    page._auto_preview_cb.setChecked(True)
-    page._auto_preview_cb.setToolTip(
-        "Show completed previews automatically when no selection or drawing gesture is active"
-    )
-
     page._reset_preview_btn = QPushButton("Reset")
     page._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
     page._reset_preview_btn.clicked.connect(page._reset_preview)
@@ -126,9 +120,6 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         on_poly_change=page._on_canvas_geometry_change,
         on_send_selected_to_draft=page._on_send_selected_to_draft_from_canvas,
         on_use_selected_as_custom_tile=page.use_custom_tile,
-        on_cutout_toggle=page._on_canvas_cutout_toggle,
-        on_outline_role_change=page._on_canvas_outline_role_change,
-        on_outline_role_explain=page._explain_outline_role,
         on_pattern_cell_cutout_toggle=page._on_pattern_cell_cutout_toggle,
         on_create_zone_from_selection=page._assign_zone,
         draft_profile=True,
@@ -146,6 +137,12 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._canvas.set_grid_snap(False)
     page._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
     page._canvas.set_selection_follows_geometry(True)
+    # Clicking inside a closed shape picks the region it bounds — the whole
+    # point of Phase 1's model is that an area is the thing you select.
+    page._canvas.set_region_picking(True)
+    # Undo reaches the canvas from the Edit menu, the command palette and the
+    # radial menu. Hooking it here is the only way all of them see treatments.
+    page._canvas.set_undo_hooks(page._undo_treatment_hook, page._redo_treatment_hook)
     page._canvas.set_selection_drag_edits(False)
     page._canvas.backgroundSelectionChanged.connect(page._on_engraving_selection_changed)
 
@@ -154,7 +151,6 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         on_mode=page._on_toolbar_mode,
         on_fit=page._canvas.fit,
         extra_widgets=[
-            page._auto_preview_cb,
             page._preview_btn,
             page._cancel_preview_btn,
             page._reset_preview_btn,
@@ -199,11 +195,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         canvas=page._canvas,
         title="Layers",
         editable=True,
-        get_active_layer_name=lambda: (
-            "pattern_preview"
-            if page._showing_preview
-            else (page._canvas.active_layer or "Outline")
-        ),
+        get_active_layer_name=lambda: (page._canvas.active_layer or "Outline"),
         build_layer_rows=page._build_layer_tree_rows,
         on_selection_requested=page._on_browser_selection_requested,
         on_fit_requested=page._fit_selection,
@@ -213,8 +205,6 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._layer_sidebar = page._layer_module.controller
     # Wire outline-mode shape rename to the runtime's label store.
     page._layers_tree.shapeRenamed.connect(page._on_shape_renamed)
-    page._layers_tree.set_shape_role_actions_enabled(True)
-    page._layers_tree.shapeRoleRequested.connect(page._on_tree_outline_role_requested)
     page._layers_tree.layerSettingsRequested.connect(page._open_pattern_layer_settings)
     page._layers_tree.layerVisibilityChanged.connect(page._on_pattern_layer_visibility_changed)
     page._zone_layers_splitter.addWidget(page._layer_module)
@@ -229,7 +219,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         canvas_status=page._canvas_status,
         precision_bar=page._precision_bar,
         get_orig_polys=lambda: page._edit_polys,
-        get_showing_preview=lambda: page._showing_preview,
+        get_showing_preview=lambda: False,
         is_preview_running=lambda: page._preview_task.running,
         has_preview_cache=lambda: bool(page._preview_polys_cache),
         has_zones=lambda: bool(page._zones),
@@ -254,12 +244,12 @@ def build_pattern_properties_panel(page: Any) -> QWidget:
     root = QVBoxLayout(panel)
     root.setContentsMargins(12, 12, 12, 12)
     root.setSpacing(8)
-    title = QLabel("Zones")
+    title = QLabel("Regions")
     title.setProperty("role", "section-title")
     root.addWidget(title)
     root.addWidget(page._zones_section)
 
-    page._pattern_props_scope = QLabel("New zone defaults")
+    page._pattern_props_scope = QLabel("Select a region")
     page._pattern_props_scope.setWordWrap(True)
     page._pattern_props_scope.setProperty("role", "hint")
     root.addWidget(page._pattern_props_scope)
@@ -267,7 +257,7 @@ def build_pattern_properties_panel(page: Any) -> QWidget:
     output_row = QHBoxLayout()
     output_row.setContentsMargins(0, 0, 0, 0)
     output_row.setSpacing(8)
-    output_row.addWidget(QLabel("Output"))
+    output_row.addWidget(QLabel("Treatment"))
     output_row.addWidget(page._zone_output_combo, stretch=1)
     root.addLayout(output_row)
 
@@ -276,7 +266,7 @@ def build_pattern_properties_panel(page: Any) -> QWidget:
     # left workflow column into the selected-zone properties panel.
     root.addWidget(page._pattern_section)
     root.addWidget(page._fill_section)
-    hint = QLabel("All changes above apply to the selected zone and rebuild the live preview.")
+    hint = QLabel("All changes above apply to the selected region and rebuild the live preview.")
     hint.setWordWrap(True)
     hint.setProperty("role", "hint-sm")
     root.addWidget(hint)
@@ -288,14 +278,16 @@ def build_pattern_properties_panel(page: Any) -> QWidget:
 def refresh_pattern_properties_panel(page: Any) -> None:
     if not hasattr(page, "_pattern_props_scope"):
         return
+    from simple_stipple.features.pattern.treatments import TREATMENT_LABELS, treatment_kind
+
     row = page._zone_list.currentRow() if hasattr(page, "_zone_list") else -1
-    if 0 <= row < len(page._zones):
-        page._pattern_props_scope.setText(f"Editing Zone {row + 1}")
+    region_ids = [rid for rid in page._outline_ids if rid in page._region_tree()]
+    if 0 <= row < len(region_ids):
+        kind = treatment_kind(page, region_ids[row])
+        page._pattern_props_scope.setText(f"Region {row + 1} · {TREATMENT_LABELS[kind]}")
         page._pattern_props_scope.setProperty("editing", True)
     else:
-        page._pattern_props_scope.setText(
-            "New zone defaults — select geometry, then create a zone."
-        )
+        page._pattern_props_scope.setText("Select a region on the canvas to give it a treatment.")
         page._pattern_props_scope.setProperty("editing", False)
     refresh_style(page._pattern_props_scope)
 
@@ -317,7 +309,11 @@ def build_left(page: Any, layout: QVBoxLayout) -> None:
     # prerequisites to a first successful export.
     section_label(layout, "Add treatments")
     build_zones_section(page, layout)
-    build_image_engraving_section(page, layout)
+    # The engraving controls are no longer a sidebar section of their own:
+    # they belong to whichever region carries an image, so they are built into
+    # the region editor and shown only when that region's pattern is Image.
+    build_image_engraving_section(page, page._zone_editor_layout)
+    page._engraving_section.setVisible(False)
     page._advanced_mode_cb.toggled.connect(page._set_advanced_mode)
     layout.addStretch()
     page._install_pattern_shortcuts()
@@ -365,36 +361,18 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     orig_row.addWidget(page._orig_dims_label)
     orig_row.addStretch()
     shape_layout.addLayout(orig_row)
-    dims_grid = QGridLayout()
-    dims_grid.setHorizontalSpacing(8)
-    dims_grid.setVerticalSpacing(6)
-    dims_grid.addWidget(QLabel("Width (mm)"), 0, 0, 1, 2)
+    # Width/Height (and the proportion lock that only existed to link them)
+    # are no longer shown: the outline's own size is the size. The widgets stay
+    # alive because `_collect_scale`, the scale-change handlers and every
+    # treatment's `scale` read them — `_update_dims_from_polys` keeps them
+    # matching the loaded outline, so the scale stays 1:1.
     page._scale_w = QLineEdit()
     page._scale_w.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, page._scale_w))
-    page._scale_w.setPlaceholderText("auto")
-    page._scale_w.setToolTip("Target width of the outline in millimetres")
-    page._scale_w.textChanged.connect(page._on_scale_w_changed)
-    page._scale_w.textChanged.connect(page._schedule_preview)
-    dims_grid.addWidget(page._scale_w, 1, 0, 1, 2)
-    page._ar_lock_btn = QToolButton()
-    page._ar_lock_btn.setIcon(QIcon(str(icon_path("lock.svg"))))
-    page._ar_lock_btn.setText("Lock proportions")
-    page._ar_lock_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-    page._ar_lock_btn.setAccessibleName("Lock outline aspect ratio")
-    page._ar_lock_btn.setMinimumHeight(32)
-    page._ar_lock_btn.setCheckable(True)
-    page._ar_lock_btn.setChecked(True)
-    page._ar_lock_btn.setToolTip("Lock aspect ratio — keep W and H proportional")
-    dims_grid.addWidget(page._ar_lock_btn, 2, 0, 1, 2)
-    dims_grid.addWidget(QLabel("Height (mm)"), 3, 0, 1, 2)
     page._scale_h = QLineEdit()
     page._scale_h.setValidator(QDoubleValidator(SCALE_MIN_MM, SCALE_MAX_MM, 6, page._scale_h))
-    page._scale_h.setPlaceholderText("auto")
-    page._scale_h.setToolTip("Target height of the outline in millimetres")
-    page._scale_h.textChanged.connect(page._on_scale_h_changed)
-    page._scale_h.textChanged.connect(page._schedule_preview)
-    dims_grid.addWidget(page._scale_h, 4, 0, 1, 2)
-    shape_layout.addLayout(dims_grid)
+    page._ar_lock_btn = QToolButton()
+    page._ar_lock_btn.setCheckable(True)
+    page._ar_lock_btn.setChecked(True)
     page._shape_section = CollapsibleSection(
         "Shape", shape_content, expanded=True, subtitle="No file loaded"
     )
@@ -449,20 +427,11 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     pattern_layout.addLayout(preset_actions)
     page._refresh_preset_combo()
     _sp = page._schedule_preview
-    _named_patterns = [
-        "Custom Tile",
-        "Flow Lines",
-        "Honeycomb",
-        "Gradient Honeycomb",
-        "Basketweave",
-        "Stipple Dots",
-        "Brick",
-        "Mesh",
-        "Voronoi",
-        "Topographic",
-    ]
+    # Derived from the spec table, never hand-listed: a hardcoded list silently
+    # skipped building widgets for newly added patterns, and
+    # ``collect_pattern_params`` then crashed on the missing page attribute.
     page._pattern_widgets = {}
-    for name in _named_patterns:
+    for name in PARAM_SPECS:
         w = build_param_widget(page, name, _sp)
         page._pattern_widgets[name] = w
         pattern_layout.addWidget(w)
@@ -569,35 +538,40 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
 
 def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     zones_content, zones_layout = collapsible_content_widget(spacing=6)
-    section_label(zones_layout, "Assigned zones")
+    section_label(zones_layout, "Regions")
     scope_hint = QLabel(
-        "Select shapes on the canvas, then create a zone. Selecting a zone below highlights its shapes."
+        "Every closed shape is a region. Click inside one on the canvas, then choose its treatment."
     )
     scope_hint.setWordWrap(True)
     scope_hint.setProperty("role", "hint")
     zones_layout.addWidget(scope_hint)
     assign_row = QHBoxLayout()
-    page._assign_zone_btn = QPushButton("Create Zone from Selection")
+    page._assign_zone_btn = QPushButton("Apply to Selection")
     page._assign_zone_btn.setMinimumHeight(30)
     page._assign_zone_btn.setToolTip(
-        "Create a zone for the selected outlines using the current settings."
+        "Apply these settings to the selected region(s)."
     )
     page._assign_zone_btn.clicked.connect(page._assign_zone)
     assign_row.addWidget(page._assign_zone_btn, stretch=1)
     zones_layout.addLayout(assign_row)
     page._zone_list = ZoneListWidget()
+    # One row per region, so the list is unbounded — it scrolls rather than
+    # growing to fit. Sizing it to its contents with the scrollbar off used to
+    # clip rows out of reach as soon as a document had more than a few shapes.
     page._zone_list.setMinimumHeight(120)
-    page._zone_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    page._zone_list.setMaximumHeight(240)
+    page._zone_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+    page._zone_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
     page._zone_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    page._zone_list.setToolTip("Assigned pattern zones — each outline group with its own pattern")
+    page._zone_list.setToolTip("Regions in this document, indented by containment")
     page._zone_list.currentRowChanged.connect(page._on_zone_selected)
     page._zone_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     page._zone_list.customContextMenuRequested.connect(page._show_zone_context_menu)
     page._zone_list.deletePressed.connect(page._remove_selected_zone)
     zones_layout.addWidget(page._zone_list)
 
-    section_label(zones_layout, "Selected zone settings")
-    page._pattern_props_scope = QLabel("Select a zone to edit its settings")
+    section_label(zones_layout, "Selected region")
+    page._pattern_props_scope = QLabel("Select a region to edit its treatment")
     page._pattern_props_scope.setWordWrap(True)
     page._pattern_props_scope.setProperty("role", "zone-edit-scope")
     zones_layout.addWidget(page._pattern_props_scope)
@@ -606,10 +580,12 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     page._zone_output_combo.addItem("Pattern + Fill", "pattern_fill")
     page._zone_output_combo.addItem("Pattern only", "pattern")
     page._zone_output_combo.addItem("Fill only", "fill")
-    page._zone_output_combo.addItem("Outline only", "outline")
-    page._zone_output_combo.addItem("Disabled", "none")
+    page._zone_output_combo.addItem("Engrave image", "engrave")
+    page._zone_output_combo.addItem("Cut only", "cut")
+    page._zone_output_combo.addItem("None", "none")
     page._zone_output_combo.setToolTip(
-        "Output for the selected zone, or the next zone when none is selected"
+        "What this region produces. A region with a treatment subtracts itself "
+        "from the region containing it."
     )
     page._zone_output_combo.currentIndexChanged.connect(page._schedule_preview)
     page._zone_output_combo.currentIndexChanged.connect(page._live_update_selected_zone)
@@ -667,11 +643,12 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     fill_targets.addStretch()
     zones_layout.addLayout(fill_targets)
     output_row = QHBoxLayout()
-    output_row.addWidget(QLabel("Output"))
+    output_row.addWidget(QLabel("Treatment"))
     output_row.addWidget(page._zone_output_combo, stretch=1)
     zones_layout.addLayout(output_row)
+    page._zone_editor_layout = zones_layout
     page._zones_section = CollapsibleSection(
-        "Zone Manager", zones_content, expanded=False, subtitle="No zones assigned"
+        "Regions", zones_content, expanded=False, subtitle="No regions yet"
     )
     layout.addWidget(page._zones_section)
     page._rebuild_zone_parameter_editor()
@@ -752,36 +729,6 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
     _fpc_layout.addWidget(page._fill_keep_outline_cb)
     page._fill_params_container.setVisible(False)
     fill_layout.addWidget(page._fill_params_container)
-    section_label(fill_layout, "Cutouts")
-    page._cutout_callout = QFrame()
-    page._cutout_callout.setObjectName("cutoutCallout")
-    cutout_callout_layout = QHBoxLayout(page._cutout_callout)
-    cutout_callout_layout.setContentsMargins(8, 8, 8, 8)
-    cutout_callout_layout.setSpacing(8)
-    page._cutout_icon = QLabel()
-    page._cutout_icon.setFixedWidth(18)
-    page._cutout_icon.setPixmap(QIcon(str(icon_path("info.svg"))).pixmap(16, 16))
-    page._cutout_icon.setProperty("role", "cutout-icon")
-    cutout_callout_layout.addWidget(page._cutout_icon)
-    page._cutout_status_label = QLabel("Right-click a shape on canvas to mark as cutout")
-    page._cutout_status_label.setWordWrap(True)
-    page._cutout_status_label.setProperty("role", "cutout-desc")
-    cutout_callout_layout.addWidget(page._cutout_status_label, stretch=1)
-    page._cutout_clear_btn = QPushButton("Clear")
-    page._cutout_clear_btn.setFixedWidth(52)
-    page._cutout_clear_btn.setToolTip("Remove all cutout assignments")
-    page._cutout_clear_btn.setVisible(False)
-    page._cutout_clear_btn.clicked.connect(page._clear_exclusions)
-    cutout_callout_layout.addWidget(page._cutout_clear_btn)
-    page._apply_cutout_callout_style(active=False)
-    fill_layout.addWidget(page._cutout_callout)
-    page._mark_cutout_btn = QPushButton("Mark Selected as Cutout")
-    page._mark_cutout_btn.setMinimumHeight(28)
-    page._mark_cutout_btn.setToolTip(
-        "Mark the selected canvas shapes as cutout regions.\nCutouts exclude areas from laser fill.  Right-click a shape to toggle individually."
-    )
-    page._mark_cutout_btn.clicked.connect(page._mark_selection_as_cutout)
-    fill_layout.addWidget(page._mark_cutout_btn)
     page._fill_section = CollapsibleSection("Fill", fill_content, expanded=False, subtitle="None")
     layout.addWidget(page._fill_section)
     page._on_fill_mode_changed()
@@ -869,12 +816,12 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     appearance_grid.addWidget(page._engrave_gamma, 0, 1)
     page._engrave_invert = QCheckBox("Invert light and dark")
     appearance_grid.addWidget(page._engrave_invert, 1, 0, 1, 2)
-    appearance_grid.addWidget(QLabel("Carve / clip at export"), 2, 0)
-    page._engrave_target = QComboBox()
-    page._engrave_target.addItem("Whole outline", "outline")
-    page._engrave_target.addItem("Selected zone", "zone")
-    page._engrave_target.setToolTip("Keeps the original image unchanged and clips the exported engraving.")
-    appearance_grid.addWidget(page._engrave_target, 2, 1)
+    clip_hint = QLabel(
+        "Clipped to the region carrying the Engrave treatment, or the whole outline if none does."
+    )
+    clip_hint.setWordWrap(True)
+    clip_hint.setProperty("role", "hint-sm")
+    appearance_grid.addWidget(clip_hint, 2, 0, 1, 2)
     form.addLayout(appearance_grid)
 
     process_content, process = collapsible_content_widget(spacing=8)
@@ -962,7 +909,6 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     page._engrave_passes.valueChanged.connect(page._update_engraving_section_summaries)
     page._engrave_invert.toggled.connect(page._update_engraving_section_summaries)
     page._engrave_material.currentIndexChanged.connect(page._update_engraving_section_summaries)
-    page._engrave_target.currentIndexChanged.connect(page._update_engraving_section_summaries)
     page._engraving_section = CollapsibleSection(
         "Image Engraving", content, expanded=False, subtitle="Add an image to begin"
     )

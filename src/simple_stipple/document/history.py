@@ -33,6 +33,10 @@ class CommandStack:
         self._undo_commands.append(pair)
         return pair
 
+    def undo_depth(self) -> int:
+        """How many actions are currently undoable."""
+        return len(self._undo_commands)
+
     def clear(self) -> None:
         self._undo_commands.clear()
         self._redo_commands.clear()

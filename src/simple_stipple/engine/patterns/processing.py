@@ -49,18 +49,18 @@ from simple_stipple.engine.patterns.fill import (
     build_fill_region,
 )
 from simple_stipple.engine.patterns.organic import (
-    gen_flow_lines,
     gen_stipple_dots,
     gen_stipple_interlaced,
-    gen_topographic,
     gen_voronoi,
 )
 from simple_stipple.engine.patterns.tiling import (
     gen_basketweave,
     gen_brick,
-    gen_gradient_honeycomb,
     gen_honeycomb,
+    gen_knurling,
     gen_mesh,
+    gen_seigaiha,
+    gen_truchet,
 )
 
 
@@ -89,14 +89,14 @@ def _repair_overlay_geometry(geometry: Any) -> Any | None:
 PATTERNS = (
     NULL_PATTERN,
     "Custom Tile",
-    "Flow Lines",
     "Basketweave",
     "Brick",
-    "Gradient Honeycomb",
     "Honeycomb",
+    "Knurling",
     "Mesh",
+    "Seigaiha",
     "Stipple Dots",
-    "Topographic",
+    "Truchet",
     "Voronoi",
 )
 
@@ -106,14 +106,14 @@ def get_generator(name: str):
     return {
         "gen_honeycomb": gen_honeycomb,
         "gen_custom_tile": _gen_custom_tile,
-        "gen_gradient_honeycomb": gen_gradient_honeycomb,
-        "gen_flow_lines": gen_flow_lines,
+        "gen_knurling": gen_knurling,
+        "gen_seigaiha": gen_seigaiha,
+        "gen_truchet": gen_truchet,
         "gen_stipple_dots": gen_stipple_dots,
         "gen_brick": gen_brick,
         "gen_basketweave": gen_basketweave,
         "gen_mesh": gen_mesh,
         "gen_voronoi": gen_voronoi,
-        "gen_topographic": gen_topographic,
         "gen_stipple_interlaced": gen_stipple_interlaced,
     }[name]
 
@@ -123,16 +123,16 @@ LOGGER = logging.getLogger(__name__)
 # Physical-length parameters affected by the user's pattern-size multiplier.
 # This domain mapping intentionally does not depend on UI field labels.
 _LENGTH_PARAM_KEYS: dict[str, tuple[str, ...]] = {
-    "Flow Lines": ("spacing", "amplitude", "wavelength"),
     "Custom Tile": ("gap", "origin_x", "origin_y"),
     "Honeycomb": ("r", "gap"),
-    "Gradient Honeycomb": ("r_min", "r_max", "gap"),
     "Basketweave": ("strip_w", "strip_l", "gap"),
     "Stipple Dots": ("r", "spacing"),
     "Brick": ("brick_w", "brick_h", "gap"),
+    "Knurling": ("pitch", "groove"),
     "Mesh": ("r", "spacing"),
+    "Seigaiha": ("r", "ring_gap", "gap"),
+    "Truchet": ("tile", "gap"),
     "Voronoi": ("gap",),
-    "Topographic": ("spacing",),
 }
 
 
@@ -180,13 +180,31 @@ def _clip_rotated_element(
         out.append(poly)
 
 
+RETIRED_PATTERNS: dict[str, str] = {
+    # Removed patterns map to the nearest survivor so an older workspace opens
+    # and renders instead of failing on an unknown generator.
+    "Flow Lines": "Truchet",
+    "Gradient Honeycomb": "Honeycomb",
+    "Topographic": "Seigaiha",
+    "Fish Scale": "Seigaiha",
+}
+
+
+def migrate_pattern_name(pattern: str) -> str:
+    """Map a retired pattern name onto the one that replaced it."""
+    name = str(pattern or NULL_PATTERN).strip() or NULL_PATTERN
+    if name in PATTERNS:
+        return name
+    return RETIRED_PATTERNS.get(name, NULL_PATTERN)
+
+
 class PatternProcessor:
     """Generate, compose, and validate pattern geometry."""
 
-    _OPEN_PATTERNS = {
-        "Fish Scale",
-        "Topographic",
-    }
+    # Patterns whose output is open linework rather than closed cells.
+    # Every shipped pattern emits closed cells so the fill system can hatch
+    # inside them or around them; keep this empty unless that changes.
+    _OPEN_PATTERNS: set[str] = set()
 
     # Patterns whose output is a regular grid of discrete tile-shaped polys
     # where row-binning makes sense. For continuous curves (rings, spirals,
@@ -194,11 +212,11 @@ class PatternProcessor:
     _INTERLACE_PATTERNS = {
         "Brick",
         "Honeycomb",
-        "Gradient Honeycomb",
         "Basketweave",
+        "Knurling",
         "Mesh",
-        "Fish Scale",
         "Stipple Dots",
+        "Truchet",
     }
     MAX_ESTIMATED_ELEMENTS = 100_000
 
@@ -220,19 +238,15 @@ class PatternProcessor:
 
         if pattern == "Voronoi":
             return max(0, int(params.get("n_cells", 0) or 0))
-        if pattern == "Topographic":
-            return int(math.hypot(width, height) / positive("spacing")) + 1
-        if pattern == "Flow Lines":
-            return (
-                int(
-                    (math.hypot(width, height) + 2 * abs(float(params.get("amplitude", 0))))
-                    / positive("spacing")
-                )
-                + 2
-            )
+        if pattern == "Knurling":
+            return int(math.hypot(width, height) / positive("pitch") * 2) + 2
+        if pattern == "Truchet":
+            return int(area / positive("tile") ** 2 * 2) + 2
+        if pattern == "Seigaiha":
+            return int(area / positive("r") ** 2 * 2 * max(1.0, positive("rings", 3.0))) + 2
         if pattern in {"Stipple Dots", "Mesh"}:
             return int(area / positive("spacing") ** 2 * 1.5) + 1
-        if pattern in {"Honeycomb", "Gradient Honeycomb"}:
+        if pattern == "Honeycomb":
             radius = positive("r", positive("r_min", 1.0))
             step = radius + max(float(params.get("gap", 0) or 0), 0.0)
             return int(area / max(step * step * 2.0, 1e-9)) + 1
@@ -529,7 +543,14 @@ class PatternProcessor:
     @staticmethod
     def _generate_base_pattern(outline, pattern: str, params: dict):
         if pattern == "Honeycomb":
-            return get_generator("gen_honeycomb")(outline, params["r"], params["gap"])
+            return get_generator("gen_honeycomb")(
+                outline,
+                params["r"],
+                params["gap"],
+                repeat_mode=params.get("repeat_mode", "Half drop"),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
+            )
         if pattern == "Custom Tile":
             return get_generator("gen_custom_tile")(
                 outline,
@@ -541,21 +562,36 @@ class PatternProcessor:
                 origin_x=params.get("origin_x", 0.0),
                 origin_y=params.get("origin_y", 0.0),
             )
-        if pattern == "Gradient Honeycomb":
-            return get_generator("gen_gradient_honeycomb")(
+        if pattern == "Truchet":
+            return get_generator("gen_truchet")(
                 outline,
-                params["r_min"],
-                params["r_max"],
-                params["gap"],
-                params["angle"],
+                params["tile"],
+                params.get("gap", 0.3),
+                seed=params.get("seed"),
+                repeat_mode=params.get("repeat_mode", "Straight"),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
-        if pattern == "Flow Lines":
-            return get_generator("gen_flow_lines")(
+        if pattern == "Seigaiha":
+            return get_generator("gen_seigaiha")(
                 outline,
-                params["spacing"],
-                params["amplitude"],
-                params["wavelength"],
-                params["angle"],
+                params["r"],
+                int(params.get("rings", 3)),
+                params.get("ring_gap", 0.6),
+                params.get("gap", 0.3),
+                repeat_mode=params.get("repeat_mode", "Half drop"),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
+            )
+        if pattern == "Knurling":
+            return get_generator("gen_knurling")(
+                outline,
+                params["pitch"],
+                params.get("angle", 30.0),
+                bool(params.get("cross", True)),
+                params.get("groove", 0.3),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
         if pattern == "Stipple Dots":
             return get_generator("gen_stipple_dots")(
@@ -567,25 +603,40 @@ class PatternProcessor:
             )
         if pattern == "Brick":
             return get_generator("gen_brick")(
-                outline, params["brick_w"], params["brick_h"], params["gap"]
+                outline,
+                params["brick_w"],
+                params["brick_h"],
+                params["gap"],
+                repeat_mode=params.get("repeat_mode", "Half drop"),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
         if pattern == "Basketweave":
             return get_generator("gen_basketweave")(
-                outline, params["strip_w"], params["strip_l"], params["gap"]
+                outline,
+                params["strip_w"],
+                params["strip_l"],
+                params["gap"],
+                repeat_mode=params.get("repeat_mode", "Straight"),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
         if pattern == "Mesh":
             return get_generator("gen_mesh")(
-                outline, params["r"], params["spacing"], quality=params.get("quality", "high")
+                outline,
+                params["r"],
+                params["spacing"],
+                quality=params.get("quality", "high"),
+                repeat_mode=params.get("repeat_mode", "Straight"),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
         if pattern == "Voronoi":
             return get_generator("gen_voronoi")(
                 outline, params["n_cells"], params["gap"], params["seed"]
             )
-        if pattern == "Topographic":
-            return get_generator("gen_topographic")(
-                outline, params["spacing"], quality=params.get("quality", "high")
-            )
         raise ValueError(f"Pattern '{pattern}' is no longer available.")
+
 
     @staticmethod
     def _apply_density_field(
@@ -1104,6 +1155,18 @@ class PatternProcessor:
         # as-is (raw coordinates) — they're still visible even though they
         # were used as a cutout mask above, not because they were assigned.
         border_polys.extend(floating_cutouts)
+        # Every other outline on the canvas is still real geometry that has to
+        # be cut. Treating only one region (an engraved grip, say) must not
+        # silently drop the untreated parts from the export — they carry no
+        # pattern, but they are still linework.
+        zone_signatures = {
+            self._poly_signature(poly) for zone in zones for poly in zone.get("polys", [])
+        }
+        border_polys.extend(
+            poly
+            for poly in (all_polys or [])
+            if self._poly_signature(poly) not in zone_signatures
+        )
         return all_polys_out, border_polys
 
     def build_preview_polys(

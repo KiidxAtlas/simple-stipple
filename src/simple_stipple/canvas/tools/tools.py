@@ -1619,6 +1619,16 @@ class SelectTool(CanvasTool):
         was_selected_before = target in v._sel if target is not None else False
         v._lmb_target = target
 
+        if v._selectable and target is None and v._region_picking:
+            region_id = v._find_region_at(pos.x(), pos.y())
+            if region_id is not None:
+                v._sel = v._sel ^ {region_id} if shift else {region_id}
+                v._lmb_press = None
+                v._lmb_prev = pos
+                v._lmb_target = None
+                v._redraw()
+                v._notify()
+                return True
         if v._selectable and target is None:
             if v._lasso_select_enabled:
                 v._lasso_active = True

@@ -10,5 +10,7 @@ def paint_document_scene(renderer: Any, painter: Any, width: int, height: int, v
     renderer._paint_guides(painter, width, height)
     renderer._paint_dimensions(painter, width, height)
     renderer._paint_ghost_polys(painter, visible)
+    # Result sits under the outlines: the user edits geometry, not output.
+    renderer._paint_result_polys(painter, visible)
     renderer._paint_main_polys(painter, visible)
     renderer._paint_operation_preview(painter)
