@@ -16,19 +16,11 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QIntValidator, QKeySequence
-from PySide6.QtWidgets import QCheckBox, QComboBox, QLabel, QLineEdit, QMenu, QMessageBox, QWidget
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QMenu, QMessageBox
 
-from simple_stipple.features.pattern.defaults import (
-    DEFAULT_FILL_ANGLE,
-    DEFAULT_FILL_INSET,
-    DEFAULT_FILL_SPACING,
-    DEFAULT_PATTERN_ROTATION,
-    FILL_SPACING_FLOOR_MM,
-)
-from simple_stipple.features.pattern.form_spec import PARAM_SPECS
 from simple_stipple.features.pattern.layout import refresh_pattern_properties_panel
-from simple_stipple.features.pattern.params import collect_form_state
+from simple_stipple.features.pattern.params import collect_form_state, restore_form_state
 from simple_stipple.features.pattern.treatments import (
     IMAGE_PATTERN,
     TREATMENT_LABELS,
@@ -161,158 +153,19 @@ def snapshot_zone_jobs(page: Any) -> list[dict]:
 # ── Editor ────────────────────────────────────────────────────────────────
 
 
-def rebuild_zone_parameter_editor(
-    page: Any, _label: str | None = None, params: dict | None = None
-) -> None:
-    if not hasattr(page, "_zone_params_grid"):
-        return
-    while page._zone_params_grid.count():
-        item = page._zone_params_grid.takeAt(0)
-        widget = item.widget() if item is not None else None
-        if widget is not None:
-            widget.deleteLater()
-    page._zone_param_inputs = {}
-    pattern = page._pattern_key(page._zone_pattern_combo.currentText())
-    values = params or {}
-    row = 0
-    for spec in PARAM_SPECS.get(pattern, []):
-        field: QWidget
-        key = spec.param_key or spec.attr[1:]
-        if spec.kind == "checkbox":
-            checkbox = QCheckBox(spec.label)
-            checkbox.setChecked(bool(values.get(key, spec.default.lower() == "true")))
-            page._zone_params_grid.addWidget(checkbox, row, 0, 1, 2)
-            field = checkbox
-        elif spec.kind == "combobox":
-            combo = QComboBox()
-            combo.addItems(spec.items)
-            combo.setCurrentText(str(values.get(key, spec.default)))
-            page._zone_params_grid.addWidget(QLabel(spec.label), row, 0)
-            page._zone_params_grid.addWidget(combo, row, 1)
-            field = combo
-        else:
-            line_edit = QLineEdit(str(values.get(key, spec.default)))
-            if spec.kind == "int":
-                line_edit.setValidator(
-                    QIntValidator(
-                        int(spec.minimum or -2_147_483_648),
-                        int(spec.maximum or 2_147_483_647),
-                        line_edit,
-                    )
-                )
-            else:
-                line_edit.setValidator(
-                    QDoubleValidator(
-                        float(spec.minimum or -1e12),
-                        float(spec.maximum or 1e12),
-                        6,
-                        line_edit,
-                    )
-                )
-            page._zone_params_grid.addWidget(QLabel(spec.label), row, 0)
-            page._zone_params_grid.addWidget(line_edit, row, 1)
-            field = line_edit
-        field.setToolTip(spec.tooltip)
-        if isinstance(field, QLineEdit):
-            field.textChanged.connect(page._live_update_selected_zone)
-        elif isinstance(field, QComboBox):
-            field.currentIndexChanged.connect(page._live_update_selected_zone)
-        elif isinstance(field, QCheckBox):
-            field.toggled.connect(page._live_update_selected_zone)
-        page._zone_param_inputs[key] = field
-        row += 1
-    page._zone_rotation = QLineEdit(str(values.get("rotation", DEFAULT_PATTERN_ROTATION)))
-    page._zone_rotation.setValidator(QDoubleValidator(-36000, 36000, 4, page._zone_rotation))
-    page._zone_rotation.textChanged.connect(page._live_update_selected_zone)
-    page._zone_params_grid.addWidget(QLabel("Rotation (°)"), row, 0)
-    page._zone_params_grid.addWidget(page._zone_rotation, row, 1)
-    row += 1
-    page._zone_size_percent = QLineEdit(str(values.get("size_percent", 100)))
-    page._zone_size_percent.setValidator(QDoubleValidator(1, 10000, 3, page._zone_size_percent))
-    page._zone_size_percent.textChanged.connect(page._live_update_selected_zone)
-    page._zone_params_grid.addWidget(QLabel("Pattern size (%)"), row, 0)
-    page._zone_params_grid.addWidget(page._zone_size_percent, row, 1)
-
-
-def collect_zone_editor(page: Any) -> tuple[str, dict, dict | None]:
-    label = page._zone_pattern_combo.currentText()
-    pattern = page._pattern_key(label)
-    params: dict = {}
-    for spec in PARAM_SPECS.get(pattern, []):
-        key = spec.param_key or spec.attr[1:]
-        field = page._zone_param_inputs[key]
-        if spec.kind == "checkbox":
-            params[key] = field.isChecked()
-        elif spec.kind == "combobox":
-            params[key] = field.currentText()
-        elif spec.kind == "int":
-            value = page._parse_float_field(
-                field,
-                spec.label,
-                minimum=spec.minimum,
-                maximum=spec.maximum,
-            )
-            assert value is not None
-            params[key] = int(value)
-        else:
-            params[key] = page._parse_float_field(
-                field,
-                spec.label,
-                minimum=spec.minimum,
-                maximum=spec.maximum,
-            )
-    params["rotation"] = page._parse_float_field(page._zone_rotation, "Rotation")
-    params["size_percent"] = page._parse_float_field(
-        page._zone_size_percent,
-        "Pattern size",
-        minimum=1.0,
-        maximum=10000.0,
-    )
-    params.update(
-        {
-            "density_mode": "Uniform",
-            "density_strength": 0.0,
-            "density_angle": 0.0,
-            "density_reverse": False,
-        }
-    )
-    custom_name = page._custom_pattern_name(label)
-    if pattern == "Custom Tile":
-        motif = page._tile_motifs.get(custom_name or "", page._custom_tile_polys)
-        if not motif:
-            raise ValueError("Choose or save custom pattern geometry first.")
-        params["tile_polys"] = [list(poly) for poly in motif]
-        params["interlock"] = False
-    mode = str(page._zone_fill_mode.currentData() or "none")
-    fill = None
-    if mode != "none":
-        fill = {
-            "mode": mode,
-            "spacing": max(
-                FILL_SPACING_FLOOR_MM,
-                page._parse_float_field(
-                    page._zone_fill_spacing,
-                    "Fill spacing",
-                    minimum=FILL_SPACING_FLOOR_MM,
-                ),
-            ),
-            "angle_deg": page._parse_float_field(page._zone_fill_angle, "Fill angle"),
-            "inset": page._parse_float_field(page._zone_fill_inset, "Fill inset", minimum=0.0),
-            "keep_pattern": True,
-            "target_outline": page._zone_fill_target_outline.isChecked(),
-            "target_pattern": page._zone_fill_target_pattern.isChecked(),
-            "cell_cutouts": [list(poly) for poly in page._pattern_cell_cutouts],
-            "cell_instance_cutouts": [list(poly) for poly in page._pattern_cell_instance_cutouts],
-        }
-    return pattern, params, fill
-
-
 def collect_treatment(page: Any) -> dict:
-    """Read the whole editor into one treatment dict."""
-    pattern, params, fill = collect_zone_editor(page)
-    kind = str(page._zone_output_combo.currentData() or "pattern_fill")
+    """Read the inspector into one treatment dict.
+
+    There is one editor for pattern and fill in this app, and it is the same
+    one whether it is editing a selected region or the document defaults —
+    which is why this reads the Pattern/Fill sections directly rather than a
+    second, partial copy of them.
+    """
+    label = page._pattern_combo.currentText()
+    pattern = page._pattern_key(label)
     if pattern == IMAGE_PATTERN:
-        # Choosing Image *is* choosing the Engrave treatment.
+        # Choosing Image *is* choosing the Engrave treatment. Checked before
+        # the parameter read: Image has no generator and therefore no params.
         return {
             "kind": "engrave",
             "pattern": IMAGE_PATTERN,
@@ -322,6 +175,9 @@ def collect_treatment(page: Any) -> dict:
             "fill": None,
             "form_state": collect_form_state(page),
         }
+    params = page._collect_pattern_params(pattern) if pattern != "— None —" else {}
+    fill = page._collect_fill_options()
+    kind = str(page._zone_output_combo.currentData() or "pattern_fill")
     # A kind that needs a treatment the editor does not supply is not
     # meaningful; normalize instead of silently generating nothing.
     if kind in {"pattern", "pattern_fill"} and pattern == "— None —":
@@ -331,7 +187,7 @@ def collect_treatment(page: Any) -> dict:
     return {
         "kind": kind,
         "pattern": pattern,
-        "pattern_label": page._zone_pattern_combo.currentText(),
+        "pattern_label": label,
         "params": params,
         "scale": page._collect_scale(),
         "fill": fill,
@@ -339,21 +195,26 @@ def collect_treatment(page: Any) -> dict:
     }
 
 
-def live_update_selected_zone(page: Any, *_args) -> None:
-    """Commit editor changes to the selected region's treatment."""
+def live_update_selected_zone(page: Any, *_args) -> bool:
+    """Commit inspector changes to the selected region's treatment.
+
+    Returns whether a region absorbed the edit. When nothing is selected the
+    same widgets are editing the document defaults, and the caller schedules
+    the solve itself.
+    """
     if page._loading_zone or page._suspend_state:
-        return
+        return False
     # Editing applies to every selected region, not just the current row —
     # selecting three and changing the pattern has to change three.
     targets = selected_region_ids(page)
     if not targets:
-        return
+        return False
     try:
         treatment = collect_treatment(page)
     except (KeyError, TypeError, ValueError):
         # A line edit can briefly contain an incomplete number while the
         # user types. Keep the last valid treatment until it is complete.
-        return
+        return False
     before = begin_treatment_change(page)
     for region_id in targets:
         set_treatment(page, region_id, treatment)
@@ -365,6 +226,7 @@ def live_update_selected_zone(page: Any, *_args) -> None:
     refresh_row_labels(page)
     page._schedule_preview()
     page._emit_state_changed()
+    return True
 
 
 def show_zone_context_menu(page: Any, pos) -> None:
@@ -410,23 +272,14 @@ def on_zone_selected(page: Any, row: int) -> None:
         page._zone_output_combo.setCurrentIndex(
             max(0, page._zone_output_combo.findData("pattern_fill" if kind == "none" else kind))
         )
-        pattern_label = str(treatment.get("pattern_label") or treatment.get("pattern") or "— None —")
+        # An untreated region opens on whatever the inspector already shows —
+        # the defaults you just set are what clicking a shape applies.
+        form_state = treatment.get("form_state")
+        if isinstance(form_state, dict) and form_state:
+            restore_form_state(page, form_state)
         if kind == "engrave":
-            pattern_label = IMAGE_PATTERN
-        page._populate_pattern_combo(page._zone_pattern_combo, pattern_label)
-        rebuild_zone_parameter_editor(page, params=dict(treatment.get("params", {})))
-        fill = treatment.get("fill")
-        fill_mode = str(fill.get("mode", "none")) if isinstance(fill, dict) else "none"
-        page._zone_fill_mode.setCurrentIndex(max(0, page._zone_fill_mode.findData(fill_mode)))
-        if isinstance(fill, dict):
-            page._zone_fill_spacing.setText(str(fill.get("spacing", DEFAULT_FILL_SPACING)))
-            page._zone_fill_angle.setText(str(fill.get("angle_deg", DEFAULT_FILL_ANGLE)))
-            page._zone_fill_inset.setText(str(fill.get("inset", DEFAULT_FILL_INSET)))
-            page._zone_fill_target_outline.setChecked(bool(fill.get("target_outline", True)))
-            page._zone_fill_target_pattern.setChecked(bool(fill.get("target_pattern", False)))
-        else:
-            page._zone_fill_target_outline.setChecked(True)
-            page._zone_fill_target_pattern.setChecked(False)
+            page._populate_pattern_combo(page._pattern_combo, IMAGE_PATTERN)
+        page._switch_pattern(page._pattern_combo.currentText())
     finally:
         page._suspend_state = False
         page._loading_zone = False

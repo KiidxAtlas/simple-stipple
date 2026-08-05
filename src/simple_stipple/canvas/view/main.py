@@ -1622,6 +1622,48 @@ class CanvasView(
         """Set the hint shown on an empty canvas ("Title\\nhint line")."""
         self._empty_message = message
 
+    def set_empty_actions(self, actions: list[tuple[str, object]]) -> None:
+        """Offer the empty canvas's next steps as buttons, not numbered prose.
+
+        Shown only while the canvas holds nothing; ``sync_empty_actions``
+        keeps that true on every redraw and resize.
+        """
+        from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
+
+        existing = getattr(self, "_empty_actions_bar", None)
+        if existing is not None:
+            existing.deleteLater()
+        self._empty_actions_bar = None
+        if not actions:
+            return
+        bar = QWidget(self)
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        for label, callback in actions:
+            button = QPushButton(label, bar)
+            button.setMinimumHeight(30)
+            button.clicked.connect(callback)
+            row.addWidget(button)
+        self._empty_actions_bar = bar
+        self.sync_empty_actions()
+
+    def sync_empty_actions(self) -> None:
+        """Centre the empty-state buttons under the hint, or hide them."""
+        bar = getattr(self, "_empty_actions_bar", None)
+        if bar is None:
+            return
+        show = not self._entities and not self._draw_pts
+        bar.setVisible(show)
+        if not show:
+            return
+        bar.adjustSize()
+        bar.move(
+            max(0, (self.width() - bar.width()) // 2),
+            max(0, self.height() // 2 + 40),
+        )
+        bar.raise_()
+
     def set_grid_visible(self, visible: bool) -> None:
         self._grid_visible = bool(visible)
         self._redraw()
@@ -1951,6 +1993,7 @@ class CanvasView(
     _MOVE_SNAP_SAMPLE = 64  # max moving vertices considered per drag event
 
     def _redraw(self) -> None:
+        self.sync_empty_actions()
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -2008,6 +2051,7 @@ class CanvasView(
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._layout_draw_sidebar()
+        self.sync_empty_actions()
         if self._needs_fit:
             if self._entities:
                 self._needs_fit = False

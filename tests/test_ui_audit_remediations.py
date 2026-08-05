@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
-from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QToolButton, QWidget
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
 from shapely.geometry import Point, Polygon
 
 import simple_stipple.ui.dialogs.customize_dialogs as customize_dialogs
@@ -48,7 +48,6 @@ from simple_stipple.ui.components.focus import CanvasEscapeRouter
 from simple_stipple.ui.components.inputs import NoWheelSlider
 from simple_stipple.ui.components.workflow import (
     OperationProgress,
-    WorkflowStepper,
     set_status_label,
 )
 from simple_stipple.ui.dialogs.customize_dialogs import (
@@ -355,8 +354,10 @@ def test_image_engraving_actions_stay_visible_and_keyboard_reachable(
     assert page._engrave_remove_btn.isEnabled()
     page.show()
     app.processEvents()
+    # Tab hands the image over to the inspector once; Qt's own focus chain
+    # walks the placement fields from there.
     page._on_engraving_canvas_key("tab")
-    assert page._engrave_w.hasFocus()
+    assert page._engrave_x.hasFocus()
     page._remove_engraving_image()
     assert page._engraving_image_path == ""
     assert not page._engrave_remove_btn.isEnabled()
@@ -393,30 +394,6 @@ def test_draw_guidance_describes_the_actual_shape_gesture(app: QApplication) -> 
     guidance, _tone = canvas.get_command_guidance()
     assert guidance == "Rectangle: drag to size · Esc exits"
     canvas.close()
-
-
-def test_workflow_strip_is_honest_noninteractive_progress(app: QApplication) -> None:
-    stepper = WorkflowStepper(("Input", "Preview", "Export"))
-    for button in stepper.findChildren(QToolButton):
-        assert button.focusPolicy() == Qt.FocusPolicy.NoFocus
-        assert button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        assert button.minimumHeight() >= 24 or button.sizeHint().height() >= 24
-
-
-def test_workflow_error_uses_danger_guidance_without_freezing_wrapped_content(
-    app: QApplication,
-) -> None:
-    stepper = WorkflowStepper(
-        ("Input", "Preview", "Export"), description="A description that may wrap in narrow layouts."
-    )
-    stepper.set_step_states(
-        ["complete", "error", "pending"], {1: "Fix the outline, then preview again."}
-    )
-
-    assert stepper._labels[1].property("state") == "error"
-    assert stepper._guidance is not None
-    assert stepper._guidance.property("tone") == "danger"
-    assert stepper.maximumHeight() > stepper.sizeHint().height()
 
 
 def test_operation_progress_uses_semantic_role_and_cancellable_guidance(app: QApplication) -> None:
@@ -1387,7 +1364,9 @@ def test_pattern_defaults_to_basic_controls_and_can_reveal_advanced(
     # Zones are always available because they are part of the primary
     # workflow, even when secondary advanced controls are hidden.
     assert page._zone_scroll.isVisibleTo(page)
-    assert not page._zones_section.is_expanded()
+    # Regions head the inspector: it names what the Pattern and Fill sections
+    # below it are editing, so it opens with them.
+    assert page._zones_section.is_expanded()
 
     page._advanced_mode_cb.setChecked(True)
     app.processEvents()
@@ -2173,7 +2152,7 @@ def test_a_region_can_be_treated_from_either_selection_surface(app: QApplication
     # Regions list → choose a pattern. This is the flow that did nothing.
     page._zone_list.setCurrentRow(1)
     assert page._assign_zone_btn.isEnabled()
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
     assert treatment_kind(page, circle_id) == "pattern_fill"
 
     # "None" still clears it.
@@ -2183,7 +2162,7 @@ def test_a_region_can_be_treated_from_either_selection_surface(app: QApplication
     # Canvas selection → Apply.
     page._canvas.set_selection([outer_id])
     page._on_sel_change(1)
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
     page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("pattern"))
     page._assign_zone()
     assert treatment_kind(page, outer_id) == "pattern"
@@ -2215,7 +2194,7 @@ def test_multi_region_canvas_selection_shows_every_row(app: QApplication) -> Non
     assert sorted(i.row() for i in page._zone_list.selectedIndexes()) == [1, 2]
 
     # Apply reaches every selected region, not just the current row.
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
     page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("pattern"))
     page._assign_zone()
     assert treatment_kind(page, ids[1]) == "pattern"
@@ -2238,7 +2217,7 @@ def test_treatment_undo_reaches_every_undo_route(app: QApplication) -> None:
     page.load_outline_polys(polys)
     region_id = page._outline_ids[0]
     page._zone_list.setCurrentRow(0)
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
     assert treatment_kind(page, region_id) == "pattern_fill"
 
     canvas_commands.run(page._canvas, "edit.undo")
@@ -2269,7 +2248,7 @@ def test_treatment_changes_undo_and_redo(app: QApplication) -> None:
 
     page._canvas.set_selection([ids[0]])
     page._on_sel_change(1)
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
     page._zone_output_combo.setCurrentIndex(page._zone_output_combo.findData("pattern"))
     page._assign_zone()
     assert treatment_kind(page, ids[0]) == "pattern"
@@ -2326,7 +2305,7 @@ def test_editing_applies_to_every_region_selected_in_the_list(app: QApplication)
         if item is not None:
             item.setSelected(True)
 
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
     assert [treatment_kind(page, i) for i in ids] == ["pattern_fill"] * 3
 
     # One undo step for the whole multi-region edit, not one per region.
@@ -2402,17 +2381,19 @@ def test_editing_a_region_parameter_keeps_the_field_alive(app: QApplication) -> 
     page.show()
     page.load_outline_polys([poly])
     page._zone_list.setCurrentRow(0)
-    page._zone_pattern_combo.setCurrentText("Honeycomb")
+    page._pattern_combo.setCurrentText("Honeycomb")
 
-    key = next(iter(page._zone_param_inputs))
-    field = page._zone_param_inputs[key]
+    from simple_stipple.features.pattern.form_spec import PARAM_SPECS
+
+    attr = PARAM_SPECS["Honeycomb"][0].attr
+    field = getattr(page, attr)
     field.setFocus(Qt.FocusReason.MouseFocusReason)
     QTest.keyClicks(field, "5")
 
     # Widget identity is the real guard: a rebuilt field cannot hold the caret.
     # hasFocus() itself is not asserted — it depends on the window being active,
     # which is not reliable under a batch test run.
-    assert page._zone_param_inputs[key] is field, "parameter widget was rebuilt mid-edit"
+    assert getattr(page, attr) is field, "parameter widget was rebuilt mid-edit"
     assert not field.isHidden()
     # The row label still reflects the change.
     assert "Honeycomb" in page._zone_list.item(0).text()
@@ -2581,14 +2562,14 @@ def test_image_is_a_pattern_choice_not_a_sidebar_section(app: QApplication) -> N
     page.load_outline_polys([outer, circle])
     region_id = page._outline_ids[1]
 
-    items = [page._zone_pattern_combo.itemText(i) for i in range(page._zone_pattern_combo.count())]
+    items = [page._pattern_combo.itemText(i) for i in range(page._pattern_combo.count())]
     assert IMAGE_PATTERN in items
 
     # The image controls are mounted inside the region editor, not the sidebar.
     assert page._engraving_section.isHidden()
 
     page._zone_list.setCurrentRow(1)
-    page._zone_pattern_combo.setCurrentText(IMAGE_PATTERN)
+    page._pattern_combo.setCurrentText(IMAGE_PATTERN)
     assert treatment_kind(page, region_id) == "engrave"
     assert not page._engraving_section.isHidden()
     # Image is a UI choice; the engine emits the region outline, not a pattern.

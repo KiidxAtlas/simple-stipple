@@ -67,7 +67,6 @@ from simple_stipple.ui.components.inputs import (
 from simple_stipple.ui.components.layout import (
     content_splitter,
     section_label,
-    surface_frame,
 )
 from simple_stipple.ui.components.recent_files import RecentFilesButton
 from simple_stipple.ui.files import reveal_label
@@ -129,8 +128,16 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     # original document layers so the layer tree remains useful.
     page._canvas.set_layer_model([], None)
     page._canvas.set_empty_message(
-        "Start a pattern\n1  Import or drop a closed outline\n"
-        "2  Click inside it and choose a treatment\n3  Export"
+        "Start a pattern\nImport a closed outline, draw one, or trace an image"
+    )
+    # The next actions are buttons, not numbered prose telling you to go and
+    # find them somewhere else.
+    page._canvas.set_empty_actions(
+        [
+            ("Import outline…", page._browse_dxf),
+            ("Draw one", lambda: page._canvas.set_mode("draw")),
+            ("Trace an image", lambda: page.openPageRequested.emit("trace")),
+        ]
     )
     page._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
     page._canvas.set_grid_snap(False)
@@ -234,56 +241,21 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._refresh_canvas_panels()
 
 
-def build_pattern_properties_panel(page: Any) -> QWidget:
-    panel = surface_frame("panel")
-    root = QVBoxLayout(panel)
-    root.setContentsMargins(12, 12, 12, 12)
-    root.setSpacing(8)
-    title = QLabel("Regions")
-    title.setProperty("role", "section-title")
-    root.addWidget(title)
-    root.addWidget(page._zones_section)
-
-    page._pattern_props_scope = QLabel("Select a region")
-    page._pattern_props_scope.setWordWrap(True)
-    page._pattern_props_scope.setProperty("role", "hint")
-    root.addWidget(page._pattern_props_scope)
-
-    output_row = QHBoxLayout()
-    output_row.setContentsMargins(0, 0, 0, 0)
-    output_row.setSpacing(8)
-    output_row.addWidget(QLabel("Treatment"))
-    output_row.addWidget(page._zone_output_combo, stretch=1)
-    root.addLayout(output_row)
-
-    # Reuse the real editors rather than maintaining a second, partial
-    # set of parameter widgets.  Qt reparents these sections out of the
-    # left workflow column into the selected-zone properties panel.
-    root.addWidget(page._pattern_section)
-    root.addWidget(page._fill_section)
-    hint = QLabel("All changes above apply to the selected region and rebuild the live preview.")
-    hint.setWordWrap(True)
-    hint.setProperty("role", "hint-sm")
-    root.addWidget(hint)
-    page._refresh_zone_list()
-    refresh_pattern_properties_panel(page)
-    return panel
-
-
 def refresh_pattern_properties_panel(page: Any) -> None:
+    """Name what the inspector is editing, rather than describing a mode."""
     if not hasattr(page, "_pattern_props_scope"):
         return
     from simple_stipple.features.pattern.treatments import TREATMENT_LABELS, treatment_kind
 
     row = page._zone_list.currentRow() if hasattr(page, "_zone_list") else -1
     region_ids = [rid for rid in page._outline_ids if rid in page._region_tree()]
-    if 0 <= row < len(region_ids):
+    editing = 0 <= row < len(region_ids)
+    if editing:
         kind = treatment_kind(page, region_ids[row])
         page._pattern_props_scope.setText(f"Region {row + 1} · {TREATMENT_LABELS[kind]}")
-        page._pattern_props_scope.setProperty("editing", True)
     else:
-        page._pattern_props_scope.setText("Select a region on the canvas to give it a treatment.")
-        page._pattern_props_scope.setProperty("editing", False)
+        page._pattern_props_scope.setText("Document defaults · nothing selected")
+    page._pattern_props_scope.setProperty("editing", editing)
     refresh_style(page._pattern_props_scope)
 
 
@@ -295,18 +267,15 @@ def build_left(page: Any, layout: QVBoxLayout) -> None:
     )
     layout.addWidget(page._advanced_mode_cb)
     build_shape_section(page, layout)
-    build_pattern_section(page, layout)
-    # Fill is a primary pattern output, not an expert-only option. Keep it
-    # immediately after pattern choice so it is available as the default next step.
-    build_fill_section(page, layout)
-    # Treatments are intentionally grouped after the basic outline/pattern/fill
-    # path. This labels zones and engraving as optional additions rather than
-    # prerequisites to a first successful export.
-    section_label(layout, "Add treatments")
+    # One inspector, read top-down: what is selected → what it produces →
+    # the pattern and fill that produce it. There is no second copy of the
+    # Pattern/Fill controls scoped to something else.
     build_zones_section(page, layout)
-    # The engraving controls are no longer a sidebar section of their own:
-    # they belong to whichever region carries an image, so they are built into
-    # the region editor and shown only when that region's pattern is Image.
+    build_pattern_section(page, layout)
+    build_fill_section(page, layout)
+    # The engraving controls are not a sidebar section of their own: they
+    # belong to whichever region carries an image, so they are built into the
+    # region editor and shown only when that region's pattern is Image.
     build_image_engraving_section(page, page._zone_editor_layout)
     page._engraving_section.setVisible(False)
     page._advanced_mode_cb.toggled.connect(page._set_advanced_mode)
@@ -421,7 +390,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     preset_actions.addWidget(overflow_btn)
     pattern_layout.addLayout(preset_actions)
     page._refresh_preset_combo()
-    _sp = page._schedule_preview
+    _sp = page._on_inspector_edit
     # Derived from the spec table, never hand-listed: a hardcoded list silently
     # skipped building widgets for newly added patterns, and
     # ``collect_pattern_params`` then crashed on the missing page attribute.
@@ -478,7 +447,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._pattern_rotation.setValidator(QDoubleValidator(-36000, 36000, 4, page._pattern_rotation))
     page._pattern_rotation.setFixedWidth(80)
     page._pattern_rotation.setToolTip("Rotate generated pattern around the outline center")
-    page._pattern_rotation.textChanged.connect(page._schedule_preview)
+    page._pattern_rotation.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._pattern_rotation, 0, 1)
     rot_row.addWidget(QLabel("Pattern size (%)"), 1, 0)
     page._pattern_size_percent = QLineEdit("100")
@@ -488,7 +457,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._pattern_size_percent.setToolTip(
         "Scale pattern elements and spacing without resizing the outline"
     )
-    page._pattern_size_percent.textChanged.connect(page._schedule_preview)
+    page._pattern_size_percent.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._pattern_size_percent, 1, 1)
     rot_row.addWidget(QLabel("Fade (mm)"), 2, 0)
     page._border_fade = QLineEdit(DEFAULT_BORDER_FADE)
@@ -496,31 +465,31 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._border_fade.setValidator(QDoubleValidator(0, 1e9, 6, page._border_fade))
     page._border_fade.setFixedWidth(80)
     page._border_fade.setToolTip("Thin the pattern near the outline edge. 0 = off.")
-    page._border_fade.textChanged.connect(page._schedule_preview)
+    page._border_fade.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._border_fade, 2, 1)
     rot_row.addWidget(QLabel("Density field"), 3, 0)
     page._density_mode_combo = QComboBox()
     page._density_mode_combo.addItems(["Uniform", "Horizontal", "Radial", "Boundary"])
     page._density_mode_combo.setToolTip("Deterministically thin pattern elements across a field")
-    page._density_mode_combo.currentTextChanged.connect(page._schedule_preview)
+    page._density_mode_combo.currentTextChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_mode_combo, 3, 1)
     rot_row.addWidget(QLabel("Density strength"), 4, 0)
     page._density_strength = QLineEdit(DEFAULT_DENSITY_STRENGTH)
     make_resettable_line_edit(page._density_strength, DEFAULT_DENSITY_STRENGTH)
     page._density_strength.setValidator(QDoubleValidator(0, 1, 4, page._density_strength))
     page._density_strength.setToolTip("0 = uniform; 1 = strongest thinning")
-    page._density_strength.textChanged.connect(page._schedule_preview)
+    page._density_strength.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_strength, 4, 1)
     rot_row.addWidget(QLabel("Density angle (°)"), 5, 0)
     page._density_angle = QLineEdit(DEFAULT_DENSITY_ANGLE)
     make_resettable_line_edit(page._density_angle, DEFAULT_DENSITY_ANGLE)
     page._density_angle.setValidator(QDoubleValidator(-36000, 36000, 4, page._density_angle))
     page._density_angle.setToolTip("Direction of the linear density gradient")
-    page._density_angle.textChanged.connect(page._schedule_preview)
+    page._density_angle.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_angle, 5, 1)
     page._density_reverse = QCheckBox("Reverse density")
     page._density_reverse.setToolTip("Swap the dense and sparse sides of the field")
-    page._density_reverse.stateChanged.connect(page._schedule_preview)
+    page._density_reverse.stateChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_reverse, 6, 0, 1, 2)
     pattern_layout.addWidget(page._modifiers_widget)
     page._modifiers_label.hide()
@@ -565,8 +534,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     page._zone_list.deletePressed.connect(page._remove_selected_zone)
     zones_layout.addWidget(page._zone_list)
 
-    section_label(zones_layout, "Selected region")
-    page._pattern_props_scope = QLabel("Select a region to edit its treatment")
+    page._pattern_props_scope = QLabel("Document defaults")
     page._pattern_props_scope.setWordWrap(True)
     page._pattern_props_scope.setProperty("role", "zone-edit-scope")
     zones_layout.addWidget(page._pattern_props_scope)
@@ -582,71 +550,19 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
         "What this region produces. A region with a treatment subtracts itself "
         "from the region containing it."
     )
-    page._zone_output_combo.currentIndexChanged.connect(page._schedule_preview)
-    page._zone_output_combo.currentIndexChanged.connect(page._live_update_selected_zone)
-    pattern_row = QHBoxLayout()
-    pattern_row.addWidget(QLabel("Pattern"))
-    page._zone_pattern_combo = QComboBox()
-    page._populate_pattern_combo(page._zone_pattern_combo)
-    page._zone_pattern_combo.currentTextChanged.connect(page._rebuild_zone_parameter_editor)
-    page._zone_pattern_combo.currentTextChanged.connect(page._live_update_selected_zone)
-    page._zone_pattern_combo.currentTextChanged.connect(page._update_zone_actions)
-    pattern_row.addWidget(page._zone_pattern_combo, stretch=1)
-    zones_layout.addLayout(pattern_row)
-    page._zone_params_widget = QWidget()
-    page._zone_params_grid = QGridLayout(page._zone_params_widget)
-    page._zone_params_grid.setContentsMargins(0, 0, 0, 0)
-    page._zone_params_grid.setSpacing(4)
-    page._zone_param_inputs = {}
-    zones_layout.addWidget(page._zone_params_widget)
-    fill_grid = QGridLayout()
-    fill_grid.addWidget(QLabel("Fill"), 0, 0)
-    page._zone_fill_mode = QComboBox()
-    page._zone_fill_mode.addItem("None", "none")
-    page._zone_fill_mode.addItem("Lines", "lines")
-    page._zone_fill_mode.addItem("Zigzag", "zigzag")
-    page._zone_fill_mode.addItem("Crosshatch", "crosshatch")
-    page._zone_fill_mode.addItem("Concentric", "concentric")
-    page._zone_fill_mode.currentIndexChanged.connect(page._live_update_selected_zone)
-    fill_grid.addWidget(page._zone_fill_mode, 0, 1)
-    page._zone_fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
-    page._zone_fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
-    page._zone_fill_inset = QLineEdit(DEFAULT_FILL_INSET)
-    for row, (label, field) in enumerate(
-        (
-            ("Spacing (mm)", page._zone_fill_spacing),
-            ("Angle (°)", page._zone_fill_angle),
-            ("Inset (mm)", page._zone_fill_inset),
-        ),
-        start=1,
-    ):
-        field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
-        field.textChanged.connect(page._live_update_selected_zone)
-        fill_grid.addWidget(QLabel(label), row, 0)
-        fill_grid.addWidget(field, row, 1)
-    zones_layout.addLayout(fill_grid)
-    fill_targets = QHBoxLayout()
-    fill_targets.addWidget(QLabel("Fill targets"))
-    page._zone_fill_target_outline = QCheckBox("Outline space")
-    page._zone_fill_target_outline.setChecked(True)
-    page._zone_fill_target_outline.toggled.connect(page._live_update_selected_zone)
-    fill_targets.addWidget(page._zone_fill_target_outline)
-    page._zone_fill_target_pattern = QCheckBox("Pattern cells")
-    page._zone_fill_target_pattern.setChecked(False)
-    page._zone_fill_target_pattern.toggled.connect(page._live_update_selected_zone)
-    fill_targets.addWidget(page._zone_fill_target_pattern)
-    fill_targets.addStretch()
-    zones_layout.addLayout(fill_targets)
+    page._zone_output_combo.currentIndexChanged.connect(page._on_inspector_edit)
     output_row = QHBoxLayout()
     output_row.addWidget(QLabel("Treatment"))
     output_row.addWidget(page._zone_output_combo, stretch=1)
     zones_layout.addLayout(output_row)
+    # The Pattern and Fill sections below this one *are* the region editor —
+    # there is no second copy of them here. Image controls mount here so they
+    # sit with the region that carries the image.
     page._zone_editor_layout = zones_layout
     page._zones_section = CollapsibleSection(
-        "Regions", zones_content, expanded=False, subtitle="No regions yet"
+        "Regions", zones_content, expanded=True, subtitle="No regions yet"
     )
     layout.addWidget(page._zones_section)
-    page._rebuild_zone_parameter_editor()
 
 
 def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
@@ -673,14 +589,14 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
     make_resettable_line_edit(page._fill_spacing, DEFAULT_FILL_SPACING)
     page._fill_spacing.setFixedWidth(80)
     page._fill_spacing.setToolTip("Distance between adjacent infill lines")
-    page._fill_spacing.textChanged.connect(page._schedule_preview)
+    page._fill_spacing.textChanged.connect(page._on_inspector_edit)
     params_row.addWidget(page._fill_spacing, 0, 1)
     params_row.addWidget(QLabel("Angle (°)"), 1, 0)
     page._fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
     make_resettable_line_edit(page._fill_angle, DEFAULT_FILL_ANGLE)
     page._fill_angle.setFixedWidth(80)
     page._fill_angle.setToolTip("Angle of the infill direction")
-    page._fill_angle.textChanged.connect(page._schedule_preview)
+    page._fill_angle.textChanged.connect(page._on_inspector_edit)
     params_row.addWidget(page._fill_angle, 1, 1)
     params_row.addWidget(QLabel("Boundary inset (mm)"), 2, 0)
     page._fill_inset = QLineEdit(DEFAULT_FILL_INSET)
@@ -689,7 +605,7 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
     page._fill_inset.setToolTip(
         "Keep engraving this far inside each target boundary; useful for kerf and edge clearance"
     )
-    page._fill_inset.textChanged.connect(page._schedule_preview)
+    page._fill_inset.textChanged.connect(page._on_inspector_edit)
     params_row.addWidget(page._fill_inset, 2, 1)
     target_row = QHBoxLayout()
     target_row.setSpacing(8)
@@ -699,14 +615,14 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
         "Fill the outline's negative space without crossing into closed pattern cells"
     )
     page._fill_target_outline_cb.setChecked(False)
-    page._fill_target_outline_cb.toggled.connect(page._schedule_preview)
+    page._fill_target_outline_cb.toggled.connect(page._on_inspector_edit)
     target_row.addWidget(page._fill_target_outline_cb)
     page._fill_target_pattern_cb = QCheckBox("Pattern cells")
     page._fill_target_pattern_cb.setToolTip(
         "Hatch each closed pattern stroke (tiles, tessellation, …)"
     )
     page._fill_target_pattern_cb.setChecked(True)
-    page._fill_target_pattern_cb.toggled.connect(page._schedule_preview)
+    page._fill_target_pattern_cb.toggled.connect(page._on_inspector_edit)
     target_row.addWidget(page._fill_target_pattern_cb)
     target_row.addStretch()
     page._fill_keep_outline_cb = QCheckBox("Keep pattern strokes alongside fill")
@@ -714,7 +630,7 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
         "Output both pattern strokes and laser-fill lines.\nUncheck for fill-only output."
     )
     page._fill_keep_outline_cb.setChecked(True)
-    page._fill_keep_outline_cb.stateChanged.connect(page._schedule_preview)
+    page._fill_keep_outline_cb.stateChanged.connect(page._on_inspector_edit)
     page._fill_params_container = QWidget()
     _fpc_layout = QVBoxLayout(page._fill_params_container)
     _fpc_layout.setContentsMargins(0, 0, 0, 0)

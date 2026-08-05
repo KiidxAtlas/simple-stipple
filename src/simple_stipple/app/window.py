@@ -387,6 +387,11 @@ class App(QMainWindow):
             slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Trace"),
         )
         self._page_runtime.connect_signal_if_present(
+            page_id="pattern",
+            signal_name="openPageRequested",
+            slot=self._switch_to_page,
+        )
+        self._page_runtime.connect_signal_if_present(
             page_id="convert",
             signal_name="openInDraftRequested",
             slot=self._send_pattern_selection_to_draft,
