@@ -50,6 +50,61 @@ class EntityRecord:
 
 
 @dataclass
+class PlacedImage:
+    """A raster placed on the part, in millimetres, owned by the document.
+
+    An image used to belong to whichever page was showing it, which is why
+    "is this the picture I traced or the picture I am engraving?" had no
+    answer. One placement, one document; whether it is engraved or traced to
+    outlines is a treatment on it, not a different page.
+    """
+
+    path: str
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 0.0
+    height: float = 0.0
+    rotation: float = 0.0
+    id: EntityId = field(default_factory=new_entity_id)
+    # Non-placement options (engraving power, trace threshold, …). Kept open
+    # so the two treatments do not each need their own schema here.
+    options: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "path": self.path,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "rotation": self.rotation,
+            "options": deepcopy(self.options),
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> PlacedImage:
+        def number(key: str) -> float:
+            try:
+                return float(raw.get(key) or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        placed = cls(
+            path=str(raw.get("path") or ""),
+            x=number("x"),
+            y=number("y"),
+            width=number("width"),
+            height=number("height"),
+            rotation=number("rotation"),
+            options=dict(raw.get("options") or {}),
+        )
+        if raw.get("id"):
+            placed.id = str(raw["id"])
+        return placed
+
+
+@dataclass
 class Document:
     """Canonical runtime aggregate for entities, selection, layers, and groups."""
 
@@ -63,7 +118,32 @@ class Document:
     constraints: list[GeometricConstraint] = field(default_factory=list)
     guides: list[tuple[str, float]] = field(default_factory=list)
     dimensions: list[dict[str, Any]] = field(default_factory=list)
+    # Images placed on the part, and one treatment per region keyed by the
+    # owning outline's id. Both used to live on the Pattern page, which is
+    # what made them impossible to see from Draw or Trace.
+    images: list[PlacedImage] = field(default_factory=list)
+    treatments: dict[EntityId, dict[str, Any]] = field(default_factory=dict)
     _validate_on_mutate: bool = field(default=True)
+
+    def image_for_id(self, image_id: EntityId) -> PlacedImage | None:
+        return next((image for image in self.images if image.id == image_id), None)
+
+    def treatment_for(self, region_id: EntityId) -> dict[str, Any]:
+        return self.treatments.get(region_id) or {}
+
+    def set_treatment(self, region_id: EntityId, treatment: dict[str, Any] | None) -> None:
+        if not treatment or str(treatment.get("kind", "none")) == "none":
+            self.treatments.pop(region_id, None)
+            return
+        self.treatments[region_id] = deepcopy(treatment)
+
+    def prune_treatments(self) -> int:
+        """Drop treatments whose region no longer exists. Returns how many."""
+        live = set(self.entity_ids())
+        dropped = [rid for rid in self.treatments if rid not in live]
+        for region_id in dropped:
+            del self.treatments[region_id]
+        return len(dropped)
 
     def ensure_unique_ids(self) -> None:
         seen: set[EntityId] = set()
