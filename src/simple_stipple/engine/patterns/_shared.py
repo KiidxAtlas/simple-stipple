@@ -498,21 +498,28 @@ def lattice_cells(
 
     One walker for every tiling pattern, so repeat mode, gap and the document
     pattern origin behave identically everywhere instead of each generator
-    hard-coding its own stagger. ``origin_*`` is applied as a phase offset, so
-    two regions sharing settings stay in step across their shared edge.
+    hard-coding its own stagger.
+
+    Cells sit on the **document** lattice ``origin + k * step``, not on one
+    anchored to this shape's bounding box. That is the whole point: two
+    adjacent regions with the same settings produce one continuous lattice
+    with no seam at their shared edge, and the row index — and therefore the
+    half-drop/brick stagger — is global too. To centre a motif inside one
+    shape instead, the caller resolves an origin from that shape's corner
+    (see ``PatternProcessor._resolve_origin``).
     """
     if col_step <= 0 or row_step <= 0:
         return
     minx, miny, maxx, maxy = outline_poly.bounds
-    phase_x = float(origin_x or 0.0) % col_step
-    phase_y = float(origin_y or 0.0) % row_step
-    row = 0
-    y = miny - pad + phase_y
+    ox = float(origin_x or 0.0)
+    oy = float(origin_y or 0.0)
+    row = math.floor((miny - pad - oy) / row_step)
+    y = oy + row * row_step
     while y <= maxy + pad:
         cancellation_checkpoint()
         offset = row_offset(repeat_mode, col_step, row)
-        col = 0
-        x = minx - pad + phase_x + offset
+        col = math.floor((minx - pad - ox - offset) / col_step)
+        x = ox + offset + col * col_step
         while x <= maxx + pad:
             yield x, y, row, col
             x += col_step
@@ -564,10 +571,12 @@ def gen_custom_tile(
     pad = max(tw, th) * 2.0 + gap
     prep = prepared.prep(outline_poly)
     result: list[list[tuple[float, float]]] = []
-    row = 0
-    phase_x = float(origin_x or 0.0) % col_step
-    phase_y = float(origin_y or 0.0) % row_step
-    y = miny - pad + phase_y
+    # Same document lattice as ``lattice_cells``: anchor on ``origin + k*step``
+    # rather than on this shape's bbox, so tiles line up across regions.
+    ox = float(origin_x or 0.0)
+    oy = float(origin_y or 0.0)
+    row = math.floor((miny - pad - oy) / row_step)
+    y = oy + row * row_step
     while y <= maxy + pad:
         cancellation_checkpoint()
         if mode == "half drop":
@@ -576,8 +585,8 @@ def gen_custom_tile(
             off = col_step / 3.0 if row & 1 else 0.0
         else:
             off = 0.0
-        x = minx - pad + phase_x + off
-        col = 0
+        col = math.floor((minx - pad - ox - off) / col_step)
+        x = ox + off + col * col_step
         while x <= maxx + pad:
             mirror_x = mode == "mirror rows" and bool(row & 1)
             mirror_y = mode == "mirror columns" and bool(col & 1)

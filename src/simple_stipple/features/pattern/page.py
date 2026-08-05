@@ -781,6 +781,43 @@ class PatternPage(BasePage):
     def _snapshot_zone_jobs(self) -> list[dict]:
         return snapshot_zone_jobs(self)
 
+    # ── Document pattern grid ─────────────────────────────────────────────────
+
+    def _on_document_lattice_changed(self, *_args) -> None:
+        """Push the document grid to the engine and re-solve every region.
+
+        This is document scope on purpose: it must never be routed through
+        ``_on_inspector_edit``, which would write the grid into whichever
+        region happened to be selected.
+        """
+        self._push_document_lattice()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _push_document_lattice(self) -> None:
+        def number(field, fallback: float) -> float:
+            try:
+                return float(field.text())
+            except (TypeError, ValueError):
+                return fallback
+
+        self._pattern_service.lattice_origin = (
+            number(self._lattice_origin_x, 0.0),
+            number(self._lattice_origin_y, 0.0),
+        )
+        seed_text = self._lattice_seed.text().strip()
+        self._pattern_service.lattice_seed = int(seed_text) if seed_text.isdigit() else None
+
+    def _snap_lattice_to_selection(self) -> None:
+        """Anchor the document grid on the selection's lower-left corner."""
+        points = [point for poly in self._canvas.get_selected() for point in poly]
+        if not points:
+            self._set_status("Select geometry to snap the pattern grid to it.", STATUS_WARN)
+            return
+        self._lattice_origin_x.setText(f"{min(x for x, _y in points):g}")
+        self._lattice_origin_y.setText(f"{min(y for _x, y in points):g}")
+        self._set_status("Pattern grid snapped to the selection.", STATUS_OK)
+
     # ── Preview / reset ───────────────────────────────────────────────────────
 
     def _reset_preview(self) -> None:

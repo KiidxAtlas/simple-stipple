@@ -220,6 +220,16 @@ class PatternProcessor:
     }
     MAX_ESTIMATED_ELEMENTS = 100_000
 
+    # ── Document lattice ──────────────────────────────────────────────────
+    #
+    # Every generator anchors to this one grid, so two regions with the same
+    # settings produce one continuous lattice instead of two that meet at a
+    # visible seam. The seed does the same job for the stochastic generators:
+    # one document seed means re-solving is reproducible rather than
+    # reshuffling the point set on every edit.
+    lattice_origin: tuple[float, float] = (0.0, 0.0)
+    lattice_seed: int | None = None
+
     @classmethod
     def estimate_pattern_elements(cls, outline: Any, pattern: str, params: dict) -> int:
         """Conservative pre-generation estimate used to reject runaway jobs."""
@@ -499,7 +509,7 @@ class PatternProcessor:
         pattern: str,
         params: dict,
     ) -> list[list[tuple[float, float]]]:
-        params = self._scaled_pattern_params(pattern, params)
+        params = self._apply_document_lattice(self._scaled_pattern_params(pattern, params))
         self.validate_pattern_complexity(outline, pattern, params)
         if pattern == NULL_PATTERN:
             return []
@@ -540,8 +550,45 @@ class PatternProcessor:
         ]
         return params
 
+    def _apply_document_lattice(self, params: dict) -> dict:
+        """Stamp the document's grid onto one generator's parameters.
+
+        Both the zone path and the whole-document path route through
+        ``_gen_pattern``, so this is the single place the document lattice
+        enters the engine.
+        """
+        origin_x, origin_y = self.lattice_origin
+        params["origin_x"] = float(origin_x)
+        params["origin_y"] = float(origin_y)
+        if self.lattice_seed is not None:
+            # ponytail: one seed makes a re-solve reproducible. Point sets are
+            # still generated per region, so Voronoi/Stipple are stable, not
+            # continuous across a shared edge — that needs document-wide point
+            # generation, which is only worth it if users ask for it.
+            params["seed"] = int(self.lattice_seed)
+        return params
+
+    @staticmethod
+    def _resolve_origin(outline, params: dict) -> dict:
+        """Turn a region-relative origin into the absolute one generators want.
+
+        Patterns anchor to the document lattice by default, which is what makes
+        two adjacent regions share one continuous grid. ``align_to_region``
+        is the deliberate opt-out for a motif that should be centred in one
+        shape; it is resolved here so no generator has to know about it.
+        """
+        if not params.get("align_to_region"):
+            return params
+        minx, miny, _maxx, _maxy = outline.bounds
+        return {
+            **params,
+            "origin_x": float(params.get("origin_x") or 0.0) + minx,
+            "origin_y": float(params.get("origin_y") or 0.0) + miny,
+        }
+
     @staticmethod
     def _generate_base_pattern(outline, pattern: str, params: dict):
+        params = PatternProcessor._resolve_origin(outline, params)
         if pattern == "Honeycomb":
             return get_generator("gen_honeycomb")(
                 outline,
@@ -1033,6 +1080,14 @@ class PatternProcessor:
         shape's area, and visually overlay it. Treating any other zone's
         outline as an automatic cutout when it's geometrically contained in
         this zone mirrors the existing "open shape = cutout" convention.
+
+        This is the pass that makes a region subtract itself from the region
+        containing it — the plan pencilled it in for deletion in Phase 5 on
+        the assumption that Phase 1 would replace its input, but Phase 1
+        deliberately kept feeding it (see ``features/pattern/treatments``)
+        rather than duplicate containment logic on the page side. Deleting it
+        now would break nesting; it stays until something else computes the
+        subtraction.
         """
         target_polys = zones[target_idx].get("polys") or []
         if not target_polys:

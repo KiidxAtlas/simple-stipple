@@ -128,6 +128,11 @@ def collect_form_state(page: Any) -> dict:
         "minimum_area": page._minimum_area_edit.text(),
         "optimize_paths": page._optimize_paths_cb.isChecked(),
         "preview_quality": page._preview_quality_combo.currentData() or DEFAULT_PREVIEW_QUALITY,
+        # Document scope, not region scope: every treatment carries a copy so
+        # a workspace round-trips it, but they all hold the same grid.
+        "lattice_origin_x": page._lattice_origin_x.text(),
+        "lattice_origin_y": page._lattice_origin_y.text(),
+        "lattice_seed": page._lattice_seed.text(),
     }
     # All PARAM_SPECS pattern fields — key derived from attr name (strip leading _)
     for specs in PARAM_SPECS.values():
@@ -189,6 +194,10 @@ def restore_form_state(page: Any, payload: dict) -> None:
     page._preview_quality_combo.setCurrentIndex(
         max(0, page._preview_quality_combo.findData(quality))
     )
+    page._lattice_origin_x.setText(str(values.get("lattice_origin_x", "0")))
+    page._lattice_origin_y.setText(str(values.get("lattice_origin_y", "0")))
+    page._lattice_seed.setText(str(values.get("lattice_seed", "1")))
+    page._push_document_lattice()
     page._on_fill_mode_changed()
     if "custom_tile_polys" in values:
         raw_tile = values.get("custom_tile_polys") or []
