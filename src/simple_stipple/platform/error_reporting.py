@@ -143,19 +143,15 @@ class ErrorToast(QFrame):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        self.setStyleSheet(
-            "QFrame { background: #2d1418; border: 1px solid #f85149;"
-            " border-radius: 6px; }"
-            "QLabel { color: #ffd7d3; font-size: 12px; }"
-            "QLabel#title { color: #f85149; font-weight: 600; font-size: 13px; }"
-        )
+        self.setProperty("role", "error-toast")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(2)
 
         self._title = QLabel()
-        self._title.setObjectName("title")
+        self._title.setProperty("role", "error-toast-title")
         self._detail = QLabel()
+        self._detail.setProperty("role", "error-toast-detail")
         self._detail.setWordWrap(True)
         layout.addWidget(self._title)
         layout.addWidget(self._detail)

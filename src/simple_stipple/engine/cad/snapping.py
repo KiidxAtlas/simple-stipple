@@ -217,15 +217,16 @@ def snap_to_polyline(
     min_scale: float = _MIN_SCALE,
     allow_vertex: bool = True,
     allow_midpoint: bool = True,
+    allow_intersection: bool = True,
     allow_edge: bool = True,
 ) -> SnapResult | None:
     """Return the nearest semantic snap on any polyline within snap distance.
 
     Priority order: vertices, midpoints, intersections, centers, perpendicular
     (when drawing), and finally generic edges. ``allow_vertex`` gates the
-    vertex/intersection/center point family; ``allow_midpoint`` independently
-    gates midpoint targets; ``allow_edge`` gates the perpendicular/generic-edge
-    fallback family.
+    vertex/center point family; ``allow_midpoint`` and ``allow_intersection``
+    independently gate their target types; ``allow_edge`` gates the
+    perpendicular/generic-edge fallback family.
     """
     cwx, cwy = c2w(cx, cy)
     world_r = (snap_dist / max(scale, min_scale)) * 1.6
@@ -259,12 +260,7 @@ def snap_to_polyline(
             vertex_pt = world_points[nearest]
             return (vertex_pt[0], vertex_pt[1], "vertex")
 
-        if allow_midpoint:
-            midpoint = _nearest_midpoint(cx, cy, segments, w2c, snap_dist)
-            if midpoint is not None:
-                _distance, point = midpoint
-                return (point[0], point[1], "midpoint")
-
+    if allow_intersection:
         intersection = _nearest_intersection(
             cx, cy, segments, w2c, segment_intersection_point, snap_dist
         )
@@ -272,6 +268,13 @@ def snap_to_polyline(
             _distance, point = intersection
             return (point[0], point[1], "intersection")
 
+    if allow_midpoint:
+        midpoint = _nearest_midpoint(cx, cy, segments, w2c, snap_dist)
+        if midpoint is not None:
+            _distance, point = midpoint
+            return (point[0], point[1], "midpoint")
+
+    if allow_vertex:
         best_dist = snap_dist
         best_pt = None
         for _eid, poly in candidate_polys:
@@ -359,7 +362,9 @@ def resolve_snap(
     draw_points: Sequence[Point] | None = None,
     allow_vertex: bool = True,
     allow_midpoint: bool = True,
+    allow_intersection: bool = True,
     allow_edge: bool = True,
+    snap_dist: float = _SNAP_DIST,
 ) -> SnapResult | None:
     candidates: list[tuple[float, SnapResult]] = []
     if allow_polyline:
@@ -380,7 +385,9 @@ def resolve_snap(
             mode=mode,
             allow_vertex=allow_vertex,
             allow_midpoint=allow_midpoint,
+            allow_intersection=allow_intersection,
             allow_edge=allow_edge,
+            snap_dist=snap_dist,
         )
         if poly_snap is not None:
             sx, sy = w2c(poly_snap[0], poly_snap[1])
@@ -427,11 +434,13 @@ def resolve_drag_snap(
     mode: str | None,
     allow_vertex: bool = True,
     allow_midpoint: bool = True,
+    allow_intersection: bool = True,
     allow_edge: bool = True,
     exclude_vertices: set[tuple[EntityId, int]] | None = None,
     exclude_segments: set[tuple[EntityId, int]] | None = None,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
+    snap_dist: float = _SNAP_DIST,
 ) -> SnapResult | None:
     candidates: list[tuple[float, SnapResult]] = []
     excluded_segments = exclude_segments or set()
@@ -455,7 +464,7 @@ def resolve_drag_snap(
 
     if allow_polyline:
         cwx, cwy = c2w(cx, cy)
-        world_r = (_SNAP_DIST / max(scale, _MIN_SCALE)) * 1.6
+        world_r = (snap_dist / max(scale, _MIN_SCALE)) * 1.6
         # At high zoom (large scale), world_r shrinks and can become too small to
         # capture large-radius arcs.  Clamp to at least 1.0 world unit so arcs
         # with R > 1000 remain snappable when the user zooms in closely.
@@ -476,6 +485,7 @@ def resolve_drag_snap(
                 polylines,
                 hidden_polys,
                 w2c,
+                snap_dist=snap_dist,
                 exclude=excluded_vertices,
             )
             if vertex_snap is not None:
@@ -488,7 +498,7 @@ def resolve_drag_snap(
                 )
 
         if allow_midpoint:
-            best_dist: float = float(_SNAP_DIST)
+            best_dist: float = float(snap_dist)
             best_midpoint: Point | None = None
             for _eid, poly in candidate_polys:
                 n = len(poly)
@@ -513,11 +523,10 @@ def resolve_drag_snap(
                     )
                 )
 
-        if allow_vertex:
-            # Same "point family" as vertex/midpoint above — dragging a
-            # shape onto a line crossing should snap there too, not just
-            # the hover/draw path (resolve_snap already has this).
-            best_dist = float(_SNAP_DIST)
+        if allow_intersection:
+            # Intersections are a separate explicit snap family. They must
+            # remain reachable even when vertices or midpoints are disabled.
+            best_dist = float(snap_dist)
             best_intersection: Point | None = None
             segments: list[tuple[Point, Point]] = []
             for _eid, poly in candidate_polys:
@@ -549,7 +558,7 @@ def resolve_drag_snap(
                 )
 
         if allow_edge:
-            best_dist = float(_SNAP_DIST)
+            best_dist = float(snap_dist)
             best_edge: Point | None = None
             for _eid, poly in candidate_polys:
                 n = len(poly)
@@ -585,12 +594,20 @@ def resolve_drag_snap(
     if not candidates:
         return None
 
-    # In edit drag mode, make midpoint snaps easier to acquire: if midpoint is
-    # nearly as close as the best candidate, prefer midpoint.
+    # In edit drag mode, make midpoint snaps easier to acquire over an edge
+    # or grid point—but never steal an explicit vertex or intersection.
     if mode == "edit":
         midpoint_candidates = [(dist, snap) for dist, snap in candidates if snap[2] == "midpoint"]
         if midpoint_candidates:
             mid_dist, mid_snap = min(midpoint_candidates, key=lambda item: item[0])
+            explicit_distances = [
+                float(dist)
+                for dist, snap in candidates
+                if snap[2] in {"vertex", "intersection", "center"}
+            ]
+            if explicit_distances:
+                candidates.sort(key=lambda item: item[0])
+                return candidates[0][1]
             best_dist = min(float(dist) for dist, _ in candidates)
             if mid_dist <= best_dist + 6.0:
                 return mid_snap

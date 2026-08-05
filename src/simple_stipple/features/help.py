@@ -18,7 +18,7 @@ from html import escape as _html_escape
 from html import unescape as _html_unescape
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QFont, QPalette, QTextCursor
+from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -899,6 +899,7 @@ def _build_support() -> str:
 
 <h3 class="subheading">Getting Help</h3>
 <ul>
+    <li><strong> Feel free to reach out to me!!</strong>
     <li><strong>This manual:</strong> You're reading it! Use the search box (top-left of this dialog) to find topics quickly.</li>
     <li><strong>Keyboard Shortcuts dialog:</strong> Open from the Help menu to see a full list of all shortcuts.</li>
     <li><strong>Command Palette (⌘K):</strong> Search for any command by name, page, or shortcut.</li>
@@ -938,11 +939,31 @@ macOS, the verified disk image opens so you can replace the app bundle.</p>
 # ── Full HTML content builder ─────────────────────────────────────────────
 
 
+def _build_production_workflows() -> str:
+    """Task-first routes for the capabilities added across the application."""
+    return """
+<h2 id="production-workflows" class="section-heading">Production Workflows</h2>
+<p>Use these routes when you know the outcome you need, not the feature name.</p>
+<h3 class="subheading">Vector artwork → pattern DXF</h3>
+<ol><li>In <strong>Draft</strong>, use <strong>Import…</strong> and choose whether to replace or add geometry.</li><li>Clean up paths, then send closed outlines to Pattern.</li><li>Choose pattern and fill, inspect Preview, choose <strong>Format</strong>, then use the single main <strong>Export</strong> button.</li></ol>
+<h3 class="subheading">Image → vector outline</h3>
+<ol><li>In <strong>Trace</strong>, add a high-contrast image and set physical width.</li><li>Tune threshold and minimum feature size while inspecting the preview.</li><li>Send the result to Draft for cleanup or Pattern for texture, then export from that destination.</li></ol>
+<h3 class="subheading">Image engraving inside an outline</h3>
+<ol><li>Load or draw a closed Pattern outline, then open <strong>Advanced controls → Image Engraving</strong>.</li><li>Add the image. It is proportionally fitted and centered in the outline; drag its overlay or use placement fields to refine it.</li><li>Choose Whole outline or a zone clip, review laser settings, select <strong>Use engraving export</strong>, then use main Export.</li></ol>
+<p><strong>Safety:</strong> material profiles are starting values. Frame the job and test on scrap.</p>
+<h3 class="subheading">Precision and construction</h3>
+<p>The precision bar controls grid, object snaps, construction geometry, and constraints. Use snap strength to make capture looser or stronger; set it to zero for a temporary freehand pass without losing your saved snap choices. Apply horizontal, vertical, parallel, perpendicular, equal, coincident, midpoint, symmetric, intersection, fixed, projection, and compatible circular/curve constraints from Geometry Constraints or the command palette.</p>
+<h3 class="subheading">Shapes, arrays, and context actions</h3>
+<p>Right-click the canvas for selection-aware actions. Beyond standard Draw tools, the context and radial menus can create rings, gears, spirals, teardrops, keyholes, superellipses, rounded/chamfered stars, and joinery layouts. Use Align, Distribute, Grid array, Radial array, Group, and Move to layer instead of manually nudging a repeated layout.</p>
+"""
+
+
 def build_help_html() -> str:
     """Build the complete help HTML from all sections."""
     sections = [
         _build_getting_started(),
         _build_common_tasks(),
+        _build_production_workflows(),
         _build_files_and_recovery(),
         _build_precision_editing(),
         _build_draft_page(),
@@ -1014,8 +1035,8 @@ def build_help_html() -> str:
     }}
 </style>
 
-<h1 style="text-align:center;color:#f0f6fc;">Simple Stipple — User Manual</h1>
-<p style="text-align:center;color:#8b949e;">Draw, trace, pattern, convert, and prepare vector work with confidence.</p>
+<h1 id="manual-home" style="text-align:center;color:#f0f6fc;">Simple Stipple Manual</h1>
+<p style="text-align:center;color:#8b949e;">A task-first guide to drawing, patterning, image engraving, and production-ready export.</p>
 
 <hr style="border:none;border-top:2px solid #2f81f7;margin:20px 0;">
 
@@ -1028,6 +1049,7 @@ def build_help_html() -> str:
 TOC_ENTRIES: list[tuple[str, str]] = [
     _toc_entry("getting-started", "Start here · Getting Started"),
     _toc_entry("common-tasks", "Start here · I Want To…"),
+    _toc_entry("production-workflows", "Start here · Production Workflows"),
     _toc_entry("files-recovery", "Files · Save, Import & Recover"),
     _toc_entry("precision-editing", "Edit · Select, Round & Align"),
     _toc_entry("draft-page", "Create · Draft Page"),
@@ -1055,6 +1077,13 @@ TOC_ENTRIES: list[tuple[str, str]] = [
 TOC_SEARCH_TERMS: dict[str, tuple[str, ...]] = {
     "getting-started": ("begin", "first project", "new user", "overview", "workflow"),
     "common-tasks": ("how do i", "what can i do", "workflow", "quick start", "goal"),
+    "production-workflows": (
+        "laser",
+        "production",
+        "engraving workflow",
+        "first export",
+        "image engraving",
+    ),
     "files-recovery": (
         "save",
         "open",
@@ -1158,12 +1187,18 @@ class HelpDialog(QDialog):
         header_layout.addWidget(title_label)
 
         header_layout.addStretch()
+        home_btn = QPushButton("Browse topics")
+        home_btn.setObjectName("helpBrowseButton")
+        home_btn.setToolTip("Clear search and return to the start of the manual")
+        home_btn.clicked.connect(self._show_manual_home)
+        header_layout.addWidget(home_btn)
 
         close_btn = QPushButton()
         close_btn.setIcon(tool_icon("cancel", size=16))
         close_btn.setAccessibleName("Close user manual")
         close_btn.setObjectName("helpCloseButton")
-        close_btn.setFixedSize(32, 32)
+        close_btn.setMinimumSize(32, 32)
+        close_btn.setToolTip("Close user manual")
         # A QPushButton inside a QDialog defaults to autoDefault=True, so as
         # the dialog's only button it silently auto-triggers on every Enter
         # press anywhere in the dialog (including the search box) and closes
@@ -1248,148 +1283,9 @@ class HelpDialog(QDialog):
     # ── Styling ────────────────────────────────────────────────────────
 
     def _apply_stylesheet(self) -> None:
-        # Read the applied app palette rather than a settings lookup — this
-        # dialog previously had a hardcoded dark gradient with its own
-        # one-off accent (#0096ff) that matched neither app theme, so it
-        # stayed dark under Light mode. Palette lookup keeps it correct
-        # regardless of how theming was applied upstream.
-        is_light = self.palette().color(QPalette.ColorRole.Window).lightness() > 128
-        accent = "#0969da" if is_light else "#2f81f7"
-        if is_light:
-            bg_grad = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ffffff, stop:1 #f6f8fa)"
-            header_grad = (
-                "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-                "stop:0 rgba(9, 105, 218, 0.12), stop:1 rgba(9, 105, 218, 0.05))"
-            )
-            header_border = "rgba(9, 105, 218, 0.35)"
-            title_color = "#1f2328"
-            close_color = "rgba(31, 35, 40, 0.65)"
-            close_hover = "#1f2328"
-            close_hover_bg = "rgba(31, 35, 40, 0.08)"
-            toc_bg = "rgba(246, 248, 250, 0.9)"
-            toc_border = "rgba(31, 35, 40, 0.1)"
-            label_color = "rgba(31, 35, 40, 0.6)"
-            search_bg = "#ffffff"
-            search_text = "#1f2328"
-            search_border = "rgba(31, 35, 40, 0.2)"
-            search_placeholder = "rgba(31, 35, 40, 0.4)"
-            status_color = "rgba(31, 35, 40, 0.55)"
-            item_color = "#24292f"
-            selected_bg = "rgba(9, 105, 218, 0.12)"
-            selected_color = "#0969da"
-        else:
-            bg_grad = (
-                "qlineargradient(x1:0, y1:0, x2:1, y2:1, "
-                "stop:0 rgba(30, 35, 45, 1), stop:1 rgba(25, 30, 40, 1))"
-            )
-            header_grad = (
-                "qlineargradient(x1:0, y1:0, x2:1, y2:0, "
-                "stop:0 rgba(47, 129, 247, 0.2), stop:1 rgba(31, 111, 235, 0.1))"
-            )
-            header_border = "rgba(47, 129, 247, 0.4)"
-            title_color = "#ffffff"
-            close_color = "rgba(255, 255, 255, 0.7)"
-            close_hover = "#ffffff"
-            close_hover_bg = "rgba(255, 255, 255, 0.1)"
-            toc_bg = "rgba(25, 30, 40, 0.9)"
-            toc_border = "rgba(255, 255, 255, 0.08)"
-            label_color = "rgba(255, 255, 255, 0.6)"
-            search_bg = "rgba(30, 35, 45, 0.9)"
-            search_text = "rgba(255, 255, 255, 0.88)"
-            search_border = "rgba(255, 255, 255, 0.15)"
-            search_placeholder = "rgba(255, 255, 255, 0.4)"
-            status_color = "rgba(255, 255, 255, 0.55)"
-            item_color = "#c9d1d9"
-            selected_bg = "rgba(47, 129, 247, 0.15)"
-            selected_color = "#ffffff"
-        self.setStyleSheet(f"""
-            QDialog {{
-                background: {bg_grad};
-            }}
-            #helpHeader {{
-                background: {header_grad};
-                border-bottom: 2px solid {header_border};
-            }}
-            #helpTitle {{
-                color: {title_color};
-                font-size: 18px;
-                font-weight: bold;
-                padding: 4px 0;
-            }}
-            #helpCloseButton {{
-                background: transparent;
-                color: {close_color};
-                border: none;
-                font-size: 16px;
-            }}
-            #helpCloseButton:hover {{
-                color: {close_hover};
-                background: {close_hover_bg};
-            }}
-            #tocPanel {{
-                background: {toc_bg};
-                border-right: 1px solid {toc_border};
-            }}
-            #tocLabel {{
-                color: {label_color};
-                font-size: 11px;
-                letter-spacing: 1px;
-                padding: 4px 16px;
-            }}
-            #tocSearch {{
-                background: {search_bg};
-                color: {search_text};
-                border: 1px solid {search_border};
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 13px;
-                margin: 0 8px 4px 8px;
-            }}
-            #tocSearch:focus {{
-                border-color: {accent};
-            }}
-            #tocSearch[error="true"] {{
-                border-color: #f85149;
-                background: rgba(248, 81, 73, 0.08);
-            }}
-            #tocSearch::placeholder {{
-                color: {search_placeholder};
-            }}
-            #tocSearchStatus {{
-                color: {status_color};
-                font-size: 11px;
-                padding: 0 16px 4px 16px;
-            }}
-            #tocList {{
-                background: transparent;
-                color: {item_color};
-                border: none;
-                padding: 4px;
-            }}
-            #tocList::item {{
-                color: {item_color};
-                min-height: 24px;
-                padding: 3px 8px;
-                border-radius: 4px;
-            }}
-            QListWidget::item:selected {{
-                background: {selected_bg};
-                color: {selected_color};
-            }}
-            #helpContent {{
-                /* The generated manual HTML (build_help_html()) hardcodes
-                   its own light-gray-on-dark <style> block, independent of
-                   this dialog's chrome — same "always-dark reading surface"
-                   pattern as the CAD canvas and Convert's preview pane, so
-                   this stays fixed rather than following Light/Dark. */
-                background: #0d1117;
-                color: rgba(255, 255, 255, 0.88);
-                border: none;
-                border-radius: 6px;
-                line-height: 1.7;
-            }}
-        """)
-
+        """Refresh centralized Help-dialog selectors after construction."""
+        self.style().unpolish(self)
+        self.style().polish(self)
     # ── Search / Filter ────────────────────────────────────────────────
 
     def _section_text(self, section_id: str) -> str:
@@ -1481,6 +1377,13 @@ class HelpDialog(QDialog):
         self._search_status.setText(f"{visible_count} {noun}{best_text}")
         self._search_box.setProperty("error", bool(query) and visible_count == 0)
         refresh_style(self._search_box)
+
+    def _show_manual_home(self) -> None:
+        """Restore the complete navigation list and its introductory page."""
+        self._search_box.clear()
+        self._content.scrollToAnchor("manual-home")
+        if self._toc_list.count():
+            self._toc_list.setCurrentRow(0)
 
     def _find_in_content(self) -> None:
         """Enter in the search box jumps to, selects (highlighted via the

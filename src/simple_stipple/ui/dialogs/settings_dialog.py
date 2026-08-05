@@ -26,8 +26,6 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.features.trace.form import TRACE_DEFAULT_FIELDS, trace_default
 from simple_stipple.platform.config import (
-    DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
-    DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
@@ -54,7 +52,7 @@ from simple_stipple.ui.components.tokens import (
     SPACE_SM,
 )
 from simple_stipple.ui.dialogs.customize_dialogs import (
-    ContextMenuCustomizeDialog,
+    ContextMenuActionCustomizeDialog,
     DrawSidebarCustomizeDialog,
     RadialMenuDialog,
 )
@@ -475,7 +473,7 @@ class SettingsDialog(QDialog):
         field.setSpacing(self._SPACE)
         field.addWidget(entry, 1)
         browse = QPushButton("Browse…")
-        browse.setFixedSize(72, 28)
+        browse.setMinimumSize(72, 28)
         browse.setProperty("role", "browse-btn")
         browse.setToolTip("Choose a folder")
         browse.setAutoDefault(False)
@@ -484,8 +482,8 @@ class SettingsDialog(QDialog):
         clear_btn = QPushButton()
         clear_btn.setIcon(tool_icon("cancel", size=16))
         clear_btn.setAccessibleName("Clear saved folder path")
-        clear_btn.setFixedSize(28, 28)
-        clear_btn.setProperty("role", "browse-btn")
+        clear_btn.setMinimumSize(28, 28)
+        clear_btn.setProperty("role", "icon-sm")
         clear_btn.setToolTip("Clear this saved folder path")
         clear_btn.setAutoDefault(False)
         clear_btn.clicked.connect(entry.clear)
@@ -611,20 +609,10 @@ class SettingsDialog(QDialog):
             self._settings["draw_sidebar_shape_tools"] = dlg.get_shape_tools()
 
     def _open_context_menu_customize(self) -> None:
-        current = self._settings.get("context_menu_sections", list(DEFAULT_CONTEXT_MENU_SECTIONS))
-        overflow = self._settings.get(
-            "context_menu_overflow_sections",
-            list(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS),
-        )
-        dlg = ContextMenuCustomizeDialog(
-            self,
-            sections=current,
-            overflow_sections=overflow,
-            profiles=self._settings.get("context_menu_profiles", {}),
+        dlg = ContextMenuActionCustomizeDialog(
+            self, profiles=self._settings.get("context_menu_profiles", {})
         )
         if dlg.exec():
-            self._settings["context_menu_sections"] = dlg.get_sections()
-            self._settings["context_menu_overflow_sections"] = dlg.get_overflow_sections()
             self._settings["context_menu_profiles"] = dlg.get_profiles()
 
     def _browse_dir(self, key: str) -> None:

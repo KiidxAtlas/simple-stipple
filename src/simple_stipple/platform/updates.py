@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from importlib import metadata
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 _LOG = logging.getLogger(__name__)
 
@@ -79,20 +79,23 @@ def _read_windows_executable_version(executable: Path) -> str | None:
     try:
         import ctypes
 
-        size = ctypes.windll.version.GetFileVersionInfoSizeW(str(executable), None)
+        winapi: Any = cast(Any, ctypes).windll
+        size = winapi.version.GetFileVersionInfoSizeW(str(executable), None)
         if not size:
             return None
         data = ctypes.create_string_buffer(size)
-        if not ctypes.windll.version.GetFileVersionInfoW(str(executable), 0, size, data):
+        if not winapi.version.GetFileVersionInfoW(str(executable), 0, size, data):
             return None
         value = ctypes.c_void_p()
         value_len = ctypes.c_uint()
-        if not ctypes.windll.version.VerQueryValueW(
+        if not winapi.version.VerQueryValueW(
             data,
             "\\StringFileInfo\\040904B0\\FileVersion",
             ctypes.byref(value),
             ctypes.byref(value_len),
         ):
+            return None
+        if value.value is None:
             return None
         text = ctypes.wstring_at(value.value, value_len.value).strip().rstrip("\x00")
         return text if text and text != "0.0.0" else None

@@ -110,12 +110,15 @@ def mark_selection_as_cutout(page: Any) -> None:
         entity_indices = {
             entity_id: index for index, entity_id in enumerate(page._canvas.get_entity_ids())
         }
-        cell_indices = {entity_indices[eid] for eid in entity_ids if eid in entity_indices}
+        cell_indices = {
+            entity_indices[eid]
+            for eid in entity_ids
+            if eid in entity_indices and eid in page._canvas._pattern_cell_indices
+        }
         selected_cells = [
             list(pattern_polys[idx - outline_count])
             for idx in cell_indices
-            if idx in page._canvas._pattern_cell_indices
-            and 0 <= idx - outline_count < len(pattern_polys)
+            if 0 <= idx - outline_count < len(pattern_polys)
         ]
         unique_cells: dict[tuple, list[tuple[float, float]]] = {}
         for poly in selected_cells:

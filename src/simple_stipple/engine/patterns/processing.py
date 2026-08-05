@@ -844,16 +844,44 @@ class PatternProcessor:
             cell_shapes: list[tuple[Any, Any, Any]] = []
             pending_lines: list[list[tuple[float, float]]] = []
             try:
-                for poly in polys:
-                    shp = _polygon_from_polyline_shared(poly, force_close=False)
-                    if shp is not None:
-                        cell_shapes.append(
-                            (shp, self._poly_repeat_signature(poly), self._poly_signature(poly))
-                        )
-                    elif len(poly) >= 2:
-                        pending_lines.append(poly)
+                if pattern == "Custom Tile":
+                    # A motif often has several nested closed paths (rings,
+                    # counters, decorative cutouts). Build one compound cell
+                    # region so inner paths become holes rather than a second
+                    # overlapping hatch pass. Open paths deliberately remain
+                    # linework and are never coerced into cells.
+                    closed_tile_paths: list[list[tuple[float, float]]] = []
+                    for poly in polys:
+                        if _polygon_from_polyline_shared(poly, force_close=False) is None:
+                            continue
+                        repeat_signature = self._poly_repeat_signature(poly)
+                        instance_signature = self._poly_signature(poly)
+                        if (
+                            repeat_signature in cell_cutout_signatures
+                            or instance_signature in instance_cutout_signatures
+                        ):
+                            continue
+                        closed_tile_paths.append(poly)
+                    compound_cells = build_fill_region(closed_tile_paths)
+                    if compound_cells is not None and not compound_cells.is_empty:
+                        cell_shapes.append((compound_cells, None, None))
+                else:
+                    for poly in polys:
+                        shp = _polygon_from_polyline_shared(poly, force_close=False)
+                        if shp is not None:
+                            cell_shapes.append(
+                                (shp, self._poly_repeat_signature(poly), self._poly_signature(poly))
+                            )
+                        elif len(poly) >= 2:
+                            pending_lines.append(poly)
 
-                if pending_lines:
+                # Open custom-tile strokes are decorative linework. Running
+                # polygonize across every repeated copy joins neighbouring
+                # strokes into accidental large cells, which then receive
+                # hatch fills that spill across the tile lattice. Only an
+                # explicitly closed motif path is a fillable custom-tile
+                # cell; keep its open paths as strokes only.
+                if pending_lines and pattern != "Custom Tile":
                     from shapely.geometry import (  # type: ignore[import-untyped]
                         LineString as _LS,
                     )

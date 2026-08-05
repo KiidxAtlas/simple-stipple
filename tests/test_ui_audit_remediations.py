@@ -9,38 +9,57 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QWheelEvent
-from PySide6.QtWidgets import QApplication, QToolButton, QWidget
+from PySide6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QToolButton, QWidget
 from shapely.geometry import Point, Polygon
 
+import simple_stipple.ui.dialogs.customize_dialogs as customize_dialogs
 from simple_stipple.canvas.layers.logic import describe_polyline
+from simple_stipple.canvas.operations.hud_text import HudTextService, text_to_polylines
 from simple_stipple.canvas.snap import SnapEngine
-from simple_stipple.canvas.widget import DxfCanvas
+from simple_stipple.canvas.widget import _CONTEXT_STATIC_ACTION_IDS, DxfCanvas
 from simple_stipple.canvas.widgets.draw_sidebar import DrawSidebar, _ResizeHandle
 from simple_stipple.canvas.widgets.precision_bar import CanvasPrecisionBar
 from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
 from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
 from simple_stipple.canvas.widgets.toolbar import canvas_toolbar
 from simple_stipple.document.model import CanvasDocument, EntityRecord
+from simple_stipple.engine.cad.constraints import GeometricConstraint, solve_constraints
 from simple_stipple.engine.editing.split import split_paths
+from simple_stipple.engine.formats.dxf import polylines_to_outline
 from simple_stipple.engine.patterns.fill import FillSpec, apply_fill
 from simple_stipple.engine.patterns.processing import PatternProcessor
 from simple_stipple.features.convert import ConvertPage
 from simple_stipple.features.help import HelpDialog
 from simple_stipple.features.pattern.page import PatternPage
+from simple_stipple.features.pattern.workers import compute_preview
 from simple_stipple.features.pattern.zones import (
     _restore_preview_poly_to_source,
     highlight_zone_on_canvas,
     select_zone_for_canvas_selection,
 )
-from simple_stipple.platform.settings import MIN_DRAW_SIDEBAR_WIDTH
+from simple_stipple.platform.settings import (
+    DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
+    MIN_DRAW_SIDEBAR_WIDTH,
+)
 from simple_stipple.platform.updates import UpdateInfo
 from simple_stipple.ui.components.cycle_button import CycleIconButton
 from simple_stipple.ui.components.focus import CanvasEscapeRouter
 from simple_stipple.ui.components.inputs import NoWheelSlider
-from simple_stipple.ui.components.workflow import WorkflowStepper, set_status_label
-from simple_stipple.ui.dialogs.customize_dialogs import _build_list
+from simple_stipple.ui.components.workflow import (
+    OperationProgress,
+    WorkflowStepper,
+    set_status_label,
+)
+from simple_stipple.ui.dialogs.customize_dialogs import (
+    _CONTEXT_ACTION_LABELS,
+    ContextMenuActionCustomizeDialog,
+    _build_list,
+    _checked_keys,
+    _ordered_keys,
+)
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
+from simple_stipple.ui.dialogs.import_dialog import VectorImportModeDialog
 from simple_stipple.ui.dialogs.settings_dialog import SettingsDialog
 from simple_stipple.ui.dialogs.update_dialog import UpdateDialog
 from simple_stipple.ui.notifications import notification_history
@@ -135,6 +154,17 @@ def test_outline_transfer_preserves_source_layers(app: QApplication) -> None:
     page.close()
 
 
+def test_fill_is_primary_pattern_workflow_not_an_advanced_control(app: QApplication) -> None:
+    page = PatternPage(settings={"pattern_advanced_mode": False})
+
+    page._set_advanced_mode(False)
+
+    assert not page._fill_section.isHidden()
+    assert page._engraving_section.isHidden()
+    page.shutdown()
+    page.close()
+
+
 def test_knife_splits_when_endpoints_land_on_closed_shape_boundary() -> None:
     square = [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]]
     result = split_paths(square, [(0.0, 5.0), (10.0, 5.0)])
@@ -142,6 +172,19 @@ def test_knife_splits_when_endpoints_land_on_closed_shape_boundary() -> None:
     assert len(result.paths) == 2
     # A line fully inside a closed region must still not become an invisible cut.
     assert not split_paths(square, [(2.0, 5.0), (8.0, 5.0)]).changed
+
+
+def test_curve_split_retains_the_drawn_curve_instead_of_using_its_endpoint_chord() -> None:
+    square = [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]]
+    curve = [(0.0, 5.0), (2.5, 7.0), (7.5, 7.0), (10.0, 5.0)]
+
+    result = split_paths(square, curve)
+
+    assert result.changed
+    assert len(result.paths) == 2
+    split_vertices = {point for piece in result.paths for point in piece.points}
+    assert (2.5, 7.0) in split_vertices
+    assert (7.5, 7.0) in split_vertices
 
 
 def test_none_pattern_refreshes_and_keeps_export_action_available(
@@ -158,6 +201,60 @@ def test_none_pattern_refreshes_and_keeps_export_action_available(
     assert page._gen_btn.isEnabled()
     page.shutdown()
     page.close()
+
+
+def test_pattern_export_format_selection_does_not_execute_export(app: QApplication) -> None:
+    """Changing format must not also start a potentially expensive export."""
+    page = PatternPage(settings={})
+    calls: list[bool] = []
+    page._run_remembered_export = lambda: calls.append(True)
+
+    page._select_export_kind("laserstar")
+
+    assert page._export_default == "laserstar"
+    assert calls == []
+    assert "LaserStar" in page._gen_btn.text()
+    page.shutdown()
+    page.close()
+
+
+def test_selection_actions_stay_on_canvas_and_offer_grouping(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    canvas.add_polylines_state(
+        [
+            [(0.0, 0.0), (1.0, 0.0)],
+            [(0.0, 1.0), (1.0, 1.0)],
+        ]
+    )
+    canvas.select_all()
+
+    actions = canvas.get_context_actions()
+
+    assert [action[0] for action in actions] == ["delete-selection", "group-selection"]
+    assert canvas.trigger_context_action("group-selection")
+    assert all(entity.group is not None for entity in canvas._entities)
+    canvas.close()
+
+
+def test_vector_import_mode_makes_replace_the_safe_default(app: QApplication) -> None:
+    dialog = VectorImportModeDialog(
+        "/tmp/example.svg",
+        format_name="SVG",
+        has_existing_geometry=True,
+    )
+    assert not dialog.append_mode()
+    dialog._append.setChecked(True)
+    assert dialog.append_mode()
+    dialog.close()
+
+
+def test_status_readiness_can_keep_import_details_visible(app: QApplication) -> None:
+    strip = CanvasStatusStrip()
+    strip.set_readiness("Import notes", "warn", "Skipped unsupported SVG arc commands")
+
+    assert strip._readiness_chip.toolTip() == "Skipped unsupported SVG arc commands"
+    assert strip._readiness_chip.accessibleDescription() == "Skipped unsupported SVG arc commands"
+    strip.close()
 
 
 def test_inspector_sliders_do_not_consume_scroll_wheel_input(app: QApplication) -> None:
@@ -192,6 +289,58 @@ def test_canvas_numeric_controls_meet_the_shared_target_size(app: QApplication) 
     precision.close()
 
 
+def test_canvas_size_hud_uses_semantic_styling_and_recovers_from_invalid_input(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.add_polylines_state([[(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)]])
+    canvas.select_all()
+
+    canvas._show_size_hud()
+
+    assert canvas._size_w_edit is not None
+    assert canvas._size_h_edit is not None
+    assert canvas._size_w_edit.property("role") == "canvas-hud-input"
+    assert canvas._size_h_edit.accessibleName() == "Selected height"
+
+    canvas._size_w_edit.setText("not a number")
+    canvas._apply_size_hud()
+    assert canvas._size_w_edit.property("error") == "true"
+    canvas._clear_size_hud_error("")
+    assert canvas._size_w_edit.property("error") is None
+
+    canvas._size_w_edit.setText("0")
+    canvas._size_h_edit.setText("2")
+    canvas._apply_size_hud()
+    assert canvas._size_w_edit.property("error") == "true"
+    assert canvas._size_h_edit.property("error") is None
+    canvas.close()
+
+
+def test_canvas_context_actions_are_canvas_owned_and_available_in_status_strip(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.set_mode("draw")
+    canvas._draw_pts = [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0)]
+    actions = canvas.get_context_actions()
+    assert [action[0] for action in actions] == [
+        "undo-point",
+        "finish-path",
+        "close-path",
+        "cancel-draw",
+    ]
+    assert not canvas.trigger_context_action("export")
+
+    strip = CanvasStatusStrip()
+    requested: list[str] = []
+    strip.contextActionRequested.connect(requested.append)
+    strip.set_context_actions(actions)
+    strip._context_buttons[0].click()
+    assert requested == ["undo-point"]
+    canvas.close()
+
+
 def test_image_engraving_actions_stay_visible_and_keyboard_reachable(
     app: QApplication,
 ) -> None:
@@ -215,12 +364,70 @@ def test_image_engraving_actions_stay_visible_and_keyboard_reachable(
     page.close()
 
 
+def test_image_engraving_has_one_export_terminal_and_safe_clip_choice(
+    app: QApplication,
+) -> None:
+    page = PatternPage(settings={})
+    assert page._engrave_export_btn.text() == "Use engraving export"
+    assert page._engrave_target.currentData() == "outline"
+    zone_index = page._engrave_target.findData("zone")
+    assert not page._engrave_target.model().item(zone_index).isEnabled()
+
+    page._use_engraving_export()
+    assert page._export_default == "engraving"
+    assert "Export engraving assets" in page._gen_btn.text()
+    page.shutdown()
+    page.close()
+
+
+def test_draw_guidance_describes_the_actual_shape_gesture(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    canvas.set_mode("draw")
+    canvas._draw_primitive = "rectangle"
+    guidance, _tone = canvas.get_command_guidance()
+    assert guidance == "Rectangle: drag to size · Esc exits"
+    canvas.close()
+
+
 def test_workflow_strip_is_honest_noninteractive_progress(app: QApplication) -> None:
     stepper = WorkflowStepper(("Input", "Preview", "Export"))
     for button in stepper.findChildren(QToolButton):
         assert button.focusPolicy() == Qt.FocusPolicy.NoFocus
         assert button.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         assert button.minimumHeight() >= 24 or button.sizeHint().height() >= 24
+
+
+def test_workflow_error_uses_danger_guidance_without_freezing_wrapped_content(
+    app: QApplication,
+) -> None:
+    stepper = WorkflowStepper(
+        ("Input", "Preview", "Export"), description="A description that may wrap in narrow layouts."
+    )
+    stepper.set_step_states(
+        ["complete", "error", "pending"], {1: "Fix the outline, then preview again."}
+    )
+
+    assert stepper._labels[1].property("state") == "error"
+    assert stepper._guidance is not None
+    assert stepper._guidance.property("tone") == "danger"
+    assert stepper.maximumHeight() > stepper.sizeHint().height()
+
+
+def test_operation_progress_uses_semantic_role_and_cancellable_guidance(app: QApplication) -> None:
+    progress = OperationProgress()
+    assert progress.property("role") == "operation-progress"
+    assert progress._cancel.toolTip() == "Cancel the current operation"
+    progress.fail("The export could not be written. Choose another folder and try again.")
+    assert progress.property("tone") == "danger"
+    assert not progress.isHidden()
+    assert progress._cancel.isHidden()
+
+
+def test_canvas_hud_validation_state_clears_when_the_user_corrects_input(app: QApplication) -> None:
+    field = QLineEdit()
+    field.setProperty("error", True)
+    HudTextService._clear_hud_error(field)
+    assert field.property("error") is False
 
 
 def test_compact_status_keeps_selection_and_exposes_details(app: QApplication) -> None:
@@ -299,6 +506,8 @@ def test_multistate_button_uses_native_menu_without_hover_flyout(
     app.processEvents()
     assert button._state_menu is not None
     assert "3 options" in button.accessibleDescription()
+    assert button.maximumWidth() == 44
+    assert button.minimumHeight() >= 40
 
 
 def test_draw_resize_handle_meets_target_and_keyboard_contract(
@@ -442,6 +651,44 @@ def test_relationship_snaps_require_a_nearby_reference_and_retain_its_source() -
     assert engine.last_relationship_reference is None
 
 
+def test_spline_controls_do_not_acquire_line_relationship_snaps() -> None:
+    source = SimpleNamespace(id="line", kind="line", points=[(0.0, 0.0), (10.0, 0.0)])
+    view = SimpleNamespace(
+        _draw_primitive="spline",
+        _entities=[source],
+        _snap_angle_enabled=True,
+        _snap_equal_length_enabled=True,
+        _flagged=lambda _flag: set(),
+        _w2c=lambda x, y: (x, y),
+    )
+    engine = SnapEngine(view)
+
+    assert engine._relationship_candidate(10.0, 10.0, 10.0, 10.0, (0.0, 0.0)) is None
+    assert engine.last_relationship_reference is None
+
+
+def test_curve_control_polygons_are_not_line_relationship_references() -> None:
+    spline = SimpleNamespace(
+        id="curve",
+        kind="spline",
+        points=[(0.0, 0.0), (10.0, 0.0), (12.0, 4.0)],
+    )
+    line = SimpleNamespace(id="line", kind="line", points=[(0.0, 5.0), (10.0, 5.0)])
+    view = SimpleNamespace(
+        _entities=[spline, line],
+        _snap_angle_enabled=False,
+        _snap_equal_length_enabled=True,
+        _flagged=lambda _flag: set(),
+        _w2c=lambda x, y: (x, y),
+    )
+    engine = SnapEngine(view)
+
+    result = engine._relationship_candidate(10.0, 0.0, 10.0, 0.0, (0.0, 0.0))
+    assert result == (10.0, 0.0, "equal_length")
+    assert engine.last_relationship_reference is not None
+    assert engine.last_relationship_reference[0] == "line"
+
+
 def test_equal_length_can_reference_an_earlier_segment_of_active_drawing() -> None:
     view = SimpleNamespace(
         _entities=[],
@@ -459,6 +706,28 @@ def test_equal_length_can_reference_an_earlier_segment_of_active_drawing() -> No
     assert engine.last_relationship_type == "perpendicular_equal_length"
     assert engine.last_relationship_reference is not None
     assert engine.last_relationship_reference[0] == "__active_draw__"
+
+
+def test_equal_length_ignores_distant_canvas_segments_during_acquisition() -> None:
+    local = SimpleNamespace(id="local", points=[(0.0, 5.0), (10.0, 5.0)])
+    unrelated = SimpleNamespace(id="unrelated", points=[(0.0, 300.0), (30.0, 300.0)])
+    view = SimpleNamespace(
+        _entities=[local, unrelated],
+        _draw_pts=[],
+        _snap_angle_enabled=False,
+        _snap_equal_length_enabled=True,
+        _flagged=lambda _flag: set(),
+        _w2c=lambda x, y: (x, y),
+    )
+    engine = SnapEngine(view)
+
+    result = engine._relationship_candidate(30.0, 0.0, 30.0, 0.0, (0.0, 0.0))
+
+    # The distant 30 mm segment would land exactly under the cursor, but a
+    # locally relevant 10 mm reference must be selected instead.
+    assert result == (10.0, 0.0, "equal_length")
+    assert engine.last_relationship_reference is not None
+    assert engine.last_relationship_reference[0] == "local"
 
 
 def test_parallel_and_equal_length_beat_an_extension_at_the_same_point() -> None:
@@ -582,6 +851,7 @@ def test_snap_menu_has_independent_plain_language_toggles(app: QApplication) -> 
     assert list(precision._snap_actions) == [
         "snap_vertex",
         "snap_midpoint",
+        "snap_intersection",
         "snap_parallel",
         "snap_perpendicular",
         "snap_equal_length",
@@ -597,8 +867,377 @@ def test_snap_menu_has_independent_plain_language_toggles(app: QApplication) -> 
     assert state["snap_parallel"] is False
     assert state["snap_align_x"] is False
     assert state["snap_align_y"] is True
+    precision._snap_strength_slider.setValue(60)
+    assert canvas.get_precision_state()["snap_strength"] == pytest.approx(0.6)
+    assert precision._snap_strength_value.text() == "60%"
+    precision._snap_strength_slider.setValue(0)
+    assert canvas.get_precision_state()["snap_strength"] == 0.0
+    assert precision._snap_strength_value.text() == "0%"
     canvas.close()
     precision.close()
+
+
+def test_context_menu_customizer_persists_individual_command_toggles(app: QApplication) -> None:
+    dialog = ContextMenuActionCustomizeDialog(
+        profiles={"draft": {"items": ["constraint.horizontal", "constraint.vertical"]}}
+    )
+    assert dialog._list.count() > 20
+    for index in range(dialog._list.count()):
+        item = dialog._list.item(index)
+        if item.data(Qt.ItemDataRole.UserRole) == "constraint.vertical":
+            item.setCheckState(Qt.CheckState.Unchecked)
+            break
+    dialog._apply()
+    profile = dialog.get_profiles()["draft"]
+    assert "constraint.horizontal" in profile["items"]
+    assert "constraint.vertical" not in profile["items"]
+    dialog.close()
+
+
+def test_context_menu_customizer_initializes_draft_profile_without_rebuilding_lists(
+    app: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening the dialog must not clear and recreate its initial Qt list items.
+
+    A redundant first profile load previously called ``QListWidget.clear()``
+    after both lists had been populated.  That native teardown can segfault
+    under PySide, before the dialog is even shown.
+    """
+    original_fill_list = customize_dialogs._fill_list
+    calls: list[object] = []
+
+    def record_fill_list(*args, **kwargs) -> None:
+        calls.append(args[0])
+        original_fill_list(*args, **kwargs)
+
+    monkeypatch.setattr(customize_dialogs, "_fill_list", record_fill_list)
+    dialog = ContextMenuActionCustomizeDialog(
+        profiles={
+            "draft": {
+                "action_items_configured": ["yes"],
+                "items": ["constraint.horizontal"],
+                "overflow_items": [],
+            }
+        }
+    )
+
+    assert calls == [dialog._list, dialog._overflow_list]
+    assert _checked_keys(dialog._list) == ["constraint.horizontal"]
+    dialog.close()
+
+
+def test_context_menu_customizer_supports_none_and_a_reorderable_more_list(
+    app: QApplication,
+) -> None:
+    dialog = ContextMenuActionCustomizeDialog()
+    dialog._set_all_visible(False)
+    assert not _checked_keys(dialog._list)
+    more_item = next(
+        dialog._overflow_list.item(index)
+        for index in range(dialog._overflow_list.count())
+        if dialog._overflow_list.item(index).data(Qt.ItemDataRole.UserRole) == "constraint.horizontal"
+    )
+    more_item.setCheckState(Qt.CheckState.Checked)
+    assert _checked_keys(dialog._list) == ["constraint.horizontal"]
+    assert _checked_keys(dialog._overflow_list) == ["constraint.horizontal"]
+
+    vertical_more_item = next(
+        dialog._overflow_list.item(index)
+        for index in range(dialog._overflow_list.count())
+        if dialog._overflow_list.item(index).data(Qt.ItemDataRole.UserRole) == "constraint.vertical"
+    )
+    vertical_more_item.setCheckState(Qt.CheckState.Checked)
+    assert _checked_keys(dialog._overflow_list) == [
+        "constraint.horizontal",
+        "constraint.vertical",
+    ]
+    item = dialog._overflow_list.takeItem(0)
+    dialog._overflow_list.insertItem(1, item)
+    dialog._normalize_more_action_rows()
+    dialog._apply()
+    profile = dialog.get_profiles()["draft"]
+    assert profile["items"][:2] == ["constraint.horizontal", "constraint.vertical"]
+    assert profile["overflow_items"] == ["constraint.vertical", "constraint.horizontal"]
+    dialog.close()
+
+
+def test_context_menu_defaults_place_secondary_selection_actions_under_more(
+    app: QApplication,
+) -> None:
+    dialog = ContextMenuActionCustomizeDialog()
+
+    assert set(DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS).issubset(
+        _checked_keys(dialog._overflow_list)
+    )
+    assert "view.fit" in _checked_keys(dialog._overflow_list)
+    dialog.close()
+
+
+def test_canvas_uses_action_menu_defaults_with_secondary_actions_under_more(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.set_context_menu_profiles({"draft": {"items": []}})
+
+    assert canvas._context_menu_actions_configured
+    assert canvas._context_menu_item_order
+    assert canvas._context_menu_overflow_items == set(DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS)
+    canvas.close()
+
+
+def test_procedural_shapes_use_the_same_drag_creation_path_as_quick_shapes(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.resize(600, 400)
+
+    canvas.set_quick_shape_mode("ring")
+    ring_paths = canvas._build_drag_shapes("ring", 0.0, 0.0, 30.0, 20.0)
+    gear_paths = canvas._build_drag_shapes("gear", 0.0, 0.0, 30.0, 20.0)
+
+    assert canvas.quick_shape_enabled
+    assert len(ring_paths) == 2
+    assert len(gear_paths) == 1
+
+    canvas._start_shape_drag("ring", QPointF(120.0, 120.0))
+    canvas._finish_shape_drag(QPoint(260, 220))
+
+    assert len(canvas._entities) == 2
+    assert {entity.kind for entity in canvas._entities} == {"ring"}
+    canvas.close()
+
+
+def test_procedural_shapes_use_standard_draw_dimensions_workflow(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    canvas.resize(600, 400)
+
+    canvas.activate_procedural_draw("ring")
+
+    assert canvas.get_mode() == "draw"
+    assert canvas._draw_primitive == "ring"
+    assert canvas._shape_primitive_active()
+    canvas._draw_shape_preview_active = True
+    canvas._draw_shape_anchor_w = (0.0, 0.0)
+    canvas._draw_shape_cursor_w = (30.0, 20.0)
+    canvas._show_shape_dim_inputs()
+    assert canvas._draw_shape_w_edit is not None
+    assert canvas._draw_shape_h_edit is not None
+    assert canvas._commit_shape_preview()
+    assert len(canvas._entities) == 2
+    canvas.close()
+
+
+def test_snap_strength_defaults_to_fifty_percent(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    precision = CanvasPrecisionBar(canvas)
+
+    assert canvas.get_precision_state()["snap_strength"] == 0.5
+    assert precision._snap_strength_slider.value() == 50
+    assert precision._snap_strength_value.text() == "50%"
+    canvas.close()
+    precision.close()
+
+
+def test_context_menu_customizer_filters_catalogue_and_covers_static_actions(
+    app: QApplication,
+) -> None:
+    dialog = ContextMenuActionCustomizeDialog()
+
+    dialog._filter.setText("dovetail")
+    visible = [
+        item.data(Qt.ItemDataRole.UserRole)
+        for index in range(dialog._list.count())
+        if not (item := dialog._list.item(index)).isHidden()
+    ]
+    assert visible == ["context.create.dovetail_box"]
+    assert set(_CONTEXT_STATIC_ACTION_IDS.values()).issubset(_CONTEXT_ACTION_LABELS)
+    assert "context.share.move_to_layer" in _CONTEXT_ACTION_LABELS
+    assert "context.cutout.toggle" in _CONTEXT_ACTION_LABELS
+    dialog.close()
+
+
+def test_context_menu_customizer_prioritizes_enabled_actions_and_saves_drag_order(
+    app: QApplication,
+) -> None:
+    dialog = ContextMenuActionCustomizeDialog(
+        profiles={"draft": {"items": [], "action_items_configured": ["yes"]}}
+    )
+    items = {
+        str(dialog._list.item(index).data(Qt.ItemDataRole.UserRole)): dialog._list.item(index)
+        for index in range(dialog._list.count())
+    }
+    items["constraint.horizontal"].setCheckState(Qt.CheckState.Checked)
+    items["constraint.vertical"].setCheckState(Qt.CheckState.Checked)
+    assert _ordered_keys(dialog._list)[:2] == ["constraint.horizontal", "constraint.vertical"]
+
+    item = dialog._list.takeItem(0)
+    dialog._list.insertItem(1, item)
+    dialog._normalize_action_rows()
+    dialog._apply()
+
+    assert dialog.get_profiles()["draft"]["items"][:2] == [
+        "constraint.vertical",
+        "constraint.horizontal",
+    ]
+    dialog.close()
+
+
+def test_context_menu_applies_individual_order_and_more_placement(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    canvas._context_menu_item_order = ["constraint.horizontal", "transform.rotate_cw"]
+    canvas._context_menu_overflow_items = {"transform.rotate_cw"}
+    menu = QMenu()
+    menu.addAction("Horizontal")
+    transform = menu.addMenu("Transform")
+    rotate = transform.addAction("Rotate +90°")
+    rotate.setProperty("context_item", "rotate_cw")
+
+    canvas._apply_context_menu_overflow(menu)
+
+    assert menu.actions()[0].text() == "Horizontal"
+    assert menu.actions()[1].text() == "More actions…"
+    more_actions = menu.actions()[1].menu().actions()
+    assert more_actions[0].text() == "Transform"
+    assert more_actions[0].menu().actions()[0].text() == "Rotate +90°"
+    menu.close()
+    canvas.close()
+
+
+def test_context_menu_hides_every_action_for_an_intentionally_empty_profile(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.set_context_menu_profiles(
+        {"draft": {"items": [], "action_items_configured": ["yes"]}}
+    )
+    menu = QMenu()
+    menu.addAction("Fit View  [F]")
+    menu.addAction("Copy  [⌘C]")
+
+    canvas._apply_context_menu_overflow(menu)
+
+    assert not menu.actions()
+    menu.close()
+    canvas.close()
+
+
+def test_context_menu_recognizes_shortcut_actions_and_respects_disabled_fit(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas._context_menu_item_order = ["clipboard.copy", "edit.delete"]
+    menu = QMenu()
+    menu.addAction("Cut  [⌘X]")
+    menu.addAction("Copy  [⌘C]")
+    menu.addAction("Paste  [⌘V]")
+    menu.addAction("Delete Selected  [⌦]")
+    menu.addAction("Fit View  [F]")
+
+    canvas._apply_context_menu_overflow(menu)
+
+    assert [action.text() for action in menu.actions()] == ["Copy  [⌘C]", "Delete Selected  [⌦]"]
+    menu.close()
+    canvas.close()
+
+
+def test_context_menu_action_customization_flattens_nested_submenus_safely(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas._context_menu_item_order = ["transform.rotate_cw"]
+    menu = QMenu()
+    transform = menu.addMenu("Transform")
+    rotate = transform.addAction("Rotate +90°")
+    rotate.setProperty("context_item", "rotate_cw")
+
+    canvas._apply_context_menu_overflow(menu)
+
+    assert [action.text() for action in menu.actions()] == ["Transform"]
+    assert menu.actions()[0].menu().actions()[0].text() == "Rotate +90°"
+    menu.close()
+    canvas.close()
+
+
+def test_context_menu_groups_shape_actions_without_losing_individual_visibility(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas._context_menu_item_order = ["context.create.rectangle"]
+    menu = QMenu()
+    shapes = menu.addMenu("Create shape")
+    shapes.addAction("Rectangle (drag)")
+    shapes.addAction("Circle (drag)")
+
+    canvas._apply_context_menu_overflow(menu)
+
+    assert [action.text() for action in menu.actions()] == ["Shapes"]
+    assert [action.text() for action in menu.actions()[0].menu().actions()] == ["Rectangle (drag)"]
+    menu.close()
+    canvas.close()
+
+
+def test_context_menu_customization_keeps_every_destination_layer(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    canvas._context_menu_item_order = ["context.share.move_to_layer"]
+    menu = QMenu()
+    move_menu = menu.addMenu("Move selected to layer")
+    for layer in ("Cut", "Engrave"):
+        action = move_menu.addAction(layer)
+        action.setProperty("context_item_id", "context.share.move_to_layer")
+
+    canvas._apply_context_menu_overflow(menu)
+
+    assert [action.text() for action in menu.actions()] == ["Move selected to layer"]
+    assert [
+        action.text() for action in menu.actions()[0].menu().actions()
+    ] == ["Cut", "Engrave"]
+    menu.close()
+    canvas.close()
+
+
+def test_intersection_snap_beats_midpoint_and_remains_independent() -> None:
+    horizontal = SimpleNamespace(id="horizontal", points=[(-20.0, 0.0), (20.0, 0.0)])
+    vertical = SimpleNamespace(id="vertical", points=[(0.0, -20.0), (0.0, 20.0)])
+    view = SimpleNamespace(
+        _snap_master_enabled=True,
+        _entities=[horizontal, vertical],
+        _flagged=lambda _flag: set(),
+        _snap_vertex_enabled=False,
+        _snap_midpoint_enabled=False,
+        _snap_intersection_enabled=True,
+        _snap_edge_enabled=True,
+        _snap_tangent_enabled=False,
+        _snap_extension_enabled=False,
+        _snap_parallel_enabled=True,
+        _snap_perpendicular_enabled=True,
+        _snap_equal_length_enabled=True,
+        _snap_align_x_enabled=True,
+        _snap_align_y_enabled=True,
+        _grid_snap=False,
+        _grid_spacing=5.0,
+        _scale=1.0,
+        _w2c=lambda x, y: (x, y),
+        _c2w=lambda x, y: (x, y),
+        _poly_bounds=lambda points: (
+            min(x for x, _y in points),
+            min(y for _x, y in points),
+            max(x for x, _y in points),
+            max(y for _x, y in points),
+        ),
+        _is_poly_closed=lambda _points: False,
+        _segment_intersection_point=lambda _a, _b, _c, _d: (0.0, 0.0),
+        _mode="draw",
+        _draw_pts=[],
+        _snap_shapes=lambda: {},
+        _guides=[],
+    )
+    engine = SnapEngine(view)
+
+    assert engine.query(0.0, 0.0, 0.0, 0.0, reference_point=(0.0, 10.0)) == (
+        0.0,
+        0.0,
+        "intersection",
+    )
 
 
 def test_relationship_snaps_beat_grid_but_not_explicit_geometry() -> None:
@@ -628,6 +1267,24 @@ def test_inferred_line_snaps_use_a_more_reachable_band_than_exact_geometry() -> 
 
     assert engine._axis_alignment_candidate(16.0, 30.0, 16.0, 30.0) == (0.0, 30.0, "axis_x")
     assert engine._extension_candidate(16.0, 26.0) == (0.0, 26.0, "extension")
+
+
+def test_inferred_snaps_ignore_remote_sources_when_drawing_a_stroke() -> None:
+    source = SimpleNamespace(id="remote", points=[(0.0, 300.0), (0.0, 310.0)])
+    view = SimpleNamespace(
+        _entities=[source],
+        _flagged=lambda _flag: set(),
+        _w2c=lambda x, y: (x, y),
+        _c2w=lambda x, y: (x, y),
+        _is_poly_closed=lambda _points: False,
+        _snap_extension_enabled=True,
+        _snap_align_x_enabled=True,
+        _snap_align_y_enabled=True,
+    )
+    engine = SnapEngine(view)
+
+    assert engine._axis_alignment_candidate(15.0, 0.0, 15.0, 0.0, reference=(15.0, 0.0)) is None
+    assert engine._extension_candidate(0.0, 0.0, reference=(15.0, 0.0)) is None
 
 
 def test_help_search_indexes_body_text_and_reports_results(app: QApplication) -> None:
@@ -825,6 +1482,50 @@ def test_invalid_zone_geometry_is_repaired_before_crosshatch_clipping() -> None:
     assert strokes
 
 
+def test_custom_tile_open_strokes_do_not_polygonize_across_repetitions() -> None:
+    """An open motif must not create accidental fill cells with its neighbours."""
+    outline = [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0), (0.0, 0.0)]
+    # A three-sided tile: adjacent zero-gap repetitions share enough edges
+    # to create rectangles if all open strokes are polygonized together.
+    open_u = [(0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (10.0, 0.0)]
+    fill: list[list[tuple[float, float]]] = []
+
+    PatternProcessor().build_pattern_polys(
+        [outline],
+        pattern="Custom Tile",
+        params={"tile_polys": [open_u], "gap": 0.0},
+        scale=(30.0, 30.0),
+        orig_w=30.0,
+        orig_h=30.0,
+        fill_options={"mode": "lines", "spacing": 1.0, "target_pattern": True},
+        fill_polys_out=fill,
+    )
+
+    assert fill == []
+
+
+def test_custom_tile_nested_paths_fill_as_one_compound_cell() -> None:
+    outline = [(0.0, 0.0), (30.0, 0.0), (30.0, 30.0), (0.0, 30.0), (0.0, 0.0)]
+    outer = [(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0), (-5.0, -5.0)]
+    inner = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0), (-2.0, -2.0)]
+    fill: list[list[tuple[float, float]]] = []
+
+    PatternProcessor().build_pattern_polys(
+        [outline],
+        pattern="Custom Tile",
+        params={"tile_polys": [outer, inner], "gap": 0.0},
+        scale=(30.0, 30.0),
+        orig_w=30.0,
+        orig_h=30.0,
+        fill_options={"mode": "lines", "spacing": 0.5, "target_pattern": True},
+        fill_polys_out=fill,
+    )
+
+    assert fill
+    inner_core = Polygon(inner).buffer(-0.1)
+    assert not any(inner_core.contains(Point(point)) for stroke in fill for point in stroke)
+
+
 def test_invalid_zone_exclusion_overlay_does_not_abort_preview() -> None:
     processor = PatternProcessor()
     outline = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
@@ -834,7 +1535,7 @@ def test_invalid_zone_exclusion_overlay_does_not_abort_preview() -> None:
         [outline],
         pattern="— None —",
         params={},
-        scale=(1.0, 1.0),
+        scale=(10.0, 10.0),
         orig_w=10.0,
         orig_h=10.0,
         exclusion_polys=[exclusion],
@@ -890,6 +1591,226 @@ def test_nested_boundary_outlines_are_filled_until_explicitly_marked_cutout(
         exclusion_polys=[inner],
     )
     assert not cutout_capture["region"].covers(Point(5.0, 5.0))
+
+
+def test_outline_winding_preserves_text_counters_without_hiding_nested_shapes() -> None:
+    """Opposite-winding text counters are holes; same-winding shapes are not."""
+    outer = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+    # The counter runs in the opposite direction, as Qt/SVG font outlines do.
+    counter = [(3.0, 3.0), (3.0, 7.0), (7.0, 7.0), (7.0, 3.0), (3.0, 3.0)]
+    text_region = polylines_to_outline([outer, counter])
+    assert text_region.covers(Point(1.0, 1.0))
+    assert not text_region.covers(Point(5.0, 5.0))
+
+    # A separately drawn inner square with the same direction is a filled
+    # shape, not an accidental cutout.  Explicit Cutout remains the way to
+    # subtract it in Pattern.
+    inner_shape = [(3.0, 3.0), (7.0, 3.0), (7.0, 7.0), (3.0, 7.0), (3.0, 3.0)]
+    drawing_region = polylines_to_outline([outer, inner_shape])
+    assert drawing_region.covers(Point(5.0, 5.0))
+
+
+def test_overlapping_compound_outlines_do_not_erase_each_others_fill() -> None:
+    """A counter only subtracts from the glyph/object it belongs to."""
+    left = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+    # Opposite winding: a counter in the left compound outline.
+    left_counter = [(3.0, 3.0), (3.0, 7.0), (7.0, 7.0), (7.0, 3.0), (3.0, 3.0)]
+    # A separate overlapping shape covers part of that counter's coordinate
+    # space.  Its fill must survive the left object's counter subtraction.
+    right = [(4.0, 0.0), (12.0, 0.0), (12.0, 10.0), (4.0, 10.0), (4.0, 0.0)]
+
+    region = polylines_to_outline([left, left_counter, right])
+
+    assert region.covers(Point(5.0, 5.0))
+
+
+def test_text_outline_fill_reaches_every_glyph_and_respects_its_counter(
+    app: QApplication,
+) -> None:
+    """A multi-contour text selection must not fill only its first glyph."""
+    contours = text_to_polylines("hey", family="Arial", height_mm=10.0)
+    fill: list[list[tuple[float, float]]] = []
+    PatternProcessor().build_pattern_polys(
+        contours,
+        pattern="— None —",
+        params={},
+        scale=(1.0, 1.0),
+        orig_w=1.0,
+        orig_h=1.0,
+        fill_options={"mode": "lines", "spacing": 0.25, "target_outline": True},
+        fill_polys_out=fill,
+    )
+
+    # The three clockwise exterior contours are h, e, and y.  Every glyph
+    # should receive at least one hatch endpoint, rather than stopping after
+    # the first contour in the selected text group.
+    exteriors = [Polygon(poly) for poly in contours if Polygon(poly).exterior.is_ccw is False]
+    assert len(exteriors) == 3
+    fill_points = [Point(point) for stroke in fill for point in stroke]
+    assert all(any(exterior.covers(point) for point in fill_points) for exterior in exteriors)
+
+    # The counter in e is anti-clockwise and must remain unfilled.
+    counter = next(Polygon(poly) for poly in contours if Polygon(poly).exterior.is_ccw)
+    # Hatch clipping can retain a point a few floating-point units inside a
+    # curve boundary, but it must never place a stroke through the counter's
+    # actual interior.
+    assert not any(counter.buffer(-0.05).contains(point) for point in fill_points)
+
+
+def test_pattern_transfer_expands_a_selected_text_contour_to_its_full_group(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas._text_service.add_text_at(
+        0.0,
+        0.0,
+        text="hey",
+        family="Arial",
+        height_mm=10.0,
+    )
+    canvas.set_selection([canvas._entities[0].id])
+    received: list[list[dict]] = []
+    canvas._send_selected_to_pattern_cb = received.append
+
+    canvas._editing._send_selected_to_pattern()
+
+    assert len(received) == 1
+    assert len(received[0]) == len(canvas._entities)
+    canvas.close()
+
+
+def test_self_touching_closed_outline_is_repaired_for_pattern_fill() -> None:
+    # A bow-tie stands in for the self-touching contours emitted by some font
+    # glyphs.  It should become two valid fillable islands, not a hard error.
+    bow_tie = [(0.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0), (0.0, 0.0)]
+    processor = PatternProcessor()
+    assert processor.validate_outline_inputs([bow_tie]) is None
+    fill: list[list[tuple[float, float]]] = []
+    processor.build_pattern_polys(
+        [bow_tie],
+        pattern="— None —",
+        params={},
+        scale=(10.0, 10.0),
+        orig_w=10.0,
+        orig_h=10.0,
+        fill_options={"mode": "lines", "spacing": 1.0, "target_outline": True},
+        fill_polys_out=fill,
+    )
+    assert fill
+
+
+def test_preview_fill_row_budget_bounds_dense_hatching_without_changing_export() -> None:
+    outline = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    processor = PatternProcessor()
+    full = processor.build_preview_polys(
+        [outline],
+        pattern="— None —",
+        params={},
+        scale=(100.0, 100.0),
+        orig_w=100.0,
+        orig_h=100.0,
+        border_polys=None,
+        fill_options={"mode": "lines", "spacing": 0.1, "target_outline": True},
+    )
+    bounded = processor.build_preview_polys(
+        [outline],
+        pattern="— None —",
+        params={},
+        scale=(100.0, 100.0),
+        orig_w=100.0,
+        orig_h=100.0,
+        border_polys=None,
+        fill_options={
+            "mode": "lines",
+            "spacing": 0.1,
+            "target_outline": True,
+            "preview_max_rows": 120,
+        },
+    )
+
+    assert len(full["fill"]) > 900
+    assert len(bounded["fill"]) <= 120
+
+
+def test_canvas_preview_keeps_every_fill_stroke(app: QApplication) -> None:
+    outline = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
+    completed: list[tuple] = []
+    errors: list[tuple] = []
+
+    compute_preview(
+        [outline],
+        "— None —",
+        {},
+        (100.0, 100.0),
+        None,
+        pattern_service=PatternProcessor(),
+        orig_w=100.0,
+        orig_h=100.0,
+        on_done=completed.append,
+        on_error=errors.append,
+        fill_options={"mode": "lines", "spacing": 0.1, "target_outline": True},
+    )
+
+    assert errors == []
+    assert len(completed) == 1
+    _token, display, _count, categories = completed[0]
+    assert len(categories["fill"]) > 900
+    assert display == categories["display"]
+    assert len(display) == sum(len(categories[name]) for name in ("outline", "pattern", "fill"))
+
+
+def test_dense_canvas_preview_reuses_exact_paths_until_visual_state_changes(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.resize(640, 480)
+    canvas.load(
+        [[(float(index), 0.0), (float(index), 100.0)] for index in range(2_000)],
+        fit=True,
+    )
+    canvas.set_dense_preview_render(True)
+    canvas.show()
+    app.processEvents()
+
+    first = canvas._renderer._dense_preview_batches
+    assert first is not None
+    assert sum(path.elementCount() for path in first.values()) >= 4_000
+    raster = canvas._renderer._dense_preview_raster
+    assert raster is not None
+
+    canvas._ox += 24.0
+    canvas.update()
+    app.processEvents()
+    assert canvas._renderer._dense_preview_batches is first
+    assert canvas._renderer._dense_preview_raster is raster
+
+    canvas._zoom_at(320.0, 240.0, 1.5)
+    app.processEvents()
+    assert canvas._renderer._dense_preview_raster is not raster
+    assert canvas._renderer._dense_preview_raster_scale == canvas._scale
+
+    canvas._find_poly_at = lambda *_args: pytest.fail("dense preview hover must not hit-test")
+    canvas._tools["select"].move(
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(320.0, 240.0),
+            QPointF(320.0, 240.0),
+            QPointF(320.0, 240.0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+    render_only_id = canvas._entities[1].id
+    canvas.set_render_only_entity_ids({render_only_id})
+    assert not canvas._entity_selectable(render_only_id)
+    canvas.set_selection([render_only_id])
+    assert canvas.get_selected_ids() == []
+
+    canvas.set_selection([canvas._entities[0].id])
+    assert canvas._renderer._dense_preview_batches is None
+    canvas.close()
 
 
 def test_nested_zone_exclusion_uses_repaired_coverage() -> None:
@@ -1040,6 +1961,67 @@ def test_constraints_accept_polyline_edges_and_two_edit_vertices(app: QApplicati
     points = [canvas._entities_by_id[first].points[1], canvas._entities_by_id[second].points[0]]
     assert points[0] == points[1]
     canvas.close()
+
+
+def test_merging_a_spline_uses_its_visible_curve_not_control_polygon(app: QApplication) -> None:
+    canvas = DxfCanvas(selectable=True)
+    spline = EntityRecord(
+        points=[(0.0, 0.0), (10.0, 30.0), (20.0, 0.0)],
+        kind="spline",
+        meta={"segments": 64, "control_points": [(0.0, 0.0), (10.0, 30.0), (20.0, 0.0)]},
+    )
+    continuation = EntityRecord(points=[(20.0, 0.0), (30.0, 0.0)], kind="line")
+    canvas._canvas_service.create_entities([spline, continuation])
+    canvas.set_selection([spline.id, continuation.id])
+
+    assert canvas.merge_selected_segments_to_objects() == 1
+    merged = canvas._entity_for_id(next(iter(canvas._sel)))
+    assert merged is not None
+    assert merged.kind == "polyline"
+    assert len(merged.points) > len(spline.points) + len(continuation.points)
+    assert max(y for _x, y in merged.points) > 10.0
+    canvas.close()
+
+
+def test_extended_line_and_point_constraints_are_persistent_and_deterministic() -> None:
+    geometry = {
+        "axis": [(0.0, 0.0), (10.0, 0.0)],
+        "other": [(2.0, 3.0), (5.0, 8.0)],
+        "point": [(7.0, 7.0), (8.0, 7.0)],
+        "cross_a": [(0.0, 0.0), (10.0, 10.0)],
+        "cross_b": [(0.0, 10.0), (10.0, 0.0)],
+        "curve_a": [(0.0, 0.0), (1.0, 0.0), (2.0, 1.0), (3.0, 1.0)],
+        "curve_b": [(8.0, 8.0), (9.0, 8.0), (10.0, 8.0), (11.0, 8.0)],
+    }
+    constraints = [
+        GeometricConstraint(
+            kind="collinear",
+            entity_ids=("axis", "other"),
+        ),
+        GeometricConstraint(
+            kind="midpoint",
+            entity_ids=("axis", "point"),
+            parameters={"point_vertex": 0},
+        ),
+        GeometricConstraint(
+            kind="intersection",
+            entity_ids=("cross_a", "cross_b", "point"),
+            parameters={"point_vertex": 1},
+        ),
+        GeometricConstraint(
+            kind="smooth",
+            entity_ids=("curve_a", "curve_b"),
+            parameters={"curve": True},
+        ),
+    ]
+
+    solved = solve_constraints(geometry, constraints)
+
+    assert solved["other"][0][1] == pytest.approx(0.0)
+    assert solved["other"][1][1] == pytest.approx(0.0)
+    assert solved["point"][0] == pytest.approx((5.0, 0.0))
+    assert solved["point"][1] == pytest.approx((5.0, 5.0))
+    assert solved["curve_b"][:3] == pytest.approx([(3.0, 1.0), (4.0, 1.0), (5.0, 0.0)])
 
 
 def test_pattern_preview_layer_tree_uses_selectable_canvas_ids(app: QApplication) -> None:

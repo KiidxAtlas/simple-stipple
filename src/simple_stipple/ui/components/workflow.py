@@ -105,7 +105,6 @@ class WorkflowStepper(QFrame):
         steps_layout.addStretch()
         layout.addLayout(steps_layout)
         self.set_current_step(0)
-        self.setMaximumHeight(self.sizeHint().height())
 
     def set_current_step(self, index: int) -> None:
         current = max(0, min(index, len(self._labels) - 1)) if self._labels else 0
@@ -190,7 +189,7 @@ class WorkflowStepper(QFrame):
             None,
         )
         if issue is not None:
-            tone = "warn"
+            tone = "danger" if states[issue] == "error" else "warn"
             detail = reasons.get(issue, "")
             text = guidance or detail or f"Check {self._steps[issue]}"
         elif current is not None:
@@ -261,11 +260,15 @@ class OperationProgress(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setProperty("role", "operation-progress")
+        self.setAccessibleName("Operation progress")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 4, 8, 4)
         self._label = QLabel("Working…")
+        self._label.setProperty("role", "operation-progress-label")
         self._bar = QProgressBar()
         self._cancel = ActionButton("Cancel")
+        self._cancel.setToolTip("Cancel the current operation")
         self._cancel.clicked.connect(self.cancelRequested)
         layout.addWidget(self._label)
         layout.addWidget(self._bar, 1)
@@ -286,6 +289,16 @@ class OperationProgress(QFrame):
 
     def finish(self) -> None:
         self.setVisible(False)
+
+    def fail(self, message: str) -> None:
+        """Surface a recoverable failure without leaving stale progress visible."""
+        self._label.setText(message or "Operation failed")
+        self.setProperty("tone", "danger")
+        self._cancel.setVisible(False)
+        self.setVisible(True)
+        self.setAccessibleDescription(self._label.text())
+        refresh_style(self)
+        announce_accessible(self, urgent=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════

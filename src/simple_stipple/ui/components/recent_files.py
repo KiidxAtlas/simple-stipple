@@ -45,7 +45,8 @@ class RecentFilesButton(QPushButton):
         # Reserve room for both the word and the disclosure icon. At 76 px
         # Fusion elides "Recent" to "Recen", a particularly unhelpful label
         # in the already-dense file source row.
-        self.setFixedWidth(94)
+        self.setMinimumWidth(94)
+        self.setAccessibleName("Open recent files")
         self.setToolTip("Pick from recently opened files")
         self.clicked.connect(self._open_menu)
 

@@ -170,6 +170,23 @@ DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS: tuple[str, ...] = (
     "arrange",
     "text",
 )
+
+# Leaf actions initially placed under the action-level context menu's
+# ``More actions…`` submenu. These are useful but not frequent enough to
+# compete with selection, clipboard, and shape actions at the top level.
+DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS: tuple[str, ...] = (
+    "select.lasso",
+    "context.selection.move",
+    "context.selection.smooth",
+    "context.selection.simplify",
+    "context.selection.fit",
+    "view.fit",
+    "grid.toggle",
+    "grid.snap",
+    "context.view.select",
+    "mode.draw",
+    "mode.edit",
+)
 CONTEXT_MENU_PROFILES: tuple[str, ...] = ("draft", "pattern", "trace")
 
 CONTEXT_MENU_SECTION_LABELS: tuple[tuple[str, str], ...] = (
@@ -242,6 +259,32 @@ def normalize_context_menu_profiles(value: object) -> dict[str, dict[str, list[s
             "transform": normalize_context_menu_transform_items(
                 saved.get("transform", [key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS])
             ),
+            # An empty list is an intentional "show none" choice after the
+            # action-level customizer has been saved. Preserve that separately
+            # from a legacy profile that has never supplied ``items``.
+            "action_items_configured": (
+                ["yes"]
+                if bool(saved.get("action_items_configured")) or bool(saved.get("items"))
+                else []
+            ),
+            "items": list(
+                dict.fromkeys(
+                    key
+                    for key in saved.get("items", [])
+                    if isinstance(key, str) and key
+                )
+            )
+            if isinstance(saved.get("items", []), list)
+            else [],
+            "overflow_items": list(
+                dict.fromkeys(
+                    key
+                    for key in saved.get("overflow_items", [])
+                    if isinstance(key, str) and key
+                )
+            )
+            if isinstance(saved.get("overflow_items", []), list)
+            else [],
         }
     return result
 
@@ -415,6 +458,7 @@ class SettingsSchema(BaseModel):
     snap_master: bool = True
     snap_vertex: bool = True
     snap_midpoint: bool = True
+    snap_intersection: bool = True
     snap_edge: bool = True
     snap_tangent: bool = True
     snap_extension: bool = True

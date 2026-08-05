@@ -39,6 +39,7 @@ _SCALE = {
     "font_lg": "16px",
     "font_xl": "20px",
     "font_2xl": "25px",
+    "font_display": "36px",
     "weight_regular": "400",
     "weight_medium": "600",
     "weight_semibold": "700",

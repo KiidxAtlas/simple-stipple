@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QPalette
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -87,6 +87,7 @@ class AddTextDialog(QDialog):
         # font-family, and Qt stylesheets override setFont(), so a plain
         # setFont() here would be silently ignored.
         self._preview = QLabel("Preview")
+        self._preview.setProperty("role", "text-preview")
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview.setMinimumHeight(64)
         form.addRow(self._preview)
@@ -120,15 +121,11 @@ class AddTextDialog(QDialog):
         family = self._font_combo.currentFont().family().replace('"', "")
         weight = "bold" if self._bold_cb.isChecked() else "normal"
         style = "italic" if self._italic_cb.isChecked() else "normal"
-        # font-family must be a per-widget stylesheet override (the app-wide
-        # QSS sets a global font-family that setFont() alone can't beat), so
-        # this can't just move into theme.qss — read the applied palette
-        # instead of hardcoding dark colors, so it still matches in Light mode.
-        is_light = self.palette().color(QPalette.ColorRole.Window).lightness() > 128
-        bg, border = ("#ffffff", "#d0d7de") if is_light else ("#10161d", "#2a3a44")
+        # Font selection is document data, not a theme decision. Keep only
+        # those dynamic properties local; the preview's surface and type
+        # scale are defined by its semantic QSS role.
         self._preview.setStyleSheet(
-            f"background: {bg}; border: 1px solid {border}; border-radius: 4px;"
-            f'font-family: "{family}"; font-size: 28px; '
+            f'font-family: "{family}"; '
             f"font-weight: {weight}; font-style: {style};"
         )
         self._preview.setText(self._text_edit.toPlainText() or "Preview")

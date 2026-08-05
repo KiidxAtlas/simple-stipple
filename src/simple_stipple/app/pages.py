@@ -91,6 +91,7 @@ SETTINGS_SYNC_TABLE: tuple[SettingSync, ...] = (
     SettingSync("snap_master", "set_snap_master"),
     SettingSync("snap_vertex", "set_snap_vertex"),
     SettingSync("snap_midpoint", "set_snap_midpoint"),
+    SettingSync("snap_intersection", "set_snap_intersection"),
     SettingSync("snap_edge", "set_snap_edge"),
     SettingSync("snap_tangent", "set_snap_tangent"),
     SettingSync("snap_extension", "set_snap_extension"),

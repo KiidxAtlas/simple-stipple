@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.engine.workflows import (
+from simple_stipple.engine.patterns.presets import (
     export_to_file,
     import_from_file,
     merge_presets,

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PySide6.QtGui import QIcon, QResizeEvent
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QAction, QIcon, QResizeEvent
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QToolButton
 
 from simple_stipple.ui.components.feedback import refresh_style
@@ -20,6 +21,7 @@ class CanvasStatusStrip(QFrame):
     # early enough that the status bar never imposes a desktop-only minimum
     # width on the whole workspace.
     COMPACT_WIDTH = 960
+    contextActionRequested = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -70,6 +72,21 @@ class CanvasStatusStrip(QFrame):
             action.setEnabled(False)
         self._details_button.setMenu(self._details_menu)
         layout.addWidget(self._details_button)
+
+        self._context_buttons: list[QToolButton] = []
+        self._context_menu_actions: list[QAction] = []
+        for _ in range(3):
+            button = QToolButton()
+            button.setProperty("role", "context-action")
+            button.setMinimumHeight(28)
+            button.setVisible(False)
+            button.clicked.connect(
+                lambda _checked=False, source=button: self.contextActionRequested.emit(
+                    str(source.property("action"))
+                )
+            )
+            layout.addWidget(button)
+            self._context_buttons.append(button)
 
         layout.addStretch()
 
@@ -173,6 +190,8 @@ class CanvasStatusStrip(QFrame):
         self._selection_dot.setVisible(not compact and self._selection_count > 0)
         self._precision_label.setVisible(not compact)
         self._details_button.setVisible(compact)
+        for button in self._context_buttons:
+            button.setVisible(not compact and bool(button.property("action")))
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -278,11 +297,36 @@ class CanvasStatusStrip(QFrame):
         self._update_details_tooltip()
         self._update_responsive_visibility()
 
-    def set_readiness(self, text: str, tone: str = "neutral") -> None:
+    def set_readiness(self, text: str, tone: str = "neutral", detail: str = "") -> None:
         """Lightweight command-lifecycle update without rebuilding page state."""
         self._readiness_chip.setText(text)
         self._readiness_chip.setProperty("tone", tone)
+        if detail:
+            self._readiness_chip.setToolTip(detail)
+            self._readiness_chip.setAccessibleDescription(detail)
         refresh_style(self._readiness_chip)
+
+    def set_context_actions(self, actions: tuple[tuple[str, str, str], ...]) -> None:
+        """Update stable canvas actions without rebuilding the status layout."""
+        for action in self._context_menu_actions:
+            self._details_menu.removeAction(action)
+        self._context_menu_actions.clear()
+        for button, entry in zip(self._context_buttons, actions[:3], strict=False):
+            action_id, label, tooltip = entry
+            button.setText(label)
+            button.setProperty("action", action_id)
+            button.setToolTip(tooltip)
+            button.setAccessibleName(label)
+            menu_action = self._details_menu.addAction(label)
+            menu_action.setToolTip(tooltip)
+            menu_action.triggered.connect(
+                lambda _checked=False, requested=action_id: self.contextActionRequested.emit(requested)
+            )
+            self._context_menu_actions.append(menu_action)
+        for button in self._context_buttons[len(actions[:3]) :]:
+            button.setProperty("action", "")
+            button.setVisible(False)
+        self._update_responsive_visibility()
 
 
 __all__ = ["CanvasStatusStrip"]

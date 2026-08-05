@@ -265,7 +265,18 @@ class DocumentService:
             from simple_stipple.engine.geometry.service import PathInput
 
             merged = GeometryService.merge_paths_with_construction(
-                [PathInput(entity.points, entity.construction) for entity in sources],
+                # Parametric entities store sparse defining points (for
+                # example spline controls), not the path shown on canvas.
+                # Merge converts geometry to a plain editable path, so use
+                # the same tessellation the renderer uses instead of joining
+                # those controls into a jagged straight-line chain.
+                [
+                    PathInput(
+                        GeometryService.geometry_for_entity(entity).tessellate(),
+                        entity.construction,
+                    )
+                    for entity in sources
+                ],
                 tolerance=0.01,
             )
             snapshots = tuple(

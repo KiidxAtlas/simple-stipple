@@ -8,14 +8,35 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "simple_stipple"
 
 
+def _module_from_relative_import(path: Path, node: ast.ImportFrom) -> str | None:
+    """Resolve a relative import so it is checked by the same boundary rules."""
+    if node.level == 0:
+        return node.module
+    package_parts = path.relative_to(PACKAGE).parent.parts
+    parent_parts = package_parts[: len(package_parts) - node.level + 1]
+    module_parts = (*parent_parts, *((node.module or "").split(".")))
+    return ".".join(("simple_stipple", *filter(None, module_parts)))
+
+
 def _absolute_imports(path: Path) -> set[str]:
+    """Return direct, relative, and literal dynamic imports used by a module."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     modules: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            modules.add(node.module)
+        if isinstance(node, ast.ImportFrom):
+            if module := _module_from_relative_import(path, node):
+                modules.add(module)
         elif isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            modules.add(node.args[0].value)
     return modules
 
 
@@ -71,6 +92,18 @@ def test_engine_and_document_do_not_depend_on_qt() -> None:
         for module in _absolute_imports(path)
         if module.startswith(("PySide6", "PyQt"))
     ]
+    assert not violations, "\n".join(violations)
+
+
+def test_engine_never_depends_on_feature_or_qt_presentation() -> None:
+    """Keep reusable engine code free of feature workflows and Qt imports."""
+    violations = _violations("engine", ("simple_stipple.features", "PySide6", "PyQt"))
+    assert not violations, "\n".join(violations)
+
+
+def test_canvas_never_depends_on_feature_workflows() -> None:
+    """Canvas interactions remain reusable across Draft, Pattern, and Trace."""
+    violations = _violations("canvas", ("simple_stipple.features",))
     assert not violations, "\n".join(violations)
 
 

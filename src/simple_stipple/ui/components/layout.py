@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import platform as _platform
 
-from PySide6.QtCore import (
-    Qt,
-    QTimer,
-)
+from PySide6.QtCore import QChildEvent, QEvent, QObject, Qt
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -134,22 +131,39 @@ def sidebar_panel(content: QWidget, *, min_width: int = 340, max_width: int = 43
     # the entire application wider than its declared compact breakpoint.
     content.setMinimumWidth(0)
     content.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-    # Most page sidebars are assembled immediately after this helper returns.
-    # Run once after construction so labels added by the page are also made
-    # responsive without requiring every feature to maintain its own audit.
-    QTimer.singleShot(0, lambda: _prepare_sidebar_content(content))
+    _install_sidebar_reflow(content)
     return frame
 
 
-def _prepare_sidebar_content(content: QWidget) -> None:
-    """Make sidebar text reflow instead of being silently truncated."""
-    for label in content.findChildren(QLabel):
-        # Preserve icon-only labels and status-strip-like compact markers.
-        if label.text().strip() and not label.property("icon-only"):
-            label.setWordWrap(True)
-            policy = label.sizePolicy()
-            policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
-            label.setSizePolicy(policy)
+class _SidebarReflowFilter(QObject):
+    """Keep sidebar labels responsive as feature pages add controls."""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.ChildAdded:
+            child_event = event
+            assert isinstance(child_event, QChildEvent)
+            child = child_event.child()
+            if isinstance(child, QWidget):
+                self.prepare(child)
+        return super().eventFilter(watched, event)
+
+    def prepare(self, widget: QWidget) -> None:
+        """Install this filter recursively and configure readable labels."""
+        widget.installEventFilter(self)
+        labels = [widget] if isinstance(widget, QLabel) else []
+        labels.extend(widget.findChildren(QLabel))
+        for label in labels:
+            if label.text().strip() and not label.property("icon-only"):
+                label.setWordWrap(True)
+                policy = label.sizePolicy()
+                policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+                label.setSizePolicy(policy)
+
+
+def _install_sidebar_reflow(content: QWidget) -> None:
+    """Apply responsive label policies now and for all subsequently added children."""
+    reflow_filter = _SidebarReflowFilter(content)
+    reflow_filter.prepare(content)
 
 
 class ResponsiveContentSplitter(QSplitter):
@@ -159,6 +173,7 @@ class ResponsiveContentSplitter(QSplitter):
     # shell gutters. Enter drawer mode early enough that a nominal 1050 px
     # window is never expanded by the combined pane minimum-size hints.
     COMPACT_WIDTH = 1100
+    COMPACT_HYSTERESIS = 24
 
     def __init__(self) -> None:
         super().__init__(Qt.Orientation.Horizontal)
@@ -166,6 +181,7 @@ class ResponsiveContentSplitter(QSplitter):
         self._drawer_label = "Inspector"
         self._drawer_size = 280
         self._compact = False
+        self._compact_drawer_open = False
         self._secondary_size_policy: QSizePolicy | None = None
         self._secondary_minimum_width = 0
         # A QWidget parented directly to QSplitter is automatically inserted as
@@ -217,12 +233,18 @@ class ResponsiveContentSplitter(QSplitter):
     def _toggle_drawer(self) -> None:
         index = self._responsive_secondary
         if index is not None:
-            self._set_drawer_open(self.sizes()[index] == 0)
+            opened = self.sizes()[index] == 0
+            self._set_drawer_open(opened)
+            if self._compact:
+                self._compact_drawer_open = opened
 
     def _update_responsive_state(self) -> None:
         if self._responsive_secondary is None:
             return
-        compact = self.width() < self.COMPACT_WIDTH
+        breakpoint = self.COMPACT_WIDTH + (
+            self.COMPACT_HYSTERESIS if self._compact else -self.COMPACT_HYSTERESIS
+        )
+        compact = self.width() < breakpoint
         secondary = self.widget(self._responsive_secondary)
         if secondary is None:
             return
@@ -236,7 +258,7 @@ class ResponsiveContentSplitter(QSplitter):
             secondary.setMinimumWidth(self._secondary_minimum_width)
         if compact != self._compact:
             self._compact = compact
-            self._set_drawer_open(not compact)
+            self._set_drawer_open(self._compact_drawer_open if compact else True)
         self._drawer_toggle.setVisible(compact)
         self._position_drawer_toggle()
 

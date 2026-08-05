@@ -294,7 +294,7 @@ class CanvasLayerSidebarController:
         if hasattr(self._canvas, "layer_names"):
             names = self._canvas.layer_names
             available = names() if callable(names) else names
-            if str(layer) not in available:
+            if not isinstance(available, (list, set, tuple)) or str(layer) not in available:
                 return
         self._canvas.set_active_layer(str(layer))
         self._after_mutation()

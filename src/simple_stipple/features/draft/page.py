@@ -42,7 +42,7 @@ from simple_stipple.engine.cad.recognition import (
     convert_to_parametric,
     recognized_entities,
 )
-from simple_stipple.engine.formats.service import DxfService
+from simple_stipple.engine.formats.service import DxfService, summarize_dxf_import_report
 from simple_stipple.features.base import BasePage
 from simple_stipple.features.draft.recognition_dialog import ShapeRecognitionDialog
 from simple_stipple.features.draft.session import (
@@ -59,7 +59,7 @@ from simple_stipple.ui.components.recent_files import RecentFilesButton
 from simple_stipple.ui.components.workflow import workflow_strip
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
-from simple_stipple.ui.dialogs.import_dialog import DxfImportPreviewDialog
+from simple_stipple.ui.dialogs.import_dialog import DxfImportPreviewDialog, VectorImportModeDialog
 from simple_stipple.ui.files import pick_open_file, pick_save_file
 from simple_stipple.ui.recent import KIND_VECTOR, record_recent
 
@@ -87,6 +87,7 @@ class DraftPage(BasePage):
         super().__init__(parent, settings)
         self._last_out_path: str | None = None
         self._last_in_path: str | None = None
+        self._import_note: str = ""
         self._runtime: CanvasRuntime | None = None
 
         root = QVBoxLayout(self)
@@ -117,6 +118,7 @@ class DraftPage(BasePage):
         self._canvas_status = CanvasStatusStrip()
         self._canvas_status.set_zoom_callback(self._on_zoom_preset)
         self._canvas_status.bind_canvas(self._canvas)
+        self._canvas_status.contextActionRequested.connect(self._on_context_action)
         root.addWidget(self._canvas_status)
         self.setAcceptDrops(True)
 
@@ -130,11 +132,11 @@ class DraftPage(BasePage):
 
     def _build_toolbar(self) -> QWidget:
         open_btn = QToolButton()
-        open_btn.setText("Import Vector")
+        open_btn.setText("Import…")
         open_btn.setMinimumHeight(30)
         open_btn.setToolTip(
-            "Import a DXF, FVI, or SVG file and replace the drawing.\n"
-            "Use the arrow to add it to the current drawing instead."
+            "Choose a DXF, FVI, or SVG file. If the drawing has content, "
+            "choose whether to replace it or add the imported geometry."
         )
         open_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         open_btn.clicked.connect(self._browse_vector)
@@ -302,10 +304,10 @@ class DraftPage(BasePage):
         self._export_btn.clicked.connect(self._export)
         row.addWidget(self._export_btn, stretch=1)
         overflow = QToolButton()
-        overflow.setText("Options")
+        overflow.setText("Format")
         overflow.setProperty("role", "overflow")
-        overflow.setFixedSize(72, 38)
-        overflow.setToolTip("More export formats")
+        overflow.setMinimumSize(72, 38)
+        overflow.setToolTip("Choose an export format")
         overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(overflow)
         menu.addAction("Export StarFX FVI…", self._export_fvi)
@@ -700,6 +702,13 @@ class DraftPage(BasePage):
             zoom_percent=zoom,
             cursor_pos=cursor,
         )
+        if self._import_note:
+            self._canvas_status.set_readiness(
+                "Import notes",
+                "warn",
+                self._import_note,
+            )
+        self._canvas_status.set_context_actions(self._canvas.get_context_actions())
 
         if hasattr(self, "_precision_bar"):
             self._precision_bar.refresh()
@@ -741,6 +750,12 @@ class DraftPage(BasePage):
         if hasattr(self, "_canvas_status") and hasattr(self._canvas, "get_command_guidance"):
             text, tone = self._canvas.get_command_guidance()
             self._canvas_status.set_readiness(text, tone)
+            self._canvas_status.set_context_actions(self._canvas.get_context_actions())
+
+    def _on_context_action(self, action: str) -> None:
+        """Execute a canvas-owned action then refresh only the affected UI."""
+        if self._canvas.trigger_context_action(action):
+            self._refresh_status()
 
     def _build_layer_tree_rows(
         self,
@@ -791,12 +806,12 @@ class DraftPage(BasePage):
             self._load_vector(path, append=append)
 
     def _load_vector(self, path: str, *, append: bool = False) -> None:
+        self._import_note = ""
         suffix = Path(path).suffix.lower()
-        # DXF imports get a Replace/Add choice in their preview dialog; FVI
-        # and SVG have no preview step, so ask before replacing a non-empty
-        # drawing (drops and Open both route through here).
+        # Every format must make the same destructive-state decision. DXF
+        # includes it in its layer review; FVI/SVG use the compact equivalent.
         if suffix in (".fvi", ".svg") and not append and self._canvas._entities:
-            choice = self._confirm_replace_or_add(path)
+            choice = self._review_vector_import(path, suffix)
             if choice is None:
                 return
             append = choice
@@ -816,26 +831,18 @@ class DraftPage(BasePage):
                 "Choose a DXF, FVI, or SVG vector file.",
             )
 
-    def _confirm_replace_or_add(self, path: str) -> bool | None:
-        """Ask what to do with an import when the drawing already has shapes.
-
-        Returns True to add, False to replace, None to cancel.
-        """
-        box = QMessageBox(self)
-        box.setWindowTitle("Import Vector")
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setText(f"The drawing already has shapes. How should {Path(path).name} be imported?")
-        add_btn = box.addButton("Add to Drawing", QMessageBox.ButtonRole.AcceptRole)
-        replace_btn = box.addButton("Replace Drawing", QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton(QMessageBox.StandardButton.Cancel)
-        box.setDefaultButton(add_btn)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is add_btn:
-            return True
-        if clicked is replace_btn:
-            return False
-        return None
+    def _review_vector_import(self, path: str, suffix: str) -> bool | None:
+        """Return the selected Add/Replace mode, or ``None`` when cancelled."""
+        format_name = {".fvi": "StarFX FVI", ".svg": "SVG"}.get(suffix, "vector")
+        dialog = VectorImportModeDialog(
+            path,
+            format_name=format_name,
+            has_existing_geometry=bool(self._canvas._entities),
+            parent=self,
+        )
+        if not dialog.exec():
+            return None
+        return dialog.append_mode()
 
     def _import_dxf_add(self, path: str) -> None:
         """Add a DXF's shapes to the existing drawing (instead of replacing)."""
@@ -848,6 +855,7 @@ class DraftPage(BasePage):
             if decision is not None:
                 selected, append = decision
                 self._apply_dxf_import(path, selected, append=append)
+                self._set_import_note(summarize_dxf_import_report(report) or "")
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import DXF Failed", exc)
 
@@ -932,6 +940,7 @@ class DraftPage(BasePage):
             if decision is not None:
                 selected, append = decision
                 self._apply_dxf_import(path, selected, append=append)
+                self._set_import_note(summarize_dxf_import_report(report) or "")
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Open DXF Failed", exc)
 
@@ -957,8 +966,7 @@ class DraftPage(BasePage):
             self._canvas._show_flash(f"{verb} FVI: {Path(path).name} ({len(polys)} paths)", 1400)
             details = DxfService.summarize_fvi_import(document.report)
             if details:
-                self._canvas.setToolTip(f"FVI import notes:\n{details}")
-                self._canvas._show_flash("Imported with notes — hover the canvas for details", 4000)
+                self._set_import_note(details)
             self._refresh_status()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:
@@ -993,8 +1001,7 @@ class DraftPage(BasePage):
                 if unsupported_features:
                     notes.append("Unsupported SVG features: " + ", ".join(unsupported_features))
                 details = "\n".join(notes)
-                self._canvas.setToolTip(f"SVG import notes:\n{details}")
-                self._canvas._show_flash("Imported with notes — hover the canvas for details", 4000)
+                self._set_import_note(details)
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import SVG Failed", exc)
 
@@ -1015,6 +1022,13 @@ class DraftPage(BasePage):
             QMessageBox.information(self, "Import DXF", "Select at least one layer to import.")
             return None
         return selected, dialog.append_mode()
+
+    def _set_import_note(self, detail: str) -> None:
+        """Persist conversion-loss information in the visible status surface."""
+        self._import_note = detail.strip()
+        if self._import_note:
+            self._canvas._show_flash("Imported with notes — see status details", 2400)
+        self._refresh_status()
 
     def _apply_dxf_import(
         self,

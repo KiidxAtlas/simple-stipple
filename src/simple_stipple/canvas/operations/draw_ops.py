@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from typing import Any, cast
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation
@@ -130,12 +131,18 @@ class DrawOpsService:
             return self._host._draw_sidebar_height
         return min(430, max(260, self._host.height() - y - 8))
 
+    def _draw_sidebar_y(self) -> int:
+        """Place the drawer below both the ruler and the canvas toolbar."""
+        # _chrome_top only reserves ruler pixels.  The canvas toolbar is
+        # painted above the scene as well, so anchoring at +8 caused the
+        # drawer title to overlap its active-mode/guidance text.
+        return self._host._chrome_top() + 60
+
     def _layout_draw_sidebar(self) -> None:
         if self._host._draw_sidebar is None:
             return
         left = self._host._chrome_left()
-        top = self._host._chrome_top()
-        y = top + 8
+        y = self._draw_sidebar_y()
         self._host._draw_sidebar.setFixedHeight(self._draw_sidebar_target_height(y))
         x = (
             left + 8
@@ -156,7 +163,7 @@ class DrawOpsService:
         self._host._draw_sidebar_visible = visible
         self._host._refresh_draw_sidebar_state()
         left = self._host._chrome_left()
-        y = self._host._chrome_top() + 8
+        y = self._draw_sidebar_y()
         hidden_x = left - self._host._draw_sidebar.width() + 20
         shown_x = left + 8
         self._host._draw_sidebar.setFixedHeight(self._draw_sidebar_target_height(y))
@@ -219,6 +226,7 @@ class DrawOpsService:
         h = abs(ey - sy)
 
         poly: list[tuple[float, float]] = []
+        paths: list[list[tuple[float, float]]] = []
         kind = "polyline"
         meta: dict[str, Any] | None = None
         if self._host._draw_primitive in {"rectangle", "rounded_rectangle"}:
@@ -276,12 +284,45 @@ class DrawOpsService:
                 "inner_ratio": 0.45,
                 "rotation": -90.0,
             }
+        elif self._host._draw_primitive in getattr(self._host, "_PROCEDURAL_QUICK_SHAPES", set()):
+            paths = self._host._build_drag_procedural_shapes(
+                self._host._draw_primitive, w, h, cx, cy
+            )
+            poly = paths[0] if paths else []
+            kind = self._host._draw_primitive
+            meta = {
+                "generator": kind,
+                "center": (cx, cy),
+                "width": w,
+                "height": h,
+            }
 
         self._host._draw_shape_preview_active = False
         self._host._draw_shape_anchor_w = None
         self._host._draw_shape_cursor_w = None
 
         if len(poly) >= 2:
+            if len(paths) > 1:
+                group = self._host._next_group_id
+                entities = [
+                    EntityRecord(
+                        points=points,
+                        kind=kind,
+                        meta=meta,
+                        group=group,
+                        layer=self._host._active_layer,
+                        construction=self._host._draw_construction_mode,
+                    )
+                    for points in paths
+                ]
+                self._host._canvas_service.create_entities(entities)
+                self._host._document.selection = {entity.id for entity in entities}
+                self._host._notify()
+                self._host._fire_poly_change()
+                self._host._show_flash(f"{kind.title()} created", 800)
+                self._host._refresh_draw_sidebar_state()
+                self._host._redraw()
+                return True
             if (
                 self._host._draw_split_enabled
                 and not self._host._draw_construction_mode
@@ -395,9 +436,11 @@ class DrawOpsService:
             "text",
             "bezier",
         }
+        valid.update(getattr(self._host, "_PROCEDURAL_QUICK_SHAPES", set()))
         if tool not in valid:
             return
         self._host._draw_primitive = tool
+        self._host._snap_engine.clear_relationship_reference()
         self._host._draw_pts.clear()
         self._host._draw_arc_pts.clear()
         self._host._pen_pts.clear()
@@ -445,13 +488,89 @@ class ConstructionService:
             entity.points = points
             if entity.kind == "line" and len(points) == 2:
                 entity.meta = {"start": points[0], "end": points[1]}
+            elif entity.kind in {
+                "arc",
+                "circle",
+                "ellipse",
+                "polygon",
+                "rectangle",
+                "rounded_rectangle",
+                "slot",
+                "star",
+            }:
+                # Parametric shapes retain their defining metadata. Fixed and
+                # projection constraints may replace their tessellation, but
+                # must not silently degrade the shape into a plain polyline.
+                pass
             else:
                 entity.kind = "polyline"
                 entity.meta = None
             changed += 1
+        changed += self._apply_shape_and_projection_constraints(entities_by_id)
         return changed
 
-    def add_geometric_constraint(self, kind: str) -> int:
+    def _apply_shape_and_projection_constraints(self, entities_by_id: dict[str, EntityRecord]) -> int:
+        """Apply persistent constraints whose defining data lives in shape metadata."""
+        changed = 0
+        for constraint in self._host._constraints:
+            if not constraint.enabled or len(constraint.entity_ids) < 2:
+                continue
+            source = entities_by_id.get(constraint.entity_ids[0])
+            target = entities_by_id.get(constraint.entity_ids[1])
+            if source is None or target is None:
+                continue
+            if constraint.kind == "projection":
+                snapshot = (list(target.points), target.kind, deepcopy(target.meta))
+                target.points = list(source.points)
+                target.kind = source.kind
+                target.meta = deepcopy(source.meta)
+                target.construction = True
+                if snapshot != (target.points, target.kind, target.meta):
+                    changed += 1
+                continue
+            source_meta = source.meta or {}
+            target_meta = target.meta or {}
+            source_center = source_meta.get("center")
+            target_center = target_meta.get("center")
+            if constraint.kind == "concentric" and source_center and target_center:
+                sx, sy = map(float, source_center)
+                tx, ty = map(float, target_center)
+                dx, dy = sx - tx, sy - ty
+                target.meta = {**target_meta, "center": (sx, sy)}
+                target.points = [(x + dx, y + dy) for x, y in target.points]
+                changed += int(bool(dx or dy))
+            elif constraint.kind == "equal" and "radius" in source_meta and "radius" in target_meta:
+                source_radius = float(source_meta["radius"])
+                target_radius = float(target_meta["radius"])
+                if target_radius <= 1e-12:
+                    continue
+                center = tuple(map(float, target_meta.get("center", (0.0, 0.0))))
+                scale = source_radius / target_radius
+                target.meta = {**target_meta, "radius": source_radius}
+                target.points = [
+                    (center[0] + (x - center[0]) * scale, center[1] + (y - center[1]) * scale)
+                    for x, y in target.points
+                ]
+                changed += int(abs(source_radius - target_radius) > 1e-12)
+            elif constraint.kind == "tangent" and source_center and target_center:
+                source_radius = float(source_meta.get("radius", 0.0))
+                target_radius = float(target_meta.get("radius", 0.0))
+                if source_radius <= 0 or target_radius <= 0:
+                    continue
+                sx, sy = map(float, source_center)
+                tx, ty = map(float, target_center)
+                dx, dy = tx - sx, ty - sy
+                distance = math.hypot(dx, dy)
+                ux, uy = (dx / distance, dy / distance) if distance > 1e-12 else (1.0, 0.0)
+                desired = source_radius + target_radius
+                new_center = (sx + ux * desired, sy + uy * desired)
+                shift = (new_center[0] - tx, new_center[1] - ty)
+                target.meta = {**target_meta, "center": new_center}
+                target.points = [(x + shift[0], y + shift[1]) for x, y in target.points]
+                changed += int(math.hypot(*shift) > 1e-12)
+        return changed
+
+    def add_geometric_constraint(self, kind: str) -> int:  # noqa: C901
         """Attach a persistent constraint to selected edges or vertices."""
         segment_refs = [
             ref
@@ -469,53 +588,198 @@ class ConstructionService:
             for index in self._host._selected_ids()
             if len(self._host._entities_by_id[index].points) == 2
         ]
-        unary = {"horizontal", "vertical", "fixed"}
-        binary = {"parallel", "perpendicular", "equal_length", "coincident"}
-        if kind in unary and not (segment_refs or line_indices):
-            self._host._show_flash("Select one or more edges", 1200)
-            return 0
-        if kind == "coincident" and len(vertex_refs) == 2:
-            first_ref, second_ref = vertex_refs
+        selected_ids = list(self._host._selected_ids())
+        selected_entities = [
+            self._host._entities_by_id[index]
+            for index in selected_ids
+            if index in self._host._entities_by_id
+        ]
+        if kind == "unfix":
+            fixed = [
+                constraint
+                for constraint in self._host._constraints
+                if constraint.kind == "fixed" and set(constraint.entity_ids).intersection(selected_ids)
+            ]
+            if not fixed:
+                self._host._show_flash("Select fixed geometry to unfix", 1200)
+                return 0
+            before = self._host._canvas_service.begin_preview()
+            self._host._constraints = [
+                constraint for constraint in self._host._constraints if constraint not in fixed
+            ]
+            self._host._canvas_service.commit_preview(before)
+            self._host._redraw()
+            self._host._notify()
+            self._host._fire_poly_change()
+            self._host._show_flash(f"Unfixed {len(fixed)} item(s)", 1000)
+            return len(fixed)
+        if kind == "projection":
+            if not selected_entities:
+                self._host._show_flash("Select geometry to project as construction", 1200)
+                return 0
+            before = self._host._canvas_service.begin_preview()
+            additions: list[GeometricConstraint] = []
+            projected_ids: list[str] = []
+            for source in selected_entities:
+                projection = EntityRecord(
+                    points=list(source.points),
+                    kind=source.kind,
+                    meta=deepcopy(source.meta),
+                    construction=True,
+                    layer=source.layer,
+                )
+                self._host._document.append(projection)
+                projected_ids.append(projection.id)
+                additions.append(
+                    GeometricConstraint(kind="projection", entity_ids=(source.id, projection.id))
+                )
+            self._host._constraints.extend(additions)
+            self._host._canvas_service.commit_preview(before)
+            self._host.set_selection(projected_ids)
+            self._host._sync_shape_storage_from_entities()
+            self._host._redraw()
+            self._host._notify()
+            self._host._fire_poly_change()
+            self._host._show_flash(f"Projected {len(additions)} construction reference(s)", 1000)
+            return len(additions)
+        if kind == "midpoint" and len(vertex_refs) == 1 and len(segment_refs) == 1:
+            point_id, point_vertex = vertex_refs[0]
+            segment = segment_refs[0]
             additions = [
                 GeometricConstraint(
-                    kind="coincident",
-                    entity_ids=(first_ref[0], second_ref[0]),
-                    parameters={"first_vertex": first_ref[1], "second_vertex": second_ref[1]},
+                    kind="midpoint",
+                    entity_ids=(str(segment["entity_id"]), point_id),
+                    parameters={"first_segment": int(segment["segment_index"]), "point_vertex": point_vertex},
                 )
             ]
-        elif kind in binary and len(segment_refs) == 2:
-            first_ref, second_ref = segment_refs
+        elif kind == "symmetric" and len(vertex_refs) == 2 and len(segment_refs) >= 1:
+            first, second = vertex_refs
+            axis = segment_refs[0]
             additions = [
                 GeometricConstraint(
-                    kind=cast(ConstraintKind, kind),
-                    entity_ids=(str(first_ref["entity_id"]), str(second_ref["entity_id"])),
+                    kind="symmetric",
+                    entity_ids=(str(axis["entity_id"]), first[0], second[0]),
                     parameters={
-                        "first_segment": int(first_ref["segment_index"]),
-                        "second_segment": int(second_ref["segment_index"]),
+                        "first_segment": int(axis["segment_index"]),
+                        "first_vertex": first[1],
+                        "second_vertex": second[1],
                     },
                 )
             ]
-            if kind == "coincident":
-                first = self._host._entities_by_id[str(first_ref["entity_id"])]
-                second = self._host._entities_by_id[str(second_ref["entity_id"])]
-                a = int(first_ref["segment_index"])
-                b = int(second_ref["segment_index"])
-                choice = min(
-                    (
-                        (math.dist(first.points[a + da], second.points[b + db]), da, db)
-                        for da in (0, 1)
-                        for db in (0, 1)
+        elif kind == "intersection" and len(vertex_refs) == 1 and len(segment_refs) == 2:
+            point_id, point_vertex = vertex_refs[0]
+            intersection_first, intersection_second = segment_refs
+            additions = [
+                GeometricConstraint(
+                    kind="intersection",
+                    entity_ids=(
+                        str(intersection_first["entity_id"]),
+                        str(intersection_second["entity_id"]),
+                        point_id,
                     ),
-                    key=lambda item: item[0],
+                    parameters={
+                        "first_segment": int(intersection_first["segment_index"]),
+                        "second_segment": int(intersection_second["segment_index"]),
+                        "point_vertex": point_vertex,
+                    },
                 )
-                additions[0].parameters.update(
-                    {"first_endpoint": choice[1], "second_endpoint": choice[2]}
+            ]
+        elif kind == "coincident" and len(vertex_refs) == 1 and len(segment_refs) == 1:
+            point_id, point_vertex = vertex_refs[0]
+            segment = segment_refs[0]
+            additions = [
+                GeometricConstraint(
+                    kind="coincident",
+                    entity_ids=(str(segment["entity_id"]), point_id),
+                    parameters={"first_segment": int(segment["segment_index"]), "point_vertex": point_vertex},
                 )
-        elif kind in binary and len(line_indices) != 2:
-            self._host._show_flash("Select two edges (Shift-click to add the second)", 1600)
-            return 0
+            ]
         else:
             additions = []
+        binary = {"parallel", "perpendicular", "equal", "equal_length", "coincident", "collinear", "smooth"}
+        if kind in {"concentric", "tangent", "equal"} and len(selected_entities) == 2:
+            round_kinds = {"arc", "circle"}
+            first, second = selected_entities
+            if first.kind in round_kinds and second.kind in round_kinds:
+                additions = [
+                    GeometricConstraint(
+                        kind=cast(ConstraintKind, kind),
+                        entity_ids=(first.id, second.id),
+                        parameters={"shape": True},
+                    )
+                ]
+        if (
+            kind == "smooth"
+            and len(selected_entities) == 2
+            and all(entity.kind in {"bezier", "spline"} for entity in selected_entities)
+        ):
+            first, second = selected_entities
+            additions = [
+                GeometricConstraint(
+                    kind="smooth",
+                    entity_ids=(first.id, second.id),
+                    parameters={"curve": True},
+                )
+            ]
+        if kind in {"horizontal", "vertical"} and not (segment_refs or line_indices):
+            self._host._show_flash("Select one or more edges", 1200)
+            return 0
+        if kind == "fixed" and not selected_entities:
+            self._host._show_flash("Select geometry to fix", 1200)
+            return 0
+        if not additions:
+            if kind == "coincident" and len(vertex_refs) == 2:
+                first_ref, second_ref = vertex_refs
+                additions = [
+                    GeometricConstraint(
+                        kind="coincident",
+                        entity_ids=(first_ref[0], second_ref[0]),
+                        parameters={"first_vertex": first_ref[1], "second_vertex": second_ref[1]},
+                    )
+                ]
+            elif kind in binary and len(segment_refs) == 2:
+                segment_first, segment_second = segment_refs
+                additions = [
+                    GeometricConstraint(
+                        kind=cast(ConstraintKind, kind),
+                        entity_ids=(
+                            str(segment_first["entity_id"]),
+                            str(segment_second["entity_id"]),
+                        ),
+                        parameters={
+                            "first_segment": int(segment_first["segment_index"]),
+                            "second_segment": int(segment_second["segment_index"]),
+                        },
+                    )
+                ]
+                if kind == "coincident":
+                    first_entity = self._host._entities_by_id[str(segment_first["entity_id"])]
+                    second_entity = self._host._entities_by_id[str(segment_second["entity_id"])]
+                    a = int(segment_first["segment_index"])
+                    b = int(segment_second["segment_index"])
+                    choice = min(
+                        (
+                            (
+                                math.dist(
+                                    first_entity.points[a + da], second_entity.points[b + db]
+                                ),
+                                da,
+                                db,
+                            )
+                            for da in (0, 1)
+                            for db in (0, 1)
+                        ),
+                        key=lambda item: item[0],
+                    )
+                    additions[0].parameters.update(
+                        {"first_endpoint": choice[1], "second_endpoint": choice[2]}
+                    )
+            elif kind in binary and len(line_indices) != 2:
+                self._host._show_flash("Select two edges (Shift-click to add the second)", 1600)
+                return 0
+        if kind in {"midpoint", "symmetric", "intersection"} and not additions:
+            self._host._show_flash("Select the required point and reference edge(s)", 1600)
+            return 0
         before = self._host._canvas_service.begin_preview()
         constraint_kind = cast(ConstraintKind, kind)
         if not additions and kind in {"horizontal", "vertical"}:
@@ -535,14 +799,14 @@ class ConstructionService:
             additions = [
                 GeometricConstraint(
                     kind="fixed",
-                    entity_ids=(self._host._entities_by_id[index].id,),
+                    entity_ids=(entity.id,),
                     parameters={
                         "points": [
-                            list(point) for point in self._host._entities_by_id[index].points
+                            list(point) for point in entity.points
                         ]
                     },
                 )
-                for index in line_indices
+                for entity in selected_entities
             ]
         elif not additions and kind in binary:
             first, second = (self._host._entities_by_id[index] for index in line_indices)

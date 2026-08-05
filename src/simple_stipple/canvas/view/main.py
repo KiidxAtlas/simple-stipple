@@ -53,6 +53,7 @@ from simple_stipple.canvas.view.helpers import (
     add_polylines_state,
     eventFilter,
     get_command_guidance,
+    get_context_actions,
     get_entity_records,
     get_status_summary,
     get_view_state,
@@ -63,6 +64,7 @@ from simple_stipple.canvas.view.helpers import (
     show_coordinate_entry,
     toggle_dimension_mode,
     toggle_measure,
+    trigger_context_action,
 )
 from simple_stipple.canvas.view.interactions import (
     _append_dimension,
@@ -142,8 +144,13 @@ class CanvasView(
 
     @property
     def _entities_by_id(self) -> dict[str, EntityRecord]:
-        """O(1) lookup of entities by their ID string."""
-        return {entity.id: entity for entity in self._entities}
+        """Cached O(1) entity lookup, rebuilt only when the entity list changes."""
+        entities = self._entities
+        cache_key = (id(entities), len(entities))
+        if cache_key != self.__entities_by_id_key:
+            self.__entities_by_id = {entity.id: entity for entity in entities}
+            self.__entities_by_id_key = cache_key
+        return self.__entities_by_id
 
     def _entity_for_id(self, entity_id: str) -> EntityRecord | None:
         """Return the entity record for ``entity_id``, or ``None`` if not found."""
@@ -316,13 +323,24 @@ class CanvasView(
         return self._layer_service.on_active(entity)
 
     def _entity_selectable(self, entity_id: str) -> bool:
+        if entity_id in self._render_only_entity_ids:
+            return False
         return self._layer_service.selectable(entity_id)
 
     def _entity_selectable_by_id(self, entity_id: str) -> bool:
+        if entity_id in self._render_only_entity_ids:
+            return False
         return self._layer_service.selectable(entity_id)
 
     def _noninteractive_ids(self) -> set[str]:
-        return self._layer_service.noninteractive_indices()
+        return self._layer_service.noninteractive_indices() | self._render_only_entity_ids
+
+    def set_render_only_entity_ids(self, entity_ids: set[str]) -> None:
+        """Keep generated strokes visible while excluding them from editing and hit tests."""
+        self._render_only_entity_ids = set(entity_ids)
+        self._sel.difference_update(self._render_only_entity_ids)
+        self._reset_edit_interaction_state()
+        self._redraw()
 
     def _drop_inactive_selection(self) -> None:
         self._layer_service.drop_inactive_selection()
@@ -786,6 +804,7 @@ class CanvasView(
         Pass an empty dict to clear all accents.
         """
         self._accent_polys = dict(accent)
+        self._renderer.invalidate_dense_preview_cache()
         self._redraw()
 
     def set_selection_follows_geometry(self, enabled: bool) -> None:
@@ -936,6 +955,7 @@ class CanvasView(
         if enabled == self._dense_preview_render:
             return
         self._dense_preview_render = enabled
+        self._renderer.invalidate_dense_preview_cache()
         self._redraw()
 
     def get_precision_state(self) -> dict[str, object]:
@@ -949,6 +969,7 @@ class CanvasView(
             "snap_master": self._snap_master_enabled,
             "snap_vertex": self._snap_vertex_enabled,
             "snap_midpoint": self._snap_midpoint_enabled,
+            "snap_intersection": self._snap_intersection_enabled,
             "snap_edge": self._snap_edge_enabled,
             "snap_tangent": self._snap_tangent_enabled,
             "snap_extension": self._snap_extension_enabled,
@@ -959,6 +980,7 @@ class CanvasView(
             "snap_axis_alignment": self._snap_axis_alignment_enabled,
             "snap_align_x": self._snap_align_x_enabled,
             "snap_align_y": self._snap_align_y_enabled,
+            "snap_strength": self._snap_strength,
         }
 
     def get_topology_summary(self) -> dict[str, int]:
@@ -1546,8 +1568,15 @@ class CanvasView(
         self.set_context_menu_sections(profile.get("sections", []))
         self.set_context_menu_overflow_sections(profile.get("overflow", []))
         self._context_menu_transform_items = list(profile.get("transform", []))
+        self._context_menu_item_order = list(profile.get("items", []))
+        self._context_menu_overflow_items = set(profile.get("overflow_items", []))
+        self._context_menu_actions_configured = bool(profile.get("action_items_configured", []))
 
     def _context_menu_section_enabled(self, section: str) -> bool:
+        if self._context_menu_actions_configured or self._context_menu_item_order:
+            # Action-level configuration filters the completed menu once all
+            # possible leaf actions have been built.
+            return True
         return section in self._context_menu_sections
 
     def set_grid_snap(self, enabled: bool) -> None:
@@ -1570,6 +1599,10 @@ class CanvasView(
 
     def set_snap_midpoint(self, enabled: bool) -> None:
         self._snap_midpoint_enabled = bool(enabled)
+        self._refresh_draw_sidebar_state()
+
+    def set_snap_intersection(self, enabled: bool) -> None:
+        self._snap_intersection_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
 
     def set_snap_edge(self, enabled: bool) -> None:
@@ -1599,6 +1632,15 @@ class CanvasView(
     def set_snap_equal_length(self, enabled: bool) -> None:
         self._snap_equal_length_enabled = bool(enabled)
         self._refresh_draw_sidebar_state()
+
+    def set_snap_strength(self, strength: float) -> None:
+        """Set the screen-space magnetic capture radius multiplier."""
+        try:
+            self._snap_strength = max(0.0, min(2.0, float(strength)))
+        except (TypeError, ValueError):
+            self._snap_strength = 1.0
+        self._refresh_draw_sidebar_state()
+        self._redraw()
 
     def set_snap_axis_alignment(self, enabled: bool) -> None:
         self._snap_axis_alignment_enabled = bool(enabled)
@@ -2355,6 +2397,7 @@ CanvasView._update_cursor = _update_cursor
 CanvasView.add_polylines_state = add_polylines_state
 CanvasView.eventFilter = eventFilter
 CanvasView.get_command_guidance = get_command_guidance
+CanvasView.get_context_actions = get_context_actions
 CanvasView.get_entity_records = get_entity_records
 CanvasView.get_status_summary = get_status_summary
 CanvasView.get_view_state = get_view_state
@@ -2363,6 +2406,7 @@ CanvasView.set_entity_records = set_entity_records
 CanvasView.set_ghost_polylines = set_ghost_polylines
 CanvasView.set_mode = set_mode
 CanvasView.show_coordinate_entry = show_coordinate_entry
+CanvasView.trigger_context_action = trigger_context_action
 CanvasView.toggle_dimension_mode = toggle_dimension_mode
 CanvasView.toggle_measure = toggle_measure
 CanvasView._append_dimension = _append_dimension

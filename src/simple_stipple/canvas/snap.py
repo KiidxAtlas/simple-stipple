@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from simple_stipple.engine.cad.constants import SNAP_DIST
 from simple_stipple.engine.cad.shapes import (
     ArcShape,
     CircleShape,
@@ -49,7 +50,12 @@ class SnapEngine:
     """Snap resolution bound to one canvas view."""
 
     GUIDE_SNAP_PX = 8.0
-    RELATIONSHIP_REFERENCE_PX = 96.0
+    # Relationship snaps should be intentional, local references.  A broad
+    # source search makes an unrelated segment elsewhere in the document win
+    # simply because its length happens to put an equal-length endpoint under
+    # the cursor.  Sources may be approached from either end of the new
+    # stroke, so test both the anchor and the live pointer.
+    RELATIONSHIP_REFERENCE_PX = 48.0
     # A combined relationship has one exact endpoint, but asking users to
     # land inside the generic 10px vertex radius defeats the point of an
     # intelligent constraint snap.  It gets a forgiving acquisition band
@@ -76,6 +82,17 @@ class SnapEngine:
         ) = None
         self.last_relationship_type: str | None = None
 
+    def _snap_strength(self) -> float:
+        """Return the user-selected magnetic capture multiplier."""
+        try:
+            # A real canvas always supplies its persisted 50% default. Keep
+            # the fallback at the historical full strength for lightweight
+            # host adapters that do not expose snap configuration.
+            value = float(getattr(self.v, "_snap_strength", 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+        return max(0.0, min(2.0, value))
+
     # ── Public API ────────────────────────────────────────────────────────
 
     def query(
@@ -94,17 +111,26 @@ class SnapEngine:
         exclude_segments: set[tuple[str, int]] | None = None,
         exclude_polys: set[str] | None = None,
         reference_point: tuple[float, float] | None = None,
+        allow_inferred: bool = True,
     ) -> SnapResult | None:
         v = self.v
         if not getattr(v, "_snap_master_enabled", True):
+            self.clear_relationship_reference()
+            return None
+        # Zero strength intentionally bypasses every snap family, including
+        # grid points. The individual snap toggles stay untouched so a user
+        # can temporarily draw freehand and then restore their setup.
+        if self._snap_strength() <= 0.0:
             self.clear_relationship_reference()
             return None
         polylines = {e.id: e.points for e in v._entities}
         # Locked and non-active-layer entities remain useful references, but
         # explicitly hidden geometry must not create invisible snap targets.
         hidden_polys = v._flagged("hidden")
+        snap_dist = SNAP_DIST * self._snap_strength()
         vertex_enabled = allow_vertex and getattr(v, "_snap_vertex_enabled", True)
         midpoint_enabled = allow_vertex and getattr(v, "_snap_midpoint_enabled", True)
+        intersection_enabled = allow_vertex and getattr(v, "_snap_intersection_enabled", True)
         edge_enabled = allow_edge and getattr(v, "_snap_edge_enabled", True)
         if drag:
             best = resolve_drag_snap(
@@ -116,6 +142,7 @@ class SnapEngine:
                 allow_grid=allow_grid,
                 allow_vertex=vertex_enabled,
                 allow_midpoint=midpoint_enabled,
+                allow_intersection=intersection_enabled,
                 allow_edge=edge_enabled,
                 exclude_vertices=exclude_vertices,
                 exclude_segments=exclude_segments,
@@ -132,6 +159,7 @@ class SnapEngine:
                 mode=getattr(v, "_mode", None),
                 reference_point=reference_point,
                 draw_points=getattr(v, "_draw_pts", []),
+                snap_dist=snap_dist,
             )
         else:
             best = resolve_snap(
@@ -143,6 +171,7 @@ class SnapEngine:
                 allow_grid=allow_grid,
                 allow_vertex=vertex_enabled,
                 allow_midpoint=midpoint_enabled,
+                allow_intersection=intersection_enabled,
                 allow_edge=edge_enabled,
                 grid_snap_enabled=v._grid_snap,
                 grid_spacing=v._grid_spacing,
@@ -157,6 +186,7 @@ class SnapEngine:
                 mode=getattr(v, "_mode", None),
                 reference_point=reference_point,
                 draw_points=getattr(v, "_draw_pts", []),
+                snap_dist=snap_dist,
             )
         best = self._pick_better(cx, cy, best, self._shape_candidate(cx, cy, exclude=exclude_polys))
         # Tangent/extension are inferred edge snaps and deliberately lower
@@ -199,7 +229,7 @@ class SnapEngine:
                     cx, cy, wx, wy, reference_point, exclude=exclude_polys
                 ),
             )
-        if allow_polyline and vertex_enabled and (
+        if allow_inferred and allow_polyline and vertex_enabled and (
             getattr(v, "_snap_align_x_enabled", getattr(v, "_snap_axis_alignment_enabled", True))
             or getattr(v, "_snap_align_y_enabled", getattr(v, "_snap_axis_alignment_enabled", True))
         ):
@@ -207,14 +237,23 @@ class SnapEngine:
                 cx,
                 cy,
                 best,
-                self._axis_alignment_candidate(cx, cy, wx, wy, exclude=exclude_polys),
+                self._axis_alignment_candidate(
+                    cx, cy, wx, wy, reference=reference_point, exclude=exclude_polys
+                ),
             )
-        if allow_polyline and edge_enabled and getattr(v, "_snap_extension_enabled", True):
+        if (
+            allow_inferred
+            and allow_polyline
+            and edge_enabled
+            and getattr(v, "_snap_extension_enabled", True)
+        ):
             best = self._pick_better(
                 cx,
                 cy,
                 best,
-                self._extension_candidate(cx, cy, exclude=exclude_polys),
+                self._extension_candidate(
+                    cx, cy, reference=reference_point, exclude=exclude_polys
+                ),
             )
         best = self._pick_better(cx, cy, best, self._guide_candidate(cx, cy, wx, wy))
         if best is None or best[2] not in {
@@ -242,6 +281,11 @@ class SnapEngine:
         Only nearby source segments participate, and the selected source is
         retained so feedback can identify the exact referenced geometry.
         """
+        # Spline controls do not form straight segments. Treating their
+        # control polygon as line geometry produced false relationship hints.
+        if getattr(self.v, "_draw_primitive", None) in {"spline", "bezier"}:
+            self.clear_relationship_reference()
+            return None
         locked_reference = self.last_relationship_reference
         locked_type = self.last_relationship_type
         ax, ay = reference
@@ -250,6 +294,7 @@ class SnapEngine:
         if pointer_length <= 1e-12:
             return None
         hidden_ids = self.v._flagged("hidden")
+        reference_c = self.v._w2c(ax, ay)
         candidates: list[tuple[SnapResult, RelationshipReference]] = []
         equal_candidates: list[tuple[SnapResult, RelationshipReference]] = []
         combined_candidates: list[tuple[SnapResult, RelationshipReference]] = []
@@ -257,6 +302,7 @@ class SnapEngine:
             (entity.id, entity.points, False)
             for entity in self.v._entities
             if entity.id not in (exclude or ()) and entity.id not in hidden_ids
+            and getattr(entity, "kind", "polyline") not in {"spline", "bezier"}
         ]
         draw_points = list(getattr(self.v, "_draw_pts", []))
         if len(draw_points) >= 2:
@@ -271,6 +317,7 @@ class SnapEngine:
                 is_active_draw,
                 cx=cx,
                 cy=cy,
+                reference_c=reference_c,
                 reference=reference,
                 pointer=(wx, wy),
                 pointer_angle=pointer_angle,
@@ -286,7 +333,7 @@ class SnapEngine:
             self.COMBINED_RELATIONSHIP_RETAIN_PX
             if locked_type in {"parallel_equal_length", "perpendicular_equal_length"}
             else self.COMBINED_RELATIONSHIP_ACQUIRE_PX
-        )
+        ) * self._snap_strength()
         combined = self._nearest_relationship_candidate(
             cx, cy, combined_radius, combined_candidates
         )
@@ -296,13 +343,13 @@ class SnapEngine:
             self.EQUAL_LENGTH_RETAIN_PX
             if locked_type == "equal_length"
             else self.EQUAL_LENGTH_ACQUIRE_PX
-        )
+        ) * self._snap_strength()
         equal = self._nearest_relationship_candidate(cx, cy, equal_radius, equal_candidates)
         directional_radius = (
             self.DIRECTIONAL_RELATIONSHIP_RETAIN_PX
             if locked_type in {"parallel", "perpendicular"}
             else self.DIRECTIONAL_RELATIONSHIP_ACQUIRE_PX
-        )
+        ) * self._snap_strength()
         result = (
             equal
             if equal is not None
@@ -326,6 +373,7 @@ class SnapEngine:
         *,
         cx: float,
         cy: float,
+        reference_c: tuple[float, float],
         reference: tuple[float, float],
         pointer: tuple[float, float],
         pointer_angle: float,
@@ -357,6 +405,7 @@ class SnapEngine:
             if not self._relationship_source_is_eligible(
                 cx,
                 cy,
+                reference_c,
                 entity_id,
                 segment_index,
                 start_c,
@@ -503,6 +552,7 @@ class SnapEngine:
         self,
         cx: float,
         cy: float,
+        reference_c: tuple[float, float],
         entity_id: str,
         segment_index: int,
         start_c: tuple[float, float],
@@ -511,16 +561,21 @@ class SnapEngine:
         *,
         always_available: bool,
     ) -> bool:
-        """Apply acquisition proximity while preserving an existing lock."""
+        """Keep new relationship references local to the active stroke.
+
+        The source can be near either the stroke anchor or its live endpoint:
+        the former supports starting beside a reference and drawing away from
+        it, while the latter supports approaching a reference to use it.
+        """
         is_locked = locked is not None and locked[0] == entity_id and locked[1] == segment_index
         if locked is not None:
             return is_locked
         if always_available:
             return True
-        return (
-            self._screen_distance_to_segment(cx, cy, start_c, end_c)
-            <= self.RELATIONSHIP_REFERENCE_PX
-        )
+        return min(
+            self._screen_distance_to_segment(cx, cy, start_c, end_c),
+            self._screen_distance_to_segment(*reference_c, start_c, end_c),
+        ) <= self.RELATIONSHIP_REFERENCE_PX
 
     @staticmethod
     def _screen_distance_to_segment(
@@ -546,18 +601,20 @@ class SnapEngine:
         wx: float,
         wy: float,
         *,
+        reference: tuple[float, float] | None = None,
         exclude: set[str] | None = None,
     ) -> SnapResult | None:
         """Align the moving endpoint's X or Y coordinate to visible endpoints."""
         hidden_ids = self.v._flagged("hidden")
         best: SnapResult | None = None
-        best_distance = self.INFERRED_LINE_SNAP_PX
+        best_distance = self.INFERRED_LINE_SNAP_PX * self._snap_strength()
         align_x_enabled = getattr(
             self.v, "_snap_align_x_enabled", getattr(self.v, "_snap_axis_alignment_enabled", True)
         )
         align_y_enabled = getattr(
             self.v, "_snap_align_y_enabled", getattr(self.v, "_snap_axis_alignment_enabled", True)
         )
+        reference_c = self.v._w2c(*reference) if reference is not None else None
         for entity in self.v._entities:
             if entity.id in (exclude or ()) or entity.id in hidden_ids or not entity.points:
                 continue
@@ -570,6 +627,11 @@ class SnapEngine:
                 else ()
             )
             for px, py in points:
+                endpoint_c = self.v._w2c(px, py)
+                if not self._source_is_local(
+                    cx, cy, endpoint_c, endpoint_c, reference_c
+                ):
+                    continue
                 pcx, _ = self.v._w2c(px, wy)
                 x_distance = abs(cx - pcx)
                 if align_x_enabled and x_distance < best_distance:
@@ -602,7 +664,7 @@ class SnapEngine:
         if not getattr(v, "_snap_vertex_enabled", True):
             return None  # shape center/start/end points are "vertex family"
         best: SnapResult | None = None
-        best_dist = float("inf")
+        best_dist = ShapeSnapEngine.SNAP_RADIUS * self._snap_strength()
         excluded = exclude or ()
         hidden_ids = self.v._flagged("hidden")
         # Shape snapping works across visible layers — shapes on non-active
@@ -618,7 +680,7 @@ class SnapEngine:
             for sx, sy, snap_type in ShapeSnapEngine.get_snap_candidates(shape):
                 pcx, pcy = v._w2c(sx, sy)
                 dist = math.hypot(cx - pcx, cy - pcy)
-                if dist <= ShapeSnapEngine.SNAP_RADIUS and dist < best_dist:
+                if dist <= best_dist:
                     best_dist = dist
                     best = (sx, sy, snap_type)
         return best
@@ -630,7 +692,7 @@ class SnapEngine:
         if not guides:
             return None
         best: SnapResult | None = None
-        best_dist = self.GUIDE_SNAP_PX
+        best_dist = self.GUIDE_SNAP_PX * self._snap_strength()
         for orient, coord in guides:
             if orient == "v":
                 gx, _ = v._w2c(coord, wy)
@@ -659,7 +721,7 @@ class SnapEngine:
         """Nearest analytic point on circles, arcs, and rotated ellipses."""
         wx, wy = self.v._c2w(cx, cy)
         best: SnapResult | None = None
-        best_distance = ShapeSnapEngine.SNAP_RADIUS
+        best_distance = ShapeSnapEngine.SNAP_RADIUS * self._snap_strength()
         hidden_ids = self.v._flagged("hidden")
         for eid, shape in self.v._snap_shapes().items():
             if eid in (exclude or ()) or eid in hidden_ids:
@@ -721,7 +783,7 @@ class SnapEngine:
             return None
         ax, ay = reference
         best: SnapResult | None = None
-        best_dist = ShapeSnapEngine.SNAP_RADIUS
+        best_dist = ShapeSnapEngine.SNAP_RADIUS * self._snap_strength()
         hidden_ids = self.v._flagged("hidden")
         for eid, shape in self.v._snap_shapes().items():
             if eid in (exclude or ()) or eid in hidden_ids or not isinstance(shape, CircleShape):
@@ -748,6 +810,7 @@ class SnapEngine:
         cx: float,
         cy: float,
         *,
+        reference: tuple[float, float] | None = None,
         exclude: set[str] | None = None,
     ) -> SnapResult | None:
         """Project onto the infinite extension of visible straight segments."""
@@ -755,13 +818,22 @@ class SnapEngine:
             return None
         wx, wy = self.v._c2w(cx, cy)
         best: SnapResult | None = None
-        best_dist = self.INFERRED_LINE_SNAP_PX
+        best_dist = self.INFERRED_LINE_SNAP_PX * self._snap_strength()
         hidden_ids = self.v._flagged("hidden")
+        reference_c = self.v._w2c(*reference) if reference is not None else None
         for entity in self.v._entities:
             if entity.id in (exclude or ()) or entity.id in hidden_ids:
                 continue
             points = entity.points
             for start, end in zip(points, points[1:]):
+                if not self._source_is_local(
+                    cx,
+                    cy,
+                    self.v._w2c(*start),
+                    self.v._w2c(*end),
+                    reference_c,
+                ):
+                    continue
                 dx, dy = end[0] - start[0], end[1] - start[1]
                 length_sq = dx * dx + dy * dy
                 if length_sq <= 1e-12:
@@ -776,6 +848,20 @@ class SnapEngine:
                     best_dist = distance
                     best = (px, py, "extension")
         return best
+
+    def _source_is_local(
+        self,
+        cx: float,
+        cy: float,
+        start_c: tuple[float, float],
+        end_c: tuple[float, float],
+        reference_c: tuple[float, float] | None,
+    ) -> bool:
+        """Whether an inferred source belongs to the active drawing area."""
+        distances = [self._screen_distance_to_segment(cx, cy, start_c, end_c)]
+        if reference_c is not None:
+            distances.append(self._screen_distance_to_segment(*reference_c, start_c, end_c))
+        return min(distances) <= self.RELATIONSHIP_REFERENCE_PX
 
     def _pick_better(
         self,
@@ -806,9 +892,10 @@ class SnapEngine:
         # A point has a small magnetic core over an edge, but outside that
         # core competing explicit targets resolve by proximity. This avoids a
         # distant circle quadrant stealing an exact tangent/curve hit.
-        if self._is_magnetic_point(first[2]) and second_priority < 105 and fd <= 6.0:
+        magnetic_core = 6.0 * self._snap_strength()
+        if self._is_magnetic_point(first[2]) and second_priority < 105 and fd <= magnetic_core:
             return first
-        if self._is_magnetic_point(second[2]) and first_priority < 105 and sd <= 6.0:
+        if self._is_magnetic_point(second[2]) and first_priority < 105 and sd <= magnetic_core:
             return second
         # Preserve source priority for visually coincident candidates. Tiny
         # floating-point differences must not relabel a tangent as generic

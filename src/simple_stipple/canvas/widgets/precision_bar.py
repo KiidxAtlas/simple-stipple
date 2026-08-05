@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QToolButton,
+    QWidget,
+    QWidgetAction,
 )
 
 from simple_stipple.canvas.constants import GRID_SPACING_MAX_MM, GRID_SPACING_MIN_MM
@@ -21,6 +23,7 @@ from simple_stipple.ui.components.feedback import (
     refresh_style,
     set_line_edit_error,
 )
+from simple_stipple.ui.components.inputs import NoWheelSlider
 from simple_stipple.ui.units import parse_numeric_expression
 
 
@@ -102,6 +105,7 @@ class CanvasPrecisionBar(QFrame):
         for key, label_text, setter in (
             ("snap_vertex", "Vertices", "set_snap_vertex"),
             ("snap_midpoint", "Midpoints", "set_snap_midpoint"),
+            ("snap_intersection", "Intersections", "set_snap_intersection"),
             ("snap_parallel", "Parallel", "set_snap_parallel"),
             ("snap_perpendicular", "Perpendicular", "set_snap_perpendicular"),
             ("snap_equal_length", "Equal length", "set_snap_equal_length"),
@@ -113,6 +117,33 @@ class CanvasPrecisionBar(QFrame):
             action.setCheckable(True)
             action.toggled.connect(lambda checked, method=setter: self._set_snap(method, checked))
             self._snap_actions[key] = action
+        self._snap_menu.addSeparator()
+        strength_widget = QWidget(self._snap_menu)
+        strength_layout = QHBoxLayout(strength_widget)
+        strength_layout.setContentsMargins(10, 6, 10, 6)
+        strength_layout.setSpacing(8)
+        strength_label = QLabel("Snap strength")
+        strength_label.setToolTip("How strongly the cursor is attracted to snap targets")
+        strength_layout.addWidget(strength_label)
+        self._snap_strength_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self._snap_strength_slider.setRange(0, 200)
+        self._snap_strength_slider.setSingleStep(10)
+        self._snap_strength_slider.setPageStep(25)
+        self._snap_strength_slider.setFixedWidth(112)
+        self._snap_strength_slider.setToolTip(
+            "Magnetic capture radius: 0% disables magnetic capture; 200% is forgiving. "
+            "Scrolling does not change this value."
+        )
+        self._snap_strength_slider.setAccessibleName("Snap strength")
+        strength_layout.addWidget(self._snap_strength_slider)
+        self._snap_strength_value = QLabel("50%")
+        self._snap_strength_value.setMinimumWidth(38)
+        self._snap_strength_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        strength_layout.addWidget(self._snap_strength_value)
+        self._snap_strength_slider.valueChanged.connect(self._set_snap_strength)
+        self._snap_strength_action = QWidgetAction(self._snap_menu)
+        self._snap_strength_action.setDefaultWidget(strength_widget)
+        self._snap_menu.addAction(self._snap_strength_action)
         self._snap_btn.setMenu(self._snap_menu)
         layout.addWidget(self._snap_btn)
 
@@ -137,9 +168,18 @@ class CanvasPrecisionBar(QFrame):
             ("vertical", "Vertical"),
             ("parallel", "Parallel"),
             ("perpendicular", "Perpendicular"),
-            ("equal_length", "Equal length"),
+            ("equal", "Equal"),
             ("coincident", "Coincident"),
+            ("collinear", "Collinear"),
+            ("concentric", "Concentric"),
+            ("tangent", "Tangent"),
+            ("smooth", "Smooth (G2)"),
+            ("symmetric", "Symmetric"),
+            ("midpoint", "Midpoint"),
+            ("intersection", "Intersection"),
+            ("projection", "Project as construction"),
             ("fixed", "Fix"),
+            ("unfix", "Unfix"),
         ):
             constraints_menu.addAction(
                 label, lambda _checked=False, k=kind: self._add_constraint(k)
@@ -185,6 +225,11 @@ class CanvasPrecisionBar(QFrame):
             action.blockSignals(True)
             action.setChecked(bool(state.get(key, False if key == "grid_snap" else True)))
             action.blockSignals(False)
+        strength = max(0.0, min(2.0, float(state.get("snap_strength", 0.5))))
+        self._snap_strength_slider.blockSignals(True)
+        self._snap_strength_slider.setValue(round(strength * 100))
+        self._snap_strength_slider.blockSignals(False)
+        self._snap_strength_value.setText(f"{round(strength * 100)}%")
 
         self._spacing.setText(f"{spacing:g}")
         show_spacing = grid_on or bool(state.get("grid_snap", False))
@@ -200,6 +245,13 @@ class CanvasPrecisionBar(QFrame):
         canvas = self._canvas
         if canvas is not None and hasattr(canvas, method):
             getattr(canvas, method)(enabled)
+            self._after_change()
+
+    def _set_snap_strength(self, percent: int) -> None:
+        canvas = self._canvas
+        if canvas is not None and hasattr(canvas, "set_snap_strength"):
+            canvas.set_snap_strength(percent / 100.0)
+            self._snap_strength_value.setText(f"{percent}%")
             self._after_change()
 
     def _set_construction(self, enabled: bool) -> None:

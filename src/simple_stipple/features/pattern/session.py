@@ -15,7 +15,7 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from simple_stipple.document.model import PatternTabState
-from simple_stipple.engine.workflows import NULL_PATTERN
+from simple_stipple.engine.patterns.fill import NULL_PATTERN
 from simple_stipple.features.pattern.params import collect_form_state, restore_form_state
 from simple_stipple.ui.components.feedback import refresh_style
 

@@ -1,4 +1,4 @@
-"""DXF import preview and selective-layer decision dialog."""
+"""Import review dialogs with explicit replace/add decisions."""
 
 from __future__ import annotations
 
@@ -126,4 +126,57 @@ class DxfImportPreviewDialog(BaseDialog):
         return self._append.isChecked()
 
 
-__all__ = ["DxfImportPreviewDialog"]
+class VectorImportModeDialog(BaseDialog):
+    """Keep non-DXF imports honest about their effect on the current drawing.
+
+    DXF needs a layer picker, while FVI and SVG do not.  All three formats
+    still need the same destructive-state decision before import, so this
+    compact dialog deliberately shares the wording and control order of the
+    DXF review dialog.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        format_name: str,
+        has_existing_geometry: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        self._path = path
+        self._format_name = format_name
+        self._has_existing_geometry = has_existing_geometry
+        super().__init__(parent, title=f"Import {format_name}")
+        self.setMinimumWidth(460)
+
+    def create_content(self, layout: QVBoxLayout) -> None:
+        section_label(layout, Path(self._path).name)
+        summary = QLabel(
+            f"Import this {self._format_name} file into the current Draft canvas."
+        )
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        self._replace = QRadioButton("Replace drawing")
+        self._append = QRadioButton("Add to drawing")
+        self._append.setEnabled(self._has_existing_geometry)
+        self._replace.setChecked(True)
+        layout.addWidget(self._replace)
+        layout.addWidget(self._append)
+
+        if self._has_existing_geometry:
+            safety = QLabel(
+                "Add preserves existing objects. Replace removes them; use Undo immediately "
+                "after import if needed."
+            )
+            safety.setProperty("role", "hint")
+            safety.setWordWrap(True)
+            layout.addWidget(safety)
+
+        install_dialog_focus_lifecycle(self, self._replace)
+
+    def append_mode(self) -> bool:
+        return self._append.isChecked()
+
+
+__all__ = ["DxfImportPreviewDialog", "VectorImportModeDialog"]

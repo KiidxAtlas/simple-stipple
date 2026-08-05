@@ -449,21 +449,25 @@ class DxfLayersTree(QFrame):
             for index, row in enumerate(layers):
                 item = self._tree.topLevelItem(index)
                 assert item is not None
-                display = str(row.get("display_name", row.get("name", "")))
-                shapes = list(row.get("shapes", []))
+                row_data = row if isinstance(row, dict) else {}
+                display = str(row_data.get("display_name", row_data.get("name", "")))
+                shapes = list(row_data.get("shapes", []))
                 item.setText(0, f"{display}{f'  ·  {len(shapes)}' if shapes else ''}")
                 item.setCheckState(
                     0,
-                    Qt.CheckState.Checked if bool(row.get("visible", True)) else Qt.CheckState.Unchecked,
+                    Qt.CheckState.Checked
+                    if bool(row_data.get("visible", True))
+                    else Qt.CheckState.Unchecked,
                 )
                 for child, shape in zip(
                     (item.child(i) for i in range(item.childCount())), shapes
                 ):
-                    child.setText(0, str(shape.get("label", "Shape")))
+                    shape_data = shape if isinstance(shape, dict) else {}
+                    child.setText(0, str(shape_data.get("label", "Shape")))
                     child.setCheckState(
                         0,
                         Qt.CheckState.Checked
-                        if bool(shape.get("visible", True))
+                        if bool(shape_data.get("visible", True))
                         else Qt.CheckState.Unchecked,
                     )
             self._apply_filter()

@@ -12,7 +12,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QDialog, QMessageBox
 
-from simple_stipple.engine.workflows import SETTINGS_KEY as PRESET_SETTINGS_KEY
+from simple_stipple.engine.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
 from simple_stipple.features.pattern.params import collect_form_state, restore_form_state
 from simple_stipple.features.pattern.presets_dialog import PresetManagerDialog
 from simple_stipple.platform.config import save_settings

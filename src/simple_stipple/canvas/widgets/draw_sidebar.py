@@ -76,10 +76,8 @@ class _ResizeHandle(QFrame):
         )
         self.setToolTip("Drag to resize · Left/Right keys resize · Shift for larger steps")
         self.setCursor(Qt.CursorShape.SizeHorCursor)
-        self.setStyleSheet(
-            "QFrame { background: transparent; border-right: 2px solid #30363d; }"
-            "QFrame:hover, QFrame:focus { border-right-color: #58a6ff; }"
-        )
+        self.setProperty("role", "drawer-resize-handle")
+        self.setProperty("edge", "right")
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         step = 24 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 8
@@ -133,10 +131,8 @@ class _BottomResizeHandle(QFrame):
         )
         self.setToolTip("Drag to resize · Up/Down keys resize · Shift for larger steps")
         self.setCursor(Qt.CursorShape.SizeVerCursor)
-        self.setStyleSheet(
-            "QFrame { background: transparent; border-bottom: 2px solid #30363d; }"
-            "QFrame:hover, QFrame:focus { border-bottom-color: #58a6ff; }"
-        )
+        self.setProperty("role", "drawer-resize-handle")
+        self.setProperty("edge", "bottom")
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         step = 24 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 8
@@ -210,45 +206,7 @@ class DrawSidebar(QFrame):
         self._shape_tools = normalize_draw_sidebar_shape_tools(shape_tools)
 
         self.setObjectName("draw-side-panel")
-        self.setStyleSheet(
-            """
-            QFrame#draw-side-panel {
-                background: rgba(13, 17, 23, 240);
-                border: 1px solid #30363d;
-                border-radius: 12px;
-            }
-            QFrame#draw-side-panel QLabel[role='title'] {
-                color: #f0f6fc;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.5px;
-            }
-            QFrame#draw-side-panel QLabel[role='section-title'] {
-                color: #c9d1d9;
-                font-size: 10px;
-                font-weight: 700;
-                letter-spacing: 1px;
-            }
-            QFrame#draw-side-panel QScrollBar:vertical {
-                width: 8px;
-                background: transparent;
-                margin: 0;
-            }
-            QFrame#draw-side-panel QScrollBar::handle:vertical {
-                background: #30363d;
-                border-radius: 4px;
-                min-height: 24px;
-            }
-            QFrame#draw-side-panel QScrollBar::add-line:vertical,
-            QFrame#draw-side-panel QScrollBar::sub-line:vertical {
-                height: 0;
-            }
-            QFrame#draw-side-panel QScrollBar::add-page:vertical,
-            QFrame#draw-side-panel QScrollBar::sub-page:vertical {
-                background: transparent;
-            }
-            """
-        )
+        self.setProperty("role", "draw-sidebar")
         self._apply_width(width if width is not None else MIN_DRAW_SIDEBAR_WIDTH + 12)
 
         outer = QVBoxLayout(self)

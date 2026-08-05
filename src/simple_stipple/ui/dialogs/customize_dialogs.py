@@ -28,6 +28,7 @@ from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.platform.config import (
     CONTEXT_MENU_SECTION_LABELS,
     CONTEXT_MENU_TRANSFORM_ITEMS,
+    DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
     DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
@@ -211,7 +212,11 @@ _SHAPE_LABELS: dict[str, str] = dict(DRAW_SIDEBAR_SHAPE_TOOL_LABELS)
 
 
 def _build_list(
-    labels: dict[str, str], checked: list[str], defaults: tuple[str, ...]
+    labels: dict[str, str],
+    checked: list[str],
+    defaults: tuple[str, ...],
+    *,
+    default_when_empty: bool = True,
 ) -> QListWidget:
     widget = QListWidget()
     widget.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -224,7 +229,7 @@ def _build_list(
     widget.setSpacing(2)
     widget.setWordWrap(False)
     widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-    _fill_list(widget, labels, checked or list(defaults))
+    _fill_list(widget, labels, checked or list(defaults) if default_when_empty else checked)
     return widget
 
 
@@ -254,6 +259,36 @@ def _checked_keys(widget: QListWidget) -> list[str]:
         if item.checkState() == Qt.CheckState.Checked:
             keys.append(item.data(Qt.ItemDataRole.UserRole))
     return keys
+
+
+def _build_ordered_list(labels: dict[str, str], keys: list[str]) -> QListWidget:
+    """Build a drag-reorder list containing only explicitly assigned rows."""
+    widget = QListWidget()
+    widget.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+    widget.setUniformItemSizes(True)
+    widget.setSpacing(2)
+    widget.setWordWrap(False)
+    widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    _fill_ordered_list(widget, labels, keys)
+    return widget
+
+
+def _fill_ordered_list(widget: QListWidget, labels: dict[str, str], keys: list[str]) -> None:
+    widget.clear()
+    for key in dict.fromkeys(key for key in keys if key in labels):
+        item = QListWidgetItem(labels[key])
+        item.setData(Qt.ItemDataRole.UserRole, key)
+        item.setSizeHint(QSize(0, 36))
+        item.setToolTip(labels[key])
+        widget.addItem(item)
+    widget.doItemsLayout()
+
+
+def _ordered_keys(widget: QListWidget) -> list[str]:
+    return [
+        widget.item(index).data(Qt.ItemDataRole.UserRole)
+        for index in range(widget.count())
+    ]
 
 
 class DrawSidebarCustomizeDialog(QDialog):
@@ -416,7 +451,7 @@ class DrawSidebarCustomizeDialog(QDialog):
 
 
 class ContextMenuCustomizeDialog(QDialog):
-    """Choose visible sections and which live under More actions."""
+    """Choose visible context-menu controls and their placement."""
 
     def __init__(
         self,
@@ -427,8 +462,12 @@ class ContextMenuCustomizeDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Customize Canvas Context Menu")
-        self.resize(460, 720)
-        self.setMinimumSize(380, 560)
+        # The former single narrow column compressed two independent ordered
+        # lists plus a submenu editor into one viewport. Give the lists their
+        # own horizontal space so checkbox labels and drag targets remain
+        # readable before the user interacts with them.
+        self.resize(820, 740)
+        self.setMinimumSize(680, 580)
         self.setModal(True)
         labels = dict(CONTEXT_MENU_SECTION_LABELS)
         current = [key for key in (sections or []) if key in labels]
@@ -467,26 +506,36 @@ class ContextMenuCustomizeDialog(QDialog):
         profile_row.addWidget(self._profile_combo, stretch=1)
         layout.addLayout(profile_row)
         subtitle = QLabel(
-            "The first list controls what appears. The second controls which visible "
-            "sections are grouped under More actions. Drag either list to set order. "
-            "Direct Select, Delete, and Cutout actions remain immediately available. "
-            "View always stays visible."
+            "Choose what appears directly in the canvas menu and what lives under More actions. "
+            "Drag rows to set order. View always remains available."
         )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
         layout.addWidget(subtitle)
         self._list = _build_list(labels, current, DEFAULT_CONTEXT_MENU_SECTIONS)
         self._lock_view_item()
-        layout.addWidget(self._list, stretch=1)
-        overflow_label = QLabel("Place under More actions")
-        overflow_label.setProperty("role", "section-title")
-        layout.addWidget(overflow_label)
         self._overflow_list = _build_list(
             labels,
             overflow,
             DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
         )
-        layout.addWidget(self._overflow_list, stretch=1)
+        menu_lists = QHBoxLayout()
+        menu_lists.setSpacing(SPACE_LG)
+        direct_column = QVBoxLayout()
+        direct_label = QLabel("Show in menu")
+        direct_label.setProperty("role", "section-title")
+        direct_column.addWidget(direct_label)
+        self._list.setMinimumWidth(370)
+        direct_column.addWidget(self._list, stretch=1)
+        menu_lists.addLayout(direct_column, stretch=3)
+        overflow_column = QVBoxLayout()
+        overflow_label = QLabel("Place under More actions")
+        overflow_label.setProperty("role", "section-title")
+        overflow_column.addWidget(overflow_label)
+        self._overflow_list.setMinimumWidth(270)
+        overflow_column.addWidget(self._overflow_list, stretch=1)
+        menu_lists.addLayout(overflow_column, stretch=2)
+        layout.addLayout(menu_lists, stretch=1)
         transform_label = QLabel("Transform submenu")
         transform_label.setProperty("role", "section-title")
         layout.addWidget(transform_label)
@@ -495,7 +544,8 @@ class ContextMenuCustomizeDialog(QDialog):
             self._profiles["draft"]["transform"],
             tuple(key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS),
         )
-        self._transform_list.setMaximumHeight(170)
+        self._transform_list.setMinimumHeight(180)
+        self._transform_list.setMaximumHeight(220)
         layout.addWidget(self._transform_list)
         self._profile_combo.currentIndexChanged.connect(self._switch_profile)
         sep(layout)
@@ -585,7 +635,391 @@ class ContextMenuCustomizeDialog(QDialog):
         return list(self._overflow_result)
 
     def get_profiles(self) -> dict[str, dict[str, list[str]]]:
-        return {name: {key: list(value) for key, value in data.items()} for name, data in self._profiles.items()}
+        return {
+            name: {key: list(value) for key, value in data.items()}
+            for name, data in self._profiles.items()
+        }
 
 
-__all__ = ["ContextMenuCustomizeDialog", "DrawSidebarCustomizeDialog", "RadialMenuDialog"]
+# The section customizer above is retained to read older profiles. New
+# profiles use this leaf-action customizer instead: every command is a row,
+# rather than a broad section that silently governs several unrelated actions.
+_CONTEXT_ACTION_LABELS: dict[str, str] = {
+    command.id: command.label for command in canvas_commands.COMMANDS if not command.hidden
+}
+_CONTEXT_ACTION_LABELS.update(
+    {f"transform.{key}": label for key, label in CONTEXT_MENU_TRANSFORM_ITEMS}
+)
+_CONTEXT_ACTION_LABELS.update(
+    {
+        "context.create.rectangle": "Rectangle (drag)",
+        "context.create.circle": "Circle (drag)",
+        "context.create.slot": "Slot (drag)",
+        "context.create.hexagon": "Hexagon (drag)",
+        "context.create.ring": "Ring",
+        "context.create.gear": "Gear / sprocket",
+        "context.create.spiral": "Spiral",
+        "context.create.teardrop": "Teardrop",
+        "context.create.keyhole": "Keyhole",
+        "context.create.superellipse": "Superellipse / squircle",
+        "context.create.rounded_star": "Rounded star",
+        "context.create.chamfered_star": "Chamfered star",
+        "context.create.finger_joint_box": "Finger-joint box",
+        "context.create.dovetail_box": "Dovetail box",
+        "context.create.tabbed_panel": "Tabbed panel",
+        "context.entity.select": "Select",
+        "context.entity.deselect": "Deselect",
+        "context.entity.delete": "Delete",
+        "context.entity.edit_text": "Edit text…",
+        "context.pattern_cell_cutout.instance": "This cell only",
+        "context.pattern_cell_cutout.repeat": "Every matching tile",
+        "context.outline_role.boundary": "Boundary (fillable)",
+        "context.outline_role.cutout": "Cutout (subtract)",
+        "context.outline_role.open_path": "Open path (do not fill)",
+        "context.outline_role.ignore": "Ignore in generation",
+        "context.outline_role.explain": "Explain this role…",
+        "context.cutout.toggle": "Mark or remove cutout",
+        "context.cutout.toggle_all": "Mark or remove cutout for all selected",
+        "context.selection.move": "Move to Coordinate…",
+        "context.selection.close_path": "Close path",
+        "context.selection.fit": "Frame selection",
+        "context.selection.smooth": "Smooth",
+        "context.selection.simplify": "Simplify…",
+        "context.selection.create_zone": "Create Zone from Selection",
+        "context.selection.array_grid": "Grid array…",
+        "context.selection.array_radial": "Radial array…",
+        "context.bezier_node.corner": "Corner — independent handles",
+        "context.bezier_node.smooth": "Smooth — aligned handles",
+        "context.bezier_node.symmetric": "Symmetric — linked handles",
+        "context.arrange.left": "Align left",
+        "context.arrange.center_x": "Align center X",
+        "context.arrange.right": "Align right",
+        "context.arrange.top": "Align top",
+        "context.arrange.center_y": "Align center Y",
+        "context.arrange.bottom": "Align bottom",
+        "context.arrange.distribute_horizontal_gap": "Distribute horizontal — gap…",
+        "context.arrange.distribute_vertical_gap": "Distribute vertical — gap…",
+        "context.arrange.distribute_horizontal_centers": "Distribute horizontal — center-to-center…",
+        "context.arrange.distribute_vertical_centers": "Distribute vertical — center-to-center…",
+        "context.share.outline": "Use as outline",
+        "context.share.custom_tile": "Use as Custom Tile",
+        "context.share.draft": "Send to Draft",
+        "context.share.move_to_layer": "Move selected to layer",
+        "context.view.select": "Select [Esc]",
+    }
+)
+
+
+class ContextMenuActionCustomizeDialog(QDialog):
+    """Configure each context-menu action independently for each workspace."""
+
+    def __init__(self, parent: QWidget | None = None, profiles: dict | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Customize Canvas Context Menu")
+        self.setObjectName("context-menu-action-customize-dialog")
+        self.resize(1040, 760)
+        self.setMinimumSize(800, 600)
+        self.setModal(True)
+        default_items = list(_CONTEXT_ACTION_LABELS)
+        raw_profiles = profiles if isinstance(profiles, dict) else {}
+        self._profiles: dict[str, dict[str, list[str]]] = {}
+        for name in ("draft", "pattern", "trace"):
+            saved = raw_profiles.get(name, {})
+            saved = saved if isinstance(saved, dict) else {}
+            action_items_configured = bool(saved.get("action_items_configured", []))
+            raw_items = saved.get("items")
+            items = (
+                [key for key in raw_items if key in _CONTEXT_ACTION_LABELS]
+                if action_items_configured and isinstance(raw_items, list)
+                else list(default_items)
+            )
+            overflow = [
+                key for key in saved.get("overflow_items", []) if key in _CONTEXT_ACTION_LABELS
+            ] if action_items_configured else list(DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS)
+            self._profiles[name] = {
+                "items": items,
+                "overflow_items": overflow,
+            }
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
+        layout.setSpacing(SPACE_MD)
+        title = QLabel("Canvas Context Menu")
+        title.setProperty("role", "page-title")
+        layout.addWidget(title)
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Customize for"))
+        self._profile_combo = QComboBox()
+        for name in ("draft", "pattern", "trace"):
+            self._profile_combo.addItem(name.capitalize(), name)
+        profile_row.addWidget(self._profile_combo, stretch=1)
+        layout.addLayout(profile_row)
+        subtitle = QLabel(
+            "Every row is one action. Enabled actions stay at the top; drag them to set "
+            "the menu order, and choose which enabled actions live under More actions."
+        )
+        subtitle.setProperty("role", "page-subtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+        self._filter = QLineEdit()
+        self._filter.setPlaceholderText("Search actions…")
+        self._filter.setClearButtonEnabled(True)
+        self._filter.setToolTip("Filter actions by name")
+        self._filter.textChanged.connect(self._apply_filter)
+        layout.addWidget(self._filter)
+        lists = QHBoxLayout()
+        lists.setSpacing(SPACE_LG)
+        direct = QVBoxLayout()
+        direct_label = QLabel("Show in menu")
+        direct_label.setProperty("role", "section-title")
+        direct.addWidget(direct_label)
+        direct_actions = QHBoxLayout()
+        select_all = QPushButton("All")
+        select_all.setToolTip("Show every action in this context menu")
+        select_all.clicked.connect(lambda: self._set_all_visible(True))
+        direct_actions.addWidget(select_all)
+        select_none = QPushButton("None")
+        select_none.setToolTip("Hide every configurable action in this context menu")
+        select_none.clicked.connect(lambda: self._set_all_visible(False))
+        direct_actions.addWidget(select_none)
+        direct_actions.addStretch()
+        direct.addLayout(direct_actions)
+        # Build the initially visible Draft profile directly.  Rebuilding the
+        # just-populated Qt lists in ``_load_profile("draft")`` made their
+        # first lifetime needlessly destructive; with PySide this could crash
+        # in the native QListWidgetItem cleanup path before the dialog opened.
+        initial_profile = self._profiles["draft"]
+        self._list = _build_list(
+            _CONTEXT_ACTION_LABELS,
+            initial_profile["items"],
+            tuple(default_items),
+            default_when_empty=False,
+        )
+        self._list.setMinimumWidth(360)
+        direct.addWidget(self._list, stretch=1)
+        lists.addLayout(direct, stretch=1)
+        overflow_column = QVBoxLayout()
+        overflow_label = QLabel("Show under More actions")
+        overflow_label.setProperty("role", "section-title")
+        overflow_column.addWidget(overflow_label)
+        more_actions = QHBoxLayout()
+        more_all = QPushButton("All")
+        more_all.setToolTip("Put every enabled action under More actions")
+        more_all.clicked.connect(lambda: self._set_all_more(True))
+        more_actions.addWidget(more_all)
+        more_none = QPushButton("None")
+        more_none.setToolTip("Keep every action in the main context menu")
+        more_none.clicked.connect(lambda: self._set_all_more(False))
+        more_actions.addWidget(more_none)
+        more_actions.addStretch()
+        overflow_column.addLayout(more_actions)
+        self._overflow_list = _build_list(
+            _CONTEXT_ACTION_LABELS,
+            initial_profile["overflow_items"],
+            (),
+            default_when_empty=False,
+        )
+        self._overflow_list.setMinimumWidth(360)
+        overflow_column.addWidget(self._overflow_list, stretch=1)
+        lists.addLayout(overflow_column, stretch=1)
+        layout.addLayout(lists, stretch=1)
+        self._profile_combo.currentIndexChanged.connect(self._switch_profile)
+        self._reordering_actions = False
+        self._reordering_more_actions = False
+        self._list.itemChanged.connect(self._prioritize_enabled_action)
+        self._list.model().rowsMoved.connect(self._normalize_action_rows)
+        self._overflow_list.itemChanged.connect(self._prioritize_more_action)
+        self._overflow_list.model().rowsMoved.connect(self._normalize_more_action_rows)
+        sep(layout)
+        buttons = QHBoxLayout()
+        reset = QPushButton("Reset this workspace")
+        reset.setAutoDefault(False)
+        reset.clicked.connect(self._reset)
+        buttons.addWidget(reset)
+        buttons.addStretch()
+        save = QPushButton("Save")
+        save.setProperty("role", "primary")
+        save.setDefault(True)
+        save.clicked.connect(self._apply)
+        cancel = QPushButton("Cancel")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+        install_dialog_focus_lifecycle(self, self._filter)
+
+    def _save_current_profile(self) -> None:
+        active = str(self._profile_combo.currentData())
+        items = _checked_keys(self._list)
+        self._profiles[active] = {
+            "items": items,
+            "overflow_items": [key for key in _checked_keys(self._overflow_list) if key in items],
+        }
+
+    def _load_profile(self, name: str) -> None:
+        profile = self._profiles[name]
+        self._reordering_actions = True
+        self._reordering_more_actions = True
+        try:
+            _fill_list(self._list, _CONTEXT_ACTION_LABELS, profile["items"])
+            _fill_list(self._overflow_list, _CONTEXT_ACTION_LABELS, profile["overflow_items"])
+        finally:
+            self._reordering_actions = False
+            self._reordering_more_actions = False
+        self._apply_filter(self._filter.text())
+
+    def _prioritize_enabled_action(self, item: QListWidgetItem) -> None:
+        """Append a newly enabled action without losing drag-set order."""
+        if item.checkState() != Qt.CheckState.Checked:
+            self._set_more_action_checked(
+                str(item.data(Qt.ItemDataRole.UserRole)), checked=False
+            )
+        self._prioritize_checked_row(self._list, item, "_reordering_actions")
+
+    def _prioritize_more_action(self, item: QListWidgetItem) -> None:
+        """A More action is also enabled in the primary context menu."""
+        if item.checkState() == Qt.CheckState.Checked:
+            self._set_action_checked(str(item.data(Qt.ItemDataRole.UserRole)), checked=True)
+        self._prioritize_checked_row(self._overflow_list, item, "_reordering_more_actions")
+
+    def _prioritize_checked_row(
+        self, widget: QListWidget, item: QListWidgetItem, guard_name: str
+    ) -> None:
+        if getattr(self, guard_name):
+            return
+        setattr(self, guard_name, True)
+        try:
+            row = widget.row(item)
+            moved = widget.takeItem(row)
+            if moved is None:
+                return
+            if moved.checkState() == Qt.CheckState.Checked:
+                enabled_count = sum(
+                    widget.item(index).checkState() == Qt.CheckState.Checked
+                    for index in range(widget.count())
+                )
+                widget.insertItem(enabled_count, moved)
+            else:
+                first_disabled = next(
+                    (
+                        index
+                        for index in range(widget.count())
+                        if widget.item(index).checkState() != Qt.CheckState.Checked
+                    ),
+                    widget.count(),
+                )
+                widget.insertItem(first_disabled, moved)
+        finally:
+            setattr(self, guard_name, False)
+
+    def _normalize_action_rows(self, *_args: object) -> None:
+        """Keep enabled entries together after a drag, preserving their order."""
+        self._normalize_checked_rows(self._list, "_reordering_actions")
+
+    def _normalize_more_action_rows(self, *_args: object) -> None:
+        self._normalize_checked_rows(self._overflow_list, "_reordering_more_actions")
+
+    def _normalize_checked_rows(self, widget: QListWidget, guard_name: str) -> None:
+        if getattr(self, guard_name):
+            return
+        setattr(self, guard_name, True)
+        try:
+            items = [widget.takeItem(0) for _ in range(widget.count())]
+            ordered = [
+                item for item in items if item is not None and item.checkState() == Qt.CheckState.Checked
+            ] + [item for item in items if item is not None and item.checkState() != Qt.CheckState.Checked]
+            for item in ordered:
+                widget.addItem(item)
+        finally:
+            setattr(self, guard_name, False)
+
+    def _set_action_checked(self, key: str, *, checked: bool) -> None:
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == key:
+                item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+                return
+
+    def _set_more_action_checked(self, key: str, *, checked: bool) -> None:
+        for index in range(self._overflow_list.count()):
+            item = self._overflow_list.item(index)
+            if item.data(Qt.ItemDataRole.UserRole) == key:
+                item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+                return
+
+    def _apply_filter(self, text: str) -> None:
+        """Keep the action catalogue navigable without changing its order."""
+        query = text.casefold().strip()
+        for widget in (self._list, self._overflow_list):
+            for index in range(widget.count()):
+                item = widget.item(index)
+                key = str(item.data(Qt.ItemDataRole.UserRole))
+                haystack = f"{_CONTEXT_ACTION_LABELS.get(key, '')} {key}".casefold()
+                item.setHidden(bool(query) and query not in haystack)
+
+    def _switch_profile(self, _index: int) -> None:
+        self._save_current_profile()
+        self._load_profile(str(self._profile_combo.currentData()))
+
+    def _reset(self) -> None:
+        self._reordering_actions = True
+        self._reordering_more_actions = True
+        try:
+            _fill_list(self._list, _CONTEXT_ACTION_LABELS, list(_CONTEXT_ACTION_LABELS))
+            _fill_list(
+                self._overflow_list,
+                _CONTEXT_ACTION_LABELS,
+                list(DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS),
+            )
+        finally:
+            self._reordering_actions = False
+            self._reordering_more_actions = False
+
+    def _set_all_visible(self, visible: bool) -> None:
+        self._reordering_actions = True
+        try:
+            for index in range(self._list.count()):
+                self._list.item(index).setCheckState(
+                    Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked
+                )
+        finally:
+            self._reordering_actions = False
+        self._normalize_action_rows()
+        if not visible:
+            self._set_all_more(False)
+
+    def _set_all_more(self, visible: bool) -> None:
+        self._reordering_more_actions = True
+        try:
+            enabled = set(_checked_keys(self._list))
+            for index in range(self._overflow_list.count()):
+                item = self._overflow_list.item(index)
+                should_show = visible and item.data(Qt.ItemDataRole.UserRole) in enabled
+                item.setCheckState(
+                    Qt.CheckState.Checked if should_show else Qt.CheckState.Unchecked
+                )
+        finally:
+            self._reordering_more_actions = False
+        self._normalize_more_action_rows()
+
+    def _apply(self) -> None:
+        self._save_current_profile()
+        self.accept()
+
+    def get_profiles(self) -> dict[str, dict[str, list[str]]]:
+        profiles = {
+            name: {key: list(value) for key, value in data.items()}
+            for name, data in self._profiles.items()
+        }
+        for profile in profiles.values():
+            profile["action_items_configured"] = ["yes"]
+        return profiles
+
+
+__all__ = [
+    "ContextMenuActionCustomizeDialog",
+    "ContextMenuCustomizeDialog",
+    "DrawSidebarCustomizeDialog",
+    "RadialMenuDialog",
+]

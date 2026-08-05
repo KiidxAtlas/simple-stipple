@@ -17,61 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from simple_stipple.engine.formats.service import DxfService
-from simple_stipple.engine.workflows import (
-    cancellation_scope,
-    prepare_output,
-)
+from simple_stipple.engine.patterns.cancellation import cancellation_scope
+from simple_stipple.engine.patterns.output import prepare_output
 
 LOGGER = logging.getLogger(__name__)
 CANCELLED_MESSAGE = "__task_cancelled__"
 MAX_RENDER_PREVIEW_PATHS = 1_200
 MAX_RENDER_PREVIEW_POINTS = 160
-
-
-def _sample_for_render(polys: list[list[tuple[float, float]]], limit: int) -> list[list[tuple[float, float]]]:
-    """Keep interactive previews responsive without changing exported geometry."""
-    if len(polys) <= limit:
-        chosen = polys
-    else:
-        step = len(polys) / limit
-        chosen = [polys[min(len(polys) - 1, int(index * step))] for index in range(limit)]
-    compact: list[list[tuple[float, float]]] = []
-    for poly in chosen:
-        if len(poly) <= MAX_RENDER_PREVIEW_POINTS:
-            compact.append(poly)
-            continue
-        step = (len(poly) - 1) / (MAX_RENDER_PREVIEW_POINTS - 1)
-        compact.append([poly[min(len(poly) - 1, int(index * step))] for index in range(MAX_RENDER_PREVIEW_POINTS)])
-    return compact
-
-
-def _cap_render_preview(preview: dict[str, Any]) -> dict[str, Any]:
-    """Return a lightweight rendering payload while retaining full counts."""
-    outline = list(preview.get("outline", []))
-    pattern = list(preview.get("pattern", []))
-    fill = list(preview.get("fill", []))
-    total = len(outline) + len(pattern) + len(fill)
-    available = max(0, MAX_RENDER_PREVIEW_PATHS - len(outline))
-    pattern_limit = min(len(pattern), max(0, available // 2))
-    fill_limit = min(len(fill), max(0, available - pattern_limit))
-    if pattern and not pattern_limit:
-        pattern_limit = min(len(pattern), available)
-    rendered_pattern = _sample_for_render(pattern, pattern_limit) if pattern_limit else []
-    rendered_fill = _sample_for_render(fill, fill_limit) if fill_limit else []
-    result = dict(preview)
-    result.update(
-        {
-            "outline": _sample_for_render(outline, MAX_RENDER_PREVIEW_PATHS),
-            "pattern": rendered_pattern,
-            "fill": rendered_fill,
-            "display": _sample_for_render(outline, MAX_RENDER_PREVIEW_PATHS)
-            + rendered_pattern
-            + rendered_fill,
-            "preview_total": total,
-            "preview_limited": total > len(result["display"]),
-        }
-    )
-    return result
 
 
 class TaskPhase(str, Enum):
@@ -357,7 +309,6 @@ def compute_preview(
         if cancel_event and cancel_event.is_set():
             _report_cancel(on_error, preview_token)
             return
-        preview = _cap_render_preview(preview)
         on_done((preview_token, preview["display"], preview["count"], preview))
     except Exception as exc:  # noqa: BLE001 - see run_generate
         if cancel_event and cancel_event.is_set():
@@ -404,7 +355,6 @@ def compute_preview_zones(
         if cancel_event and cancel_event.is_set():
             _report_cancel(on_error, preview_token)
             return
-        preview = _cap_render_preview(preview)
         on_done((preview_token, preview["display"], preview["count"], preview))
     except Exception as exc:  # noqa: BLE001 - see run_generate
         if cancel_event and cancel_event.is_set():

@@ -46,6 +46,7 @@ class ResponsiveCanvasToolbar(QWidget):
         self._guidance_chip.setProperty("role", "toolbar-selection")
         self._guidance_chip.setAccessibleName("Current canvas guidance")
         self._guidance_chip.hide()
+        self._full_guidance_label: QLabel | None = None
 
     def set_guidance(self, text: str) -> None:
         """Keep current-tool guidance available when the full label is hidden."""
@@ -93,7 +94,7 @@ class ResponsiveCanvasToolbar(QWidget):
         # Keep a single source of guidance visible.  Previously the full
         # instruction and its compact duplicate were both shown at narrower
         # widths, consuming the room that the canvas actions needed.
-        full_guidance = getattr(self, "_full_guidance_label", None)
+        full_guidance = self._full_guidance_label
         if full_guidance is not None:
             full_guidance.setVisible(not compact)
 

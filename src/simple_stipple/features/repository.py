@@ -283,7 +283,7 @@ class RepoPage(BasePage):
     def _update_workflow(self, repo_ready: bool) -> None:
         """Make the safe next Git action visible without relaxing safeguards."""
         if not repo_ready:
-            states = ("current", "pending", "pending", "pending")
+            states: list[str] = ["current", "pending", "pending", "pending"]
         else:
             states = ["complete"]
             for index in range(1, 4):

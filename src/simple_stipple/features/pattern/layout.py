@@ -304,16 +304,20 @@ def build_left(page: Any, layout: QVBoxLayout) -> None:
     page._advanced_mode_cb = QCheckBox("Advanced controls")
     page._advanced_mode_cb.setChecked(bool(page._settings.get("pattern_advanced_mode", False)))
     page._advanced_mode_cb.setToolTip(
-        "Show zones, supplemental fills, engraving placement, and fabrication controls"
+        "Show image engraving placement and fabrication controls"
     )
     layout.addWidget(page._advanced_mode_cb)
     build_shape_section(page, layout)
     build_pattern_section(page, layout)
+    # Fill is a primary pattern output, not an expert-only option. Keep it
+    # immediately after pattern choice so it is available as the default next step.
     build_fill_section(page, layout)
-    build_image_engraving_section(page, layout)
-    # Keep Zone Manager last in the workflow sidebar and collapsed at startup;
-    # it is an optional refinement after the primary pattern/fill setup.
+    # Treatments are intentionally grouped after the basic outline/pattern/fill
+    # path. This labels zones and engraving as optional additions rather than
+    # prerequisites to a first successful export.
+    section_label(layout, "Add treatments")
     build_zones_section(page, layout)
+    build_image_engraving_section(page, layout)
     page._advanced_mode_cb.toggled.connect(page._set_advanced_mode)
     layout.addStretch()
     page._install_pattern_shortcuts()
@@ -433,7 +437,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     overflow_btn = QToolButton()
     overflow_btn.setText("Options")
     overflow_btn.setProperty("role", "overflow")
-    overflow_btn.setFixedWidth(72)
+    overflow_btn.setMinimumWidth(72)
     overflow_btn.setToolTip("More preset actions")
     overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     overflow_menu = QMenu(overflow_btn)
@@ -932,9 +936,14 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
         "Laser settings", process_content, expanded=False, subtitle="Custom · 80% · 100 mm/s"
     )
     form.addWidget(page._engraving_process_section)
-    page._engrave_export_btn = primary_button("Export engraving package…", height=32)
-    page._engrave_export_btn.setToolTip("Export the positioned, clipped engraving image and handoff files.")
-    page._engrave_export_btn.clicked.connect(page._export_pattern_engraving)
+    # Export has one terminal control in the persistent Export area.  This
+    # contextual button only chooses its format, so users do not have to
+    # guess which of two identical export buttons is authoritative.
+    page._engrave_export_btn = QPushButton("Use engraving export")
+    page._engrave_export_btn.setToolTip(
+        "Choose engraving as the export format; use the main Export button when ready."
+    )
+    page._engrave_export_btn.clicked.connect(page._use_engraving_export)
     form.addWidget(page._engrave_export_btn)
 
     for field in (
@@ -1036,9 +1045,9 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     export_action_row = QHBoxLayout()
     export_action_row.addWidget(page._gen_btn, stretch=1)
     page._export_more = QToolButton()
-    page._export_more.setText("Options")
+    page._export_more.setText("Format")
     page._export_more.setMinimumSize(72, 38)
-    page._export_more.setToolTip("Choose an export by operator purpose")
+    page._export_more.setToolTip("Choose the export format; exporting starts only from the primary button")
     page._export_more.setAccessibleName("Choose export format")
     page._export_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     page._export_menu = QMenu(page._export_more)

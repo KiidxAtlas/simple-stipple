@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QMenu, QPushButton, QWidget
+from PySide6.QtWidgets import QMenu, QPushButton, QSizePolicy, QWidget
 
 StateEntry = tuple[str, QIcon, str]  # (id, icon, label)
 
@@ -61,14 +61,16 @@ class CycleIconButton(QPushButton):
         )
         self.setCheckable(True)
         self.setFlat(True)
-        # Native styles (macOS in particular) can ignore CSS min/max-width
-        # on a QPushButton's bezel and render wider than the stylesheet
-        # asks for — a hard pixel size is the only constraint every style
-        # actually honors, which is what kept the old sidebar's buttons
-        # from overflowing its fixed width.
-        # The icon stays compact while the button supplies a substantially
-        # larger acquisition target (Fitts's law) for touchpads and tired hands.
-        self.setFixedSize(44, 40)
+        # Keep a generous acquisition target without pinning a platform-native
+        # bezel to one fixed size. A fixed size clipped at larger accessibility
+        # scales on macOS and made this reusable control unusable outside the
+        # sidebar grid.
+        self.setMinimumHeight(40)
+        # The draw sidebar is intentionally a two-column grid. Bound the
+        # button's width so a native macOS size hint cannot push its sibling
+        # under the vertical scrollbar, but leave height layout-managed.
+        self.setMaximumWidth(44)
+        self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Minimum)
 
         # Themed via theme.qss's role="cycle-icon" rules (not a per-widget
         # setStyleSheet) so this follows Light/Dark/high-contrast like every

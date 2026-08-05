@@ -106,7 +106,7 @@ class App(QMainWindow):
         self.restoreGeometry(geometry)
 
     def _save_window_geometry(self) -> None:
-        self._settings["window_geometry"] = bytes(self.saveGeometry().toHex()).decode("ascii")
+        self._settings["window_geometry"] = bytes(self.saveGeometry().toHex().data()).decode("ascii")
 
     def _autosave_path(self) -> Path:
         return user_data_dir() / "recovery" / f"{self._recovery_id}.workspace.json"

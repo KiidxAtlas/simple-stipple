@@ -215,6 +215,7 @@ class EditingService:
             mode=self._host._mode,
             allow_vertex=self._host._snap_vertex_enabled,
             allow_midpoint=self._host._snap_midpoint_enabled,
+            allow_intersection=self._host._snap_intersection_enabled,
             allow_edge=self._host._snap_edge_enabled,
         )
 
@@ -228,6 +229,7 @@ class EditingService:
         allow_polyline: bool = True,
         allow_grid: bool = True,
         reference_point: tuple[float, float] | None = None,
+        allow_inferred: bool = True,
     ) -> tuple[float, float, str] | None:
         return self._host._snap_engine.query(
             cx,
@@ -237,6 +239,7 @@ class EditingService:
             allow_polyline=allow_polyline,
             allow_grid=allow_grid,
             reference_point=reference_point,
+            allow_inferred=allow_inferred,
         )
 
     def _resolve_drag_snap(
@@ -1276,6 +1279,22 @@ class EditingService:
             self._host._show_flash("Select shape(s) first", 1000)
             return
         selected_ids = set(self._host.get_selected_ids())
+        # Text is stored as several contours in one group.  A direct hit can
+        # select only one contour (especially after loading an older workspace
+        # whose selection state predates group expansion); sending that lone
+        # contour makes letters such as ``e`` self-touching and invalid in the
+        # Pattern page.  Treat every selected group as one object at this
+        # transfer boundary so text and other grouped artwork always arrive
+        # complete.
+        selected_groups = {
+            entity.group
+            for entity in self._host._entities
+            if entity.id in selected_ids and entity.group is not None
+        }
+        if selected_groups:
+            selected_ids.update(
+                entity.id for entity in self._host._entities if entity.group in selected_groups
+            )
         payload = [
             {
                 "points": [[float(x), float(y)] for x, y in entity.points],

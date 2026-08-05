@@ -99,20 +99,34 @@ def _polygon_pieces(polygon: Polygon, cutter: LineString) -> list[list[PointTupl
     inner = polygon.buffer(-1e-6)
     if (inner if not inner.is_empty else polygon).intersection(cutter).is_empty:
         return []
-    # GEOS can refuse to split when the two endpoints sit exactly on a
-    # polygon edge/vertex. Extend only a proven boundary-to-boundary cutter
-    # by a tiny, geometry-relative amount; an interior-only stroke is still
-    # rejected above and never gets silently extended into a cut.
-    (x0, y0), (x1, y1) = cutter.coords[0], cutter.coords[-1]
-    dx, dy = x1 - x0, y1 - y0
-    length = math.hypot(dx, dy)
-    if length <= 1e-9:
+    # GEOS can refuse to split when endpoints sit exactly on a polygon edge
+    # or vertex. Extend only this proven boundary-to-boundary cutter by a
+    # geometry-relative amount.  Crucially, extend its *end tangents* rather
+    # than replacing the cutter with its endpoint chord: a drawn spline or
+    # Bézier must cut along its actual sampled curve.
+    coordinates = [(float(x), float(y)) for x, y in cutter.coords]
+    if len(coordinates) < 2:
         return []
+    start, second = coordinates[0], coordinates[1]
+    penultimate, end = coordinates[-2], coordinates[-1]
+
+    def _extend_endpoint(
+        endpoint: PointTuple, adjacent: PointTuple, amount: float
+    ) -> PointTuple:
+        dx, dy = endpoint[0] - adjacent[0], endpoint[1] - adjacent[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return endpoint
+        return (endpoint[0] + dx / length * amount, endpoint[1] + dy / length * amount)
+
     min_x, min_y, max_x, max_y = polygon.bounds
     extension = max(math.hypot(max_x - min_x, max_y - min_y), 1.0) * 1e-6
-    ux, uy = dx / length, dy / length
     extended = LineString(
-        [(x0 - ux * extension, y0 - uy * extension), (x1 + ux * extension, y1 + uy * extension)]
+        [
+            _extend_endpoint(start, second, extension),
+            *coordinates,
+            _extend_endpoint(end, penultimate, extension),
+        ]
     )
     geometries = [item for item in split(polygon, extended).geoms if isinstance(item, Polygon)]
     if len(geometries) < 2:

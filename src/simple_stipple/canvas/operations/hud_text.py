@@ -10,13 +10,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath, QPalette
+from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath
 from PySide6.QtWidgets import QLabel, QLineEdit, QSpinBox, QWidget
 
 from simple_stipple.document.model import EntityRecord
 from simple_stipple.platform.config import user_data_dir
 from simple_stipple.ui.components.feedback import refresh_style
-from simple_stipple.ui.style.theme import resolve_tokens
 from simple_stipple.ui.units import (
     parse_numeric_expression as _parse_expression,
 )
@@ -74,31 +73,6 @@ class HudTextService:
 
     # ── Auto-dimension HUD (Fusion 360 style) ──────────────────────────────
 
-    def _hud_input_style(self, *, focused: bool = False) -> str:
-        """Use the active app palette for canvas editors, not a blue-only skin."""
-        theme = resolve_tokens()
-        palette = self._host.palette()
-        border = palette.color(
-            QPalette.ColorRole.Highlight if focused else QPalette.ColorRole.Mid
-        ).name()
-        background = palette.color(
-            QPalette.ColorRole.AlternateBase if focused else QPalette.ColorRole.Base
-        ).name()
-        text = palette.color(QPalette.ColorRole.Text).name()
-        return (
-            f"background: {background}; color: {text}; "
-            f"border: 1px solid {border}; border-radius: {theme['radius_sm']}; "
-            f"font-size: {theme['font_sm']}; font-family: {theme['mono']}; padding: 3px 7px;"
-        )
-
-    def _hud_label_style(self) -> str:
-        palette = self._host.palette()
-        return (
-            f"background: {palette.color(QPalette.ColorRole.Window).name()}; "
-            f"color: {palette.color(QPalette.ColorRole.PlaceholderText).name()}; "
-            "border: none; font-size: 10px; font-weight: 600; padding: 0 2px;"
-        )
-
     def _make_hud_edit(
         self,
         placeholder: str = "",
@@ -117,15 +91,13 @@ class HudTextService:
         edit.setFixedWidth(max(width, 76))
         edit.setFixedHeight(max(height, 30))
         edit.setAlignment(align)
-        edit.setStyleSheet(self._hud_input_style())
+        edit.setProperty("role", "canvas-hud-input")
         edit.setAccessibleName(placeholder or "Canvas numeric input")
         edit.setAccessibleDescription("Type a value, press Enter to apply, or Escape to cancel")
 
-        # Store hover style for focus events.
-        edit.setProperty("_dim_hover_style", self._hud_input_style(focused=True))
-
         if placeholder:
             edit.setPlaceholderText(placeholder)
+        edit.textEdited.connect(lambda _text: self._clear_hud_error(edit))
         edit.installEventFilter(cast("QWidget", self._host))
         edit.show()
         return edit
@@ -150,12 +122,19 @@ class HudTextService:
         spin.setFixedWidth(max(width, 76))
         spin.setFixedHeight(max(height, 30))
         spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        spin.setStyleSheet(self._hud_input_style())
+        spin.setProperty("role", "canvas-hud-input")
         spin.setAccessibleName("Canvas numeric stepper")
         spin.setAccessibleDescription("Type a value or use the arrow keys to adjust it")
         spin.installEventFilter(cast("QWidget", self._host))
         spin.show()
         return spin
+
+    @staticmethod
+    def _clear_hud_error(widget: QLineEdit) -> None:
+        """Clear stale validation chrome as soon as the user corrects input."""
+        if widget.property("error"):
+            widget.setProperty("error", False)
+            refresh_style(widget)
 
     def _show_hud_prompt(
         self,
@@ -186,7 +165,7 @@ class HudTextService:
         edit.setToolTip(display_label)
         x, y = self._context_hud_position(180, 52)
         label_widget = QLabel(display_label, cast("QWidget", self._host))
-        label_widget.setStyleSheet(self._hud_label_style())
+        label_widget.setProperty("role", "canvas-hud-label")
         label_widget.setFixedSize(180, 18)
         label_widget.move(x, y)
         label_widget.show()
@@ -218,7 +197,7 @@ class HudTextService:
         def _reject(message: str) -> None:
             # Keep the prompt open and flag it — silently vanishing made bad
             # input indistinguishable from success.
-            edit.setProperty("invalid", True)
+            edit.setProperty("error", True)
             edit.setToolTip(message)
             refresh_style(edit)
             self._host._show_flash(message, 1400)
@@ -260,7 +239,7 @@ class HudTextService:
         edit.setText(initial)
         x, y = self._context_hud_position(width, 44)
         label_widget = QLabel(label, cast("QWidget", self._host))
-        label_widget.setStyleSheet(self._hud_label_style())
+        label_widget.setProperty("role", "canvas-hud-label")
         label_widget.setFixedSize(width, 18)
         label_widget.move(x, y)
         label_widget.show()
@@ -274,7 +253,7 @@ class HudTextService:
             try:
                 callback(edit.text().strip())
             except ValueError as exc:
-                edit.setProperty("invalid", True)
+                edit.setProperty("error", True)
                 edit.setToolTip(str(exc))
                 refresh_style(edit)
                 self._host._show_flash(str(exc), 1400)
@@ -336,7 +315,7 @@ class HudTextService:
             f"Length ({_unit_suffix(self._host._unit_system)})",
             cast("QWidget", self._host),
         )
-        dist_label.setStyleSheet(self._hud_label_style())
+        dist_label.setProperty("role", "canvas-hud-label")
         dist_label.setFixedSize(92, 16)
         dist_label.show()
         self._host._dim_distance_label = dist_label
@@ -353,7 +332,7 @@ class HudTextService:
         self._host._dim_distance_dirty = False
 
         angle_label = QLabel("Angle (°)", cast("QWidget", self._host))
-        angle_label.setStyleSheet(self._hud_label_style())
+        angle_label.setProperty("role", "canvas-hud-label")
         angle_label.setFixedSize(92, 16)
         angle_label.show()
         self._host._dim_angle_label = angle_label

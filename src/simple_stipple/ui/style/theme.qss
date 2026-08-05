@@ -121,6 +121,40 @@ QFrame[role="status-strip"], QFrame[role="draw-section"], QFrame[role="precision
 QWidget[role="pattern-side-panel"], QWidget#draw-side-panel {
     background: $bg_surface;
 }
+QFrame[role="draw-sidebar"] {
+    background: $overlay;
+    border: 1px solid $border;
+    border-radius: $radius_lg;
+}
+QFrame[role="draw-sidebar"] QScrollBar:vertical {
+    width: 8px;
+    background: transparent;
+    margin: 0;
+}
+QFrame[role="draw-sidebar"] QScrollBar::handle:vertical {
+    background: $border;
+    border-radius: $radius_sm;
+    min-height: 24px;
+}
+QFrame[role="draw-sidebar"] QScrollBar::handle:vertical:hover {
+    background: $border_strong;
+}
+QFrame[role="draw-sidebar"] QScrollBar::add-line:vertical,
+QFrame[role="draw-sidebar"] QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QFrame[role="drawer-resize-handle"][edge="right"] {
+    background: transparent;
+    border-right: 2px solid $border;
+}
+QFrame[role="drawer-resize-handle"][edge="bottom"] {
+    background: transparent;
+    border-bottom: 2px solid $border;
+}
+QFrame[role="drawer-resize-handle"]:hover,
+QFrame[role="drawer-resize-handle"]:focus {
+    border-color: $focus;
+}
 QFrame[role="hairline"] {
     color: $border;
 }
@@ -145,6 +179,20 @@ QFrame[role="system-banner"] {
     border: 1px solid $danger_border;
     border-radius: $radius_md;
     color: $danger;
+}
+QFrame[role="error-toast"] {
+    background: $danger_soft;
+    border: 1px solid $danger_border;
+    border-radius: $radius_sm;
+}
+QLabel[role="error-toast-title"] {
+    color: $danger;
+    font-size: $font_md;
+    font-weight: $weight_semibold;
+}
+QLabel[role="error-toast-detail"] {
+    color: $text;
+    font-size: $font_sm;
 }
 
 /* ══ Type ════════════════════════════════════════════════════════════════
@@ -188,6 +236,13 @@ QLabel[role="section-subtitle"] {
     color: $text_muted;
     background: transparent;
     font-size: $font_xs;
+}
+QLabel[role="text-preview"] {
+    background: $bg_input;
+    border: 1px solid $border;
+    border-radius: $radius_sm;
+    color: $text;
+    font-size: $font_xl;
 }
 QLabel[role="section-subtitle"] {
     padding-left: 18px;
@@ -322,6 +377,7 @@ QPushButton[role="browse-btn"] {
 QPushButton[role="cycle-icon"] {
     background: $bg_input;
     border: 1px solid $border;
+    min-height: 40px;
 }
 QPushButton[role="cycle-icon"]:hover {
     border-color: $accent_border;
@@ -393,6 +449,23 @@ QLineEdit[error="true"], QComboBox[error="true"], QSpinBox[error="true"],
 QDoubleSpinBox[error="true"] {
     border: 1px solid $danger;
     background: $danger_soft;
+}
+QLineEdit[role="canvas-hud-input"], QSpinBox[role="canvas-hud-input"] {
+    background: $bg_input;
+    color: $text;
+    border: 1px solid $border_strong;
+    border-radius: $radius_sm;
+    font-size: $font_sm;
+    font-family: $mono;
+    padding: 3px 7px;
+}
+QLabel[role="canvas-hud-label"] {
+    background: $bg_surface;
+    color: $text_muted;
+    border: none;
+    font-size: $font_2xs;
+    font-weight: $weight_medium;
+    padding: 0 2px;
 }
 QComboBox::drop-down {
     border: none;
@@ -541,6 +614,11 @@ QLabel[role="workflow-guidance"][tone="warn"] {
     border-color: $warn_border;
     color: $warn;
 }
+QLabel[role="workflow-guidance"][tone="danger"] {
+    background: $danger_soft;
+    border-color: $danger_border;
+    color: $danger;
+}
 QToolButton[role="workflow-step"] {
     border: none;
     background: transparent;
@@ -559,14 +637,33 @@ QToolButton[role="workflow-step"][state="current"] {
 QToolButton[role="workflow-step"][state="complete"] {
     color: $success;
 }
-QToolButton[role="workflow-step"][state="stale"],
-QToolButton[role="workflow-step"][state="error"] {
+QToolButton[role="workflow-step"][state="stale"] {
     color: $warn;
     background: $warn_soft;
     border-radius: $radius_md;
 }
+QToolButton[role="workflow-step"][state="error"] {
+    color: $danger;
+    background: $danger_soft;
+    border-radius: $radius_md;
+}
 QLabel[role="workflow-arrow"] {
     color: $text_subtle;
+}
+QToolButton[role="context-action"] {
+    background: $bg_surface_alt;
+    border: 1px solid $border;
+    border-radius: $radius_sm;
+    color: $text;
+    font-size: $font_xs;
+    font-weight: $weight_semibold;
+    padding: 3px 8px;
+}
+QToolButton[role="context-action"]:hover,
+QToolButton[role="context-action"]:focus {
+    background: $accent_soft;
+    border-color: $accent_border;
+    color: $accent_text;
 }
 
 /* ══ Status ══════════════════════════════════════════════════════════════
@@ -582,6 +679,22 @@ QFrame[role="status-region"][tone="warn"] {
 QFrame[role="status-region"][tone="danger"] {
     border-color: $danger_border;
     background: $danger_soft;
+}
+QFrame[role="operation-progress"] {
+    background: $bg_surface_alt;
+    border: 1px solid $border;
+    border-radius: $radius_md;
+}
+QFrame[role="operation-progress"][tone="danger"] {
+    background: $danger_soft;
+    border-color: $danger_border;
+}
+QLabel[role="operation-progress-label"] {
+    color: $text_muted;
+    font-size: $font_sm;
+}
+QFrame[role="operation-progress"][tone="danger"] QLabel[role="operation-progress-label"] {
+    color: $danger;
 }
 
 QLabel[role="chip"], QLabel[role="summary-banner"], QLabel[role="status-chip"] {
@@ -867,7 +980,7 @@ QFrame#conversion-preview QWidget[role="empty-state"] {
 QWidget[role="empty-state"] QLabel[role="empty-icon"],
 QFrame[role="preview-surface"] QLabel[role="empty-icon"] {
     color: $ink_muted;
-    font-size: 36px;
+    font-size: $font_display;
 }
 QWidget[role="empty-state"] QLabel[role="empty-title"],
 QFrame[role="preview-surface"] QLabel[role="empty-title"] {
@@ -910,8 +1023,44 @@ QLabel#tocLabel {
     font-size: $font_2xs;
     font-weight: $weight_bold;
     letter-spacing: 1.1px;
+    padding: 4px 16px;
 }
 QLabel#tocSearchStatus {
     color: $text_muted;
-    font-size: $font_xs;
+    font-size: $font_2xs;
+    padding: 0 16px 4px 16px;
+}
+QPushButton#helpCloseButton {
+    background: transparent;
+    color: $text_muted;
+    border: none;
+    font-size: $font_lg;
+}
+QPushButton#helpCloseButton:hover {
+    color: $text;
+    background: $bg_surface_alt;
+}
+QPushButton#helpBrowseButton {
+    min-height: 28px;
+    padding: 4px 10px;
+}
+QLineEdit#tocSearch {
+    margin: 0 8px 4px 8px;
+}
+QListWidget#tocList {
+    background: transparent;
+    border: none;
+    padding: 4px;
+}
+QListWidget#tocList::item {
+    min-height: 24px;
+    padding: 3px 8px;
+    border-radius: $radius_sm;
+}
+QTextBrowser#helpContent {
+    background: $bg_ink;
+    color: $ink_text;
+    border: none;
+    border-radius: $radius_sm;
+    line-height: 1.7;
 }

@@ -85,11 +85,17 @@ def _initialize_view(
     # any structural/geometry change).
     self._snap_shapes_cache = None
 
-    # Cached entity lookup by ID (rebuilt whenever _entities changes).
+    # Cached entity lookup by ID. The view's document service replaces the
+    # entity list for committed edits, while bulk preview loads append to it
+    # directly, so the accessor keys the cache by list identity and length.
     self._CanvasView__entities_by_id = {}
+    self._CanvasView__entities_by_id_key = None
 
     # construction/hidden/locked/group flags live on EntityRecord.
     self._accent_polys = {}  # entity_id → color hex for role overlays
+    # Generated preview strokes may be rendered faithfully without becoming
+    # selectable editor geometry (for example, dense pattern-fill hatch rows).
+    self._render_only_entity_ids = set()
     self._draw_construction_mode = False
     self._draw_split_enabled = True
 
@@ -102,7 +108,7 @@ def _initialize_view(
     # Dense preview fills are visually identical when their strokes are
     # submitted to Qt in batches instead of one draw call per segment.
     self._dense_preview_render = False
-    self._context_menu_transform_items: list[str] = []
+    self._context_menu_transform_items = []
 
     self._scale = 1.0
     self._ox = 0.0
@@ -133,6 +139,11 @@ def _initialize_view(
     self._context_menu_sections = set(DEFAULT_CONTEXT_MENU_SECTIONS)
     self._context_menu_section_order = list(DEFAULT_CONTEXT_MENU_SECTIONS)
     self._context_menu_overflow_sections = set(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
+    # New profiles store leaf actions individually. This flag distinguishes
+    # an intentionally empty action list from an unsaved legacy profile.
+    self._context_menu_item_order = []
+    self._context_menu_overflow_items = set()
+    self._context_menu_actions_configured = False
     self._context_menu_profile = "draft"
     # Named reusable geometry snippets. Definitions live in view state so
     # a workspace carries its own small symbol library without introducing
@@ -186,6 +197,11 @@ def _initialize_view(
     self._construction_service = ConstructionService(self)
     self._selection_service = SelectionService(self)
     self._renderer = CanvasRenderer(self)
+    # The renderer retains dense preview geometry in world coordinates. The
+    # reactive model is the canonical invalidation boundary for document and
+    # selection changes, so the cache can never outlive rendered state.
+    self._model.geometry_changed.connect(self._renderer.invalidate_dense_preview_cache)
+    self._model.selection_changed.connect(self._renderer.invalidate_dense_preview_cache)
     self._editing = EditingService(self)
 
     # Fit scale for zoom-% display
@@ -360,6 +376,7 @@ def _initialize_view(
     self._snap_master_enabled = True
     self._snap_vertex_enabled = True
     self._snap_midpoint_enabled = True
+    self._snap_intersection_enabled = True
     self._snap_edge_enabled = True
     self._snap_tangent_enabled = True
     self._snap_extension_enabled = True
@@ -370,6 +387,9 @@ def _initialize_view(
     self._snap_axis_alignment_enabled = True
     self._snap_align_x_enabled = True
     self._snap_align_y_enabled = True
+    # Magnetic capture radius multiplier (0%–200%), controlled from the
+    # Snap dropdown. It changes snapping tolerance, never stored geometry.
+    self._snap_strength = 0.5
     self._rotation_snap_increment = 15.0
 
     # Construction / reference lines: list of ("h", y_world) or ("v", x_world)

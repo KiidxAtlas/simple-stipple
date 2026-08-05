@@ -43,6 +43,7 @@ class FillSpec:
     target_outline: bool = False  # fill the input outline region
     target_pattern: bool = True  # fill the closed pattern strokes
     inset: float = 0.0  # shrink fill region by this many mm before hatching
+    preview_max_rows: int | None = None  # preview-only hatch density cap
 
     def __post_init__(self) -> None:
         if self.mode not in _VALID_MODES:
@@ -53,6 +54,8 @@ class FillSpec:
             raise ValueError(f"FillSpec.spacing must be > 0 (got {self.spacing!r})")
         if self.inset < 0:
             raise ValueError(f"FillSpec.inset must be >= 0 (got {self.inset!r})")
+        if self.preview_max_rows is not None and self.preview_max_rows < 1:
+            raise ValueError("FillSpec.preview_max_rows must be positive when set")
 
     @classmethod
     def disabled(cls) -> FillSpec:
@@ -90,6 +93,14 @@ class FillSpec:
         inset = float(data.get("inset", 0.0) or 0.0)
         if inset < 0:
             inset = 0.0
+        try:
+            preview_max_rows = (
+                int(data["preview_max_rows"]) if data.get("preview_max_rows") is not None else None
+            )
+        except (TypeError, ValueError):
+            preview_max_rows = None
+        if preview_max_rows is not None:
+            preview_max_rows = max(1, min(preview_max_rows, 10_000))
         return cls(
             mode=mode,  # type: ignore[arg-type]
             spacing=spacing,
@@ -98,6 +109,7 @@ class FillSpec:
             target_outline=target_outline,
             target_pattern=target_pattern,
             inset=inset,
+            preview_max_rows=preview_max_rows,
         )
 
 
@@ -173,13 +185,13 @@ def apply_fill(
             return []
 
     if spec.mode == "lines":
-        return _fill_lines(region_geom, spec.spacing, spec.angle_deg)
+        return _fill_lines(region_geom, spec.spacing, spec.angle_deg, spec.preview_max_rows)
     if spec.mode == "crosshatch":
-        return _fill_crosshatch(region_geom, spec.spacing, spec.angle_deg)
+        return _fill_crosshatch(region_geom, spec.spacing, spec.angle_deg, spec.preview_max_rows)
     if spec.mode == "zigzag":
-        return _fill_zigzag(region_geom, spec.spacing, spec.angle_deg)
+        return _fill_zigzag(region_geom, spec.spacing, spec.angle_deg, spec.preview_max_rows)
     if spec.mode == "concentric":
-        return _fill_concentric(region_geom, spec.spacing)
+        return _fill_concentric(region_geom, spec.spacing, spec.preview_max_rows)
     return []
 
 
@@ -209,6 +221,7 @@ def _fill_lines(
     region_geom: Any,
     spacing: float,
     angle_deg: float,
+    max_rows: int | None = None,
 ) -> list[list[tuple[float, float]]]:
     """Parallel-hatch fill: clip a sweep of straight lines to the region.
 
@@ -237,6 +250,11 @@ def _fill_lines(
     minx, miny, maxx, maxy = rotated.bounds
     if not math.isfinite(minx + miny + maxx + maxy):
         return []
+
+    # Preview workers provide a row budget for very dense fills.  Coarsening
+    # is preview-only; exports omit ``max_rows`` and retain exact spacing.
+    if max_rows is not None and max_rows > 0:
+        spacing = max(spacing, (maxy - miny) / max_rows)
 
     # Pad a touch so the very-edge lines clip cleanly.
     pad = max(spacing, 1e-3)
@@ -300,6 +318,7 @@ def _fill_crosshatch(
     region_geom: Any,
     spacing: float,
     angle_deg: float,
+    max_rows: int | None = None,
 ) -> list[list[tuple[float, float]]]:
     """Crosshatch fill: two sets of parallel lines at ±45° to the base angle.
 
@@ -308,16 +327,22 @@ def _fill_crosshatch(
     ``angle_deg`` — and combining them.  This gives the classic diagonal
     crosshatch look used in many laser-engraving applications.
     """
-    lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0)
-    lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0)
+    per_pass_rows = max(1, max_rows // 2) if max_rows is not None else None
+    lines_1 = _fill_lines(region_geom, spacing, angle_deg + 45.0, per_pass_rows)
+    lines_2 = _fill_lines(region_geom, spacing, angle_deg - 45.0, per_pass_rows)
     return lines_1 + lines_2
 
 
-def _fill_zigzag(region_geom: Any, spacing: float, angle_deg: float):
+def _fill_zigzag(
+    region_geom: Any,
+    spacing: float,
+    angle_deg: float,
+    max_rows: int | None = None,
+):
     """Continuous bidirectional hatch where safe, split around holes/gaps."""
     from shapely.geometry import LineString
 
-    rows = _fill_lines(region_geom, spacing, angle_deg)
+    rows = _fill_lines(region_geom, spacing, angle_deg, max_rows)
     if not rows:
         return []
     ordered = sorted(rows, key=lambda line: (line[0][1], line[0][0]))
@@ -341,7 +366,7 @@ def _fill_zigzag(region_geom: Any, spacing: float, angle_deg: float):
     return paths
 
 
-def _fill_concentric(region_geom: Any, spacing: float):
+def _fill_concentric(region_geom: Any, spacing: float, max_rows: int | None = None):
     """Successive inward contours, useful for pocket-like engraving."""
     paths: list[list[tuple[float, float]]] = []
 
@@ -357,7 +382,8 @@ def _fill_concentric(region_geom: Any, spacing: float):
 
     current = region_geom
     # Area must decrease each pass; the cap is a corrupt-geometry safeguard.
-    for _ in range(10000):
+    max_passes = min(10_000, max_rows) if max_rows is not None else 10_000
+    for _ in range(max_passes):
         if current is None or current.is_empty:
             break
         append_rings(current)

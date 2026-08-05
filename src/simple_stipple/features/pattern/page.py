@@ -37,18 +37,17 @@ from simple_stipple.engine.formats.service import (
     summarize_dxf_import_report,
     svg_to_dxf,
 )
-from simple_stipple.engine.workflows import (
-    PATTERNS,
-    PatternProcessor,
-    RasterEngravingSpec,
-    SETTINGS_KEY as PRESET_SETTINGS_KEY,
-    ensure_builtins_seeded,
-    export_laserstar_package,
-    export_raster_job,
-)
+from simple_stipple.engine.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
+from simple_stipple.engine.patterns.presets import ensure_builtins_seeded
+from simple_stipple.engine.patterns.processing import PATTERNS, PatternProcessor
 from simple_stipple.canvas.constants import DIM
 from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.features.base import BasePage
+from simple_stipple.features.pattern.export_jobs import (
+    EngravingJob,
+    export_laserstar_job,
+    export_positioned_engraving,
+)
 from simple_stipple.ui.components.collapsible import CollapsibleSection
 from simple_stipple.ui.components.feedback import (
     clear_line_edit_error,
@@ -247,7 +246,6 @@ class PatternPage(BasePage):
             description="Turn closed outlines into adjustable fills, then inspect the result before export.",
         )
         root.addWidget(self._workflow_strip)
-        self._workflow_strip.setVisible(False)
 
         left_w = QWidget()
         left = QVBoxLayout(left_w)
@@ -434,6 +432,7 @@ class PatternPage(BasePage):
             self._showing_preview = False
             self._canvas.set_dense_preview_render(False)
             self._canvas.set_pattern_cell_context(set())
+            self._canvas.set_render_only_entity_ids(set())
             self._canvas.set_ghost_polylines(None)
             if self._edit_polys:
                 self._load_outline_canvas(fit=False)
@@ -455,10 +454,15 @@ class PatternPage(BasePage):
     def _configure_pattern_cell_context(self) -> None:
         if not self._showing_preview:
             self._canvas.set_pattern_cell_context(set())
+            self._canvas.set_render_only_entity_ids(set())
             return
         outline_count = len(self._preview_categories.get("outline", []))
         pattern_polys = self._preview_categories.get("pattern", [])
-        indices = set(range(outline_count, outline_count + len(pattern_polys)))
+        entity_ids = self._canvas.get_entity_ids()
+        pattern_start = outline_count
+        fill_start = pattern_start + len(pattern_polys)
+        pattern_entity_ids = set(entity_ids[pattern_start:fill_start])
+        self._canvas.set_render_only_entity_ids(set(entity_ids[fill_start:]))
         cutout_signatures = {
             self._pattern_service._poly_repeat_signature(poly)
             for poly in self._pattern_cell_cutouts
@@ -470,13 +474,11 @@ class PatternPage(BasePage):
         cutout_entity_ids = {
             entity_id
             for index, poly in enumerate(pattern_polys)
-            for entity_id in self._canvas.get_entity_ids()[
-                outline_count + index : outline_count + index + 1
-            ]
+            for entity_id in entity_ids[pattern_start + index : pattern_start + index + 1]
             if self._pattern_service._poly_repeat_signature(poly) in cutout_signatures
             or self._pattern_service._poly_signature(poly) in instance_signatures
         }
-        self._canvas.set_pattern_cell_context(indices, cutout_entity_ids)
+        self._canvas.set_pattern_cell_context(pattern_entity_ids, cutout_entity_ids)
 
     def _preview_outline_indices_for_zone(self, zone_row: int) -> list[int]:
         return preview_outline_indices_for_zone(self, zone_row)
@@ -484,11 +486,14 @@ class PatternPage(BasePage):
     def _highlight_zone_on_canvas(self, zone_row: int) -> None:
         return highlight_zone_on_canvas(self, zone_row)
 
-    def _on_pattern_cell_cutout_toggle(self, canvas_index: int, scope: str = "repeat") -> None:
+    def _on_pattern_cell_cutout_toggle(self, entity_id: str, scope: str = "repeat") -> None:
         if not self._showing_preview:
             return
         outline_count = len(self._preview_categories.get("outline", []))
-        pattern_index = canvas_index - outline_count
+        try:
+            pattern_index = self._canvas.get_entity_ids().index(entity_id) - outline_count
+        except ValueError:
+            return
         pattern_polys = self._preview_categories.get("pattern", [])
         if not 0 <= pattern_index < len(pattern_polys):
             return
@@ -994,9 +999,23 @@ class PatternPage(BasePage):
         self._engrave_edit_btn.setEnabled(has_image)
         self._engrave_fit_btn.setEnabled(has_image)
         self._engrave_center_btn.setEnabled(has_image)
+        has_zone = bool(self._zones)
+        zone_index = self._engrave_target.findData("zone")
+        if zone_index >= 0:
+            self._engrave_target.model().item(zone_index).setEnabled(has_zone)
+        if not has_zone and self._engrave_target.currentData() == "zone":
+            self._engrave_target.setCurrentIndex(self._engrave_target.findData("outline"))
         # Keep the CTA actionable. It explains the prerequisite if no source
         # exists instead of becoming a dead, undiscoverable control.
         self._engrave_export_btn.setEnabled(True)
+
+    def _engraving_bounds(self) -> tuple[float, float, float, float] | None:
+        """Return the active outline bounds, if the workspace has an outline."""
+        points = [point for poly in self._generation_polys() for point in poly]
+        if not points:
+            return None
+        xs, ys = zip(*points, strict=True)
+        return min(xs), min(ys), max(xs), max(ys)
 
     def _remove_engraving_image(self) -> None:
         """Detach the image from the workspace without touching the source file."""
@@ -1022,25 +1041,32 @@ class PatternPage(BasePage):
     def _center_engraving_image(self) -> None:
         if not self._engraving_image_path:
             return
-        center_x, center_y = self._canvas._c2w(
-            self._canvas.width() / 2.0, self._canvas.height() / 2.0
-        )
+        bounds = self._engraving_bounds()
+        if bounds is not None:
+            left, top, right, bottom = bounds
+            center_x, center_y = (left + right) / 2.0, (top + bottom) / 2.0
+            context = "the outline"
+        else:
+            center_x, center_y = self._canvas._c2w(
+                self._canvas.width() / 2.0, self._canvas.height() / 2.0
+            )
+            context = "the current canvas view"
         self._engrave_x.setValue(center_x - self._engrave_w.value() / 2.0)
         self._engrave_y.setValue(center_y - self._engrave_h.value() / 2.0)
-        self._set_status("Engraving image centered in the current canvas view.", STATUS_OK)
+        self._set_status(f"Engraving image centered in {context}.", STATUS_OK)
 
     def _fit_engraving_to_outline(self) -> None:
         if not self._engraving_image_path:
             return
-        points = [point for poly in self._generation_polys() for point in poly]
-        if not points:
+        bounds = self._engraving_bounds()
+        if bounds is None:
             self._set_status("Add an outline before fitting the engraving image.", STATUS_WARN)
             return
-        xs, ys = zip(*points, strict=True)
-        self._engrave_x.setValue(min(xs))
-        self._engrave_y.setValue(min(ys))
-        self._engrave_w.setValue(max(max(xs) - min(xs), 0.01))
-        self._engrave_h.setValue(max(max(ys) - min(ys), 0.01))
+        left, top, right, bottom = bounds
+        self._engrave_x.setValue(left)
+        self._engrave_y.setValue(top)
+        self._engrave_w.setValue(max(right - left, 0.01))
+        self._engrave_h.setValue(max(bottom - top, 0.01))
         self._set_status("Engraving image fitted to the outline bounds.", STATUS_OK)
 
     def _on_engraving_canvas_key(self, action: str, reverse: bool = False) -> None:
@@ -1074,9 +1100,9 @@ class PatternPage(BasePage):
         if not path:
             return
         self._engraving_image_path = path
-        # Loading an image must not silently fit it to the outline. Respect
-        # embedded DPI when present; otherwise retain the user's current width
-        # and derive only the height needed to preserve the image aspect ratio.
+        # Start in the user's actual work area.  An image that lands in the
+        # viewport instead of the outline is easy to miss and forces a second
+        # placement action before it can be evaluated.
         try:
             with Image.open(path) as source:
                 dpi = source.info.get("dpi")
@@ -1087,17 +1113,24 @@ class PatternPage(BasePage):
                     self._engrave_h.setValue(self._engrave_w.value() * source.height / source.width)
         except OSError:
             pass
-        center_x, center_y = self._canvas._c2w(
-            self._canvas.width() / 2.0, self._canvas.height() / 2.0
-        )
-        self._engrave_x.setValue(center_x - self._engrave_w.value() / 2.0)
-        self._engrave_y.setValue(center_y - self._engrave_h.value() / 2.0)
+        bounds = self._engraving_bounds()
+        if bounds is not None:
+            left, top, right, bottom = bounds
+            available_w = max(right - left, 0.01)
+            available_h = max(bottom - top, 0.01)
+            scale = min(
+                available_w / self._engrave_w.value(),
+                available_h / self._engrave_h.value(),
+            )
+            self._engrave_w.setValue(self._engrave_w.value() * scale)
+            self._engrave_h.setValue(self._engrave_h.value() * scale)
+        self._center_engraving_image()
         self._update_engraving_overlay()
         self._canvas.select_background_image(True)
         self._engraving_section.set_expanded(True)
         self._refresh_engraving_ui()
         self._set_status(
-            "Engraving image selected — drag inside it or use the corner handles.",
+            "Engraving image placed in the outline — drag it or use the corner handles.",
             STATUS_OK,
         )
 
@@ -1181,6 +1214,14 @@ class PatternPage(BasePage):
         ids = set(self._zones[row].get("outline_ids", []))
         return [list(poly) for oid, poly in zip(self._outline_ids, self._edit_polys) if oid in ids]
 
+    def _use_engraving_export(self) -> None:
+        """Make the shared Export control the sole engraving export terminal."""
+        self._select_export_kind("engraving")
+        self._set_status(
+            "Engraving export selected — use the main Export button when placement is ready.",
+            STATUS_OK,
+        )
+
     def _export_pattern_engraving(self) -> None:
         if not self._engraving_image_path:
             self._set_status("Choose an engraving image first.", STATUS_WARN)
@@ -1202,7 +1243,7 @@ class PatternPage(BasePage):
         if not out:
             return
         try:
-            spec = RasterEngravingSpec(
+            job = EngravingJob(
                 x_mm=self._engrave_x.value(),
                 y_mm=self._engrave_y.value(),
                 width_mm=self._engrave_w.value(),
@@ -1216,8 +1257,8 @@ class PatternPage(BasePage):
                 passes=self._engrave_passes.value(),
                 rotation_deg=self._engrave_rotation.value(),
             )
-            png, _metadata, _svg = export_raster_job(
-                self._engraving_image_path, out, spec, self._engraving_mask_polys()
+            png = export_positioned_engraving(
+                self._engraving_image_path, out, job, self._engraving_mask_polys()
             )
             self._set_status(f"Positioned engraving package exported → {png.name}", STATUS_OK)
         except (OSError, ValueError) as exc:
@@ -1225,9 +1266,9 @@ class PatternPage(BasePage):
 
     def _refresh_export_default_label(self) -> None:
         labels = {
-            "vector": "Export — Vector DXF",
-            "engraving": "Export — Engraving Assets",
-            "laserstar": "Export — LaserStar Package",
+            "vector": "Export reviewed DXF" if self._preview_polys_cache else "Export DXF",
+            "engraving": "Export engraving assets",
+            "laserstar": "Export LaserStar package",
         }
         self._gen_btn.setText(labels[self._export_default])
 
@@ -1236,7 +1277,12 @@ class PatternPage(BasePage):
         self._settings["pattern_export_default"] = kind
         self._refresh_export_default_label()
         self._emit_state_changed()
-        self._run_remembered_export()
+        labels = {
+            "vector": "Vector DXF",
+            "engraving": "Engraving assets",
+            "laserstar": "LaserStar package",
+        }
+        self._set_status(f"Export format set to {labels[kind]}", STATUS_OK)
 
     def _run_remembered_export(self) -> None:
         if self._export_default == "engraving":
@@ -1297,12 +1343,12 @@ class PatternPage(BasePage):
         destination = values["destination"]
         self._settings["laserstar_job_name"] = name
         self._settings["laserstar_output_dir"] = destination
-        raster_spec = None
+        engraving_job = None
         raster_source = None
         raster_mask = None
         if self._engraving_image_path:
             raster_source = self._engraving_image_path
-            raster_spec = RasterEngravingSpec(
+            engraving_job = EngravingJob(
                 x_mm=self._engrave_x.value(),
                 y_mm=self._engrave_y.value(),
                 width_mm=self._engrave_w.value(),
@@ -1322,13 +1368,13 @@ class PatternPage(BasePage):
                 QMessageBox.warning(self, "LaserStar Export", str(exc))
                 return
         try:
-            folder = export_laserstar_package(
+            folder = export_laserstar_job(
                 destination,
                 name,
                 list(self._preview_polys_cache),
-                raster_source=raster_source,
-                raster_spec=raster_spec,
-                raster_mask=raster_mask,
+                engraving_source=raster_source,
+                engraving_job=engraving_job,
+                engraving_mask=raster_mask,
             )
             self._last_out_path = str(folder / "LaserStar-Setup.txt")
             self._reveal_btn.setVisible(True)
@@ -2233,7 +2279,7 @@ class PatternPage(BasePage):
             for poly in self._pattern_cell_instance_cutouts
             if self._pattern_service._poly_signature(poly) in generated_signatures
         ]
-        from simple_stipple.engine.workflows import diagnose_output
+        from simple_stipple.engine.patterns.output import diagnose_output
 
         diagnostics = diagnose_output(
             self._preview_categories.get("pattern", []) + self._preview_categories.get("fill", [])
@@ -2250,8 +2296,6 @@ class PatternPage(BasePage):
             f"{count} shapes ({detail_str}) · {diagnostics.total_length:.1f} mm path"
             f" · {diagnostics.travel_length:.1f} mm travel"
         )
-        if self._preview_categories.get("preview_limited"):
-            status_text += " · simplified display (export remains full detail)"
         if self._showing_preview:
             self._canvas.set_dense_preview_render(True)
             selected_zone = self._zone_list.currentRow()
@@ -2381,7 +2425,16 @@ class PatternPage(BasePage):
         if self._preview_is_stale:
             reasons[3] = "Preview is stale because an outline or treatment input changed"
             reasons[4] = "Export is unavailable until preview validation completes"
-        self._workflow_strip.set_step_states(workflow_states, reasons)
+        guidance = (
+            "Import or transfer a closed outline"
+            if not has_outline
+            else "Choose a pattern and review the live preview"
+            if not has_preview
+            else "Export the reviewed preview"
+            if not self._export_is_current
+            else "Export complete — reveal the output or continue editing"
+        )
+        self._workflow_strip.set_step_states(workflow_states, reasons, guidance=guidance)
         if self._showing_preview:
             self._preview_btn.setText("Edit Outline")
             self._preview_btn.setEnabled(True)
@@ -2416,6 +2469,8 @@ class PatternPage(BasePage):
             else:
                 export_tip = "Load an outline to export it, a fill, or a pattern  (⌘E)"
             self._gen_btn.setToolTip(export_tip)
+            if not self._generate_task.running:
+                self._refresh_export_default_label()
             if hasattr(self, "_export_actions"):
                 # This action can explain what is missing, so do not turn it
                 # into a dead menu item before an image has been selected.
@@ -2462,10 +2517,10 @@ class PatternPage(BasePage):
         return update_zone_actions(self)
 
     def _set_advanced_mode(self, enabled: bool) -> None:
-        """Keep the default workflow compact while preserving expert controls."""
+        """Keep secondary engraving controls optional without hiding fill."""
         enabled = bool(enabled)
         self._settings["pattern_advanced_mode"] = enabled
-        for name in ("_fill_section", "_engraving_section"):
+        for name in ("_engraving_section",):
             section = getattr(self, name, None)
             if section is not None:
                 section.setVisible(enabled)
@@ -2474,7 +2529,7 @@ class PatternPage(BasePage):
         self._set_status(
             "Advanced pattern controls shown"
             if enabled
-            else "Basic mode · outline, pattern, preview, and export",
+            else "Basic mode · outline, pattern, fill, preview, and export",
         )
 
     # ── Generation ────────────────────────────────────────────────────────────

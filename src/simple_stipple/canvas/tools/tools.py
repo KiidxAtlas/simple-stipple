@@ -1119,7 +1119,7 @@ class DrawTool(CanvasTool):
             "polygon",
             "star",
             "slot",
-        }:
+        } or v._draw_primitive in getattr(v, "_PROCEDURAL_QUICK_SHAPES", set()):
             if not v._draw_shape_preview_active:
                 v._draw_shape_preview_active = True
                 v._draw_shape_anchor_w = (wx, wy)
@@ -1175,8 +1175,10 @@ class DrawTool(CanvasTool):
                 return True
             v._draw_pts.append((wx, wy))
             v._draw_point_snap_types.append(v._draw_snap_type or None)
-            if len(v._draw_pts) == 1:
-                v._show_dim_inputs()
+            # A spline point controls a curve; it is not the end of a
+            # dimensionable line segment.
+            v._dismiss_dim_inputs()
+            v._snap_engine.clear_relationship_reference()
             v._dim_distance_dirty = False
             v._dim_angle_dirty = False
             v._refresh_draw_sidebar_state()
@@ -1251,6 +1253,7 @@ class DrawTool(CanvasTool):
             return True
         # 1. Resolve snap target
         allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        spline_mode = v._draw_primitive == "spline"
         snap_result = v._resolve_snap(
             pos.x(),
             pos.y(),
@@ -1258,7 +1261,10 @@ class DrawTool(CanvasTool):
             wy,
             allow_polyline=allow_snap,
             allow_grid=allow_snap,
-            reference_point=v._draw_pts[-1] if v._draw_pts else None,
+            # Keep explicit point/grid snapping for spline controls, but do
+            # not apply line-only inference such as parallel or extension.
+            reference_point=v._draw_pts[-1] if v._draw_pts and not spline_mode else None,
+            allow_inferred=not spline_mode,
         )
         if snap_result is not None:
             v._draw_snap = (snap_result[0], snap_result[1])
@@ -1270,6 +1276,16 @@ class DrawTool(CanvasTool):
         # 2. Determine effective position (snap or raw cursor)
         eff_x = v._draw_snap[0] if v._draw_snap else wx
         eff_y = v._draw_snap[1] if v._draw_snap else wy
+
+        if spline_mode:
+            v._snap_engine.clear_relationship_reference()
+            v._draw_constraint = None
+            v._angle_snap_active = False
+            v._cursor_wx = eff_x
+            v._cursor_wy = eff_y
+            v._dismiss_dim_inputs()
+            v._redraw()
+            return True
 
         # 3. Angle snap with Shift
         shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -1394,7 +1410,13 @@ class DrawTool(CanvasTool):
         wx, wy = v._c2w(pos.x(), pos.y())
         allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
         snap_result = v._resolve_snap(
-            pos.x(), pos.y(), wx, wy, allow_polyline=allow_snap, allow_grid=allow_snap
+            pos.x(),
+            pos.y(),
+            wx,
+            wy,
+            allow_polyline=allow_snap,
+            allow_grid=allow_snap,
+            allow_inferred=False,
         )
         if snap_result is not None:
             wx, wy = snap_result[0], snap_result[1]
@@ -1709,6 +1731,23 @@ class SelectTool(CanvasTool):
         if apply_bezier_handle_drag(v, event):
             return True
         if apply_edit_drag(v, event):
+            return True
+
+        # A generated fill can contain tens of thousands of independently
+        # selectable strokes. Passive hover used to run a full geometry hit
+        # test for every mouse-move event, making a faithful preview unusable.
+        # Keep click selection and all pattern-cell actions available, but do
+        # not scan the full result merely to tint a stroke beneath the cursor.
+        if (
+            v._dense_preview_render
+            and len(v._entities) >= 2_000
+            and event.buttons() == Qt.MouseButton.NoButton
+        ):
+            if v._hover_poly is not None or v._hover_vert is not None:
+                v._hover_poly = None
+                v._hover_vert = None
+                v._update_cursor()
+                v._redraw()
             return True
 
         if v._sel:

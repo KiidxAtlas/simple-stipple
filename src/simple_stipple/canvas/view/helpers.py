@@ -301,6 +301,27 @@ def get_command_guidance(self) -> tuple[str, str]:
             return "Scale: pick second reference point · Shift snaps angle", "accent"
         return "Scale reference locked · Enter applies distance · Esc exits", "success"
     if self._mode == "draw":
+        drag_shapes = {
+            "rectangle",
+            "rounded_rectangle",
+            "slot",
+            "circle",
+            "ellipse",
+            "polygon",
+            "star",
+        }
+        if self._draw_primitive in drag_shapes:
+            if not self._draw_shape_preview_active:
+                return (
+                    f"{self._draw_primitive.replace('_', ' ').title()}: drag to size · Esc exits",
+                    "accent",
+                )
+            return (
+                f"{self._draw_primitive.replace('_', ' ').title()}: release to place · Esc cancels",
+                "accent",
+            )
+        if self._draw_primitive == "text":
+            return "Text: click to place text · Esc exits", "accent"
         if not self._draw_pts and not self._draw_shape_preview_active:
             return f"{self._draw_primitive.title()}: pick first point · Esc exits", "accent"
         return (
@@ -324,6 +345,84 @@ def get_command_guidance(self) -> tuple[str, str]:
             "success",
         )
     return "Select geometry · drag empty space for a selection window", "neutral"
+
+
+def get_context_actions(self) -> tuple[tuple[str, str, str], ...]:
+    """Return safe, canvas-local actions for the current drawing state."""
+    # Selection actions deliberately live in the persistent status strip as
+    # well as the right-click menu.  They are the three highest-frequency
+    # organization operations and should not require leaving the geometry to
+    # hunt through the inspector.
+    if self._mode != "draw" and self._sel:
+        actions: list[tuple[str, str, str]] = [
+            ("delete-selection", "Delete", "Delete the selected geometry"),
+        ]
+        if len(self._sel) > 1:
+            actions.append(("group-selection", "Group", "Group the selected geometry"))
+        active_layer = self.active_layer
+        selected_layers = {
+            entity.layer
+            for entity_id in self._sel
+            if (entity := self._entities_by_id.get(entity_id)) is not None
+        }
+        if active_layer and selected_layers != {active_layer}:
+            actions.append(
+                (
+                    "move-to-active-layer",
+                    f"Move to {active_layer}",
+                    f"Move the selection to the active layer, {active_layer}",
+                )
+            )
+        return tuple(actions[:3])
+    if self._mode != "draw":
+        return ()
+    point_count = len(self._draw_pts)
+    if self._draw_shape_preview_active:
+        return (
+            ("commit-shape", "Commit shape", "Accept the current shape preview"),
+            ("cancel-draw", "Cancel", "Discard the current shape preview"),
+        )
+    if point_count == 0:
+        return ()
+    actions: list[tuple[str, str, str]] = [
+        ("undo-point", "Undo point", "Remove the last drawn point"),
+    ]
+    if point_count >= 2:
+        actions.append(("finish-path", "Finish path", "Finish the open path"))
+    if point_count >= 3:
+        actions.append(("close-path", "Close path", "Finish and close the path"))
+    actions.append(("cancel-draw", "Cancel", "Discard the in-progress drawing"))
+    return tuple(actions)
+
+
+def trigger_context_action(self, action: str) -> bool:
+    """Execute a validated contextual action in the canvas command layer."""
+    available = {action_id for action_id, _label, _tooltip in get_context_actions(self)}
+    if action not in available:
+        return False
+    if action == "undo-point":
+        self._key_backspace()
+    elif action == "delete-selection":
+        self.delete_selected()
+    elif action == "group-selection":
+        self._group_selected()
+    elif action == "move-to-active-layer":
+        active_layer = self.active_layer
+        if not active_layer:
+            return False
+        self.move_indices_to_layer(self.get_selected_ids(), active_layer)
+    elif action == "finish-path":
+        self._finish_draw(close=False)
+    elif action == "close-path":
+        self._finish_draw(close=True)
+    elif action == "commit-shape":
+        self._commit_shape_preview()
+    elif action == "cancel-draw":
+        self._cancel_draw_points()
+    else:
+        return False
+    self._refresh_draw_sidebar_state()
+    return True
 
 
 def _moving_sample_points(self) -> list[tuple[float, float]]:

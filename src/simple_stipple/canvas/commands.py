@@ -377,9 +377,15 @@ COMMANDS: tuple[Command, ...] = (
         category="Constraints",
     ),
     Command(
+        "constraint.equal",
+        "Equal",
+        lambda v: v.add_geometric_constraint("equal"),
+        category="Constraints",
+    ),
+    Command(
         "constraint.equal_length",
         "Equal Length",
-        lambda v: v.add_geometric_constraint("equal_length"),
+        lambda v: v.add_geometric_constraint("equal"),
         category="Constraints",
     ),
     Command(
@@ -392,6 +398,60 @@ COMMANDS: tuple[Command, ...] = (
         "constraint.fixed",
         "Fixed",
         lambda v: v.add_geometric_constraint("fixed"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.collinear",
+        "Collinear",
+        lambda v: v.add_geometric_constraint("collinear"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.concentric",
+        "Concentric",
+        lambda v: v.add_geometric_constraint("concentric"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.tangent",
+        "Tangent",
+        lambda v: v.add_geometric_constraint("tangent"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.smooth",
+        "Smooth (G2)",
+        lambda v: v.add_geometric_constraint("smooth"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.symmetric",
+        "Symmetric",
+        lambda v: v.add_geometric_constraint("symmetric"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.midpoint",
+        "Midpoint",
+        lambda v: v.add_geometric_constraint("midpoint"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.intersection",
+        "Intersection",
+        lambda v: v.add_geometric_constraint("intersection"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.projection",
+        "Project as Construction",
+        lambda v: v.add_geometric_constraint("projection"),
+        category="Constraints",
+    ),
+    Command(
+        "constraint.unfix",
+        "Unfix",
+        lambda v: v.add_geometric_constraint("unfix"),
         category="Constraints",
     ),
     Command(

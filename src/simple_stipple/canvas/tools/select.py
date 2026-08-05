@@ -358,7 +358,8 @@ class SelectionService:
         return added
 
     def _shape_primitive_active(self) -> bool:
-        return getattr(self._host, "_draw_primitive", "polyline") in {
+        primitive = getattr(self._host, "_draw_primitive", "polyline")
+        return primitive in {
             "rectangle",
             "rounded_rectangle",
             "circle",
@@ -366,7 +367,7 @@ class SelectionService:
             "polygon",
             "star",
             "slot",
-        }
+        } or primitive in getattr(self._host, "_PROCEDURAL_QUICK_SHAPES", set())
 
     def _is_near_start(self) -> bool:
         if getattr(self._host, "_mode", None) != "draw":
