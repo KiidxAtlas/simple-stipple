@@ -294,7 +294,14 @@ class GizmoService:
         if not self._host._gizmo_undo_pushed:
             self._host._gizmo_command_snapshot = self._host._canvas_service.begin_preview()
             self._host._gizmo_undo_pushed = True
-        self._host._update_entity_in_storage(candidate)
+        # Mirror the uniform-scale path: mutate the live entity in place for
+        # the drag preview and let ``commit_preview`` record it on release.
+        # (``_update_entity_in_storage`` never existed, so every parametric
+        # handle drag raised AttributeError mid-gesture.)
+        live = self._host._entities_by_id[eid]
+        live.points = list(candidate.points)
+        if candidate.meta is not None:
+            live.meta = deepcopy(candidate.meta)
         self._host._gizmo_drag_moved = True
         self._host._sync_shape_storage_from_entities()
         self._host._refresh_driving_dimensions()

@@ -948,23 +948,6 @@ QLabel[role="zone-edit-scope"][editing="true"] {
     border-color: $accent_border;
     font-weight: $weight_semibold;
 }
-#cutoutCallout {
-    background: $bg_surface_alt;
-    border: 1px solid $border;
-    border-radius: $radius_sm;
-}
-#cutoutCallout[active="true"] {
-    background: $warn_soft;
-    border-color: $warn_border;
-}
-QLabel[role="cutout-icon"], QLabel[role="cutout-desc"] {
-    color: $text_muted;
-    background: transparent;
-    font-size: $font_2xs;
-}
-QLabel[role="cutout-icon"][active="true"], QLabel[role="cutout-desc"][active="true"] {
-    color: $warn;
-}
 
 /* ══ Empty states ════════════════════════════════════════════════════════
    The first screen a user meets on a page. It names the surface, says what

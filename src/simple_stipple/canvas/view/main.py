@@ -807,6 +807,20 @@ class CanvasView(
         self._renderer.invalidate_dense_preview_cache()
         self._redraw()
 
+    def set_region_tint(self, tint: dict[str, str]) -> None:
+        """Fill these entities translucently — the user is picking an *area*,
+        so the feedback has to read as an area, not an outline highlight."""
+        self._region_tint = dict(tint)
+        self._renderer.invalidate_dense_preview_cache()
+        self._redraw()
+
+    def set_region_picking(self, enabled: bool) -> None:
+        """Let a click on empty space inside a closed shape select it."""
+        self._region_picking = bool(enabled)
+
+    def _find_region_at(self, cx: float, cy: float):
+        return self._hit_test.region_at(cx, cy)
+
     def set_selection_follows_geometry(self, enabled: bool) -> None:
         """Use path highlighting instead of a rectangular transform frame."""
         self._selection_follows_geometry = bool(enabled)
@@ -949,6 +963,54 @@ class CanvasView(
     ) -> None:
         set_ghost_polylines(self, polys, visible=None)
 
+    def set_result_polylines(
+        self,
+        polys: list[list[tuple[float, float]]] | None,
+        *,
+        pattern_span: tuple[int, int] = (0, 0),
+    ) -> None:
+        """Install the solved pattern as a render-only overlay.
+
+        The entity set is untouched, so the canvas keeps holding the real
+        outlines and every edit stays an edit of the document. ``pattern_span``
+        marks the slice of ``polys`` that is generated pattern cells, which is
+        what right-click cell removal acts on.
+        """
+        self._result_polys = [list(poly) for poly in (polys or [])]
+        self._result_pattern_span = pattern_span
+        self._renderer.invalidate_result_cache()
+        self._redraw()
+
+    def set_result_visible(self, visible: bool) -> None:
+        if bool(visible) == self._result_visible:
+            return
+        self._result_visible = bool(visible)
+        self._redraw()
+
+    def result_visible(self) -> bool:
+        return self._result_visible
+
+    def result_cell_at(self, cx: float, cy: float) -> int | None:
+        """Index into ``_result_polys`` of the generated cell under the cursor.
+
+        Only cells inside ``pattern_span`` qualify — outline and fill strokes
+        in the result are not removable motifs.
+        """
+        if not self._result_polys or not self._result_visible:
+            return None
+        start, end = self._result_pattern_span
+        wx, wy = self._c2w(cx, cy)
+        best: int | None = None
+        best_distance = 10.0
+        for index in range(max(0, start), min(end, len(self._result_polys))):
+            poly = self._result_polys[index]
+            if len(poly) < 2:
+                continue
+            distance = self._hit_test.closest_point(poly, wx, wy, cx, cy)
+            if isinstance(distance, float) and distance < best_distance:
+                best_distance, best = distance, index
+        return best
+
     def set_dense_preview_render(self, enabled: bool) -> None:
         """Batch dense preview strokes without changing stored geometry."""
         enabled = bool(enabled)
@@ -1047,7 +1109,25 @@ class CanvasView(
         self._fire_poly_change()
         return n
 
+    def set_undo_hooks(self, undo=None, redo=None) -> None:
+        """Let the owning page undo its own state before the canvas history.
+
+        Undo is reachable from the Edit menu, the command palette and the
+        radial menu, all of which call straight into the canvas. A page that
+        owns undoable state outside the document has to be consulted here or
+        those routes silently skip it.
+        """
+        self._undo_hook = undo
+        self._redo_hook = redo
+
+    def undo_depth(self) -> int:
+        """Number of undoable canvas actions — lets a caller interleave its
+        own undo stack with this one without duplicating the history."""
+        return self._canvas_service.undo_depth()
+
     def undo(self) -> bool:
+        if callable(self._undo_hook) and self._undo_hook():
+            return True
         command_result = self._canvas_service.undo()
         if command_result.changed:
             self._gizmo_drag_mode = None
@@ -1277,6 +1357,8 @@ class CanvasView(
         return self._editing._clear_operation_preview(*args, **kwargs)
 
     def redo(self) -> bool:
+        if callable(self._redo_hook) and self._redo_hook():
+            return True
         command_result = self._canvas_service.redo()
         if command_result.changed:
             self._gizmo_drag_mode = None

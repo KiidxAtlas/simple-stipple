@@ -35,6 +35,9 @@ class CanvasService:
     def execute(self, command: Command, *, record: bool = True) -> OperationResult:
         return self.documents.execute(command, record=record)
 
+    def undo_depth(self) -> int:
+        return self.documents.history.undo_depth()
+
     def undo(self) -> OperationResult:
         return self.documents.undo()
 

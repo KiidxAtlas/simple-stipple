@@ -69,6 +69,21 @@ def handle_right_click(host: Any, cx: float, cy: float) -> bool:
     if poly_hit is not None:
         host._build_entity_actions(menu, poly_hit, section_enabled, run_transform)
         menu.addSeparator()
+    # Generated cells are overlay geometry, not entities — pick them from the
+    # result layer so removing one never touches the editable document.
+    result_cell = host.result_cell_at(cx, cy) if hasattr(host, "result_cell_at") else None
+    toggle_cell = getattr(host, "_on_pattern_cell_cutout_toggle", None)
+    if result_cell is not None and callable(toggle_cell):
+        cell_menu = menu.addMenu("Remove Cell")
+        cell_menu.addAction(
+            "This cell only",
+            lambda _checked=False, index=result_cell: toggle_cell(index, "instance"),
+        )
+        cell_menu.addAction(
+            "Every matching tile",
+            lambda _checked=False, index=result_cell: toggle_cell(index, "repeat"),
+        )
+        menu.addSeparator()
     host._add_context_section(
         menu,
         "selected",
@@ -177,10 +192,6 @@ def apply_item_customization(host: Any, menu: QMenu) -> None:  # noqa: C901
             return "edit.delete"
         if text.startswith("Close path"):
             return "context.selection.close_path"
-        if text in {"Mark as Cutout", "Remove Cutout"}:
-            return "context.cutout.toggle"
-        if text in {"Mark all selected as Cutout", "Remove Cutout for all selected"}:
-            return "context.cutout.toggle_all"
         return command_by_label.get(text) or host._context_static_action_ids.get(text)
 
     def leaves(parent: QMenu, path: tuple[str, ...] = ()) -> list:

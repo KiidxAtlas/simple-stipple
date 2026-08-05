@@ -117,7 +117,7 @@ also find them with the command palette (<kbd>Ctrl+K</kbd>/<kbd>⌘K</kbd>).</p>
   <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Draw a precise part</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Draft</strong> → Draw, then use Grid, Snap, Constraints, and Dimensions.</td></tr>
   <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Round or bevel a corner</td><td style="padding:7px;border-bottom:1px solid #30363d;">Hover the vertex in Draft → <strong>Round Corner</strong> or <strong>Chamfer Corner</strong>.</td></tr>
   <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Fill a shape for engraving</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Pattern</strong> → load an outline → choose a pattern → Generate.</td></tr>
-  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Keep lettering or holes clear</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Pattern</strong> → add the inner geometry as a cutout/exclusion.</td></tr>
+  <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Keep lettering or holes clear</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Pattern</strong> → give the inner region the <em>Cut only</em> treatment.</td></tr>
   <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Turn an image into vectors</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Trace</strong> → load image → tune threshold → Send to Draft or Pattern.</td></tr>
   <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Repair or change a file format</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>Convert</strong> for FVI, DXF, and SVG conversion or repair.</td></tr>
   <tr><td style="padding:7px;border-bottom:1px solid #30363d;">Recover lost work</td><td style="padding:7px;border-bottom:1px solid #30363d;"><strong>File → Recover Unsaved Work…</strong></td></tr>
@@ -139,7 +139,7 @@ def _build_files_and_recovery() -> str:
 <ol>
   <li>Use <strong>File → Save Workspace</strong> early and give the job a recognizable name.</li>
   <li>Use <strong>File → Workspaces and Recovery…</strong> to browse and reopen named jobs.</li>
-  <li>Export only after fitting the view, checking layers, closed outlines, cutouts, and dimensions.</li>
+  <li>Export only after fitting the view, checking layers, closed outlines, region treatments, and dimensions.</li>
   <li>Open the exported file in your machine software and verify scale, units, layers, and operation order.</li>
 </ol>
 <h3 class="subheading">Autosave and crash recovery</h3>
@@ -417,7 +417,7 @@ def _build_pattern_page() -> str:
     <li>An optional scale (width, height)</li>
     <li>A label for identification</li>
 </ul>
-<p><strong>Exclusion cutouts</strong> are outline IDs that the pattern will <em>avoid</em>. They act as "holes" in your pattern fill — use this for lettering, logos, or mechanical cutouts.</p>
+<p>A region with a treatment of its own is <em>automatically</em> subtracted from the region containing it, so a pattern always flows around inner shapes. Use <strong>Cut only</strong> for lettering, logos, or mechanical holes that should be cut but not filled.</p>
 
 <h3 class="subheading">Fill Modes</h3>
 <table style="width:100%;border-collapse:collapse;margin:8px 0;">
@@ -855,7 +855,7 @@ def _build_troubleshooting() -> str:
     <li><strong>Add fill on top:</strong> Apply a Lines or Crosshatch fill to add extra surface coverage over your main pattern.</li>
     <li><strong>Preview before generating:</strong> Use the Preview toggle to quickly check results without waiting for full generation.</li>
     <li><strong>Save custom presets:</strong> Once you find a combination you love, save it as a preset for one-click recall.</li>
-    <li><strong>Use exclusions for lettering:</strong> Mark text outlines as exclusion cutouts to have patterns flow around them.</li>
+    <li><strong>Lettering:</strong> Give text outlines the <em>Cut only</em> treatment and the surrounding pattern flows around them.</li>
     <li><strong>Command palette (⌘K):</strong> Search for any command by name, page, or shortcut — the fastest way to navigate.</li>
     <li><strong>Workspace auto-save:</strong> The app saves named workspaces every 60 seconds and keeps rolling crash-recovery snapshots for unsaved work. Use <strong>File → Recover Unsaved Work…</strong> to restore or permanently delete snapshots; <strong>File → Workspaces and Recovery…</strong> opens the normal workspace library.</li>
     <li><strong>Send between pages:</strong> Use the "Send to Pattern" button on Draft, or "Send to Draft" / "Send to Pattern" on Trace pages to move geometry between workflows.</li>
@@ -1121,7 +1121,7 @@ TOC_SEARCH_TERMS: dict[str, tuple[str, ...]] = {
     "path-cleanup": ("smooth", "simplify", "cleanup", "repair path", "fit curve"),
     "text-tools": ("font", "lettering", "type", "text on path"),
     "layers": ("hide", "lock", "organize", "color", "group"),
-    "pattern-page": ("engrave", "engraving", "fill", "generate", "zone", "cutout"),
+    "pattern-page": ("engrave", "engraving", "fill", "generate", "region", "treatment"),
     "pattern-types": ("honeycomb", "voronoi", "hatch", "tile", "motif"),
     "trace-page": ("image", "photo", "bitmap", "outline", "vectorize", "threshold"),
     "convert-page": ("convert", "repair", "fix dxf", "svg", "fvi"),

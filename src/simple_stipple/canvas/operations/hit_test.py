@@ -245,6 +245,37 @@ class HitTestService:
             if line.intersection(profile.boundary).length > 1e-7
         }
 
+    def region_at(self, cx: float, cy: float) -> EntityId | None:
+        """Smallest closed entity whose area contains the point.
+
+        Clicking *inside* a shape selects the region it bounds; clicking its
+        edge still selects the entity via ``entity_at``. Innermost wins, so a
+        circle inside a boundary is picked over the boundary containing it.
+        """
+        from shapely.geometry import Point as ShapelyPoint
+        from shapely.geometry import Polygon
+
+        host = self._host
+        wx, wy = host._c2w(cx, cy)
+        probe = ShapelyPoint(wx, wy)
+        best: EntityId | None = None
+        best_area = float("inf")
+        for entity in host._entities:
+            points = host._flattened_points_by_id(entity.id)
+            if len(points) < 3 or not host._entity_selectable(entity.id):
+                continue
+            try:
+                shape = Polygon(points)
+                if not shape.is_valid:
+                    shape = shape.buffer(0)
+            except (TypeError, ValueError):
+                continue
+            if shape.is_empty or shape.area <= 0 or shape.area >= best_area:
+                continue
+            if shape.covers(probe):
+                best, best_area = entity.id, shape.area
+        return best
+
     def guide_at(self, cx: float, cy: float) -> int | None:
         best, best_distance = None, 6.0
         for index, (orientation, coordinate) in enumerate(self._host._guides):

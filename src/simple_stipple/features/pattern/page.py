@@ -15,7 +15,7 @@ from pathlib import Path
 from PIL import Image
 from typing import Any
 
-from PySide6.QtCore import QSize, QTimer, Signal, QUrl
+from PySide6.QtCore import QSize, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QDesktopServices,
     QKeySequence,
@@ -95,7 +95,6 @@ from simple_stipple.features.pattern.layout import (
     refresh_pattern_properties_panel,
 )
 from simple_stipple.features.pattern.zones import (
-    apply_selected_zone_edits,
     assign_zone,
     clear_zones,
     collect_zone_editor,
@@ -103,17 +102,25 @@ from simple_stipple.features.pattern.zones import (
     invalidate_zones_for_geometry_change,
     live_update_selected_zone,
     on_zone_selected,
-    preview_outline_indices_for_zone,
     rebuild_zone_parameter_editor,
     refresh_zone_list,
     remove_selected_zone,
     select_zone_for_canvas_selection,
     show_zone_context_menu,
     snapshot_zone_jobs,
-    sync_selected_zone_from_controls,
     update_zone_actions,
-    zone_label,
-    zone_output_label,
+)
+from simple_stipple.features.pattern.treatments import (
+    IMAGE_PATTERN,
+    engraving_mask_polys,
+    region_engraving,
+    set_region_engraving,
+    update_region_engraving,
+    generation_polys,
+    redo_treatments,
+    region_tree,
+    undo_treatments,
+    zones as project_treatment_zones,
 )
 from simple_stipple.features.pattern.custom_tiles import (
     apply_custom_tile,
@@ -142,18 +149,6 @@ from simple_stipple.features.pattern.workers import CancellableTaskState
 # avoid touching disk. See domain/custom_tiles.py and domain/presets.py for
 # the module attributes tests must patch for those extracted call sites.
 from simple_stipple.platform.config import custom_tiles_dir, save_settings  # noqa: F401
-from simple_stipple.features.pattern.outlines import (
-    apply_cutout_callout_style,
-    clear_exclusions,
-    ensure_outline_roles,
-    explain_outline_role,
-    generation_polys,
-    mark_selection_as_cutout,
-    on_canvas_cutout_toggle,
-    on_canvas_outline_role_change,
-    refresh_cutout_status,
-    sync_canvas_cutout_highlight,
-)
 from simple_stipple.ui.files import pick_open_file, pick_save_file
 from simple_stipple.ui.recent import KIND_DXF, KIND_IMAGE, record_recent
 
@@ -203,8 +198,6 @@ class PatternPage(BasePage):
         self._base_patterns: list[str] = list(PATTERNS)
         self._load_state()
 
-        self._showing_preview: bool = False
-        self._preview_user_opt_out: bool = False
         self._preview_polys_cache: list[list[tuple[float, float]]] = []
         self._preview_categories: dict[str, list[list[tuple[float, float]]]] = {
             "outline": [],
@@ -214,18 +207,19 @@ class PatternPage(BasePage):
         self._preview_zone_owners: list[int | None] = []
         self._outline_ids: list[str] = []
         self._outline_layers: dict[str, str] = {}
-        self._outline_roles: dict[str, str] = {}
         self._pattern_cell_cutouts: list[list[tuple[float, float]]] = []
         self._pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = []
         self._preview_revision: int = 0
         self._generation_revision: int = 0
         self._pattern_service = PatternProcessor()
-        # Zones own editable output settings.  Selecting a zone loads these
-        # settings into the inspector; subsequent changes update it live.
-        self._zones: list[dict] = []
+        # One treatment per region, keyed by the owning outline's id. Regions
+        # themselves are derived from geometry, so nothing here declares
+        # containment — see features/pattern/treatments.py.
+        self._treatments: dict[str, dict] = {}
+        # Treatment history, interleaved with canvas undo by canvas depth.
+        self._treatment_undo: list[tuple[int, str | None, dict]] = []
+        self._treatment_redo: list[tuple[int, str | None, dict]] = []
         self._loading_zone: bool = False
-        # Outline IDs marked as exclusion cutouts (pattern fills around them)
-        self._exclusion_ids: list[str] = []
         self._engraving_image_path: str = ""
 
         self._preview_timer = QTimer(self)
@@ -337,22 +331,36 @@ class PatternPage(BasePage):
                     self._tile_motifs[name] = normalized
         self._load_custom_tiles_from_disk()
 
+    IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
+    OUTLINE_SUFFIXES = (".dxf", ".fvi", ".svg")
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().lower().endswith((".dxf", ".fvi", ".svg")):
+                suffix = url.toLocalFile().lower()
+                if suffix.endswith(self.OUTLINE_SUFFIXES) or suffix.endswith(self.IMAGE_SUFFIXES):
                     event.acceptProposedAction()
                     return
         # Qt withholds dropEvent entirely once dragEnterEvent rejects, so
         # this is the only chance to say why.
         if event.mimeData().hasUrls():
-            self._set_status("Pattern accepts DXF, FVI, or SVG outline files", STATUS_WARN)
+            self._set_status(
+                "Pattern accepts DXF, FVI or SVG outlines, and images to engrave", STATUS_WARN
+            )
         event.ignore()
 
     def dropEvent(self, event):
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith((".dxf", ".fvi", ".svg")):
+            if path.lower().endswith(self.IMAGE_SUFFIXES):
+                # An image dropped on the canvas is engraved into whichever
+                # region it lands in — no import dialog, no target combo.
+                if self._drop_image_into_region(path, event):
+                    event.acceptProposedAction()
+                else:
+                    event.ignore()
+                return
+            if path.lower().endswith(self.OUTLINE_SUFFIXES):
                 # Loading an outline always replaces the current one (and its
                 # zones/cutouts); a stray drop shouldn't do that silently.
                 if self._orig_polys:
@@ -388,132 +396,53 @@ class PatternPage(BasePage):
         if self._preview_task.running:
             self._preview_task.cancel()
             self._preview_task.pending = False
-            self._preview_btn.setChecked(False)
             self._set_preview_status("Cancelling preview; last completed result retained…")
             return
-        # Explicit user action: leaving preview opts out of auto-preview
-        # until the user re-engages (new outline or pattern change).
-        self._preview_user_opt_out = not checked
-        self._on_preview_toggled(checked)
+        self._set_result_visible(checked)
 
-    def _on_preview_toggled(self, checked: bool) -> None:
-        """Toggle between outline editing and pattern preview display."""
-        # Preview and Edit share one tree, but their category rows are
-        # different projections. Clear only the sidebar's virtual visibility
-        # state and canvas selection before replacing the projection; durable
-        # outline IDs/zones remain on the page.
-        if hasattr(self, "_layer_sidebar"):
-            self._layer_sidebar.clear()
-        self._canvas.deselect_all()
-        if checked and self._preview_polys_cache:
-            selected_zone = self._zone_list.currentRow()
-            # Switch to preview view
-            self._showing_preview = True
-            self._canvas.set_dense_preview_render(True)
-            self._canvas.load(self._preview_polys_cache, fit=False)
-            self._canvas.set_layer_model([], None)
-            # Show the source outline as a faded ghost overlay so the user can
-            # see both the outline and the generated pattern at the same time.
-            if self._edit_polys:
-                self._canvas.set_ghost_polylines(self._edit_polys)
-            self._configure_pattern_cell_context()
-            if 0 <= selected_zone < len(self._zones):
-                self._highlight_zone_on_canvas(selected_zone)
-            self._set_preview_status(
-                f"{len(self._preview_polys_cache)} shapes — preview", "success"
-            )
-        elif checked and not self._preview_polys_cache:
-            # No preview available yet
-            self._preview_btn.setChecked(False)
-            self._set_preview_status("No preview available")
-            return
-        else:
-            # Switch back to outline editing
-            self._showing_preview = False
-            self._canvas.set_dense_preview_render(False)
-            self._canvas.set_pattern_cell_context(set())
-            self._canvas.set_render_only_entity_ids(set())
-            self._canvas.set_ghost_polylines(None)
-            if self._edit_polys:
-                self._load_outline_canvas(fit=False)
-            if self._preview_polys_cache:
-                self._set_preview_status("Editing outline — preview cached")
-            else:
-                self._set_preview_status("Adjust settings to build a preview")
-            self._sync_canvas_cutout_highlight()
-        # The tree is a projection of the currently-loaded canvas entities.
-        # Mode switches replace those entities, so refresh the existing tree
-        # after the load; otherwise stale preview-cell rows remain visible in
-        # Edit Outline mode even though their entities no longer exist.
-        if hasattr(self, "_layer_sidebar"):
-            self._layer_sidebar.refresh_tree()
-        self._preview_btn.setProperty("active", self._showing_preview)
+    def _set_result_visible(self, visible: bool) -> None:
+        """Show or hide the solved pattern.
+
+        Visibility only: the canvas never stops holding the real outlines, so
+        there is no mode to leave and every edit is an edit of the document.
+        """
+        self._canvas.set_result_visible(visible)
+        self._preview_btn.setChecked(visible)
+        self._preview_btn.setProperty("active", visible)
         refresh_style(self._preview_btn)
+        if not self._preview_polys_cache:
+            self._set_preview_status("Adjust settings to build a preview")
+        elif visible:
+            self._set_preview_status(
+                f"{len(self._preview_polys_cache)} shapes — pattern shown", "success"
+            )
+        else:
+            self._set_preview_status("Pattern hidden — outlines only")
         self._update_preview_controls()
-
-    def _configure_pattern_cell_context(self) -> None:
-        if not self._showing_preview:
-            self._canvas.set_pattern_cell_context(set())
-            self._canvas.set_render_only_entity_ids(set())
-            return
-        outline_count = len(self._preview_categories.get("outline", []))
-        pattern_polys = self._preview_categories.get("pattern", [])
-        entity_ids = self._canvas.get_entity_ids()
-        pattern_start = outline_count
-        fill_start = pattern_start + len(pattern_polys)
-        pattern_entity_ids = set(entity_ids[pattern_start:fill_start])
-        self._canvas.set_render_only_entity_ids(set(entity_ids[fill_start:]))
-        cutout_signatures = {
-            self._pattern_service._poly_repeat_signature(poly)
-            for poly in self._pattern_cell_cutouts
-        }
-        instance_signatures = {
-            self._pattern_service._poly_signature(poly)
-            for poly in self._pattern_cell_instance_cutouts
-        }
-        cutout_entity_ids = {
-            entity_id
-            for index, poly in enumerate(pattern_polys)
-            for entity_id in entity_ids[pattern_start + index : pattern_start + index + 1]
-            if self._pattern_service._poly_repeat_signature(poly) in cutout_signatures
-            or self._pattern_service._poly_signature(poly) in instance_signatures
-        }
-        self._canvas.set_pattern_cell_context(pattern_entity_ids, cutout_entity_ids)
-
-    def _preview_outline_indices_for_zone(self, zone_row: int) -> list[int]:
-        return preview_outline_indices_for_zone(self, zone_row)
 
     def _highlight_zone_on_canvas(self, zone_row: int) -> None:
         return highlight_zone_on_canvas(self, zone_row)
 
-    def _on_pattern_cell_cutout_toggle(self, entity_id: str, scope: str = "repeat") -> None:
-        if not self._showing_preview:
+    def _on_pattern_cell_cutout_toggle(self, result_index: int, scope: str = "repeat") -> None:
+        """Remove (or restore) a generated cell picked from the result layer."""
+        polys = self._canvas._result_polys
+        if not 0 <= result_index < len(polys):
             return
-        outline_count = len(self._preview_categories.get("outline", []))
-        try:
-            pattern_index = self._canvas.get_entity_ids().index(entity_id) - outline_count
-        except ValueError:
-            return
-        pattern_polys = self._preview_categories.get("pattern", [])
-        if not 0 <= pattern_index < len(pattern_polys):
-            return
-        poly = list(pattern_polys[pattern_index])
+        poly = list(polys[result_index])
         if scope == "instance":
             added = self._toggle_pattern_cell_instance_cutout_poly(poly)
         else:
             added = self._toggle_pattern_cell_cutout_poly(poly)
         self._canvas._show_flash(
-            ("Only this cell is now a cutout" if added else "This cell is restored")
+            ("Only this cell is removed" if added else "This cell is restored")
             if scope == "instance"
             else (
-                "This shape is now a cutout in every tile"
+                "This shape is removed from every tile"
                 if added
                 else "This shape is restored in every tile"
             ),
             1000,
         )
-        self._configure_pattern_cell_context()
-        self._refresh_cutout_status()
         self._schedule_preview()
 
     def _toggle_pattern_cell_cutout_poly(self, poly: list[tuple[float, float]]) -> bool:
@@ -549,17 +478,12 @@ class PatternPage(BasePage):
         return False
 
     def _on_sel_change(self, count: int) -> None:
-        if self._showing_preview:
-            self._select_zone_for_canvas_selection(preview=True)
-            self._update_zone_actions()
-            return
         self._canvas_runtime.on_selection_change(count)  # updates toolbar
-        # `_edit_polys` always mirrors the FULL canvas state — never just the
-        # selection subset. Otherwise toggling preview off would only restore
-        # the previously-selected shapes (and silently drop all the others).
-        # If users want to pattern only specific outlines, they should create
-        # zones; selection is purely for selection, not for scoping the fill.
-        self._edit_polys = self._canvas.get_polylines_state()
+        # `_edit_polys` mirrors the FULL canvas state, never the selection
+        # subset. The id check is belt-and-braces now that the canvas only ever
+        # holds outlines: geometry and its parallel id list must stay aligned.
+        if self._canvas.get_entity_ids() == self._outline_ids:
+            self._edit_polys = self._canvas.get_polylines_state()
         self._select_zone_for_canvas_selection(preview=False)
         self._update_zone_actions()
         # Update status strip selection count without rebuilding the tree.
@@ -610,93 +534,6 @@ class PatternPage(BasePage):
         self._refresh_canvas_panels()
 
     def _on_canvas_geometry_change(self) -> None:
-        if self._showing_preview:
-            current = self._canvas.get_polylines_state()
-            previous = list(self._preview_polys_cache)
-            previous_sigs = [self._pattern_service._poly_signature(poly) for poly in previous]
-            current_sigs = [self._pattern_service._poly_signature(poly) for poly in current]
-
-            # Deleting a generated preview cell affects that instance only.
-            # The context menu is the explicit route for repeating the cutout
-            # across every matching tile.
-            missing_sigs = set(previous_sigs) - set(current_sigs)
-            removed_cells = [
-                poly
-                for poly in self._preview_categories.get("pattern", [])
-                if self._pattern_service._poly_signature(poly) in missing_sigs
-            ]
-            for poly in removed_cells:
-                if self._pattern_service._poly_signature(poly) not in {
-                    self._pattern_service._poly_signature(item)
-                    for item in self._pattern_cell_instance_cutouts
-                }:
-                    self._pattern_cell_instance_cutouts.append(list(poly))
-
-            # Preview outlines are normally the same source coordinates. When
-            # one is deleted, remove the matching durable outline and its zone
-            # membership as well. Scaled/non-matching display-only outlines
-            # are left untouched rather than risking deletion of the wrong one.
-            removed_outline_sigs = {
-                self._pattern_service._poly_signature(poly)
-                for poly in self._preview_categories.get("outline", [])
-                if self._pattern_service._poly_signature(poly) in missing_sigs
-            }
-            kept_polys: list[list[tuple[float, float]]] = []
-            kept_ids: list[str] = []
-            try:
-                preview_scale = self._collect_scale()
-                displayed_sources = self._apply_scale(self._edit_polys, *preview_scale)
-            except ValueError:
-                displayed_sources = self._edit_polys
-            for source_index, (outline_id, poly) in enumerate(
-                zip(self._outline_ids, self._edit_polys)
-            ):
-                displayed = displayed_sources[source_index]
-                if self._pattern_service._poly_signature(displayed) not in removed_outline_sigs:
-                    kept_ids.append(outline_id)
-                    kept_polys.append(poly)
-            removed_outline_count = len(self._edit_polys) - len(kept_polys)
-            if removed_outline_count:
-                self._edit_polys = kept_polys
-                self._outline_ids = kept_ids
-                self._invalidate_zones_for_geometry_change(set(kept_ids))
-
-            # Shapes drawn while previewing have no prior generated signature;
-            # promote them to source outlines so they survive regeneration.
-            # Compare signature multiplicities, not just sets: a user may
-            # draw a shape that is geometrically identical to a generated
-            # preview cell, and that still must be promoted independently.
-            previous_sig_counts: dict[tuple, int] = {}
-            for sig in previous_sigs:
-                previous_sig_counts[sig] = previous_sig_counts.get(sig, 0) + 1
-            seen_sig_counts: dict[tuple, int] = {}
-            added_indices: list[int] = []
-            for index, sig in enumerate(current_sigs):
-                seen_sig_counts[sig] = seen_sig_counts.get(sig, 0) + 1
-                if seen_sig_counts[sig] > previous_sig_counts.get(sig, 0):
-                    added_indices.append(index)
-            added = [current[index] for index in added_indices]
-            if added:
-                current_entity_ids = self._canvas.get_entity_ids()
-                added_ids = [
-                    current_entity_ids[index]
-                    for index in added_indices
-                    if index < len(current_entity_ids)
-                ]
-                self._edit_polys.extend([list(poly) for poly in added])
-                # Shapes drawn while previewing already have canvas entity
-                # ids. Reusing them prevents a second Pattern-only id from
-                # making the promoted outline unselectable after exit.
-                if len(added_ids) == len(added):
-                    self._outline_ids.extend(added_ids)
-                else:
-                    self._outline_ids.extend(self._fresh_outline_ids(len(added)))
-                self._set_status(f"Added {len(added)} outline(s) from preview.", STATUS_OK)
-
-            if removed_cells or removed_outline_count or added:
-                self._schedule_preview()
-                self._emit_state_changed()
-            return
         new_polys = self._canvas.get_polylines_state()
         # Keep the canvas entity ids for newly drawn outlines.  The canvas
         # creates those ids at draw time; generating independent Pattern ids
@@ -728,8 +565,6 @@ class PatternPage(BasePage):
                     if index < len(new_outline_ids)
                 ]
             )
-        if self._zones:
-            self._invalidate_zones_for_geometry_change(set(new_outline_ids))
         self._edit_polys = new_polys
         self._outline_ids = new_outline_ids
         self._outline_layers = {
@@ -737,6 +572,12 @@ class PatternPage(BasePage):
             for entity_id, entity in self._canvas._entities_by_id.items()
             if entity_id in set(new_outline_ids)
         }
+        # Regions are derived from geometry, so drawing a shape creates one.
+        # This ran only when a treatment already existed, which left the
+        # Regions list stuck on "No closed regions yet" for a fresh document —
+        # and it ran before the new geometry was stored, so it pruned against
+        # a stale outline list.
+        self._invalidate_zones_for_geometry_change(set(new_outline_ids))
         self._refresh_canvas_panels()
         self._schedule_preview()
         self._emit_state_changed()
@@ -749,8 +590,6 @@ class PatternPage(BasePage):
         # their real source-layer model so layer activation/reordering and
         # moves continue to work after selecting from the tree.
         selected_ids = flatten_shape_keys(indices)
-        if self._showing_preview and hasattr(self._canvas, "set_layer_model"):
-            self._canvas.set_layer_model([], None)
         valid_ids = [eid for eid in selected_ids if eid in self._canvas._entities_by_id]
         self._canvas.set_selection(valid_ids)
         # Update toolbar and status strip without rebuilding the tree —
@@ -763,12 +602,6 @@ class PatternPage(BasePage):
         """Persist a custom display label for an outline shape."""
         self._canvas_runtime.rename_shape(layer_name, shape_key, new_label)
 
-    def _on_tree_outline_role_requested(self, shape_key: object, role: str) -> None:
-        """Apply an outline role from Pattern's layer-tree context menu."""
-        for entity_id in flatten_shape_keys(shape_key):
-            if entity_id in self._outline_ids:
-                self._on_canvas_outline_role_change(self._outline_ids.index(entity_id), role)
-
     def _on_send_selected_to_draft_from_canvas(
         self,
         polys: list[list[tuple[float, float]]],
@@ -778,9 +611,6 @@ class PatternPage(BasePage):
         self.sendSelectedToDraftRequested.emit(polys)
 
     def _fit_selection(self) -> None:
-        if self._showing_preview:
-            self._on_preview_toggled(False)
-            self._preview_btn.setChecked(False)
         if self._canvas_runtime.fit_selection():
             self._refresh_canvas_panels()
 
@@ -932,8 +762,17 @@ class PatternPage(BasePage):
             self._edit_polys,
         )
 
-    def _ensure_outline_roles(self) -> None:
-        return ensure_outline_roles(self)
+    def _region_tree(self) -> dict:
+        return region_tree(self)
+
+    @property
+    def _zones(self) -> list[dict]:
+        """Region treatments in the zone shape ``engine/patterns`` consumes.
+
+        Read-only on purpose: treatments are the single source of truth, so
+        there is nowhere for a zone list to drift out of sync with geometry.
+        """
+        return project_treatment_zones(self)
 
     def _generation_polys(self) -> list[list[tuple[float, float]]]:
         return generation_polys(self)
@@ -957,9 +796,7 @@ class PatternPage(BasePage):
         self._preview_polys_cache = []
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
         self._preview_zone_owners = []
-        if self._showing_preview:
-            self._preview_btn.setChecked(False)
-            self._on_preview_toggled(False)
+        self._canvas.set_result_polylines([])
         self._set_preview_status("Adjust settings to build a preview")
         self._update_preview_controls()
         self._schedule_preview()
@@ -999,12 +836,6 @@ class PatternPage(BasePage):
         self._engrave_edit_btn.setEnabled(has_image)
         self._engrave_fit_btn.setEnabled(has_image)
         self._engrave_center_btn.setEnabled(has_image)
-        has_zone = bool(self._zones)
-        zone_index = self._engrave_target.findData("zone")
-        if zone_index >= 0:
-            self._engrave_target.model().item(zone_index).setEnabled(has_zone)
-        if not has_zone and self._engrave_target.currentData() == "zone":
-            self._engrave_target.setCurrentIndex(self._engrave_target.findData("outline"))
         # Keep the CTA actionable. It explains the prerequisite if no source
         # exists instead of becoming a dead, undiscoverable control.
         self._engrave_export_btn.setEnabled(True)
@@ -1100,31 +931,16 @@ class PatternPage(BasePage):
         if not path:
             return
         self._engraving_image_path = path
-        # Start in the user's actual work area.  An image that lands in the
-        # viewport instead of the outline is easy to miss and forces a second
-        # placement action before it can be evaluated.
-        try:
-            with Image.open(path) as source:
-                dpi = source.info.get("dpi")
-                if isinstance(dpi, tuple) and len(dpi) >= 2 and dpi[0] and dpi[1]:
-                    self._engrave_w.setValue(source.width / float(dpi[0]) * 25.4)
-                    self._engrave_h.setValue(source.height / float(dpi[1]) * 25.4)
-                elif source.width > 0:
-                    self._engrave_h.setValue(self._engrave_w.value() * source.height / source.width)
-        except OSError:
-            pass
-        bounds = self._engraving_bounds()
-        if bounds is not None:
-            left, top, right, bottom = bounds
-            available_w = max(right - left, 0.01)
-            available_h = max(bottom - top, 0.01)
-            scale = min(
-                available_w / self._engrave_w.value(),
-                available_h / self._engrave_h.value(),
-            )
-            self._engrave_w.setValue(self._engrave_w.value() * scale)
-            self._engrave_h.setValue(self._engrave_h.value() * scale)
+        self._attach_image_to_selected_region(path)
+        # Natural size, not auto-fitted: the image arrives at the size it
+        # actually is and the user places it. Auto-scaling it to the outline
+        # silently changed the artwork's dimensions before it was ever seen.
+        width_mm, height_mm = self._natural_image_size_mm(path)
+        if width_mm > 0 and height_mm > 0:
+            self._engrave_w.setValue(width_mm)
+            self._engrave_h.setValue(height_mm)
         self._center_engraving_image()
+        self._push_engraving_placement_to_region()
         self._update_engraving_overlay()
         self._canvas.select_background_image(True)
         self._engraving_section.set_expanded(True)
@@ -1168,6 +984,9 @@ class PatternPage(BasePage):
             field.blockSignals(True)
             field.setValue(value)
             field.blockSignals(False)
+        # Dragging the image on canvas is a placement edit like any other, so
+        # it lands on the region and rides the same undo stack.
+        self._push_engraving_placement_to_region()
         self._emit_state_changed()
 
     def _on_engraving_selection_changed(self, selected: bool) -> None:
@@ -1190,6 +1009,9 @@ class PatternPage(BasePage):
             with Image.open(self._engraving_image_path) as source:
                 overlay = source.convert("RGBA")
                 overlay.putalpha(125)
+                # Shown whole on canvas, deliberately: the image is something
+                # you position and resize, so cropping the preview to its
+                # region hid the very edges you drag. Export still clips it.
                 self._canvas.set_background_image(
                     overlay.copy(),
                     self._engrave_w.value(),
@@ -1205,14 +1027,124 @@ class PatternPage(BasePage):
         except OSError:
             self._canvas.clear_background_image()
 
+    def _natural_image_size_mm(self, path: str) -> tuple[float, float]:
+        """Physical size of the image, from its DPI when it declares one."""
+        try:
+            with Image.open(path) as source:
+                dpi = source.info.get("dpi")
+                if isinstance(dpi, tuple) and len(dpi) >= 2 and dpi[0] and dpi[1]:
+                    return (
+                        source.width / float(dpi[0]) * 25.4,
+                        source.height / float(dpi[1]) * 25.4,
+                    )
+                if source.width > 0 and source.height > 0:
+                    # No DPI: fall back to the current width, keeping aspect.
+                    width_mm = max(self._engrave_w.value(), 1.0)
+                    return width_mm, width_mm * source.height / source.width
+        except OSError:
+            pass
+        return 0.0, 0.0
+
+    def _drop_image_into_region(self, path: str, event) -> bool:
+        """Engrave a dropped image into the region under the cursor."""
+        from simple_stipple.features.pattern.zones import row_for_region_id
+
+        canvas_pos = self._canvas.mapFrom(self, event.position().toPoint())
+        region_id = self._canvas._find_region_at(canvas_pos.x(), canvas_pos.y())
+        if region_id is None or region_id not in self._outline_ids:
+            self._set_status(
+                "Drop the image inside a closed region to engrave it there.", STATUS_WARN
+            )
+            return False
+        # Land it at its natural size, centred on the drop point — not scaled
+        # to fill the region, which would resize the artwork behind the user's
+        # back. The region still masks it; only the sizing is theirs.
+        self._engraving_image_path = path
+        width_mm, height_mm = self._natural_image_size_mm(path)
+        if width_mm > 0 and height_mm > 0:
+            self._engrave_w.setValue(width_mm)
+            self._engrave_h.setValue(height_mm)
+        drop_x, drop_y = self._canvas._c2w(canvas_pos.x(), canvas_pos.y())
+        self._engrave_x.setValue(drop_x - self._engrave_w.value() / 2.0)
+        self._engrave_y.setValue(drop_y - self._engrave_h.value() / 2.0)
+        row = row_for_region_id(self, region_id)
+        if row >= 0:
+            self._zone_list.setCurrentRow(row)
+        self._attach_image_to_selected_region(path)
+        self._update_engraving_overlay()
+        self._set_status(f"Engraving {Path(path).name} into this region.", STATUS_OK)
+        return True
+
+    def _selected_region_id(self) -> str | None:
+        from simple_stipple.features.pattern.zones import selected_region_id
+
+        return selected_region_id(self)
+
+    def _attach_image_to_selected_region(self, path: str) -> None:
+        """Give the selected region this image, as one undo step.
+
+        The image belongs to the region that masks it — that is what removes
+        the need for a separate "which target?" choice, and it is why choosing
+        an image also makes the region an Engrave region.
+        """
+        region_id = self._selected_region_id()
+        if region_id is None:
+            self._set_status(
+                "Select a region first — the image is engraved into a region.", STATUS_WARN
+            )
+            return
+        set_region_engraving(
+            self,
+            region_id,
+            {
+                "path": path,
+                "x": self._engrave_x.value(),
+                "y": self._engrave_y.value(),
+                "width": self._engrave_w.value(),
+                "height": self._engrave_h.value(),
+                "rotation": self._engrave_rotation.value(),
+            },
+        )
+        self._refresh_zone_list()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _sync_engraving_widgets_from_region(self, region_id: str | None) -> None:
+        """Point the placement controls at whichever region is selected."""
+        engraving = region_engraving(self, region_id) if region_id else None
+        if engraving is None:
+            return
+        self._suspend_state = True
+        try:
+            self._engraving_image_path = str(engraving.get("path", ""))
+            self._engrave_x.setValue(float(engraving.get("x", 0.0)))
+            self._engrave_y.setValue(float(engraving.get("y", 0.0)))
+            if float(engraving.get("width", 0.0)) > 0:
+                self._engrave_w.setValue(float(engraving["width"]))
+            if float(engraving.get("height", 0.0)) > 0:
+                self._engrave_h.setValue(float(engraving["height"]))
+            self._engrave_rotation.setValue(float(engraving.get("rotation", 0.0)))
+        finally:
+            self._suspend_state = False
+        self._refresh_engraving_ui()
+
+    def _push_engraving_placement_to_region(self) -> None:
+        """Mirror a placement edit back onto the region that owns the image."""
+        region_id = self._selected_region_id()
+        if region_id is None or region_engraving(self, region_id) is None:
+            return
+        update_region_engraving(
+            self,
+            region_id,
+            x=self._engrave_x.value(),
+            y=self._engrave_y.value(),
+            width=self._engrave_w.value(),
+            height=self._engrave_h.value(),
+            rotation=self._engrave_rotation.value(),
+        )
+
     def _engraving_mask_polys(self) -> list[list[tuple[float, float]]]:
-        if self._engrave_target.currentData() != "zone":
-            return [list(poly) for poly in self._generation_polys()]
-        row = self._zone_list.currentRow()
-        if not 0 <= row < len(self._zones):
-            raise ValueError("Select a zone before exporting a zone-clipped engraving.")
-        ids = set(self._zones[row].get("outline_ids", []))
-        return [list(poly) for oid, poly in zip(self._outline_ids, self._edit_polys) if oid in ids]
+        return engraving_mask_polys(self)
 
     def _use_engraving_export(self) -> None:
         """Make the shared Export control the sole engraving export terminal."""
@@ -1222,7 +1154,23 @@ class PatternPage(BasePage):
             STATUS_OK,
         )
 
+    def _active_engraving(self) -> tuple[str, dict] | None:
+        """The image to export: the selected region's, else the first one."""
+        from simple_stipple.features.pattern.treatments import engraving_regions
+
+        found = engraving_regions(self)
+        if not found:
+            return None
+        selected = self._selected_region_id()
+        for region_id, engraving in found:
+            if region_id == selected:
+                return region_id, engraving
+        return found[0]
+
     def _export_pattern_engraving(self) -> None:
+        active = self._active_engraving()
+        if active is not None:
+            self._sync_engraving_widgets_from_region(active[0])
         if not self._engraving_image_path:
             self._set_status("Choose an engraving image first.", STATUS_WARN)
             return
@@ -1320,6 +1268,9 @@ class PatternPage(BasePage):
         self._with_current_preview(self._perform_laserstar_export)
 
     def _perform_laserstar_export(self) -> None:
+        active = self._active_engraving()
+        if active is not None:
+            self._sync_engraving_widgets_from_region(active[0])
         source_name = (
             Path(self._dxf_edit.text()).stem if self._dxf_edit.text().strip() else "stipple-job"
         )
@@ -1398,7 +1349,6 @@ class PatternPage(BasePage):
     # ── Subtitles, shortcuts, palette, scale callbacks ────────────────────────
 
     def _switch_pattern(self, value: str) -> None:
-        self._preview_user_opt_out = False
         custom_name = self._custom_pattern_name(value)
         if custom_name and custom_name in self._tile_motifs:
             self._custom_tile_polys = [list(poly) for poly in self._tile_motifs[custom_name]]
@@ -1582,15 +1532,34 @@ class PatternPage(BasePage):
         QShortcut(QKeySequence(f"{modifier}+R"), self, self._reload_dxf)
         QShortcut(QKeySequence(f"{modifier}+P"), self, self._apply_selected_preset)
 
+    def _undo_treatment_hook(self) -> bool:
+        """Canvas undo hook — revert a treatment change if it is the latest."""
+        if not undo_treatments(self):
+            return False
+        self._refresh_zone_list()
+        self._schedule_preview()
+        self._emit_state_changed()
+        self._set_status("Undo — region treatment restored", STATUS_OK)
+        return True
+
+    def _redo_treatment_hook(self) -> bool:
+        if not redo_treatments(self):
+            return False
+        self._refresh_zone_list()
+        self._schedule_preview()
+        self._emit_state_changed()
+        self._set_status("Redo — region treatment reapplied", STATUS_OK)
+        return True
+
     def _undo_pattern(self) -> None:
-        """Undo the latest Pattern canvas mutation, regardless of focus."""
+        """Undo the latest Pattern change — treatment or geometry."""
         if self._canvas.undo():
             self._refresh_canvas_panels()
             self._schedule_preview()
             self._emit_state_changed()
 
     def _redo_pattern(self) -> None:
-        """Redo the latest Pattern canvas mutation, regardless of focus."""
+        """Redo the latest Pattern change — treatment or geometry."""
         if self._canvas.redo():
             self._refresh_canvas_panels()
             self._schedule_preview()
@@ -1635,22 +1604,16 @@ class PatternPage(BasePage):
                 "run": self._apply_selected_preset,
             },
             {
-                "title": "Mark selected shapes as cutout",
-                "subtitle": "Exclude selected outlines from laser fill",
-                "run": self._mark_selection_as_cutout,
-            },
-            {
                 "title": "Manage presets…",
                 "subtitle": "Rename, duplicate, import, export",
                 "run": self._open_preset_manager,
             },
             {
-                "title": "Assign zone to selection",
-                "subtitle": "Save current pattern as a named zone",
+                "title": "Apply treatment to selection",
+                "subtitle": "Give the selected regions these pattern settings",
                 "run": self._assign_zone,
             },
-            {"title": "Clear all zones", "run": self._clear_zones},
-            {"title": "Clear all cutouts", "run": self._clear_exclusions},
+            {"title": "Clear all region treatments", "run": self._clear_zones},
             {
                 "title": "Toggle border on separate layer",
                 "run": lambda: self._include_border_cb.setChecked(
@@ -1838,11 +1801,7 @@ class PatternPage(BasePage):
         if not incoming:
             return
         self._suspend_state = True
-        self._preview_user_opt_out = False
-        self._showing_preview = False
-        self._preview_btn.setChecked(False)
-        self._preview_btn.setProperty("active", False)
-        refresh_style(self._preview_btn)
+        self._canvas.set_result_polylines([])
         self._orig_polys = [list(poly) for poly in incoming]
         self._edit_polys = [list(poly) for poly in incoming]
         self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
@@ -1850,16 +1809,13 @@ class PatternPage(BasePage):
             entity_id: layer or "Outline"
             for entity_id, layer in zip(self._outline_ids, layers, strict=True)
         }
-        self._exclusion_ids.clear()
+        self._treatments = {}
         self._export_is_current = False
         self._preview_is_stale = False
         self._preview_polys_cache = []
         self._preview_categories = {"outline": [], "pattern": [], "fill": []}
-        self._zones.clear()
         self._refresh_zone_list()
         self._load_outline_canvas(fit=True)
-        self._sync_canvas_cutout_highlight()
-        self._refresh_cutout_status()
         self._canvas.set_mode("select")
         self._canvas.deselect_all()
         self._update_dims_from_polys(self._orig_polys)
@@ -1885,6 +1841,19 @@ class PatternPage(BasePage):
         """Load editable outlines without discarding their source layers."""
         paths = self._edit_polys if polys is None else polys
         ids = self._outline_ids if entity_ids is None else entity_ids
+        if len(ids) != len(paths):
+            # A desync must never take the app down. Rebuild the identities
+            # that are missing and carry on with the geometry we have.
+            LOGGER.warning(
+                "Outline ids (%d) and polys (%d) disagree; reconciling",
+                len(ids),
+                len(paths),
+            )
+            ids = list(ids[: len(paths)]) + self._fresh_outline_ids(
+                max(0, len(paths) - len(ids))
+            )
+            if entity_ids is None:
+                self._outline_ids = ids
         records = [
             {
                 "id": entity_id,
@@ -1930,18 +1899,14 @@ class PatternPage(BasePage):
             self._load_outline_file(path)
 
     def _load_dxf(self, path: str) -> None:
-        self._preview_user_opt_out = False
         try:
             polys, report = load_dxf_polylines_with_report(path)
             self._orig_polys = polys
             self._edit_polys = list(polys)
             self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
-            self._exclusion_ids.clear()
-            self._zones.clear()
+            self._treatments = {}
             self._refresh_zone_list()
             self._canvas.load(polys, entity_ids=list(self._outline_ids))
-            self._sync_canvas_cutout_highlight()
-            self._refresh_cutout_status()
             self._update_dims_from_polys(polys)
             self._set_status(f"Loaded {len(polys)} polylines from {Path(path).name}")
             record_recent(self._settings, KIND_DXF, path)
@@ -1961,9 +1926,6 @@ class PatternPage(BasePage):
             QMessageBox.critical(self, "Load Error", str(exc))
 
     def _close_selected_outlines(self) -> None:
-        if self._showing_preview:
-            self._on_preview_toggled(False)
-            self._preview_btn.setChecked(False)
         changed = self._canvas.close_selected_polylines()
         if changed:
             self._edit_polys = list(self._canvas.get_polylines_state())
@@ -1971,8 +1933,7 @@ class PatternPage(BasePage):
                 self._edit_polys,
                 entity_ids=self._canvas.get_entity_ids(),
             )
-            self._zones.clear()
-            self._refresh_zone_list()
+            self._invalidate_zones_for_geometry_change(set(self._outline_ids))
             self._set_status(f"Closed {changed} outline(s).", STATUS_OK)
             self._refresh_canvas_panels()
             self._schedule_preview()
@@ -1981,9 +1942,6 @@ class PatternPage(BasePage):
             self._set_status("No open outlines selected.")
 
     def _open_selected_outlines(self) -> None:
-        if self._showing_preview:
-            self._on_preview_toggled(False)
-            self._preview_btn.setChecked(False)
         changed = self._canvas.open_selected_polylines()
         if changed:
             self._edit_polys = list(self._canvas.get_polylines_state())
@@ -1991,8 +1949,7 @@ class PatternPage(BasePage):
                 self._edit_polys,
                 entity_ids=self._canvas.get_entity_ids(),
             )
-            self._zones.clear()
-            self._refresh_zone_list()
+            self._invalidate_zones_for_geometry_change(set(self._outline_ids))
             self._set_status(f"Opened {changed} outline(s).", STATUS_OK)
             self._refresh_canvas_panels()
             self._schedule_preview()
@@ -2023,21 +1980,14 @@ class PatternPage(BasePage):
         if hasattr(self, "_zone_pattern_combo"):
             self._populate_pattern_combo(self._zone_pattern_combo)
 
-    @staticmethod
-    def _zone_output_label(mode: str) -> str:
-        return zone_output_label(mode)
-
-    def _zone_label(self, zone: dict, index: int) -> str:
-        return zone_label(self, zone, index)
-
-    def _sync_selected_zone_from_controls(self) -> None:
-        return sync_selected_zone_from_controls(self)
-
     def _populate_pattern_combo(self, combo: QComboBox, current: str | None = None) -> None:
         current = combo.currentText() if current is None else current
         combo.blockSignals(True)
         combo.clear()
         combo.addItems(self._base_patterns)
+        # An image is one of the things a region can be, so it belongs in the
+        # same list as the generated patterns rather than in its own section.
+        combo.insertItem(1, IMAGE_PATTERN)
         if self._tile_motifs:
             combo.insertSeparator(combo.count())
             for name in sorted(self._tile_motifs, key=str.casefold):
@@ -2055,9 +2005,6 @@ class PatternPage(BasePage):
 
     def _collect_zone_editor(self) -> tuple[str, dict, dict | None]:
         return collect_zone_editor(self)
-
-    def _apply_selected_zone_edits(self) -> None:
-        return apply_selected_zone_edits(self)
 
     def _live_update_selected_zone(self, *_args) -> None:
         return live_update_selected_zone(self, *_args)
@@ -2079,35 +2026,6 @@ class PatternPage(BasePage):
 
     def _refresh_zone_list(self) -> None:
         return refresh_zone_list(self)
-
-    # ── Exclusions (cutouts) ──────────────────────────────────────────────────
-
-    def _on_canvas_cutout_toggle(self, idx: int):
-        return on_canvas_cutout_toggle(self, idx)
-
-    def _on_canvas_outline_role_change(self, idx: int, role: str):
-        return on_canvas_outline_role_change(self, idx, role)
-
-    def _explain_outline_role(self, idx: int):
-        return explain_outline_role(self, idx)
-
-    def _mark_selection_as_cutout(self):
-        return mark_selection_as_cutout(self)
-
-    def _clear_exclusions(self):
-        return clear_exclusions(self)
-
-    def _sync_canvas_cutout_highlight(self):
-        return sync_canvas_cutout_highlight(self)
-
-    def _apply_cutout_callout_style(self, *, active: bool):
-        return apply_cutout_callout_style(self, active=active)
-
-    def _refresh_cutout_status(self):
-        return refresh_cutout_status(self)
-
-    def _resolve_exclusion_polys(self) -> list[list[tuple[float, float]]]:
-        return self._resolve_outline_ids(self._exclusion_ids)
 
     # ── Presets ───────────────────────────────────────────────────────────────
 
@@ -2171,7 +2089,7 @@ class PatternPage(BasePage):
             border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
         except ValueError:
             border_fade = 0.0
-        excl_polys = self._resolve_exclusion_polys() or None
+        excl_polys = None
         fill_options = self._collect_fill_options()
         self._set_preview_status("Previewing…")
         if self._zones:
@@ -2242,6 +2160,17 @@ class PatternPage(BasePage):
     def _handle_preview_done(self, payload: tuple) -> None:
         if self._shutting_down:
             return
+        # Reloading the canvas and rebuilding the layer tree can pull keyboard
+        # focus out of whatever the user is typing in. A preview is background
+        # work; it must never take the caret away mid-edit.
+        focused = QApplication.focusWidget()
+        try:
+            self._handle_preview_done_inner(payload)
+        finally:
+            if focused is not None and focused.isVisible():
+                focused.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _handle_preview_done_inner(self, payload: tuple) -> None:
         if len(payload) == 4:
             preview_token, display_polys, count, categories = payload
         else:
@@ -2296,19 +2225,22 @@ class PatternPage(BasePage):
             f"{count} shapes ({detail_str}) · {diagnostics.total_length:.1f} mm path"
             f" · {diagnostics.travel_length:.1f} mm travel"
         )
-        if self._showing_preview:
-            self._canvas.set_dense_preview_render(True)
-            selected_zone = self._zone_list.currentRow()
-            self._canvas.load(display_polys, fit=False)
-            self._configure_pattern_cell_context()
-            if 0 <= selected_zone < len(self._zones):
-                self._highlight_zone_on_canvas(selected_zone)
-            self._set_preview_status(f"{status_text} — preview", "success")
-        elif self._should_auto_preview():
-            self._preview_btn.setChecked(True)
-            self._on_preview_toggled(True)
+        # The solved pattern is an overlay, never an entity swap: the canvas
+        # keeps holding the real outlines, so editing during a preview is
+        # editing the document.
+        outline_count = len(self._preview_categories.get("outline", []))
+        pattern_count = len(self._preview_categories.get("pattern", []))
+        self._canvas.set_result_polylines(
+            display_polys,
+            pattern_span=(outline_count, outline_count + pattern_count),
+        )
+        selected_row = self._zone_list.currentRow()
+        if selected_row >= 0:
+            self._highlight_zone_on_canvas(selected_row)
+        if self._canvas.result_visible():
+            self._set_preview_status(f"{status_text} — pattern shown", "success")
         else:
-            self._set_preview_status(f"{status_text} ready — click Preview", "success")
+            self._set_preview_status(f"{status_text} ready — click Show Pattern", "success")
         self._refresh_section_subtitles()
         self._update_preview_controls()
         self._refresh_canvas_panels()
@@ -2319,20 +2251,6 @@ class PatternPage(BasePage):
             self._pending_export_after_preview = None
             if pending_export is not None:
                 QTimer.singleShot(0, pending_export)
-
-    def _should_auto_preview(self) -> bool:
-        if not self._auto_preview_cb.isChecked():
-            return False
-        if self._preview_user_opt_out:
-            return False
-        if getattr(self._canvas, "_mode", "select") != "select":
-            return False
-        # Zone editing intentionally keeps the zone's source outlines
-        # selected. That selection is context, not an in-progress geometry
-        # gesture, so it must not suppress the zone result.
-        if self._zones:
-            return True
-        return not getattr(self._canvas, "sel_count", 0)
 
     def _handle_preview_error(self, payload: tuple) -> None:
         if self._shutting_down:
@@ -2355,8 +2273,7 @@ class PatternPage(BasePage):
         if self._pending_export_after_preview is not None:
             self._pending_export_after_preview = None
             self._set_status(f"Export blocked — preview validation failed: {msg}", STATUS_ERR)
-        if self._showing_preview:
-            self._canvas.setToolTip("Preview refresh failed; showing the last completed result.")
+        self._canvas.setToolTip("Preview refresh failed; showing the last completed result.")
         self._update_preview_controls()
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
@@ -2378,26 +2295,16 @@ class PatternPage(BasePage):
     def _invalidate_preview_cache(self) -> None:
         self._export_is_current = False
         had_cache = bool(self._preview_polys_cache)
-        was_showing = self._showing_preview
-        self._preview_is_stale = had_cache or was_showing
+        self._preview_is_stale = had_cache
         self._preview_polys_cache = []
-        # Keep the last-good preview metadata while it remains on canvas so
-        # generated geometry can still select its owning zone during a live
-        # rebuild.  Replace it atomically when the worker completes.
-        if not was_showing:
-            self._preview_categories = {"outline": [], "pattern": [], "fill": []}
-            self._preview_zone_owners = []
-        if was_showing:
-            self._preview_btn.blockSignals(True)
-            self._preview_btn.setChecked(True)
-            self._preview_btn.blockSignals(False)
-            self._preview_btn.setProperty("active", True)
-            refresh_style(self._preview_btn)
+        # Keep the last-good result on screen while the next one solves, and
+        # keep its metadata so a cell can still be picked during the rebuild.
+        # Both are replaced atomically when the worker completes.
+        if had_cache:
             self._canvas.setToolTip(
-                "Refreshing preview — geometry shown is the last completed result."
+                "Refreshing pattern — the geometry shown is the last completed result."
             )
-        if had_cache or was_showing:
-            self._set_preview_status("Refreshing preview…")
+            self._set_preview_status("Refreshing pattern…")
         self._update_preview_controls()
 
     def _invalidate_zones_for_geometry_change(self, valid_outline_ids: set[str]) -> None:
@@ -2435,25 +2342,16 @@ class PatternPage(BasePage):
             else "Export complete — reveal the output or continue editing"
         )
         self._workflow_strip.set_step_states(workflow_states, reasons, guidance=guidance)
-        if self._showing_preview:
-            self._preview_btn.setText("Edit Outline")
-            self._preview_btn.setEnabled(True)
-            self._preview_btn.setToolTip(
-                "Checked: showing preview. Click to return to outline editing"
-            )
-        elif is_computing:
-            self._preview_btn.setText("Show Preview")
+        self._preview_btn.setText("Show Pattern")
+        if is_computing:
             self._preview_btn.setEnabled(False)
-            self._preview_btn.setToolTip("Preview is computing")
-        elif has_preview:
-            self._preview_btn.setText("Show Preview")
-            self._preview_btn.setEnabled(True)
-            self._preview_btn.setToolTip("Show the generated pattern preview")
+            self._preview_btn.setToolTip("Pattern is solving")
         else:
-            self._preview_btn.setText("Show Preview")
-            self._preview_btn.setEnabled(False)
+            self._preview_btn.setEnabled(has_preview)
             self._preview_btn.setToolTip(
-                "Preview becomes available after the current outline and parameters produce a valid result"
+                "Show or hide the solved pattern. Outlines stay editable either way."
+                if has_preview
+                else "Choose a pattern to solve one"
             )
         self._cancel_preview_btn.setVisible(is_computing)
         if hasattr(self, "_gen_btn"):
@@ -2584,7 +2482,7 @@ class PatternPage(BasePage):
             border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
         except ValueError:
             border_fade = 0.0
-        excl_polys = self._resolve_exclusion_polys() or None
+        excl_polys = None
         gen_fill_options = self._collect_fill_options()
         fabrication_options = self._collect_fabrication_options()
         self._gen_btn.setEnabled(False)
@@ -2681,8 +2579,7 @@ class PatternPage(BasePage):
         self._reveal_btn.setVisible(True)
         self._preview_polys_cache = list(polys)
         self._preview_is_stale = False
-        if self._showing_preview:
-            self._canvas.load(polys)
+        self._canvas.set_result_polylines(polys)
         self._set_preview_status(f"{count} shapes exported", "success")
         self._update_preview_controls()
         if hasattr(self, "_summary_chip"):

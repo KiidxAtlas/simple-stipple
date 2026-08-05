@@ -88,7 +88,6 @@ class DxfLayersTree(QFrame):
     shapeRenamed = Signal(str, object, str)  # layer, key, new_label
     layerColorChangeRequested = Signal(str, object)  # layer, hex str | None
     layerSettingsRequested = Signal(str)
-    shapeRoleRequested = Signal(object, str)  # shape key, role identifier
 
     # New signals for shape operations from layer tree context menu.
     shapesGroupRequested = Signal(str, list)  # layer, shape keys → group
@@ -271,7 +270,6 @@ class DxfLayersTree(QFrame):
         self.setProperty("surface", "panel")
         self.setProperty("role", "layer-tree")
         self._editable = editable
-        self._shape_role_actions_enabled = False
         self._syncing = False
         self._multi_select_click = False
         self._layer_order: list[str] = []
@@ -349,10 +347,6 @@ class DxfLayersTree(QFrame):
         self._esc_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._esc_shortcut.activated.connect(self._escape_focused_input)
         layout.addWidget(self._tree, stretch=1)
-
-    def set_shape_role_actions_enabled(self, enabled: bool) -> None:
-        """Enable caller-defined shape roles (used by Pattern outlines)."""
-        self._shape_role_actions_enabled = bool(enabled)
 
     def _escape_focused_input(self) -> None:
         blur_focused_line_edit(self._tree, within=self)
@@ -955,21 +949,6 @@ class DxfLayersTree(QFrame):
         elif kind == "shape":
             shape_key = self._item_shape_key(item)
             menu.addAction("Rename shape\tF2", lambda: self._tree.editItem(item, 0))
-
-            if self._shape_role_actions_enabled:
-                role_menu = menu.addMenu("Outline role")
-                for label, role in (
-                    ("Boundary (fillable)", "boundary"),
-                    ("Cutout (subtract from fill)", "cutout"),
-                    ("Open path (engrave only)", "open_path"),
-                    ("Ignore", "ignore"),
-                ):
-                    role_menu.addAction(
-                        label,
-                        lambda _key=shape_key, _role=role: self.shapeRoleRequested.emit(
-                            _key, _role
-                        ),
-                    )
 
             # Shape operations section.
             menu.addSeparator()

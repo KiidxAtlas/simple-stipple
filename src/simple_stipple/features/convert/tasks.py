@@ -377,7 +377,8 @@ class FviSubTab(_ConversionSubTab):
 
         self._btn_state.connect(self._btn.setEnabled)
         self._out_dir_sig.connect(self._set_output_dir)
-        self._status_sig.connect(self._set_status)
+        # Note: _status_sig intentionally NOT connected to avoid sidebar popups
+        # that appear after conversions complete.
         self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
@@ -608,7 +609,8 @@ class FixerSubTab(_ConversionSubTab):
         )
 
         self._btn_state.connect(self._btn.setEnabled)
-        self._status_sig.connect(self._set_status)
+        # Note: _status_sig intentionally NOT connected to avoid sidebar popups
+        # that appear after repairs complete.
         self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
@@ -910,7 +912,8 @@ class SvgSubTab(_ConversionSubTab):
         )
 
         self._btn_state.connect(self._btn.setEnabled)
-        self._status_sig.connect(self._set_status)
+        # Note: _status_sig intentionally NOT connected to avoid sidebar popups
+        # that appear after conversions complete.
         self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
@@ -1137,7 +1140,8 @@ class SvgToDxfSubTab(_ConversionSubTab):
         self._build_action_row("Convert to DXF")
 
         self._btn_state.connect(self._btn.setEnabled)
-        self._status_sig.connect(self._set_status)
+        # Note: _status_sig intentionally NOT connected to avoid sidebar popups
+        # that appear after conversions complete.
         self._bind_readiness(self._src_edit)
 
     def run(self) -> None:
