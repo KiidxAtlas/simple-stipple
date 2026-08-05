@@ -82,16 +82,6 @@ def selected_region_ids(page: Any) -> list[str]:
     return [ids[row] for row in rows if 0 <= row < len(ids)]
 
 
-def preview_outline_indices_for_zone(page: Any, zone_row: int) -> list[int]:
-    """Select only a zone's boundary entities, not all generated output."""
-    outline_count = len(page._preview_categories.get("outline", []))
-    return [
-        index
-        for index, owner in enumerate(page._preview_zone_owners[:outline_count])
-        if owner == zone_row
-    ]
-
-
 def highlight_zone_on_canvas(page: Any, row: int) -> None:
     """Highlight a region without changing canvas/layer-tree selection."""
     region_id = region_id_for_row(page, row)
@@ -108,7 +98,7 @@ def highlight_zone_on_canvas(page: Any, row: int) -> None:
     page._canvas.set_region_tint(highlighted)
 
 
-def select_zone_for_canvas_selection(page: Any, *, preview: bool = False) -> None:
+def select_zone_for_canvas_selection(page: Any) -> None:
     """Follow the canvas selection with the Regions list."""
     entity_ids = page._canvas.get_selected_ids()
     if not entity_ids:
@@ -505,7 +495,6 @@ def _apply_treatment_to(
     for region_id in (inherited or []) + targets:
         set_treatment(page, region_id, treatment)
     commit_treatment_change(page, before)
-    page._preview_user_opt_out = False
     refresh_zone_list(page)
     page._zone_list.setCurrentRow(row_for_region_id(page, targets[-1]))
     sync_engraving_visibility(page)

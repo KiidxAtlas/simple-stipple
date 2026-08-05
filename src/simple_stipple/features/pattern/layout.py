@@ -94,17 +94,15 @@ class ZoneListWidget(QListWidget):
 
 
 def build_right(page: Any, layout: QVBoxLayout) -> None:
-    page._preview_btn = QPushButton("Show Preview")
-    page._preview_btn.setCheckable(True)
-    page._preview_btn.setMinimumHeight(28)
-    page._preview_btn.setToolTip("Toggle between outline editing and pattern preview")
-    page._preview_btn.clicked.connect(page._on_preview_clicked)
+    # The solved pattern is always on screen; its visibility lives on the
+    # `pattern_result` row of the layer tree with every other layer. All that
+    # is left here is a transient "cancel the solve in flight" affordance.
     page._cancel_preview_btn = QToolButton()
-    page._cancel_preview_btn.setText("Cancel")
-    page._cancel_preview_btn.setToolTip("Cancel the preview currently computing")
-    page._cancel_preview_btn.setAccessibleName("Cancel preview")
+    page._cancel_preview_btn.setText("Solving… Cancel")
+    page._cancel_preview_btn.setToolTip("Cancel the pattern currently solving")
+    page._cancel_preview_btn.setAccessibleName("Cancel solve")
     page._cancel_preview_btn.setVisible(False)
-    page._cancel_preview_btn.clicked.connect(lambda: page._on_preview_clicked(False))
+    page._cancel_preview_btn.clicked.connect(page._cancel_solve)
     page._reset_preview_btn = QPushButton("Reset")
     page._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
     page._reset_preview_btn.clicked.connect(page._reset_preview)
@@ -121,6 +119,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         on_send_selected_to_draft=page._on_send_selected_to_draft_from_canvas,
         on_use_selected_as_custom_tile=page.use_custom_tile,
         on_pattern_cell_cutout_toggle=page._on_pattern_cell_cutout_toggle,
+        on_result_cell_convert=page._on_result_cell_convert,
         on_create_zone_from_selection=page._assign_zone,
         draft_profile=True,
     )
@@ -131,7 +130,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._canvas.set_layer_model([], None)
     page._canvas.set_empty_message(
         "Start a pattern\n1  Import or drop a closed outline\n"
-        "2  Choose a pattern\n3  Check Preview, then Export"
+        "2  Click inside it and choose a treatment\n3  Export"
     )
     page._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
     page._canvas.set_grid_snap(False)
@@ -150,11 +149,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         canvas=page._canvas,
         on_mode=page._on_toolbar_mode,
         on_fit=page._canvas.fit,
-        extra_widgets=[
-            page._preview_btn,
-            page._cancel_preview_btn,
-            page._reset_preview_btn,
-        ],
+        extra_widgets=[page._reset_preview_btn],
     )
     layout.addWidget(page._toolbar_module)
 
@@ -171,6 +166,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._canvas_status = CanvasStatusStrip()
     page._canvas_status.set_zoom_callback(page._on_zoom_preset)
     page._canvas_status.bind_canvas(page._canvas)
+    page._canvas_status.add_status_widget(page._cancel_preview_btn)
 
     canvas_shell = QWidget()
     canvas_shell_layout = QVBoxLayout(canvas_shell)
@@ -219,7 +215,6 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         canvas_status=page._canvas_status,
         precision_bar=page._precision_bar,
         get_orig_polys=lambda: page._edit_polys,
-        get_showing_preview=lambda: False,
         is_preview_running=lambda: page._preview_task.running,
         has_preview_cache=lambda: bool(page._preview_polys_cache),
         has_zones=lambda: bool(page._zones),
