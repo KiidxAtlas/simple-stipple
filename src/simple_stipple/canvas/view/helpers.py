@@ -586,7 +586,7 @@ def _background_edit_hit(self, cx: float, cy: float) -> str | None:
 
 def show_coordinate_entry(self, initial: str = "") -> None:
     """Place a draw point or selection using CAD coordinate notation."""
-    from simple_stipple.engine.cad.coordinates import parse_coordinate
+    from simple_stipple.engine.cad.geometry import parse_coordinate
 
     origin = self._draw_pts[-1] if self._mode == "draw" and self._draw_pts else (0.0, 0.0)
     unit_scale = 25.4 if self._unit_system == "in" else 1.0

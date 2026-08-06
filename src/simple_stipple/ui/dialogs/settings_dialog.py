@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator, QValidator
@@ -24,7 +25,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.features.trace.form import TRACE_DEFAULT_FIELDS, trace_default
 from simple_stipple.platform.config import (
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
@@ -51,13 +51,10 @@ from simple_stipple.ui.components.tokens import (
     SPACE_MD,
     SPACE_SM,
 )
-from simple_stipple.ui.dialogs.customize_dialogs import (
-    ContextMenuActionCustomizeDialog,
-    DrawSidebarCustomizeDialog,
-    RadialMenuDialog,
-)
-from simple_stipple.ui.dialogs.keybindings_dialog import KeybindingsDialog
 from simple_stipple.ui.units import DEFAULT_UNIT_SYSTEM
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class SettingsDialog(QDialog):
@@ -149,12 +146,35 @@ class SettingsDialog(QDialog):
         "Updates": ("Updates & Sync",),
     }
 
-    def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        settings: dict | None = None,
+        *,
+        trace_default_fields: list[tuple[str, str, str]] = (),
+        trace_default_fn: Callable[[dict, str], str] | None = None,
+        keybindings_dialog_cls: type[QDialog] | None = None,
+        radial_menu_dialog_cls: type[QDialog] | None = None,
+        draw_sidebar_customize_dialog_cls: type[QDialog] | None = None,
+        context_menu_customize_dialog_cls: type[QDialog] | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.resize(680, 620)
         self.setMinimumSize(560, 480)
         self.setModal(True)
+
+        # Feature/canvas-specific dialog classes and data are injected by the
+        # caller (app.menu, the composition root) rather than imported here —
+        # this dialog is a generic settings hub and must not know that
+        # keybindings/radial-menu/draw-sidebar customization live in canvas,
+        # or that trace defaults are a features.trace concern.
+        self._trace_default_fields = trace_default_fields
+        self._trace_default_fn = trace_default_fn
+        self._keybindings_dialog_cls = keybindings_dialog_cls
+        self._radial_menu_dialog_cls = radial_menu_dialog_cls
+        self._draw_sidebar_customize_dialog_cls = draw_sidebar_customize_dialog_cls
+        self._context_menu_customize_dialog_cls = context_menu_customize_dialog_cls
 
         # Deep-copy so the keybindings/radial-menu/draw-sidebar sub-dialogs
         # (which write straight into self._settings the instant they're
@@ -368,8 +388,9 @@ class SettingsDialog(QDialog):
         trace_hint.setProperty("role", "hint")
         trace_hint.setWordWrap(True)
         form.addRow(trace_hint)
-        for key, label, tooltip in TRACE_DEFAULT_FIELDS:
-            entry = self._add_text_field(form, label, trace_default(self._settings, key))
+        for key, label, tooltip in self._trace_default_fields:
+            default_value = self._trace_default_fn(self._settings, key) if self._trace_default_fn else ""
+            entry = self._add_text_field(form, label, default_value)
             entry.setToolTip(tooltip)
             self._trace_default_entries[key] = entry
 
@@ -579,17 +600,23 @@ class SettingsDialog(QDialog):
         return row
 
     def _open_keybindings(self) -> None:
-        dlg = KeybindingsDialog(self, keybindings=self._settings.get("keybindings", {}))
+        if not self._keybindings_dialog_cls:
+            return
+        dlg = self._keybindings_dialog_cls(self, keybindings=self._settings.get("keybindings", {}))
         if dlg.exec():
             self._settings["keybindings"] = dlg.get_keybindings()
 
     def _open_radial_menu(self) -> None:
+        if not self._radial_menu_dialog_cls:
+            return
         current = self._settings.get("radial_menu_tools", list(DEFAULT_RADIAL_MENU_TOOLS))
-        dlg = RadialMenuDialog(self, tools=current)
+        dlg = self._radial_menu_dialog_cls(self, tools=current)
         if dlg.exec():
             self._settings["radial_menu_tools"] = dlg.get_tools()
 
     def _open_draw_sidebar_customize(self) -> None:
+        if not self._draw_sidebar_customize_dialog_cls:
+            return
         current = self._settings.get("draw_sidebar_sections", list(DEFAULT_DRAW_SIDEBAR_SECTIONS))
         current_path_tools = self._settings.get(
             "draw_sidebar_path_tools", list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
@@ -597,7 +624,7 @@ class SettingsDialog(QDialog):
         current_shape_tools = self._settings.get(
             "draw_sidebar_shape_tools", list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
         )
-        dlg = DrawSidebarCustomizeDialog(
+        dlg = self._draw_sidebar_customize_dialog_cls(
             self,
             sections=current,
             path_tools=current_path_tools,
@@ -609,7 +636,9 @@ class SettingsDialog(QDialog):
             self._settings["draw_sidebar_shape_tools"] = dlg.get_shape_tools()
 
     def _open_context_menu_customize(self) -> None:
-        dlg = ContextMenuActionCustomizeDialog(
+        if not self._context_menu_customize_dialog_cls:
+            return
+        dlg = self._context_menu_customize_dialog_cls(
             self, profiles=self._settings.get("context_menu_profiles", {})
         )
         if dlg.exec():

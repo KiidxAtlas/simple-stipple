@@ -81,6 +81,23 @@ def test_dependencies_point_toward_shared_subsystems() -> None:
         ),
     )
     violations += _violations("canvas", ("simple_stipple.app", "simple_stipple.features"))
+    violations += _violations("ui", ("simple_stipple.canvas",))
+    assert not violations, "\n".join(violations)
+
+
+def test_engine_may_only_reach_document_identity() -> None:
+    """engine may depend on document.identity (a dependency-free primitive
+    type module explicitly documented as shared across all layers) but must
+    not reach into document.model, document.service, or any other document
+    submodule that carries real document state or Qt-adjacent behavior.
+    """
+    violations = [
+        f"{path.relative_to(PACKAGE)} imports {module}"
+        for path in (PACKAGE / "engine").rglob("*.py")
+        for module in _absolute_imports(path)
+        if module.startswith("simple_stipple.document")
+        and not module.startswith("simple_stipple.document.identity")
+    ]
     assert not violations, "\n".join(violations)
 
 

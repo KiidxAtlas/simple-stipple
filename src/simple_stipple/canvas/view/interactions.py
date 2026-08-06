@@ -304,7 +304,7 @@ def keyPressEvent(self, event: QKeyEvent):
         event.accept()
         return
 
-    # Declarative command shortcuts — see src/simple_stipple/canvas/interaction/commands.py.
+    # Declarative command shortcuts — see src/simple_stipple/canvas/commands.py.
     cmd = canvas_commands.match_key(key, mods)
     if cmd is not None and canvas_commands.can_run(self, cmd):
         cmd.run(self)

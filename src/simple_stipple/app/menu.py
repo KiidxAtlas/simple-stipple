@@ -26,6 +26,13 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.canvas import commands as canvas_commands
+from simple_stipple.canvas.dialogs.customize_dialogs import (
+    ContextMenuActionCustomizeDialog,
+    DrawSidebarCustomizeDialog,
+    RadialMenuDialog,
+)
+from simple_stipple.canvas.dialogs.keybindings_dialog import KeybindingsDialog
+from simple_stipple.features.trace.form import TRACE_DEFAULT_FIELDS, trace_default
 from simple_stipple.platform.settings import DEFAULT_KEYBINDINGS, DEFAULT_RADIAL_MENU_TOOLS
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.icons import (
@@ -634,7 +641,16 @@ class CommandController:
             self._run_canvas_command("clipboard.paste")
 
     def _open_settings(self) -> None:
-        dlg = SettingsDialog(self._app, self._app._settings)
+        dlg = SettingsDialog(
+            self._app,
+            self._app._settings,
+            trace_default_fields=TRACE_DEFAULT_FIELDS,
+            trace_default_fn=trace_default,
+            keybindings_dialog_cls=KeybindingsDialog,
+            radial_menu_dialog_cls=RadialMenuDialog,
+            draw_sidebar_customize_dialog_cls=DrawSidebarCustomizeDialog,
+            context_menu_customize_dialog_cls=ContextMenuActionCustomizeDialog,
+        )
         # Apply used to only save to disk — the running app kept its stale
         # in-memory settings until the dialog was later accepted (or the app
         # restarted). Route Apply through the same propagation as Save/OK.

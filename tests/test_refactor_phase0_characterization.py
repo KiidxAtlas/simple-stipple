@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QApplication
 
 import simple_stipple.canvas.view.main as canvas_view_main
 import simple_stipple.features.trace.page as trace_page_module
-from simple_stipple.canvas.rendering import overlays, scene
+from simple_stipple.canvas.renderer import CanvasRenderer
 from simple_stipple.canvas.view.main import CanvasView
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.features.pattern import export_jobs
@@ -142,9 +142,9 @@ def test_renderer_scene_and_selection_passes_keep_internal_layer_order() -> None
             raise AttributeError(name)
 
     renderer = Renderer()
-    scene.paint_document_scene(renderer, object(), 400, 300, object())
-    overlays.paint_selection_overlay(renderer, object(), object())
-    overlays.paint_chrome_rulers(renderer, object())
+    CanvasRenderer._paint_document_scene(renderer, object(), 400, 300, object())
+    CanvasRenderer._paint_selection_overlay(renderer, object(), object())
+    CanvasRenderer._paint_chrome_rulers(renderer, object())
 
     assert events == [
         "_paint_guides",

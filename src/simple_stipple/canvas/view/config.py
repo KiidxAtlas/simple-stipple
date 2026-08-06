@@ -14,6 +14,7 @@ from simple_stipple.canvas.operations.grouping import GroupingService
 from simple_stipple.canvas.operations.hit_test import HitTestService
 from simple_stipple.canvas.operations.hud_text import HudTextService, TextService
 from simple_stipple.canvas.operations.layer_service import LayerService
+from simple_stipple.canvas.operations.select import SelectionService
 from simple_stipple.canvas.operations.smoothing import SmoothingService
 from simple_stipple.canvas.operations.snap_service import SnapService
 from simple_stipple.canvas.renderer import CanvasRenderer
@@ -21,7 +22,6 @@ from simple_stipple.canvas.service import CanvasModelPort, CanvasService
 from simple_stipple.canvas.snap import SnapEngine
 from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
-from simple_stipple.canvas.tools.select import SelectionService
 from simple_stipple.document.model import OperationResult
 from simple_stipple.platform.config import (
     DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
@@ -254,7 +254,7 @@ def _initialize_view(
     # Mode: "select" | "draw" | "edit"
     self._mode = "select"
 
-    # Interaction tools (src/simple_stipple/canvas/interaction/tools.py): per-mode strategy
+    # Interaction tools (src/simple_stipple/canvas/tools/tools.py): per-mode strategy
     # objects dispatched by the mouse event handlers. All interaction
     # state stays on the view; tools are stateless.
     trim_tool = canvas_tools.TrimExtendTool(self)

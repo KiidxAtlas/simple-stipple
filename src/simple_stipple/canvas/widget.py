@@ -14,7 +14,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QLineEdit, QMenu
 
 from simple_stipple.canvas import commands as canvas_commands
-from simple_stipple.canvas.interaction import context_menu, quick_shapes
+from simple_stipple.canvas.operations import context_menu, quick_shapes
 from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.tools import RadialMenuService
 from simple_stipple.canvas.view.main import CanvasView

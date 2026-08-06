@@ -13,7 +13,14 @@ from PySide6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
 from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
 from shapely.geometry import Point, Polygon
 
-import simple_stipple.ui.dialogs.customize_dialogs as customize_dialogs
+import simple_stipple.canvas.dialogs.customize_dialogs as customize_dialogs
+from simple_stipple.canvas.dialogs.customize_dialogs import (
+    _CONTEXT_ACTION_LABELS,
+    ContextMenuActionCustomizeDialog,
+    _build_list,
+    _checked_keys,
+    _ordered_keys,
+)
 from simple_stipple.canvas.layers.logic import describe_polyline
 from simple_stipple.canvas.operations.hud_text import HudTextService, text_to_polylines
 from simple_stipple.canvas.snap import SnapEngine
@@ -25,7 +32,7 @@ from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
 from simple_stipple.canvas.widgets.toolbar import canvas_toolbar
 from simple_stipple.document.model import CanvasDocument, EntityRecord
 from simple_stipple.engine.cad.constraints import GeometricConstraint, solve_constraints
-from simple_stipple.engine.editing.split import split_paths
+from simple_stipple.engine.editing.topology import split_paths
 from simple_stipple.engine.formats.dxf import polylines_to_outline
 from simple_stipple.engine.patterns.fill import FillSpec, apply_fill
 from simple_stipple.engine.patterns.processing import PatternProcessor
@@ -49,13 +56,6 @@ from simple_stipple.ui.components.inputs import NoWheelSlider
 from simple_stipple.ui.components.workflow import (
     OperationProgress,
     set_status_label,
-)
-from simple_stipple.ui.dialogs.customize_dialogs import (
-    _CONTEXT_ACTION_LABELS,
-    ContextMenuActionCustomizeDialog,
-    _build_list,
-    _checked_keys,
-    _ordered_keys,
 )
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.import_dialog import VectorImportModeDialog

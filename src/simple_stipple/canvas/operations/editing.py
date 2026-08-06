@@ -20,7 +20,6 @@ from simple_stipple.document.commands import (
     ExplodeCommand,
     MergeCommand,
     MoveEntityCommand,
-    ResampleCommand,
     SplitCommand,
     TransformCommand,
 )
@@ -34,13 +33,11 @@ from simple_stipple.engine.cad.editor_geometry import (
     update_entity_parameter,
 )
 from simple_stipple.engine.cad.geometry import minimum_clearance
-from simple_stipple.engine.cad.shapes import ShapeFactory
 from simple_stipple.engine.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
-from simple_stipple.engine.editing.offset import offset_polyline
-from simple_stipple.engine.editing.split import split_paths
-from simple_stipple.engine.editing.transform import scale
-from simple_stipple.engine.editing.trim_extend import (
+from simple_stipple.engine.editing.boolean import offset_polyline
+from simple_stipple.engine.editing.topology import (
     extension_point,
+    split_paths,
     trim_polyline,
     trim_preview,
 )
@@ -1012,27 +1009,6 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
-    def _scale_all(self, factor: float) -> None:
-        """Scale all polylines uniformly around their bounding box center."""
-        if not self._host._entities:
-            return
-        all_pts = [pt for p in (e.points for e in self._host._entities_by_id.values()) for pt in p]
-        xs, ys = zip(*all_pts)
-        cx = (min(xs) + max(xs)) / 2
-        cy = (min(ys) + max(ys)) / 2
-        candidates = [deepcopy(entity) for entity in self._host._entities_by_id.values()]
-        for entity in candidates:
-            entity.points = scale(entity.points, (cx, cy), factor)
-            transform_entity_metadata(
-                entity,
-                transform="scale",
-                center=(cx, cy),
-                factor=factor,
-            )
-        self._host._canvas_service.update_entities(candidates)
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
 
     def scale_by_reference(self, factor: float, origin: tuple[float, float]) -> bool:
         """Uniformly scale the current selection (or all visible geometry).
@@ -1125,24 +1101,7 @@ class EditingService:
     ) -> list[tuple[float, float]] | None:
         return offset_polyline(poly, distance)
 
-    @staticmethod
-    def _points_equal(a: tuple[float, float], b: tuple[float, float]) -> bool:
-        return math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6
 
-    def _segments_for_polylines(self, poly_ids: set[str]) -> set[tuple[str, int]]:
-        segments: set[tuple[str, int]] = set()
-        for eid in poly_ids:
-            entity = self._host._entity_for_id(eid)
-            if entity is None:
-                continue
-            poly = entity.points
-            n = len(poly)
-            if n < 2:
-                continue
-            closed = self._host._is_poly_closed(poly)
-            seg_count = n if closed else n - 1
-            segments.update((eid, si) for si in range(max(0, seg_count)))
-        return segments
 
     def _update_shape_size_fields_from_preview(self) -> None:
         if self._host._draw_shape_w_edit is None or self._host._draw_shape_h_edit is None:
@@ -1163,13 +1122,6 @@ class EditingService:
         self._host._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
         self._host._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
 
-    def _vertices_for_polylines(self, poly_ids: set[str]) -> set[tuple[str, int]]:
-        vertices: set[tuple[str, int]] = set()
-        for eid in poly_ids:
-            entity = self._host._entity_for_id(eid)
-            if entity is not None:
-                vertices.update((eid, vi) for vi in range(len(entity.points)))
-        return vertices
 
     def offset_selected(self, distance: float) -> int:
         """Public command/API wrapper for the canonical offset operation."""
@@ -1317,385 +1269,16 @@ class EditingService:
         cb([[(x, y) for x, y in poly] for poly in selected])
         self._host._show_flash("Custom tile set", 900)
 
-    def _show_geometry_preflight(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
 
-        from simple_stipple.engine.cad.preflight import analyze_geometry
 
-        polys = self._host.get_selected() or self._host.get_polylines_state()
-        report = analyze_geometry(polys)
-        minimum = "—" if report.minimum_segment is None else f"{report.minimum_segment:.4g} mm"
-        QMessageBox.information(
-            self._host,
-            "Geometry Preflight",
-            f"{report.summary()}\n\n"
-            f"Analysis tolerance: {report.tolerance:.4g} mm\n"
-            f"Minimum segment: {minimum}\n\n"
-            "Open paths may be intentional engraving strokes. Invalid, duplicate, "
-            "zero-length, and tiny geometry should be repaired before fabrication.",
-        )
 
-    def recognize_selected_shapes(self) -> int:
-        """Convert conservative imported-polyline matches to parametric shapes."""
-        from simple_stipple.engine.cad.recognition import recognize_polyline
 
-        matches: list[EntityRecord] = []
-        for eid in self._host._mutable_selected_ids():
-            entity = self._host._entity_for_id(eid)
-            if entity is None or entity.kind != "polyline":
-                continue
-            recognized = recognize_polyline(entity.points)
-            if recognized is not None:
-                candidate = deepcopy(entity)
-                candidate.kind = recognized.kind
-                candidate.meta = dict(recognized.metadata)
-                matches.append(candidate)
-        if not matches:
-            self._host._show_flash("No unambiguous circles, rectangles, or regular polygons", 1600)
-            return 0
-        self._host._canvas_service.update_entities(matches)
-        self._host._sync_shape_storage_from_entities()
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        self._host._show_flash(f"Recognized {len(matches)} shape(s)", 1000)
-        return len(matches)
 
-    def reverse_selected_paths(self) -> int:
-        from simple_stipple.engine.cad.path_ops import reverse_path
 
-        indices = self._host._mutable_selected_ids()
-        if not indices:
-            return 0
-        candidates: list[EntityRecord] = []
-        for eid in indices:
-            entity = deepcopy(self._host._entity_for_id(eid))
-            if entity is None:
-                continue
-            entity.points = reverse_path(entity.points)
-            if entity.kind == "line" and len(entity.points) == 2:
-                entity.meta = {"start": entity.points[0], "end": entity.points[1]}
-            elif entity.kind == "bezier" and entity.meta:
-                old_in = list(entity.meta.get("handles_in", []))
-                old_out = list(entity.meta.get("handles_out", []))
-                if old_in or old_out:
-                    entity.meta["handles_in"] = list(reversed(old_out))
-                    entity.meta["handles_out"] = list(reversed(old_in))
-                    entity.meta["node_types"] = list(reversed(entity.meta.get("node_types", [])))
-                tangents = list(reversed(entity.meta.get("tangents", [])))
-                entity.meta["tangents"] = [(-float(x), -float(y)) for x, y in tangents]
-            elif entity.kind == "spline" and entity.meta:
-                entity.meta["control_points"] = list(entity.points)
-            elif entity.kind != "polyline":
-                entity.kind = "polyline"
-                entity.meta = None
-            candidates.append(entity)
-        self._host._canvas_service.update_entities(candidates)
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        self._host._show_flash(f"Reversed {len(indices)} path(s)", 900)
-        return len(indices)
 
-    def set_selected_path_start(self) -> bool:
-        from simple_stipple.engine.cad.path_ops import set_closed_start
 
-        indices = self._host._mutable_selected_ids()
-        if len(indices) != 1:
-            self._host._show_flash("Select exactly one closed path", 1000)
-            return False
-        eid = indices[0]
-        entity = self._host._entity_for_id(eid)
-        if entity is None:
-            return False
-        points = entity.points
-        if not self._host._is_poly_closed(points):
-            self._host._show_flash("Path is open", 800)
-            return False
-        if self._host._hover_vert is not None and self._host._hover_vert[0] == eid:
-            vertex = self._host._hover_vert[1]
-        elif self._host._cursor_wx is not None and self._host._cursor_wy is not None:
-            vertex = min(
-                range(len(points) - 1),
-                key=lambda item: math.dist(
-                    points[item], (self._host._cursor_wx, self._host._cursor_wy)
-                ),
-            )
-        else:
-            self._host._show_flash("Hover the desired start vertex", 1000)
-            return False
-        entity = deepcopy(entity)
-        entity.points = set_closed_start(points, vertex)
-        entity.kind = "polyline"
-        entity.meta = None
-        self._host._canvas_service.update_entities([entity])
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        self._host._show_flash("Path start updated", 800)
-        return True
 
-    def resample_selected_paths(self, value: float, *, by_count: bool = False) -> int:
-        indices = self._host._mutable_selected_ids()
-        if not indices:
-            return 0
-        entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
-        try:
-            result = self._host._canvas_service.execute(
-                ResampleCommand(
-                    entity_ids=entity_ids,
-                    value=float(round(value) if by_count else value),
-                    by_count=by_count,
-                )
-            )
-        except ValueError:
-            self._host._show_flash("No selected path could be resampled", 1100)
-            return 0
-        if not result.changed:
-            return 0
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        self._host._show_flash(f"Resampled {len(entity_ids)} path(s)", 900)
-        return len(entity_ids)
 
-    def prompt_resample_spacing(self) -> None:
-        self._host._show_hud_prompt(
-            "Point spacing (mm)", 1.0, self._host.resample_selected_paths, minimum=0.001
-        )
-
-    def prompt_resample_count(self) -> None:
-        self._host._show_hud_prompt(
-            "Point count",
-            32.0,
-            lambda value: self._host.resample_selected_paths(value, by_count=True),
-            minimum=2.0,
-            is_length=False,
-        )
-
-    def fit_selected_to_primitive(self, primitive: str) -> int:
-        from simple_stipple.engine.cad.path_ops import fit_circle, fit_line
-
-        indices = self._host._mutable_selected_ids()
-        replacements: dict[str, tuple[list[tuple[float, float]], str, dict[str, Any]]] = {}
-        for eid in indices:
-            entity = self._host._entity_for_id(eid)
-            if entity is None:
-                continue
-            points = entity.points
-            if primitive == "line":
-                line_result = fit_line(points)
-                if line_result is not None:
-                    replacements[eid] = (
-                        list(line_result),
-                        "line",
-                        {"start": line_result[0], "end": line_result[1]},
-                    )
-            elif primitive in {"circle", "arc"}:
-                circle_result = fit_circle(points)
-                if circle_result is None:
-                    continue
-                center, radius = circle_result
-                if primitive == "circle":
-                    circle_shape = ShapeFactory.circle(center, radius)
-                    replacements[eid] = (
-                        list(circle_shape.points),
-                        "circle",
-                        {"center": center, "radius": radius},
-                    )
-                elif len(points) >= 2:
-                    start = (
-                        math.degrees(math.atan2(points[0][1] - center[1], points[0][0] - center[0]))
-                        % 360
-                    )
-                    end = (
-                        math.degrees(
-                            math.atan2(points[-1][1] - center[1], points[-1][0] - center[0])
-                        )
-                        % 360
-                    )
-                    middle = (
-                        math.degrees(
-                            math.atan2(
-                                points[len(points) // 2][1] - center[1],
-                                points[len(points) // 2][0] - center[0],
-                            )
-                        )
-                        % 360
-                    )
-                    if (middle - start) % 360 > (end - start) % 360:
-                        start, end = end, start
-                    arc_shape = ShapeFactory.arc(center, radius, start, end, segments=48)
-                    replacements[eid] = (
-                        list(arc_shape.points),
-                        "arc",
-                        {
-                            "center": center,
-                            "radius": radius,
-                            "start_angle": start,
-                            "end_angle": end,
-                        },
-                    )
-        if not replacements:
-            self._host._show_flash(f"Could not fit selection to {primitive}", 1100)
-            return 0
-        candidates: list[EntityRecord] = []
-        for eid, (points, kind, metadata) in replacements.items():
-            entity = deepcopy(self._host._entity_for_id(eid))
-            if entity is None:
-                continue
-            entity.points, entity.kind, entity.meta = points, kind, metadata
-            candidates.append(entity)
-        self._host._canvas_service.update_entities(candidates)
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        self._host._show_flash(f"Fitted {len(replacements)} path(s) to {primitive}", 1000)
-        return len(replacements)
-
-    def create_procedural_primitive(self, primitive: str) -> int:
-        """Create an advanced primitive at the cursor using conservative defaults."""
-        from simple_stipple.engine.cad.primitives import (
-            chamfered_star,
-            dovetail_box,
-            finger_joint_box,
-            gear,
-            keyhole,
-            ring,
-            rounded_star,
-            spiral,
-            superellipse,
-            tabbed_panel,
-            teardrop,
-        )
-
-        center = (
-            (self._host._cursor_wx, self._host._cursor_wy)
-            if self._host._cursor_wx is not None and self._host._cursor_wy is not None
-            else (0.0, 0.0)
-        )
-        generators = {
-            "gear": lambda: [gear()],
-            "spiral": lambda: [spiral()],
-            "superellipse": lambda: [superellipse()],
-            "teardrop": lambda: [teardrop()],
-            "keyhole": lambda: [keyhole()],
-            "ring": lambda: list(ring()),
-            "rounded_star": lambda: [rounded_star()],
-            "chamfered_star": lambda: [chamfered_star()],
-            "finger_joint_box": lambda: [finger_joint_box()],
-            "dovetail_box": lambda: [dovetail_box()],
-            "tabbed_panel": lambda: [tabbed_panel()],
-        }
-        generator = generators.get(primitive)
-        if generator is None:
-            return 0
-        try:
-            paths = generator()
-        except ValueError as exc:
-            self._host._show_flash(str(exc), 1200)
-            return 0
-        records = [
-            (
-                [(point[0] + center[0], point[1] + center[1]) for point in path],
-                primitive,
-                {"generator": primitive, "center": center},
-            )
-            for path in paths
-            if len(path) >= 2
-        ]
-        if not records:
-            return 0
-        group = self._host._next_group_id if len(records) > 1 else None
-        entities = [
-            EntityRecord(
-                points=points,
-                kind=kind,
-                meta=metadata,
-                group=group,
-                layer=self._host._active_layer,
-                construction=self._host._draw_construction_mode,
-            )
-            for points, kind, metadata in records
-        ]
-        closed_paths = [entity.points for entity in entities if self._is_poly_closed(entity.points)]
-        if (
-            self._host._draw_split_enabled
-            and not self._host._draw_construction_mode
-            and closed_paths
-        ):
-            before = self._host._canvas_service.begin_preview()
-            carved, carved_count = self._carve_geometry_with_shapes(closed_paths)
-            if carved:
-                for entity in entities:
-                    self._host._entities_by_id[entity.id] = entity
-                self._host._document.entities.extend(entities)
-                self._host._document.selection = {entity.id for entity in entities}
-                self._host._canvas_service.commit_preview(before)
-                self._host._redraw()
-                self._host._notify()
-                self._host._fire_poly_change()
-                self._host._show_flash(f"Carved {carved_count} region(s)", 1000)
-                if group is not None:
-                    self._host._group_labels[group] = "Ring"
-                return len(entities)
-        result = self._host._canvas_service.create_entities(entities)
-        if group is not None:
-            self._host._group_labels[group] = "Ring"
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        self._host._show_flash(f"{primitive.replace('_', ' ').title()} created", 900)
-        return len(result.created_ids)
-
-    def create_polygon_from_selected_edge(self, sides: float = 6.0) -> int:
-        from simple_stipple.engine.cad.primitives import regular_polygon_from_edge
-
-        indices = [
-            eid
-            for eid in self._host._mutable_selected_ids()
-            if (ent := self._host._entity_for_id(eid)) is not None and len(ent.points) == 2
-        ]
-        if len(indices) != 1:
-            self._host._show_flash("Select exactly one edge", 900)
-            return 0
-        start, end = self._host._entities_by_id[indices[0]].points
-        points = regular_polygon_from_edge(start, end, int(round(sides)))
-        vertices = points[:-1]
-        center = (
-            sum(point[0] for point in vertices) / len(vertices),
-            sum(point[1] for point in vertices) / len(vertices),
-        )
-        radius = math.dist(center, vertices[0])
-        rotation = (
-            math.degrees(math.atan2(vertices[0][1] - center[1], vertices[0][0] - center[0])) + 90.0
-        )
-        entity = EntityRecord(
-            points=points,
-            kind="polygon",
-            meta={
-                "source": "edge",
-                "center": center,
-                "radius": radius,
-                "rotation": rotation,
-                "sides": int(round(sides)),
-            },
-            layer=self._host._active_layer,
-        )
-        self._host._canvas_service.create_entities([entity])
-        self._host._redraw()
-        self._host._notify()
-        self._host._fire_poly_change()
-        return 1
-
-    def prompt_polygon_from_edge(self) -> None:
-        self._host._show_hud_prompt(
-            "Polygon sides",
-            6.0,
-            self._host.create_polygon_from_selected_edge,
-            minimum=3.0,
-            is_length=False,
-        )
 
     def explode_selected_to_segments(self) -> int:
         indices = self._host._mutable_selected_ids()
@@ -1731,117 +1314,11 @@ class EditingService:
 
     # ── Base right-click handling + vertex ops (restored from _select/_edit mixins) ──
 
-    def create_symbol_from_selection(self) -> None:
-        if not self._host._sel:
-            self._host._show_flash("Select geometry for the symbol", 1100)
-            return
 
-        def _save(name: str) -> None:
-            clean = name.strip()
-            if not clean:
-                raise ValueError("Symbol name cannot be empty")
-            points = [
-                point
-                for entity_id in self._host._sel
-                for entity in (self._host._entity_for_id(entity_id),)
-                if entity is not None
-                for point in entity.points
-            ]
-            if not points:
-                raise ValueError("Selection has no geometry")
-            origin_x = min(x for x, _y in points)
-            origin_y = min(y for _x, y in points)
-            self._host._copy_selected()
-            records = deepcopy(self._host._clipboard)
-            for record in records:
-                record["polyline"] = [
-                    (x - origin_x, y - origin_y) for x, y in record.get("polyline", [])
-                ]
-                record["meta"] = self._host._translated_entity_meta(
-                    str(record.get("kind", "polyline")),
-                    record.get("meta"),
-                    -origin_x,
-                    -origin_y,
-                )
-            self._host._symbol_library[clean] = records
-            self._host._show_flash(f"Symbol saved: {clean}", 1000)
-            self._host._notify()
 
-        self._host._show_text_hud_prompt("Symbol name", _save)
 
-    def insert_symbol(self) -> None:
-        if not self._host._symbol_library:
-            self._host._show_flash("No symbols in this workspace", 1100)
-            return
 
-        def _insert(name: str) -> None:
-            if not self._host.insert_symbol_named(name):
-                choices = ", ".join(sorted(self._host._symbol_library))
-                raise ValueError(f"Choose: {choices}")
 
-        self._host._show_text_hud_prompt(
-            f"Symbol: {', '.join(sorted(self._host._symbol_library))}",
-            _insert,
-        )
-
-    def insert_symbol_named(self, name: str) -> bool:
-        match = next(
-            (
-                key
-                for key in self._host._symbol_library
-                if key.casefold() == name.strip().casefold()
-            ),
-            None,
-        )
-        if match is None:
-            return False
-        old_clipboard = deepcopy(self._host._clipboard)
-        self._host._clipboard = deepcopy(self._host._symbol_library[match])
-        x = self._host._cursor_wx if self._host._cursor_wx is not None else 0.0
-        y = self._host._cursor_wy if self._host._cursor_wy is not None else 0.0
-        created = self._host._paste_records(x, y)
-        self._host._clipboard = old_clipboard
-        created_ids = tuple(created)
-        self._host._apply_operation_result(
-            OperationResult(
-                changed=bool(created),
-                message=f"Inserted symbol: {match}" if created else "Symbol contains no geometry",
-                created_ids=created_ids,
-                selected_ids=created_ids,
-                metadata={"symbol": match},
-            )
-        )
-        return bool(created)
-
-    def rename_symbol(self, old_name: str, new_name: str) -> bool:
-        clean = new_name.strip()
-        if old_name not in self._host._symbol_library or not clean:
-            return False
-        conflict = next(
-            (name for name in self._host._symbol_library if name.casefold() == clean.casefold()),
-            None,
-        )
-        if conflict is not None and conflict != old_name:
-            self._host._show_flash(f"A symbol named {clean} already exists", 1200)
-            return False
-        records = self._host._symbol_library.pop(old_name)
-        self._host._symbol_library[clean] = records
-        self._host._notify()
-        self._host._show_flash(f"Renamed symbol to {clean}", 900)
-        return True
-
-    def prompt_rename_symbol(self, old_name: str) -> None:
-        self._host._show_text_hud_prompt(
-            f"Rename {old_name}", lambda new_name: self._host.rename_symbol(old_name, new_name)
-        )
-
-    def delete_symbol(self, name: str) -> bool:
-        if name not in self._host._symbol_library:
-            return False
-        del self._host._symbol_library[name]
-        self._host._notify()
-        self._host._show_flash(f"Deleted symbol: {name}", 900)
-        return True
 
     def knife_cut(
         self,
@@ -1886,75 +1363,8 @@ class EditingService:
             self._host._show_flash(text, 1200 if result.warnings or not result.changed else 900)
         return result
 
-    def prompt_morph_selected_paths(self) -> None:
-        if len(self._host._mutable_selected_ids()) != 2:
-            self._host._show_flash("Select exactly two paths to morph", 1200)
-            return
 
-        def _apply(percent: float) -> None:
-            self._host._morph_selected_paths(percent)
 
-        self._host._show_hud_prompt(
-            "Morph amount (%)",
-            50.0,
-            _apply,
-            minimum=0.0,
-            is_length=False,
-            preview=self._host._preview_morph_selected,
-        )
-
-    def _preview_morph_selected(self, percent: float) -> None:
-        from simple_stipple.engine.cad.path_ops import morph_paths
-
-        indices = self._host._mutable_selected_ids()
-        if len(indices) != 2:
-            self._host._clear_operation_preview()
-            return
-        try:
-            points = morph_paths(
-                self._host._entities_by_id[indices[0]].points,
-                self._host._entities_by_id[indices[1]].points,
-                percent / 100.0,
-            )
-        except ValueError:
-            self._host._clear_operation_preview()
-            return
-        self._host._set_operation_preview([points])
-
-    def _morph_selected_paths(self, percent: float) -> bool:
-        from simple_stipple.engine.cad.path_ops import morph_paths
-
-        indices = self._host._mutable_selected_ids()
-        if len(indices) != 2:
-            self._host._apply_operation_result(
-                OperationResult.unchanged("Select exactly two paths to morph")
-            )
-            return False
-        try:
-            points = morph_paths(
-                self._host._entities_by_id[indices[0]].points,
-                self._host._entities_by_id[indices[1]].points,
-                percent / 100.0,
-            )
-        except ValueError as exc:
-            self._host._apply_operation_result(OperationResult.unchanged(str(exc)))
-            return False
-        entity = EntityRecord(points=points, layer=self._host._active_layer)
-        result = self._host._canvas_service.create_entities([entity])
-        entity_id = result.created_ids[0]
-        self._host._apply_operation_result(
-            OperationResult(
-                changed=True,
-                message=f"Created {percent:g}% path morph",
-                created_ids=(entity_id,),
-                selected_ids=(entity_id,),
-                metadata={"amount": percent / 100.0},
-            )
-        )
-        self._host._set_repeat_action(
-            f"Morph {percent:g}%", lambda value=percent: self._host._morph_selected_paths(value)
-        )
-        return True
 
     def _set_repeat_action(self, label: str, callback) -> None:
         self._host._last_repeat_action = (str(label), callback)

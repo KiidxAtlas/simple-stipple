@@ -31,11 +31,30 @@ from simple_stipple.engine.cad.constants import (
     OUTLINE_MIN_AREA_MM2,
 )
 from simple_stipple.engine.cad.shapes import shape_from_meta
-from simple_stipple.engine.formats.dxf_schema import validate_dxf_document
 
 _LOG = logging.getLogger(__name__)
 MAX_DXF_FILE_BYTES = 64 * 1024 * 1024
 MAX_DXF_ENTITIES = 500_000
+
+
+def validate_dxf_document(document: Any) -> None:
+    """Raise when ezdxf reports structural errors in ``document``.
+
+    Auditing is best-effort because supported ezdxf versions do not all expose
+    the same audit surface. Reported errors are never ignored.
+    """
+    try:
+        auditor = document.audit()
+    except (AttributeError, RuntimeError) as exc:
+        _LOG.debug("ezdxf audit unavailable: %s", exc)
+        return
+    if not auditor.has_errors:
+        return
+    details = "; ".join(str(error.message) for error in auditor.errors[:5])
+    raise ValueError(
+        f"DXF export failed validation ({len(auditor.errors)} error(s)): "
+        f"{details}. The file was not written."
+    )
 
 
 def _require_finite_unit_scale(unit_code: int) -> float:

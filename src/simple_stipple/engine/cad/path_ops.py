@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from simple_stipple.engine.editing.resample import resample_by_count, resample_by_spacing
+from simple_stipple.engine.editing.smoothing import resample_by_count, resample_by_spacing
 
 Point = tuple[float, float]
 

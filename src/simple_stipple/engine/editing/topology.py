@@ -1,4 +1,4 @@
-"""Pure polyline and polygon splitting operations."""
+"""Pure path topology operations: decomposition, merging, splitting, trim/extend."""
 
 from __future__ import annotations
 
@@ -14,9 +14,106 @@ from shapely.geometry import (
     Point,
     Polygon,
 )
-from shapely.ops import split
+from shapely.ops import linemerge, split, unary_union
 
 PointTuple = tuple[float, float]
+PATH_DEGENERACY_TOLERANCE = 1e-8
+PATH_CLOSURE_TOLERANCE = 1e-6
+
+
+# -- Decomposition and connectivity merging (formerly merge_explode.py) --
+
+
+@dataclass(frozen=True, slots=True)
+class PathInput:
+    points: list[PointTuple]
+    construction: bool = False
+
+
+def _points_equal_within(first: PointTuple, second: PointTuple, tolerance: float) -> bool:
+    return abs(first[0] - second[0]) < tolerance and abs(first[1] - second[1]) < tolerance
+
+
+def explode_path(points: list[PointTuple]) -> list[list[PointTuple]]:
+    """Decompose a multi-vertex path into non-degenerate segments."""
+    vertices = list(points)
+    closed = len(vertices) >= 3 and math.dist(vertices[0], vertices[-1]) < PATH_CLOSURE_TOLERANCE
+    if closed:
+        vertices.pop()
+    count = len(vertices) if closed else len(vertices) - 1
+    return [
+        [vertices[index], vertices[(index + 1) % len(vertices)]]
+        for index in range(max(0, count))
+        if math.dist(vertices[index], vertices[(index + 1) % len(vertices)])
+        >= PATH_DEGENERACY_TOLERANCE
+    ]
+
+
+def _attach_segment(
+    chain: list[PointTuple],
+    first: PointTuple,
+    second: PointTuple,
+    tolerance: float,
+) -> bool:
+    if _points_equal_within(chain[-1], first, tolerance):
+        chain.append(second)
+    elif _points_equal_within(chain[-1], second, tolerance):
+        chain.append(first)
+    elif _points_equal_within(chain[0], second, tolerance):
+        chain.insert(0, first)
+    elif _points_equal_within(chain[0], first, tolerance):
+        chain.insert(0, second)
+    else:
+        return False
+    return True
+
+
+def _normalize_chain(chain: list[PointTuple]) -> list[PointTuple]:
+    normalized = [chain[0]]
+    normalized.extend(
+        point
+        for point in chain[1:]
+        if math.dist(normalized[-1], point) >= PATH_CLOSURE_TOLERANCE
+    )
+    if len(normalized) >= 3 and _points_equal_within(
+        normalized[0], normalized[-1], PATH_CLOSURE_TOLERANCE
+    ):
+        normalized[-1] = normalized[0]
+    return normalized
+
+
+def merge_paths(paths: list[PathInput], tolerance: float = 0.01) -> list[PathInput]:
+    """Merge all connected segments in paths into maximal chains."""
+    segments = [
+        (segment[0], segment[1], path.construction)
+        for path in paths
+        for segment in explode_path(path.points)
+    ]
+    used = [False] * len(segments)
+    output: list[PathInput] = []
+    for source, segment in enumerate(segments):
+        if used[source]:
+            continue
+        used[source] = True
+        chain = [segment[0], segment[1]]
+        construction = segment[2]
+        changed = True
+        while changed:
+            changed = False
+            for index, (first, second, is_construction) in enumerate(segments):
+                if used[index]:
+                    continue
+                if not _attach_segment(chain, first, second, tolerance):
+                    continue
+                used[index] = True
+                construction |= is_construction
+                changed = True
+                break
+        output.append(PathInput(_normalize_chain(chain), construction))
+    return output
+
+
+# -- Splitting (formerly split.py) --
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,3 +292,67 @@ def split_paths(
             pass
         output.append(SplitPath(source_id, list(path), False))
     return SplitResult(tuple(output), closed_count, open_count)
+
+
+# -- Trim and extend (formerly trim_extend.py) --
+
+
+def trim_polyline(
+    target: list[PointTuple], cutters: list[list[PointTuple]], click: PointTuple
+) -> list[list[PointTuple]]:
+    cutter_geometry = unary_union([LineString(points) for points in cutters if len(points) >= 2])
+    pieces = [
+        item
+        for item in split(LineString(target), cutter_geometry).geoms
+        if isinstance(item, LineString) and len(item.coords) >= 2
+    ]
+    if len(pieces) < 2:
+        return []
+    removed = min(pieces, key=lambda item: item.distance(Point(click)))
+    kept = [item for item in pieces if item is not removed]
+    merged = linemerge(kept) if len(kept) > 1 else kept[0]
+    outputs = list(merged.geoms) if isinstance(merged, MultiLineString) else [merged]
+    return [[(float(x), float(y)) for x, y in item.coords] for item in outputs]
+
+
+def trim_preview(
+    target: list[PointTuple], cutters: list[list[PointTuple]], click: PointTuple
+) -> list[PointTuple] | None:
+    """Return only the portion that a trim operation would remove."""
+    cutter_geometry = unary_union([LineString(points) for points in cutters if len(points) >= 2])
+    pieces = [
+        item
+        for item in split(LineString(target), cutter_geometry).geoms
+        if isinstance(item, LineString) and len(item.coords) >= 2
+    ]
+    if len(pieces) < 2:
+        return None
+    removed = min(pieces, key=lambda item: item.distance(Point(click)))
+    return [(float(x), float(y)) for x, y in removed.coords]
+
+
+def extension_point(
+    points: list[PointTuple], cutters: list[list[PointTuple]], *, start: bool, reach: float
+) -> PointTuple | None:
+    if len(points) < 2:
+        return None
+    tip = points[0] if start else points[-1]
+    neighbor = points[1] if start else points[-2]
+    dx, dy = tip[0] - neighbor[0], tip[1] - neighbor[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return None
+    ray = LineString([tip, (tip[0] + dx / length * reach, tip[1] + dy / length * reach)])
+    intersection = ray.intersection(
+        unary_union([LineString(item) for item in cutters if len(item) >= 2])
+    )
+    candidates: list[tuple[float, PointTuple]] = []
+    for item in getattr(intersection, "geoms", [intersection]):
+        coordinates = (
+            [(item.x, item.y)] if isinstance(item, Point) else list(getattr(item, "coords", []))
+        )
+        for x, y in coordinates:
+            distance = math.hypot(x - tip[0], y - tip[1])
+            if distance > 1e-6:
+                candidates.append((distance, (float(x), float(y))))
+    return min(candidates)[1] if candidates else None

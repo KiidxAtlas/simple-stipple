@@ -40,6 +40,8 @@ from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
 from simple_stipple.engine.formats.service import DxfService
 from simple_stipple.engine.geometry.service import GeometryService
+from simple_stipple.engine.imaging.raster import RasterEngravingSpec, export_raster_job
+from simple_stipple.engine.imaging.trace import TraceCancelled, image_to_outlines
 from simple_stipple.features.base import BasePage
 from simple_stipple.features.trace.form import (
     PathField,
@@ -55,12 +57,6 @@ from simple_stipple.features.trace.session import (
     clear_trace_workspace_state,
     get_trace_workspace_state,
 )
-from simple_stipple.features.trace.trace_jobs import (
-    RasterEngravingSpec,
-    TraceCancelled,
-    export_raster_job,
-)
-from simple_stipple.features.trace.trace_jobs import trace_image as image_to_outlines
 from simple_stipple.platform.config import save_settings
 from simple_stipple.ui.components.collapsible import CollapsibleSection
 from simple_stipple.ui.components.feedback import parse_float_field_with_feedback, show_error

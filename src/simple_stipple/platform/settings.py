@@ -36,9 +36,9 @@ settings_bus = SettingsBus()
 #
 # Every OTHER rebindable action (undo/redo, selection, path/boolean ops, tool
 # modes, view/grid controls, draw-primitive shortcuts, ...) is a canvas
-# Command in src/simple_stipple/canvas/interaction/commands.py — its default lives on Command.shortcut,
+# Command in src/simple_stipple/canvas/commands.py — its default lives on Command.shortcut,
 # not here, so there is exactly one place that owns each shortcut's default.
-# simple_stipple.canvas.interaction.commands.apply_keybindings() reads the "keybindings" dict
+# simple_stipple.canvas.commands.apply_keybindings() reads the "keybindings" dict
 # (this table merged with the user's overrides) to make those live too.
 #
 # Multi-key combinations (e.g. "Ctrl+Shift+D", "Meta+[") are fully supported
@@ -80,7 +80,7 @@ DEFAULT_KEYBINDINGS: dict[str, str] = {
 
 # =============================================================================
 # Radial ("Q") quick menu — which commands show up as wedges, and in what
-# order. Every wedge id is a real simple_stipple.canvas.interaction.commands.Command id, so the
+# order. Every wedge id is a real simple_stipple.canvas.commands.Command id, so the
 # full pool is "every command the canvas knows how to run" — no separate
 # action list to keep in sync. Customizable via RadialMenuDialog /
 # settings["radial_menu_tools"]; see DxfCanvas.set_radial_menu_tools().

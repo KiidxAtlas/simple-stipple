@@ -14,7 +14,6 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 
-from simple_stipple.document.identity import EntityId
 from simple_stipple.engine.cad.constants import (
     MIN_SCALE as _MIN_SCALE,
 )
@@ -26,7 +25,7 @@ from simple_stipple.engine.geometry.spatial import build_snap_tree, find_nearest
 Point = tuple[float, float]
 Polyline = list[Point]
 SnapResult = tuple[float, float, str]
-Polylines = Mapping[EntityId, Polyline]
+Polylines = Mapping[str, Polyline]
 
 WorldToCanvas = Callable[[float, float], Point]
 CanvasToWorld = Callable[[float, float], Point]
@@ -93,11 +92,11 @@ def find_nearest_vertex_snap(
     cx: float,
     cy: float,
     polylines: Polylines,
-    hidden_polys: set[EntityId],
+    hidden_polys: set[str],
     w2c: WorldToCanvas,
     *,
     snap_dist: float = _SNAP_DIST,
-    exclude: set[tuple[EntityId, int]] | None = None,
+    exclude: set[tuple[str, int]] | None = None,
 ) -> Point | None:
     """Return nearest vertex world position within snap distance."""
     canvas_points: list[Point] = []
@@ -119,14 +118,14 @@ def find_nearest_vertex_snap(
 
 def _candidate_polylines(
     polylines: Polylines,
-    hidden_polys: set[EntityId],
+    hidden_polys: set[str],
     *,
     cwx: float,
     cwy: float,
     world_r: float,
     poly_bounds: PolylineBounds,
-) -> list[tuple[EntityId, Polyline]]:
-    candidate_polys: list[tuple[EntityId, Polyline]] = []
+) -> list[tuple[str, Polyline]]:
+    candidate_polys: list[tuple[str, Polyline]] = []
     for eid, poly in polylines.items():
         if eid in hidden_polys or len(poly) < 2:
             continue
@@ -140,12 +139,12 @@ def _candidate_polylines(
 
 
 def _polyline_segments(
-    polylines: list[tuple[EntityId, Polyline]],
+    polylines: list[tuple[str, Polyline]],
     is_poly_closed: IsPolylineClosed,
-    excluded: set[tuple[EntityId, int]] | None = None,
-) -> list[tuple[EntityId, int, Point, Point]]:
+    excluded: set[tuple[str, int]] | None = None,
+) -> list[tuple[str, int, Point, Point]]:
     excluded = excluded or set()
-    segments: list[tuple[EntityId, int, Point, Point]] = []
+    segments: list[tuple[str, int, Point, Point]] = []
     for entity_id, polyline in polylines:
         count = len(polyline) if is_poly_closed(polyline) else len(polyline) - 1
         for index in range(count):
@@ -160,7 +159,7 @@ def _polyline_segments(
 def _nearest_midpoint(
     cx: float,
     cy: float,
-    segments: list[tuple[EntityId, int, Point, Point]],
+    segments: list[tuple[str, int, Point, Point]],
     w2c: WorldToCanvas,
     snap_dist: float,
 ) -> tuple[float, Point] | None:
@@ -178,7 +177,7 @@ def _nearest_midpoint(
 def _nearest_intersection(
     cx: float,
     cy: float,
-    segments: list[tuple[EntityId, int, Point, Point]],
+    segments: list[tuple[str, int, Point, Point]],
     w2c: WorldToCanvas,
     segment_intersection_point: SegmentIntersectionPoint,
     snap_dist: float,
@@ -201,7 +200,7 @@ def snap_to_polyline(
     cx: float,
     cy: float,
     polylines: Polylines,
-    hidden_polys: set[EntityId],
+    hidden_polys: set[str],
     scale: float,
     w2c: WorldToCanvas,
     c2w: CanvasToWorld,
@@ -211,7 +210,7 @@ def snap_to_polyline(
     *,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
-    exclude_vertices: set[tuple[EntityId, int]] | None = None,
+    exclude_vertices: set[tuple[str, int]] | None = None,
     mode: str | None = "select",
     snap_dist: float = _SNAP_DIST,
     min_scale: float = _MIN_SCALE,
@@ -349,7 +348,7 @@ def resolve_snap(
     grid_snap_enabled: bool,
     grid_spacing: float,
     polylines: Polylines,
-    hidden_polys: set[EntityId],
+    hidden_polys: set[str],
     scale: float,
     w2c: WorldToCanvas,
     c2w: CanvasToWorld,
@@ -357,7 +356,7 @@ def resolve_snap(
     is_poly_closed: IsPolylineClosed,
     segment_intersection_point: SegmentIntersectionPoint,
     mode: str | None,
-    exclude_vertices: set[tuple[EntityId, int]] | None = None,
+    exclude_vertices: set[tuple[str, int]] | None = None,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
     allow_vertex: bool = True,
@@ -424,7 +423,7 @@ def resolve_drag_snap(
     grid_snap_enabled: bool,
     grid_spacing: float,
     polylines: Polylines,
-    hidden_polys: set[EntityId],
+    hidden_polys: set[str],
     scale: float,
     w2c: WorldToCanvas,
     c2w: CanvasToWorld,
@@ -436,8 +435,8 @@ def resolve_drag_snap(
     allow_midpoint: bool = True,
     allow_intersection: bool = True,
     allow_edge: bool = True,
-    exclude_vertices: set[tuple[EntityId, int]] | None = None,
-    exclude_segments: set[tuple[EntityId, int]] | None = None,
+    exclude_vertices: set[tuple[str, int]] | None = None,
+    exclude_segments: set[tuple[str, int]] | None = None,
     reference_point: Point | None = None,
     draw_points: Sequence[Point] | None = None,
     snap_dist: float = _SNAP_DIST,

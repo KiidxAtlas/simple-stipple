@@ -1,10 +1,9 @@
 """Geometry operations extracted from document_service and view.
 
-Wraps backend.cad.geometry, backend.cad.editor_geometry,
-backend.editing.transform, backend.editing.offset,
-backend.editing.split, backend.editing.boolean,
-backend.editing.resample, backend.editing.merge_explode,
-backend.cad.shapes.
+Wraps engine.cad.geometry, engine.cad.editor_geometry,
+engine.editing.transform, engine.editing.boolean (boolean ops and offset),
+engine.editing.topology (split and merge/explode), engine.editing.smoothing
+(smoothing and resampling), engine.cad.shapes.
 """
 
 from __future__ import annotations
@@ -42,8 +41,7 @@ from simple_stipple.engine.cad.geometry import (
 )
 from simple_stipple.engine.cad.preflight import GeometryPreflight, analyze_geometry
 from simple_stipple.engine.cad.shapes import Shape
-from simple_stipple.engine.editing.merge_explode import PathInput
-from simple_stipple.engine.editing.split import SplitResult
+from simple_stipple.engine.editing.topology import PathInput, SplitResult
 
 
 class GeometryService:
@@ -310,13 +308,13 @@ class GeometryService:
         points: Sequence[PointTuple],
         amount: float,
     ) -> list[PointTuple] | None:
-        from simple_stipple.engine.editing.offset import offset_polyline as _offset
+        from simple_stipple.engine.editing.boolean import offset_polyline as _offset
 
         return _offset(list(points), amount)
 
     @staticmethod
     def is_closed(points: Sequence[PointTuple], *, tolerance: float = 0.01) -> bool:
-        from simple_stipple.engine.editing.offset import is_closed as _is_closed
+        from simple_stipple.engine.editing.boolean import is_closed as _is_closed
 
         return _is_closed(list(points), tolerance)
 
@@ -378,7 +376,7 @@ class GeometryService:
         cutter: Sequence[PointTuple],
         entity_ids: Sequence[str] | None = None,
     ) -> SplitResult:
-        from simple_stipple.engine.editing.split import (
+        from simple_stipple.engine.editing.topology import (
             split_paths as _split,
         )
 
@@ -401,7 +399,7 @@ class GeometryService:
         points: Sequence[PointTuple],
         count: int,
     ) -> list[PointTuple]:
-        from simple_stipple.engine.editing.resample import (
+        from simple_stipple.engine.editing.smoothing import (
             resample_by_count as _rbc,
         )
 
@@ -412,7 +410,7 @@ class GeometryService:
         points: Sequence[PointTuple],
         spacing: float,
     ) -> list[PointTuple]:
-        from simple_stipple.engine.editing.resample import (
+        from simple_stipple.engine.editing.smoothing import (
             resample_by_spacing as _rbs,
         )
 
@@ -424,10 +422,10 @@ class GeometryService:
         *,
         tolerance: float = 0.01,
     ) -> list:
-        from simple_stipple.engine.editing.merge_explode import (
+        from simple_stipple.engine.editing.topology import (
             PathInput,
         )
-        from simple_stipple.engine.editing.merge_explode import (
+        from simple_stipple.engine.editing.topology import (
             merge_paths as _mp,
         )
 
@@ -439,7 +437,7 @@ class GeometryService:
         *,
         tolerance: float = 0.01,
     ) -> list:
-        from simple_stipple.engine.editing.merge_explode import (
+        from simple_stipple.engine.editing.topology import (
             merge_paths as _mp,
         )
 
@@ -447,7 +445,7 @@ class GeometryService:
 
     @staticmethod
     def explode_path(points: Sequence[PointTuple]) -> list[list[PointTuple]]:
-        from simple_stipple.engine.editing.merge_explode import (
+        from simple_stipple.engine.editing.topology import (
             explode_path as _ep,
         )
 

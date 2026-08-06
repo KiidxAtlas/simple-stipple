@@ -1036,7 +1036,7 @@ class TextService:
         params = self.text_params_at(entity_id)
         if params is None:
             return
-        from simple_stipple.ui.dialogs.text_dialog import AddTextDialog
+        from simple_stipple.canvas.dialogs.text_dialog import AddTextDialog
 
         dlg = AddTextDialog(self._host, unit=self._host._unit_system)
         dlg.set_values(params)
@@ -1049,7 +1049,7 @@ class TextService:
 
     def prompt_add_text(self, wx: float, wy: float) -> None:
         """Open the Add Text dialog and place the result at world (wx, wy)."""
-        from simple_stipple.ui.dialogs.text_dialog import AddTextDialog
+        from simple_stipple.canvas.dialogs.text_dialog import AddTextDialog
 
         dlg = AddTextDialog(self._host, unit=self._host._unit_system)
         if dlg.exec() != AddTextDialog.DialogCode.Accepted:

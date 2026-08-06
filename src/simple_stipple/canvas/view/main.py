@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 import time
 from copy import deepcopy
-from typing import Any, cast
+from typing import Any
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
@@ -17,16 +17,14 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QKeyEvent, QMouseEvent, QPainter, QWheelEvent
+from PySide6.QtGui import QPainter, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
 from simple_stipple.canvas import commands as canvas_commands
-from simple_stipple.canvas.constants import DRAG_THRESH
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.canvas.model import CanvasModel
 from simple_stipple.canvas.operations.hit_test import HitTestService
-from simple_stipple.canvas.tools import tools as canvas_tools
-from simple_stipple.canvas.tools.select import SelectionService
+from simple_stipple.canvas.operations.select import SelectionService
 from simple_stipple.canvas.view.commands import (
     _cancel_active_drag,
     _cancel_draw_in_progress,
@@ -871,14 +869,6 @@ class CanvasView(
             self._redraw()
         self._notify()
 
-    def add_polylines_state(
-        self, polys: list[list[tuple[float, float]]], fit: bool = False
-    ) -> None:
-        add_polylines_state(self, polys, fit=False)
-
-    def set_view_state(self, state: dict[str, Any]) -> None:
-        return set_view_state(self, state)
-
     def get_selected(self) -> list[list[tuple[float, float]]]:
         return [self._flattened_points_by_id(eid) for eid in sorted(self._sel)]
 
@@ -954,14 +944,6 @@ class CanvasView(
             return
         self._set_flagged("locked", new_locked)
         self._redraw()
-
-    def set_ghost_polylines(
-        self,
-        polys: list[list[tuple[float, float]]] | None,
-        *,
-        visible: bool | None = None,
-    ) -> None:
-        set_ghost_polylines(self, polys, visible=None)
 
     def set_result_polylines(
         self,
@@ -1243,8 +1225,6 @@ class CanvasView(
     def rotate_selected(self, *args, **kwargs):
         return self._editing.rotate_selected(*args, **kwargs)
 
-    def _scale_all(self, *args, **kwargs):
-        return self._editing._scale_all(*args, **kwargs)
 
     def scale_by_reference(self, *args, **kwargs):
         return self._editing.scale_by_reference(*args, **kwargs)
@@ -1258,17 +1238,11 @@ class CanvasView(
     def _offset_polyline(self, *args, **kwargs):
         return self._editing._offset_polyline(*args, **kwargs)
 
-    def _points_equal(self, *args, **kwargs):
-        return self._editing._points_equal(*args, **kwargs)
 
-    def _segments_for_polylines(self, *args, **kwargs):
-        return self._editing._segments_for_polylines(*args, **kwargs)
 
     def _update_shape_size_fields_from_preview(self, *args, **kwargs):
         return self._editing._update_shape_size_fields_from_preview(*args, **kwargs)
 
-    def _vertices_for_polylines(self, *args, **kwargs):
-        return self._editing._vertices_for_polylines(*args, **kwargs)
 
     def offset_selected(self, *args, **kwargs):
         return self._editing.offset_selected(*args, **kwargs)
@@ -1294,38 +1268,16 @@ class CanvasView(
     def _use_selected_as_custom_tile(self, *args, **kwargs):
         return self._editing._use_selected_as_custom_tile(*args, **kwargs)
 
-    def _show_geometry_preflight(self, *args, **kwargs):
-        return self._editing._show_geometry_preflight(*args, **kwargs)
 
-    def recognize_selected_shapes(self, *args, **kwargs):
-        return self._editing.recognize_selected_shapes(*args, **kwargs)
 
-    def reverse_selected_paths(self, *args, **kwargs):
-        return self._editing.reverse_selected_paths(*args, **kwargs)
 
-    def set_selected_path_start(self, *args, **kwargs):
-        return self._editing.set_selected_path_start(*args, **kwargs)
 
-    def resample_selected_paths(self, *args, **kwargs):
-        return self._editing.resample_selected_paths(*args, **kwargs)
 
-    def prompt_resample_spacing(self, *args, **kwargs):
-        return self._editing.prompt_resample_spacing(*args, **kwargs)
 
-    def prompt_resample_count(self, *args, **kwargs):
-        return self._editing.prompt_resample_count(*args, **kwargs)
 
-    def fit_selected_to_primitive(self, *args, **kwargs):
-        return self._editing.fit_selected_to_primitive(*args, **kwargs)
 
-    def create_procedural_primitive(self, *args, **kwargs):
-        return self._editing.create_procedural_primitive(*args, **kwargs)
 
-    def create_polygon_from_selected_edge(self, *args, **kwargs):
-        return self._editing.create_polygon_from_selected_edge(*args, **kwargs)
 
-    def prompt_polygon_from_edge(self, *args, **kwargs):
-        return self._editing.prompt_polygon_from_edge(*args, **kwargs)
 
     def explode_selected_to_segments(self, *args, **kwargs):
         return self._editing.explode_selected_to_segments(*args, **kwargs)
@@ -1333,23 +1285,11 @@ class CanvasView(
     def merge_selected_segments_to_objects(self, *args, **kwargs):
         return self._editing.merge_selected_segments_to_objects(*args, **kwargs)
 
-    def create_symbol_from_selection(self, *args, **kwargs):
-        return self._editing.create_symbol_from_selection(*args, **kwargs)
 
-    def insert_symbol(self, *args, **kwargs):
-        return self._editing.insert_symbol(*args, **kwargs)
 
-    def insert_symbol_named(self, *args, **kwargs):
-        return self._editing.insert_symbol_named(*args, **kwargs)
 
-    def rename_symbol(self, *args, **kwargs):
-        return self._editing.rename_symbol(*args, **kwargs)
 
-    def prompt_rename_symbol(self, *args, **kwargs):
-        return self._editing.prompt_rename_symbol(*args, **kwargs)
 
-    def delete_symbol(self, *args, **kwargs):
-        return self._editing.delete_symbol(*args, **kwargs)
 
     def knife_cut(self, *args, **kwargs):
         return self._editing.knife_cut(*args, **kwargs)
@@ -1357,14 +1297,8 @@ class CanvasView(
     def _apply_operation_result(self, *args, **kwargs):
         return self._editing._apply_operation_result(*args, **kwargs)
 
-    def prompt_morph_selected_paths(self, *args, **kwargs):
-        return self._editing.prompt_morph_selected_paths(*args, **kwargs)
 
-    def _preview_morph_selected(self, *args, **kwargs):
-        return self._editing._preview_morph_selected(*args, **kwargs)
 
-    def _morph_selected_paths(self, *args, **kwargs):
-        return self._editing._morph_selected_paths(*args, **kwargs)
 
     def _set_repeat_action(self, *args, **kwargs):
         return self._editing._set_repeat_action(*args, **kwargs)
@@ -2078,19 +2012,6 @@ class CanvasView(
         else:
             self._redraw()
 
-    def keyPressEvent(self, event: QKeyEvent):
-        return keyPressEvent(self, event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
-            self._space_pan_active = False
-            self._space_pan_dragging = False
-            self._lmb_prev = None
-            self._update_cursor()
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
-
     def wheelEvent(self, event: QWheelEvent):
         delta = event.angleDelta().y()
         if delta == 0:
@@ -2140,384 +2061,6 @@ class CanvasView(
         target = self._fit_scale * percent / 100.0
         cx, cy = self.width() / 2.0, self.height() / 2.0
         self._animate_view_to(target, cx, cy)
-
-    def mousePressEvent(self, event: QMouseEvent):
-        pos = event.position()
-        btn = event.button()
-
-        if btn == Qt.MouseButton.LeftButton:
-            bg_hit = self._background_edit_hit(pos.x(), pos.y())
-            if bg_hit is not None:
-                wx, wy = self._c2w(pos.x(), pos.y())
-                self._bg_drag = (
-                    bg_hit,
-                    wx,
-                    wy,
-                    self._bg_x_mm,
-                    self._bg_y_mm,
-                    self._bg_w_mm,
-                    self._bg_h_mm,
-                    self._bg_rotation_deg,
-                )
-                return
-            if self._bg_selected:
-                self.select_background_image(False)
-            elif (
-                self._background_contains(pos.x(), pos.y())
-                and self._find_poly_at(pos.x(), pos.y()) is None
-            ):
-                self.select_background_image(True)
-                self._sel.clear()
-                self._notify()
-                return
-
-        if btn == Qt.MouseButton.MiddleButton:
-            self._mmb_prev = pos
-            return
-
-        if btn == Qt.MouseButton.LeftButton and self._space_pan_active:
-            self._space_pan_dragging = True
-            self._lmb_prev = pos
-            self._update_cursor()
-            return
-
-        if btn == Qt.MouseButton.LeftButton and self._mode == "pan":
-            self._lmb_prev = pos
-            self._update_cursor()
-            return
-
-        if btn == Qt.MouseButton.RightButton:
-            if self._selectable:
-                self._rightclick_cb(pos.x(), pos.y())
-            return
-
-        if btn != Qt.MouseButton.LeftButton:
-            return
-
-        # Persistent, visible tool buttons. These used to be painted by dead
-        # renderer helpers and had no event routing, so they were effectively
-        # invisible and unclickable.
-        if self._hit_measure_button(pos.x(), pos.y()):
-            self.toggle_measure()
-            return
-        if self._hit_dimension_button(pos.x(), pos.y()):
-            self.toggle_dimension_mode("linear")
-            return
-        if self._hit_angle_dimension_button(pos.x(), pos.y()):
-            self.toggle_dimension_mode("angle")
-            return
-
-        # Rulers: press inside a ruler strip drags out a new guide.
-        if self._rulers_visible and self._selectable:
-            r = self.RULER_PX
-            wx0, wy0 = self._c2w(pos.x(), pos.y())
-            if pos.x() <= r and pos.y() <= r:
-                return  # corner box
-            if pos.y() <= r:
-                self._guide_preview = self._canvas_service.begin_preview()
-                self._guides.append(("h", wy0))
-                self._guide_drag = len(self._guides) - 1
-                self._selected_guide = self._guide_drag
-                self._guide_drag_moved = False
-                self._redraw()
-                return
-            if pos.x() <= r:
-                self._guide_preview = self._canvas_service.begin_preview()
-                self._guides.append(("v", wx0))
-                self._guide_drag = len(self._guides) - 1
-                self._selected_guide = self._guide_drag
-                self._guide_drag_moved = False
-                self._redraw()
-                return
-        # Grab an existing guide (only when not over a shape) — click selects
-        # it (Delete/Backspace removes it); dragging moves it.
-        if (
-            self._selectable
-            and self._mode == "select"
-            and self._guides
-            and self._find_poly_at(pos.x(), pos.y()) is None
-        ):
-            gi = self._find_guide_at(pos.x(), pos.y())
-            if gi is not None:
-                self._guide_preview = self._canvas_service.begin_preview()
-                self._guide_drag = gi
-                self._selected_guide = gi
-                self._guide_drag_moved = False
-                self._redraw()
-                return
-        # Clicking elsewhere clears any selected guide.
-        if self._selected_guide is not None:
-            self._selected_guide = None
-            self._redraw()
-
-        # Existing dimensions take priority even while the Dimension tool is
-        # armed, so clicking a value edits/selects it instead of starting a
-        # new placement. Offset dragging remains a Select-mode interaction.
-        if self._selectable and self._dimensions:
-            di = self._find_dimension_at(pos.x(), pos.y())
-            if di is not None:
-                self._selected_dimension = di
-                self._all_dimensions_selected = False
-                self._sel.clear()
-                self._dimension_drag = (
-                    di
-                    if self._mode == "select" and self._dimensions[di].get("type") != "angle"
-                    else None
-                )
-                self._notify()
-                self._redraw()
-                return
-        if self._selected_dimension is not None:
-            self._selected_dimension = None
-            self._notify()
-            self._redraw()
-
-        # Selection badges / transform gizmo take priority over tools.
-        select_tool = cast(canvas_tools.SelectTool, self._tools["select"])
-        if self._mode == "select" and self._sel and select_tool.press_overlays(event):
-            return
-
-        if self._dimension_mode:
-            self._dimension_tool.press(event)
-            return
-
-        if self._measure_mode:
-            self._measure_tool.press(event)
-            return
-
-        tool = self._tools.get(self._mode)
-        if tool is not None:
-            tool.press(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        pos = event.position()
-        wx, wy = self._c2w(pos.x(), pos.y())
-        self._cursor_wx = wx
-        self._cursor_wy = wy
-        self._hover_snap = None
-        self._hover_snap_type = None
-        self._hover_snap_multi = []
-
-        if self._bg_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            mode, sx, sy, ox, oy, ow, oh, rotation = self._bg_drag
-            if mode == "move":
-                self._bg_x_mm, self._bg_y_mm = ox + wx - sx, oy + wy - sy
-            elif mode == "rotate":
-                center_x, center_y = ox + ow / 2.0, oy + oh / 2.0
-                start_angle = math.degrees(math.atan2(sy - center_y, sx - center_x))
-                current_angle = math.degrees(math.atan2(wy - center_y, wx - center_x))
-                self._bg_rotation_deg = rotation + current_angle - start_angle
-                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                    increment = self._rotation_snap_increment
-                    self._bg_rotation_deg = round(self._bg_rotation_deg / increment) * increment
-            else:
-                wx, wy = self._background_unrotate(wx, wy)
-                left, right, bottom, top = ox, ox + ow, oy, oy + oh
-                if "w" in mode:
-                    left = min(wx, right - 0.01)
-                if "e" in mode:
-                    right = max(wx, left + 0.01)
-                if "s" in mode:
-                    bottom = min(wy, top - 0.01)
-                if "n" in mode:
-                    top = max(wy, bottom + 0.01)
-                self._bg_x_mm, self._bg_y_mm = left, bottom
-                self._bg_w_mm, self._bg_h_mm = right - left, top - bottom
-            if callable(self._bg_edit_callback):
-                self._bg_edit_callback(
-                    self._bg_x_mm,
-                    self._bg_y_mm,
-                    self._bg_w_mm,
-                    self._bg_h_mm,
-                    self._bg_rotation_deg,
-                )
-            self._bg_pixmap = None
-            self._redraw()
-            return
-
-        if self._mmb_prev is not None and event.buttons() & Qt.MouseButton.MiddleButton:
-            self._ox += pos.x() - self._mmb_prev.x()
-            self._oy += pos.y() - self._mmb_prev.y()
-            self._mmb_prev = pos
-            self._redraw()
-            return
-
-        if (
-            (self._space_pan_active or self._mode == "pan")
-            and self._lmb_prev is not None
-            and event.buttons() & Qt.MouseButton.LeftButton
-        ):
-            self._ox += pos.x() - self._lmb_prev.x()
-            self._oy += pos.y() - self._lmb_prev.y()
-            self._lmb_prev = pos
-            self._redraw()
-            return
-
-        if self._gizmo_drag_mode is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self._apply_gizmo_drag(wx, wy, event.modifiers())
-            self._redraw()
-            return
-
-        if self._guide_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            orient, _ = self._guides[self._guide_drag]
-            self._guides[self._guide_drag] = (
-                orient,
-                wy if orient == "h" else wx,
-            )
-            self._guide_drag_moved = True
-            self._redraw()
-            return
-
-        if self._dimension_drag is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            dim = self._dimensions[self._dimension_drag]
-            dim["offset"] = self._dimension_offset_at(dim, wx, wy)
-            self._redraw()
-            return
-
-        if self._dimension_mode:
-            self._dimension_tool.move(event)
-            return
-
-        if self._measure_mode:
-            self._measure_tool.move(event)
-            return
-
-        tool = self._tools.get(self._mode)
-        if tool is not None:
-            tool.move(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        pos = event.position()
-
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._mmb_prev = None
-            return
-
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-
-        if self._bg_drag is not None:
-            self._bg_drag = None
-            return
-
-        if self._space_pan_active or self._mode == "pan":
-            self._space_pan_dragging = False
-            self._lmb_prev = None
-            self._update_cursor()
-            return
-
-        if self._gizmo_drag_mode is not None:
-            moved = self._end_gizmo_drag()
-            self._redraw()
-            self._notify()
-            if moved:
-                self._fire_poly_change()
-            return
-
-        if self._guide_drag is not None:
-            if self._guide_drag_moved and (pos.x() <= self.RULER_PX or pos.y() <= self.RULER_PX):
-                del self._guides[self._guide_drag]
-                self._selected_guide = None
-            self._guide_drag = None
-            self._guide_drag_moved = False
-            # Commit the whole gesture (add / move / delete) as one undoable
-            # command; a click that changed nothing commits as a no-op.
-            self._canvas_service.commit_preview(self._guide_preview)
-            self._guide_preview = None
-            self._redraw()
-            return
-
-        if self._dimension_drag is not None:
-            self._dimension_drag = None
-            self._redraw()
-            self._notify()
-            return
-
-        if self._dimension_mode:
-            return
-
-        if self._measure_mode:
-            return
-
-        if self._mode in ("edit", "select") and self._edit_dragging:
-            canvas_tools.release_edit_drag(self)
-            return
-
-        tool = self._tools.get(self._mode)
-        if tool is not None and tool.release(event):
-            return
-
-        # Click select / deselect fall-through (no tool consumed the release).
-        if (
-            self._selectable
-            and self._mode != "select"
-            and self._lmb_press is not None
-            and self._lmb_target is not None
-        ):
-            dx = pos.x() - self._lmb_press.x()
-            dy = pos.y() - self._lmb_press.y()
-            if abs(dx) <= DRAG_THRESH and abs(dy) <= DRAG_THRESH:
-                eid = self._lmb_target
-                mods = event.modifiers()
-                if mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-                    if eid in self._sel:
-                        self._sel = self._sel - {eid}
-                    else:
-                        self._sel = self._sel | {eid}
-                else:
-                    self._sel = {eid}
-                self._redraw()
-                self._notify()
-        elif (
-            self._mode == "select"
-            and self._selectable
-            and self._lmb_press is not None
-            and self._lmb_target is None
-        ):
-            dx = pos.x() - self._lmb_press.x()
-            dy = pos.y() - self._lmb_press.y()
-            if abs(dx) <= DRAG_THRESH and abs(dy) <= DRAG_THRESH and self._sel:
-                self.deselect_all()
-        self._lmb_press = None
-        self._lmb_prev = None
-        self._lmb_target = None
-        self._shift_drag = False
-        self._band_start = None
-        self._band_additive = False
-        self._move_origin = None
-        self._move_undo_pushed = False
-        self._move_anchor_w = None
-        self._move_applied_w = (0.0, 0.0)
-        self._move_start_pts = []
-        self._move_snap_exclude_vertices = set()
-        self._move_snap_exclude_segments = set()
-
-    def mouseDoubleClickEvent(self, event: QMouseEvent):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        dimension = self._find_dimension_at(event.position().x(), event.position().y())
-        if dimension is not None:
-            self._selected_dimension = dimension
-
-            if isinstance(self._dimensions[dimension].get("driving"), dict):
-                self._edit_driving_dimension(dimension)
-                return
-
-            def set_precision(value: float) -> None:
-                self._set_dimension_precision_value(dimension, int(round(value)))
-                self._notify()
-
-            self._show_hud_prompt(
-                "Dimension decimals",
-                float(self._dimensions[dimension].get("precision", 2)),
-                set_precision,
-                minimum=0,
-                maximum=6,
-            )
-            return
-        tool = self._tools.get(self._mode)
-        if tool is not None:
-            tool.double_click(event)
 
 
 CanvasView._cancel_active_drag = _cancel_active_drag

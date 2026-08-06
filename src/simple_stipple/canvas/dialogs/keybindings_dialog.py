@@ -6,7 +6,7 @@ shortcut's id/label/default:
   window management) — from ``settings.DEFAULT_KEYBINDINGS``.
 - everything else (edit/selection/path/boolean operations, tool modes,
   view/grid controls, draw-primitive quick-selects) — from the canvas
-  ``Command`` registry in ``simple_stipple.canvas.interaction.commands``.
+  ``Command`` registry in ``simple_stipple.canvas.commands``.
 
 Saving writes a flat ``{id: shortcut}`` dict; ``App`` re-applies it to its
 own QActions and calls ``canvas_commands.apply_keybindings()`` so canvas

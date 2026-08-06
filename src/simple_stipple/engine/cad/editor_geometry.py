@@ -7,8 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from simple_stipple.document.model import EntityRecord
 from simple_stipple.engine.cad.shapes import Shape, ShapeFactory
+from simple_stipple.engine.editing import transform as editing_transform
 
 Point = tuple[float, float]
 
@@ -41,20 +41,13 @@ class PolylineGeometry:
         return list(self.points)
 
     def translate(self, dx: float, dy: float) -> None:
-        self.points = [(x + dx, y + dy) for x, y in self.points]
+        self.points = editing_transform.translate(self.points, dx, dy)
 
     def rotate(self, center: Point, angle_degrees: float) -> None:
-        angle = math.radians(angle_degrees)
-        cosine, sine = math.cos(angle), math.sin(angle)
-        cx, cy = center
-        self.points = [
-            (cx + (x - cx) * cosine - (y - cy) * sine, cy + (x - cx) * sine + (y - cy) * cosine)
-            for x, y in self.points
-        ]
+        self.points = editing_transform.rotate(self.points, center, angle_degrees)
 
     def scale(self, center: Point, factor: float) -> None:
-        cx, cy = center
-        self.points = [(cx + (x - cx) * factor, cy + (y - cy) * factor) for x, y in self.points]
+        self.points = editing_transform.scale(self.points, center, factor)
 
 
 @dataclass
@@ -78,7 +71,7 @@ class ShapeGeometry:
         self.shape.scale(center, factor)
 
 
-def geometry_for_entity(entity: EntityRecord) -> CanvasGeometry:
+def geometry_for_entity(entity: Any) -> CanvasGeometry:
     """Adapt a legacy record to the new geometry interface.
 
     Generic imported paths remain lightweight polylines. Parametric records

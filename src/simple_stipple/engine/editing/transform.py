@@ -26,7 +26,7 @@ def translate_entities(entities: Iterable[Any], dx: float, dy: float) -> list[An
         entity = deepcopy(source)
         entity.points = translate(list(source.points), dx, dy)
         if hasattr(entity, "id"):
-            from simple_stipple.document.model import new_entity_id
+            from simple_stipple.document.identity import new_entity_id
 
             entity.id = new_entity_id()
         translated.append(entity)

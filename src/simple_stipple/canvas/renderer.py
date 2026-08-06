@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import cast
+from typing import Any, cast
 
 from PIL import Image as PILImage
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -88,7 +88,6 @@ from simple_stipple.canvas.constants import (
 from simple_stipple.canvas.constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
-from simple_stipple.canvas.rendering import overlays, scene
 from simple_stipple.engine.cad.geometry import (
     arc_from_center_start_end,
     arc_from_three_points,
@@ -2293,8 +2292,8 @@ class CanvasRenderer:
 
         _visible_world = self._visible_world_rect(w, h)
 
-        scene.paint_document_scene(self, painter, w, h, _visible_world)
-        overlays.paint_selection_overlay(self, painter, _visible_world)
+        self._paint_document_scene(painter, w, h, _visible_world)
+        self._paint_selection_overlay(painter, _visible_world)
 
         # Construction lines (Feature 15)
         # Guide/measure lines (non-exported)
@@ -2539,4 +2538,26 @@ class CanvasRenderer:
 
     def _paint_chrome_rulers(self, painter: QPainter) -> None:
         """Rulers paint over everything else (chrome layer)."""
-        overlays.paint_chrome_rulers(self, painter)
+        self._paint_rulers(painter, max(self._host.width(), 100), max(self._host.height(), 100))
+
+    def _paint_document_scene(self, painter: QPainter, width: int, height: int, visible: Any) -> None:
+        """Paint persistent document content below selection and interaction chrome."""
+        self._paint_guides(painter, width, height)
+        self._paint_dimensions(painter, width, height)
+        self._paint_ghost_polys(painter, visible)
+        # Result sits under the outlines: the user edits geometry, not output.
+        self._paint_result_polys(painter, visible)
+        self._paint_main_polys(painter, visible)
+        self._paint_operation_preview(painter)
+        # Findings ride on top of everything: a problem you cannot see is
+        # a problem you will only meet at the machine.
+        self._paint_issue_markers(painter)
+
+    def _paint_selection_overlay(self, painter: QPainter, visible: Any) -> None:
+        """Paint selection bounds/readouts and the active edit handles above the scene."""
+        self._paint_selection_bbox(painter, visible)
+        self._paint_selection_readout(painter)
+        if self._host._mode == "edit":
+            self._paint_edit_handles(painter)
+        elif self._host._mode == "select" and self._host._sel:
+            self._paint_select_handles(painter)
