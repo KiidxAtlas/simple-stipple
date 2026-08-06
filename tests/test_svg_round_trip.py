@@ -211,3 +211,35 @@ def test_a_foreign_svg_still_normalises_onto_its_viewbox(tmp_path) -> None:
     outline = _reimport_outline(target, tmp_path)[0]
     # Unchanged behaviour: translated into the viewBox's positive space.
     assert outline[0][0] == pytest.approx(2.0)
+
+
+def test_draft_shows_an_imported_svg_image_instead_of_an_empty_outline(
+    app: QApplication, tmp_path
+) -> None:
+    """Draft edits linework, but it must still *show* the artwork.
+
+    The geometry was drawn over this image. Importing the outline and hiding
+    the picture left the user looking at an empty square with no way to tell
+    the image had come across at all.
+    """
+    from simple_stipple.features.draft.page import DraftPage
+
+    target = tmp_path / "with-image.svg"
+    write_document_svg(
+        [NEGATIVE],
+        target,
+        images=[SvgImagePlacement(_png(), x_mm=-30.0, y_mm=-5.0, width_mm=90.0, height_mm=50.0)],
+    )
+
+    page = DraftPage(settings={})
+    page._load_vector(str(target))
+
+    assert page._canvas.get_polylines_state(), "the outline did not import"
+    assert page._canvas._bg_pil is not None, "the image is not on the canvas"
+    assert page._canvas._bg_x_mm == pytest.approx(-30.0)
+    assert page._canvas._bg_y_mm == pytest.approx(-5.0)
+    assert page._canvas._bg_w_mm == pytest.approx(90.0)
+    # Draft does not own placement, so the backdrop is not draggable here.
+    assert page._canvas._bg_editable is False
+    assert "engraving image" in (page._import_note or "")
+    page.close()

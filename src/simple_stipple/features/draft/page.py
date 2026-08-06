@@ -973,14 +973,15 @@ class DraftPage(BasePage):
             # Draft is linework only. An SVG carrying an engraving image is
             # still a valid import here, but saying nothing would look like
             # the image had been lost.
-            embedded_images = len(read_svg_images(path))
+            embedded_images = self._show_imported_svg_image(path)
             if embedded_images or unsupported or unsupported_features:
                 notes: list[str] = []
                 if embedded_images:
                     notes.append(
-                        f"This SVG carries {embedded_images} engraving image"
-                        f"{'s' if embedded_images != 1 else ''}. Draft holds linework "
-                        "only — open the file on the Pattern page to keep the image."
+                        f"Showing {embedded_images} engraving image"
+                        f"{'s' if embedded_images != 1 else ''} from this SVG as a "
+                        "reference backdrop. Draft edits linework — open the file on "
+                        "the Pattern page to move, resize, or export the image."
                     )
                 if unsupported:
                     notes.append(
@@ -993,6 +994,40 @@ class DraftPage(BasePage):
                 self._set_import_note(details)
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import SVG Failed", exc)
+
+    def _show_imported_svg_image(self, path: str) -> int:
+        """Put any image inside an imported SVG on the canvas as a backdrop.
+
+        Draft has no image tooling, but the geometry was drawn *over* this
+        artwork — hiding it left the user looking at an empty square and no
+        way to tell the image had come across at all. It is deliberately not
+        editable here: Pattern owns placement.
+        """
+        import io
+
+        from PIL import Image as PILImage
+
+        placements = read_svg_images(path)
+        if not placements:
+            return 0
+        first = placements[0]
+        try:
+            with PILImage.open(io.BytesIO(first.png_bytes)) as source:
+                backdrop = source.convert("RGBA")
+                backdrop.putalpha(110)
+                self._canvas.set_background_image(
+                    backdrop.copy(),
+                    first.width_mm,
+                    first.height_mm,
+                    first.x_mm,
+                    first.y_mm,
+                    first.rotation_deg,
+                )
+            self._canvas.set_background_image_editable(False)
+        except (OSError, ValueError):
+            self._canvas.clear_background_image()
+            return 0
+        return len(placements)
 
     def _review_dxf_import(self, path, by_layer, report, *, default_append: bool):
         dialog = DxfImportPreviewDialog(
