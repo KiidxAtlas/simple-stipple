@@ -43,6 +43,7 @@ from simple_stipple.engine.cad.recognition import (
     recognized_entities,
 )
 from simple_stipple.engine.formats.service import DxfService, summarize_dxf_import_report
+from simple_stipple.engine.formats.svg import read_svg_images
 from simple_stipple.features.base import BasePage
 from simple_stipple.features.draft.recognition_dialog import ShapeRecognitionDialog
 from simple_stipple.features.draft.session import (
@@ -969,8 +970,18 @@ class DraftPage(BasePage):
             self._apply_dxf_import(path, by_layer, append=append, source_kind="SVG")
             unsupported = int(stats.get("unsupported_paths", 0))
             unsupported_features = tuple(stats.get("unsupported_features", ()))
-            if unsupported or unsupported_features:
+            # Draft is linework only. An SVG carrying an engraving image is
+            # still a valid import here, but saying nothing would look like
+            # the image had been lost.
+            embedded_images = len(read_svg_images(path))
+            if embedded_images or unsupported or unsupported_features:
                 notes: list[str] = []
+                if embedded_images:
+                    notes.append(
+                        f"This SVG carries {embedded_images} engraving image"
+                        f"{'s' if embedded_images != 1 else ''}. Draft holds linework "
+                        "only — open the file on the Pattern page to keep the image."
+                    )
                 if unsupported:
                     notes.append(
                         f"Skipped {unsupported} path(s) containing Bézier, arc, or other "

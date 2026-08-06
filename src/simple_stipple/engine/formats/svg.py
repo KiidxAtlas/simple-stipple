@@ -102,10 +102,16 @@ def write_polylines_svg(
 
     root = ET.Element(
         "svg",
-        xmlns="http://www.w3.org/2000/svg",
-        viewBox=f"{x0 - padding:.4f} 0 {vw:.4f} {vh:.4f}",
-        width=f"{vw:.4f}mm",
-        height=f"{vh:.4f}mm",
+        {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "xmlns:stipple": STIPPLE_NS,
+            "viewBox": f"{x0 - padding:.4f} 0 {vw:.4f} {vh:.4f}",
+            "width": f"{vw:.4f}mm",
+            "height": f"{vh:.4f}mm",
+            # Where this drawing sits, so reopening it does not translate the
+            # part onto its own bounding box.
+            "stipple:world": f"0 {y_total:.6f}",
+        },
     )
     g = ET.SubElement(
         root,
@@ -130,6 +136,49 @@ def write_polylines_svg(
         "width_mm": round(vw, 4),
         "height_mm": round(vh, 4),
     }
+
+
+# ── Origin fidelity ───────────────────────────────────────────────────────
+#
+# The generic reader normalises any SVG into its own viewBox: a drawing comes
+# back translated to its bounding box plus the writer's padding. That is the
+# right behaviour for arbitrary artwork, whose viewBox origin is a page, not a
+# machine bed — but it means reopening our *own* export moved the part, and
+# the drift compounded on every round trip.
+#
+# Rather than change how every SVG is read, our files say where they are.
+# When this marker is present the reader uses it verbatim and skips the
+# viewBox normalisation entirely; without it nothing changes.
+STIPPLE_NS = "https://simple-stipple.app/svg"
+_WORLD_ATTR = f"{{{STIPPLE_NS}}}world"
+
+
+def _stipple_world(root: ET.Element) -> tuple[float, float] | None:
+    """``(x_offset_mm, y_flip_mm)`` when this SVG declares its world origin.
+
+    ``x_world = x_svg + x_offset`` and ``y_world = y_flip - y_svg`` — the exact
+    inverse of what :func:`write_document_svg` emits.
+    """
+    raw = root.attrib.get(_WORLD_ATTR) or root.attrib.get("data-stipple-world")
+    if not raw:
+        return None
+    values = [float(value) for value in re.findall(_NUM_RE, raw)]
+    return (values[0], values[1]) if len(values) == 2 else None
+
+
+def _world_transform(root: ET.Element) -> tuple[Matrix, float]:
+    """The matrix and y-flip that take this SVG's units to millimetres.
+
+    A file that declares its own world origin is taken at its word, so a part
+    drawn at negative coordinates reopens where it was drawn. Everything else
+    falls back to the viewBox normalisation, which is what arbitrary artwork
+    needs — its viewBox is a page, not a machine bed.
+    """
+    declared = _stipple_world(root)
+    if declared is None:
+        return _root_svg_matrix(root)
+    x_offset, y_flip = declared
+    return (1.0, 0.0, 0.0, 1.0, x_offset, 0.0), y_flip
 
 
 @dataclass(frozen=True)
@@ -191,9 +240,13 @@ def write_document_svg(
         {
             "xmlns": "http://www.w3.org/2000/svg",
             "xmlns:xlink": "http://www.w3.org/1999/xlink",
+            "xmlns:stipple": STIPPLE_NS,
             "viewBox": f"{x0 - padding:.4f} 0 {vw:.4f} {vh:.4f}",
             "width": f"{vw:.4f}mm",
             "height": f"{vh:.4f}mm",
+            # Where this drawing actually sits, so reopening it does not
+            # translate the part onto its own bounding box.
+            "stipple:world": f"0 {y_total:.6f}",
         },
     )
     # Images first so vector linework reads on top of the artwork.
@@ -626,7 +679,7 @@ def read_svg_images(input_path: str | Path) -> list[SvgImagePlacement]:
 
     source = Path(input_path)
     root = ET.parse(str(source)).getroot()
-    root_matrix, y_flip = _root_svg_matrix(root)
+    root_matrix, y_flip = _world_transform(root)
     viewbox = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
     user_per_px_x, user_per_px_y = _viewport_user_units(root, viewbox)
 
@@ -727,7 +780,7 @@ def svg_to_dxf(
             f"{source.name} contains {element_count:,} SVG elements; "
             "the safe import limit is 250,000."
         )
-    root_matrix, y_flip = _root_svg_matrix(root)
+    root_matrix, y_flip = _world_transform(root)
     viewbox = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
     user_per_px_x, user_per_px_y = _viewport_user_units(root, viewbox)
 

@@ -140,3 +140,74 @@ def test_reopening_our_own_export_brings_the_image_back(
     assert any(op.kind == "engrave" for op in reopened._enabled_operations())
     reopened.shutdown()
     reopened.close()
+
+
+# ── Origin fidelity ───────────────────────────────────────────────────────
+#
+# Reopening an export used to translate the part onto its own bounding box.
+# For a drawing at negative coordinates that is not a rounding nuisance: a
+# part drawn at x = -33.6 came back at x = +2, a 35.6 mm move.
+
+NEGATIVE = [(-33.6, -10.0), (66.4, -10.0), (66.4, 51.5), (-33.6, 51.5), (-33.6, -10.0)]
+
+
+def _reimport_outline(svg_path, tmp_path):
+    from simple_stipple.engine.formats.dxf import load_dxf_polylines_with_report
+    from simple_stipple.engine.formats.svg import svg_to_dxf
+
+    dxf = tmp_path / "reimport.dxf"
+    svg_to_dxf(svg_path, dxf)
+    polys, _report = load_dxf_polylines_with_report(str(dxf))
+    return polys
+
+
+@pytest.mark.parametrize("geometry", [SQUARE, NEGATIVE], ids=["at-origin", "negative"])
+def test_a_document_reopens_exactly_where_it_was_drawn(tmp_path, geometry) -> None:
+    placement = SvgImagePlacement(
+        _png(), x_mm=geometry[0][0], y_mm=geometry[0][1], width_mm=20.0, height_mm=10.0
+    )
+    target = tmp_path / "doc.svg"
+    write_document_svg([geometry], target, images=[placement])
+
+    outline = _reimport_outline(target, tmp_path)[0]
+    assert outline[0][0] == pytest.approx(geometry[0][0])
+    assert outline[0][1] == pytest.approx(geometry[0][1])
+
+    restored = read_svg_images(target)[0]
+    assert restored.x_mm == pytest.approx(placement.x_mm)
+    assert restored.y_mm == pytest.approx(placement.y_mm)
+
+
+def test_the_drawing_does_not_drift_across_repeated_round_trips(tmp_path) -> None:
+    """The old normalisation compounded: every save/open moved the part again."""
+    geometry = [list(point) for point in NEGATIVE]
+    for index in range(4):
+        target = tmp_path / f"pass{index}.svg"
+        write_document_svg([[tuple(p) for p in geometry]], target)
+        geometry = [list(point) for point in _reimport_outline(target, tmp_path)[0]]
+    assert geometry[0][0] == pytest.approx(NEGATIVE[0][0])
+    assert geometry[0][1] == pytest.approx(NEGATIVE[0][1])
+
+
+def test_draft_exports_are_origin_stable_too(tmp_path) -> None:
+    from simple_stipple.engine.formats.svg import write_polylines_svg
+
+    target = tmp_path / "draft.svg"
+    write_polylines_svg([NEGATIVE], target)
+    outline = _reimport_outline(target, tmp_path)[0]
+    assert outline[0][0] == pytest.approx(NEGATIVE[0][0])
+    assert outline[0][1] == pytest.approx(NEGATIVE[0][1])
+
+
+def test_a_foreign_svg_still_normalises_onto_its_viewbox(tmp_path) -> None:
+    """Arbitrary artwork has a page, not a machine bed. It must not change."""
+    target = tmp_path / "foreign.svg"
+    target.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-35.6 0 104 65.54" '
+        'width="104mm" height="65.54mm">'
+        '<path d="M-33.6,2 L66.4,2"/>'
+        "</svg>"
+    )
+    outline = _reimport_outline(target, tmp_path)[0]
+    # Unchanged behaviour: translated into the viewBox's positive space.
+    assert outline[0][0] == pytest.approx(2.0)
