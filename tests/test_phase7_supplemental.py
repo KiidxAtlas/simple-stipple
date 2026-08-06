@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.app.tasks import AutosaveController
 from simple_stipple.app.window import App
 from simple_stipple.canvas.operations.draw_ops import DrawOpsService
 from simple_stipple.canvas.view.helpers import _animate_view_to
@@ -60,8 +61,16 @@ def close_test_windows(app: QApplication, monkeypatch: pytest.MonkeyPatch):
     These tests exercise layout and focus only; save/discard behavior is
     covered independently. Page activation can mark a fresh workspace dirty,
     so the production confirmation dialog would otherwise block test teardown.
+
+    Startup recovery is suppressed for the same reason, and for a sharper one:
+    ``App()`` reads the *real* application-support directory, so a developer
+    with the app open — or any leftover autosave — made this suite hang on a
+    modal recovery prompt forever, with no output saying why.
     """
     monkeypatch.setattr(App, "_confirm_discard_if_dirty", lambda _self, **_kwargs: True)
+    monkeypatch.setattr(
+        AutosaveController, "offer_startup_autosave_recovery", lambda _self: None
+    )
     existing = set(app.topLevelWidgets())
     yield
     for widget in set(app.topLevelWidgets()) - existing:

@@ -203,12 +203,16 @@ def test_none_pattern_refreshes_and_keeps_export_action_available(
 
 
 def test_export_is_one_button_over_the_documents_operations(app: QApplication) -> None:
-    """There is no export "kind" to pick: the operations come from the
-    document, and one Export writes every enabled one."""
+    """The dropdown picks a file format, never which operations get written.
+
+    The old menu forked the *flow* — choosing "engraving" silently dropped
+    your vectors. The operations now come from the document and every format
+    writes all of them.
+    """
     page = PatternPage(settings={})
-    for gone in ("_export_default", "_select_export_kind", "_export_actions", "_export_more"):
+    for gone in ("_export_default", "_select_export_kind"):
         assert not hasattr(page, gone), f"{gone} is part of the deleted export fork"
-    assert page._gen_btn.text() == "Export"
+    assert page._gen_btn.text() == "Export DXF"
 
     ring = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0), (0.0, 0.0)]
     page.load_outline_polys([ring])
@@ -388,7 +392,7 @@ def test_image_engraving_has_one_export_terminal_and_safe_clip_choice(
     # The image is an Engrave operation in Output; Export is the one terminal.
     page._use_engraving_export()
     assert page._output_section.is_expanded()
-    assert page._gen_btn.text() == "Export"
+    assert page._gen_btn.text().startswith("Export ")
     page.shutdown()
     page.close()
 

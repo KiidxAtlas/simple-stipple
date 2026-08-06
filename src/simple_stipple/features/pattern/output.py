@@ -88,6 +88,23 @@ def document_operations(page) -> list[Operation]:
             operations.append(
                 Operation(key=f"cut:{region_id}", kind="cut", subject=name, target="outline")
             )
+    # An image added without a region selected belongs to no region, so the
+    # loop above never sees it — and it was then dropped from the export in
+    # silence, while sitting visibly on the canvas. It is on the part, so it
+    # is an operation; the whole outline is its mask.
+    if getattr(page, "_engraving_image_path", "") and not any(
+        op.kind == "engrave" for op in operations
+    ):
+        operations.append(
+            Operation(
+                key="engrave:document",
+                kind="engrave",
+                subject=Path(page._engraving_image_path).name,
+                target="whole outline",
+                detail=_engraving_detail(page),
+            )
+        )
+
     # The part still has to come off the sheet. An outermost region is cut
     # whatever is done inside it, which is why the reference scenario's ring
     # is both marked and cut — the boundary is the same shape either way.

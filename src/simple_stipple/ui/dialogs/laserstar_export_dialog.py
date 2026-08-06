@@ -40,19 +40,19 @@ class LaserStarExportDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Export Job")
+        self.setWindowTitle("Create Operator Package")
         self.setModal(True)
         self.resize(620, 430)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(SPACE_LG, SPACE_LG, SPACE_LG, SPACE_LG)
         root.setSpacing(SPACE_MD)
-        title = QLabel("Export job")
+        title = QLabel("Operator package")
         title.setProperty("role", "page-title")
         root.addWidget(title)
         subtitle = QLabel(
-            "Every enabled operation is written together, in run order. The "
-            "destination format is a field here, not a fork before you start."
+            "Every enabled operation is written into one folder, in run order, "
+            "with a setup sheet and checklist for the machine."
         )
         subtitle.setProperty("role", "page-subtitle")
         subtitle.setWordWrap(True)
@@ -78,8 +78,8 @@ class LaserStarExportDialog(QDialog):
         self.output_format = QComboBox()
         self.output_format.addItem("FVI — LaserStar / StarFX", "fvi")
         self.output_format.addItem("DXF", "dxf")
-        self.output_format.setAccessibleName("Destination format")
-        form.addRow("Format", self.output_format)
+        self.output_format.setAccessibleName("Vector file format inside the package")
+        form.addRow("Vector file", self.output_format)
         self.machine = QComboBox()
         self.machine.addItem("LaserStar 3602XL", "laserstar-3602xl")
         form.addRow("Machine", self.machine)
@@ -107,7 +107,7 @@ class LaserStarExportDialog(QDialog):
         cancel = QPushButton("Cancel")
         cancel.setAutoDefault(False)
         cancel.clicked.connect(self.reject)
-        create = QPushButton("Export")
+        create = QPushButton("Create Package")
         create.setProperty("role", "primary")
         create.setDefault(True)
         create.clicked.connect(self._accept_if_valid)

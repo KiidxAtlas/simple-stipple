@@ -53,6 +53,11 @@ from simple_stipple.features.pattern.defaults import (
     SCALE_MAX_MM,
     SCALE_MIN_MM,
 )
+from simple_stipple.features.pattern.export_jobs import (
+    EXPORT_BUTTON_LABEL,
+    EXPORT_FORMAT_KEYS,
+    EXPORT_FORMATS,
+)
 from simple_stipple.features.pattern.form import build_param_widget
 from simple_stipple.features.pattern.form_spec import PARAM_SPECS
 from simple_stipple.ui.components.collapsible import (
@@ -961,14 +966,40 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     page._output_section = CollapsibleSection("Output", output_content, expanded=True)
     layout.addWidget(page._output_section)
 
+    # Primary action plus a format picker beside it. The format changes what
+    # the file is, never which operations get written — that is the Output
+    # panel's job, and it is why this is not the old three-kind fork.
+    export_format = str(page._settings.get("pattern_export_format", "dxf"))
+    if export_format not in EXPORT_FORMAT_KEYS:
+        export_format = "dxf"
+    page._export_format = export_format
     page._gen_btn = primary_button(
-        "Export",
+        EXPORT_BUTTON_LABEL[export_format],
         height=38,
-        tooltip="Write every enabled operation as one job  (⌘E)",
+        tooltip="Write every enabled operation in the chosen format  (⌘E)",
     )
     page._gen_btn.clicked.connect(page._export_document_job)
     export_action_row = QHBoxLayout()
     export_action_row.addWidget(page._gen_btn, stretch=1)
+    page._export_more = QToolButton()
+    page._export_more.setText("Format")
+    page._export_more.setMinimumSize(72, 38)
+    page._export_more.setToolTip(
+        "Choose the file format; exporting starts only from the Export button"
+    )
+    page._export_more.setAccessibleName("Choose export format")
+    page._export_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    page._export_menu = QMenu(page._export_more)
+    page._export_actions = {}
+    for key, label, _suffix in EXPORT_FORMATS:
+        action = page._export_menu.addAction(label)
+        action.setCheckable(True)
+        action.triggered.connect(
+            lambda _checked=False, chosen=key: page._select_export_format(chosen)
+        )
+        page._export_actions[key] = action
+    page._export_more.setMenu(page._export_menu)
+    export_action_row.addWidget(page._export_more)
     page._cancel_generate_btn = QToolButton()
     page._cancel_generate_btn.setText("Cancel")
     page._cancel_generate_btn.setToolTip("Cancel the current export")
@@ -1003,3 +1034,4 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     page._operator_notes_btn.clicked.connect(page._copy_operator_notes)
     layout.addWidget(page._operator_notes_btn)
     page._refresh_output_panel()
+    page._refresh_export_format_label()

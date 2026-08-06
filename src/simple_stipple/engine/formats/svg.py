@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import re
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -126,6 +127,114 @@ def write_polylines_svg(
     )
     return {
         "polylines": len(polys),
+        "width_mm": round(vw, 4),
+        "height_mm": round(vh, 4),
+    }
+
+
+@dataclass(frozen=True)
+class SvgImagePlacement:
+    """A raster to embed at real-world millimetre coordinates."""
+
+    png_bytes: bytes
+    x_mm: float
+    y_mm: float
+    width_mm: float
+    height_mm: float
+    rotation_deg: float = 0.0
+
+
+def write_document_svg(
+    polys: list[list[tuple[float, float]]],
+    output_path: str | Path,
+    *,
+    images: list[SvgImagePlacement] | None = None,
+    stroke: str = "#000000",
+    stroke_width: float = 0.5,
+    padding: float = 2.0,
+) -> dict:
+    """Write outlines *and* placed images into one SVG, in one mm space.
+
+    This is the single-file answer to "export the outline with the image on
+    it": every other format needs the raster as a sidecar, because DXF and FVI
+    have nowhere to put one. Images are embedded as base64 PNG, so the file
+    stands alone.
+
+    Coordinates are millimetres, y-up in the document. SVG's y axis points
+    down, so both paths and images are emitted through the same
+    ``y_svg = y_total - y_world`` flip rather than a group transform, which
+    would mirror the rasters.
+    """
+    import base64
+
+    from simple_stipple.platform.storage import atomic_write_via
+
+    placements = list(images or [])
+    boxes = [
+        [
+            (image.x_mm, image.y_mm),
+            (image.x_mm + image.width_mm, image.y_mm + image.height_mm),
+        ]
+        for image in placements
+    ]
+    extent = [poly for poly in polys if poly] + boxes
+    if not extent:
+        raise ValueError("Nothing to export — the document has no geometry or images.")
+
+    x0, y0, x1, y1 = _bbox(extent)
+    vw = (x1 - x0) + padding * 2
+    vh = (y1 - y0) + padding * 2
+    y_total = y1 + padding
+
+    root = ET.Element(
+        "svg",
+        {
+            "xmlns": "http://www.w3.org/2000/svg",
+            "xmlns:xlink": "http://www.w3.org/1999/xlink",
+            "viewBox": f"{x0 - padding:.4f} 0 {vw:.4f} {vh:.4f}",
+            "width": f"{vw:.4f}mm",
+            "height": f"{vh:.4f}mm",
+        },
+    )
+    # Images first so vector linework reads on top of the artwork.
+    for image in placements:
+        encoded = base64.b64encode(image.png_bytes).decode("ascii")
+        top = y_total - (image.y_mm + image.height_mm)
+        attrs = {
+            "x": f"{image.x_mm:.4f}",
+            "y": f"{top:.4f}",
+            "width": f"{image.width_mm:.4f}",
+            "height": f"{image.height_mm:.4f}",
+            "preserveAspectRatio": "none",
+            "href": f"data:image/png;base64,{encoded}",
+        }
+        if image.rotation_deg:
+            centre_x = image.x_mm + image.width_mm / 2.0
+            centre_y = top + image.height_mm / 2.0
+            # Negated: the y flip reverses the sense of a rotation.
+            attrs["transform"] = (
+                f"rotate({-image.rotation_deg:.4f} {centre_x:.4f} {centre_y:.4f})"
+            )
+        ET.SubElement(root, "image", attrs)
+
+    group = ET.SubElement(
+        root,
+        "g",
+        {"fill": "none", "stroke": stroke, "stroke-width": f"{stroke_width:.4f}"},
+    )
+    for points in polys:
+        if points:
+            ET.SubElement(group, "path", d=_poly_to_svg_d(points, y_total))
+
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    atomic_write_via(
+        output_path,
+        lambda path: tree.write(str(path), xml_declaration=True, encoding="utf-8"),
+    )
+    return {
+        "polylines": len(polys),
+        "images": len(placements),
         "width_mm": round(vw, 4),
         "height_mm": round(vh, 4),
     }

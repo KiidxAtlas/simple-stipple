@@ -47,7 +47,6 @@ class RepoPage(BasePage):
         self._git_process: subprocess.Popen[str] | None = None
         self._git_thread: threading.Thread | None = None
         self._git_op_done.connect(self._on_git_op_done)
-        self._completed_steps: set[int] = set()
         self._workflow_repo_key: str | None = None
 
         root = QVBoxLayout(self)
@@ -247,7 +246,6 @@ class RepoPage(BasePage):
         repo_key = str(repo.resolve()) if repo is not None else None
         if repo_key != self._workflow_repo_key:
             self._workflow_repo_key = repo_key
-            self._completed_steps.clear()
         if not self._dir_edit.text().strip():
             message = "Choose a repository folder to enable git actions."
             color = STATUS_NEUTRAL
@@ -377,8 +375,6 @@ class RepoPage(BasePage):
             ok = results[-1][1] if results else False
             if ok:
                 self._set_step_status(self._pull_status, "Up to date", STATUS_OK)
-                self._completed_steps.add(1)
-                self._update_workflow(True)
             else:
                 self._set_step_status(self._pull_status, "Pull failed — check log", STATUS_ERR)
 
@@ -491,8 +487,6 @@ class RepoPage(BasePage):
                 QMessageBox.information(self, "Commit", "Nothing to commit.")
             elif ok:
                 self._set_step_status(self._commit_status, "Committed", STATUS_OK)
-                self._completed_steps.add(2)
-                self._update_workflow(True)
             else:
                 self._set_step_status(self._commit_status, "Commit failed — check log", STATUS_ERR)
 
@@ -503,8 +497,6 @@ class RepoPage(BasePage):
             ok = results[-1][1] if results else False
             if ok:
                 self._set_step_status(self._push_status, "Pushed", STATUS_OK)
-                self._completed_steps.add(3)
-                self._update_workflow(True)
             else:
                 self._set_step_status(self._push_status, "Push failed — check log", STATUS_ERR)
 

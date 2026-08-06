@@ -44,7 +44,11 @@ from simple_stipple.canvas.constants import DIM
 from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.features.base import BasePage
 from simple_stipple.features.pattern.export_jobs import (
+    EXPORT_BUTTON_LABEL,
+    EXPORT_FORMAT_KEYS,
     EngravingJob,
+    export_document_file,
+    export_format_suffix,
     export_laserstar_job,
 )
 from simple_stipple.ui.components.collapsible import CollapsibleSection
@@ -104,6 +108,7 @@ from simple_stipple.features.pattern.zones import (
     snapshot_zone_jobs,
     update_zone_actions,
 )
+from simple_stipple.engine.patterns.fill import NULL_PATTERN
 from simple_stipple.features.pattern.treatments import (
     IMAGE_PATTERN,
     engraving_mask_polys,
@@ -721,7 +726,16 @@ class PatternPage(BasePage):
         return label.removeprefix("Custom · ") if label.startswith("Custom · ") else None
 
     def _current_pattern_key(self) -> str:
-        return self._pattern_key(self._pattern_combo.currentText())
+        """The generator the document-level path should run.
+
+        "Image" is a treatment choice, not a generator: the region's outline
+        is emitted and the raster is exported alongside it. Since the pattern
+        combo became the region editor, selecting an Engrave region leaves
+        "Image" showing here — reporting it as a generator made the solver
+        fail with "Pattern 'Image' is no longer available".
+        """
+        key = self._pattern_key(self._pattern_combo.currentText())
+        return NULL_PATTERN if key == IMAGE_PATTERN else key
 
     def _apply_scale(
         self,
@@ -1237,9 +1251,16 @@ class PatternPage(BasePage):
         """
         region_id = self._selected_region_id()
         if region_id is None:
+            # No region selected is not a dead end: the image is on the part,
+            # so it engraves over the whole outline and shows up in Output as
+            # its own operation. Silently doing nothing here is what let an
+            # image sit on the canvas and vanish from the export.
             self._set_status(
-                "Select a region first — the image is engraved into a region.", STATUS_WARN
+                "Image added over the whole outline. Select a region and re-add it "
+                "to clip it to that region instead.",
+                STATUS_OK,
             )
+            self._refresh_output_panel()
             return
         set_region_engraving(
             self,
@@ -1316,13 +1337,43 @@ class PatternPage(BasePage):
                 return region_id, engraving
         return found[0]
 
-    def _export_document_job(self) -> None:
-        """One Export: every enabled operation, written as one job.
+    def _with_solved_pattern(self, continuation) -> None:
+        """Run an export once the geometry it writes has finished solving."""
+        if self._preview_polys_cache and not self._preview_is_stale:
+            continuation()
+            return
+        if not self._zones and not self._edit_polys:
+            self._set_status("Load an outline before exporting.", STATUS_WARN)
+            return
+        self._pending_export_after_preview = continuation
+        self._set_status("Solving the pattern before export…", STATUS_WARN)
+        self._schedule_preview()
 
-        Replaces the vector / engraving / LaserStar fork. The document already
-        knows what it produces; the user should not have to choose a "kind"
-        before they can write it, then reconcile two files at the machine.
-        """
+    # ── Format ────────────────────────────────────────────────────────────
+    #
+    # The format picker sits beside Export and changes what the file *is*.
+    # It never changes which operations get written — the Output panel owns
+    # that, which is what separates this from the old three-kind fork where
+    # picking "engraving" silently dropped your vectors.
+
+    def _select_export_format(self, export_format: str) -> None:
+        if export_format not in EXPORT_FORMAT_KEYS:
+            return
+        self._export_format = export_format
+        self._settings["pattern_export_format"] = export_format
+        self._refresh_export_format_label()
+        self._emit_state_changed()
+        self._set_status(f"Export format set to {export_format.upper()}", STATUS_OK)
+
+    def _refresh_export_format_label(self) -> None:
+        if not hasattr(self, "_gen_btn"):
+            return
+        self._gen_btn.setText(EXPORT_BUTTON_LABEL[self._export_format])
+        for key, action in getattr(self, "_export_actions", {}).items():
+            action.setChecked(key == self._export_format)
+
+    def _export_document_job(self) -> None:
+        """One Export: every enabled operation, in the chosen format."""
         operations = self._enabled_operations()
         if not operations:
             self._set_status(
@@ -1351,16 +1402,98 @@ class PatternPage(BasePage):
         # thing being written is the part, not a picture of it.
         self._force_export_quality = True
         self._preview_is_stale = True
-        self._with_current_preview(self._perform_document_export)
+        self._with_solved_pattern(self._perform_document_export)
+
+    def _collect_engraving_job(self) -> tuple[str | None, Any, list | None]:
+        """Source, settings, and clip mask for the enabled Engrave operation."""
+        active = self._active_engraving()
+        if active is not None:
+            self._sync_engraving_widgets_from_region(active[0])
+        if not self._engraving_image_path:
+            return None, None, None
+        job = EngravingJob(
+            x_mm=self._engrave_x.value(),
+            y_mm=self._engrave_y.value(),
+            width_mm=self._engrave_w.value(),
+            height_mm=self._engrave_h.value(),
+            line_interval_mm=self._engrave_interval.value(),
+            min_power_percent=self._engrave_min_power.value(),
+            max_power_percent=self._engrave_max_power.value(),
+            speed_mm_s=self._engrave_speed.value(),
+            gamma=self._engrave_gamma.value(),
+            passes=self._engrave_passes.value(),
+            invert=self._engrave_invert.isChecked(),
+            rotation_deg=self._engrave_rotation.value(),
+        )
+        return self._engraving_image_path, job, self._engraving_mask_polys()
 
     def _perform_document_export(self) -> None:
         self._force_export_quality = False
         operations = self._enabled_operations()
         wants_engraving = any(op.kind == "engrave" for op in operations)
         wants_vectors = any(op.kind in {"mark", "cut"} for op in operations)
-        active = self._active_engraving()
-        if active is not None:
-            self._sync_engraving_widgets_from_region(active[0])
+        try:
+            raster_source, engraving_job, raster_mask = (
+                self._collect_engraving_job() if wants_engraving else (None, None, None)
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Export", str(exc))
+            return
+        vectors = list(self._preview_polys_cache) if wants_vectors else []
+        if self._export_format == "laserstar":
+            self._write_laserstar_package(operations, vectors, raster_source, engraving_job, raster_mask)
+            return
+        self._write_single_file(operations, vectors, raster_source, engraving_job, raster_mask)
+
+    def _write_single_file(
+        self, operations, vectors, raster_source, engraving_job, raster_mask
+    ) -> None:
+        suffix = export_format_suffix(self._export_format)
+        source_name = (
+            Path(self._dxf_edit.text()).stem if self._dxf_edit.text().strip() else "pattern"
+        )
+        out_path = pick_save_file(
+            self,
+            self._settings,
+            "pattern_output",
+            f"Export {self._export_format.upper()}",
+            f"{source_name}{suffix}",
+            f"{self._export_format.upper()} files (*{suffix});;All files (*)",
+            fallback_dir=self._settings.get("pattern_output_dir", ""),
+        )
+        if not out_path:
+            return
+        try:
+            written = export_document_file(
+                out_path,
+                self._export_format,
+                vectors,
+                engraving_source=raster_source,
+                engraving_job=engraving_job,
+                engraving_mask=raster_mask,
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Export Failed", str(exc))
+            return
+        self._last_out_path = str(written[0])
+        self._export_is_current = True
+        self._reveal_btn.setVisible(True)
+        self._operator_notes_btn.setVisible(False)
+        extra = (
+            f" (+{len(written) - 1} engraving file{'s' if len(written) > 2 else ''})"
+            if len(written) > 1
+            else ""
+        )
+        self._set_status(
+            f"{len(operations)} operation{'s' if len(operations) != 1 else ''} exported → "
+            f"{Path(written[0]).name}{extra}",
+            STATUS_OK,
+        )
+        self._update_preview_controls()
+
+    def _write_laserstar_package(
+        self, operations, vectors, raster_source, engraving_job, raster_mask
+    ) -> None:
         source_name = (
             Path(self._dxf_edit.text()).stem if self._dxf_edit.text().strip() else "stipple-job"
         )
@@ -1374,46 +1507,18 @@ class PatternPage(BasePage):
                 or self._settings.get("pattern_output_dir", "")
                 or Path.home()
             ),
-            has_engraving=wants_engraving and bool(self._engraving_image_path),
+            has_engraving=bool(raster_source),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         values = dialog.values()
-        name = values["job_name"]
-        destination = values["destination"]
-        self._settings["laserstar_job_name"] = name
-        self._settings["laserstar_output_dir"] = destination
-        self._settings["pattern_export_format"] = values["format"]
-        engraving_job = None
-        raster_source = None
-        raster_mask = None
-        if wants_engraving and self._engraving_image_path:
-            raster_source = self._engraving_image_path
-            engraving_job = EngravingJob(
-                x_mm=self._engrave_x.value(),
-                y_mm=self._engrave_y.value(),
-                width_mm=self._engrave_w.value(),
-                height_mm=self._engrave_h.value(),
-                line_interval_mm=self._engrave_interval.value(),
-                min_power_percent=self._engrave_min_power.value(),
-                max_power_percent=self._engrave_max_power.value(),
-                speed_mm_s=self._engrave_speed.value(),
-                gamma=self._engrave_gamma.value(),
-                passes=self._engrave_passes.value(),
-                invert=self._engrave_invert.isChecked(),
-                rotation_deg=self._engrave_rotation.value(),
-            )
-            try:
-                raster_mask = self._engraving_mask_polys()
-            except ValueError as exc:
-                QMessageBox.warning(self, "Export", str(exc))
-                return
-        vectors = list(self._preview_polys_cache) if wants_vectors else []
+        self._settings["laserstar_job_name"] = values["job_name"]
+        self._settings["laserstar_output_dir"] = values["destination"]
         try:
             folder = export_laserstar_job(
-                destination,
-                name,
+                values["destination"],
+                values["job_name"],
                 vectors,
                 engraving_source=raster_source,
                 engraving_job=engraving_job,
@@ -1426,11 +1531,12 @@ class PatternPage(BasePage):
             self._operator_notes_btn.setVisible(True)
             self._set_status(
                 f"{len(operations)} operation{'s' if len(operations) != 1 else ''} "
-                f"exported as one job → {folder.name}",
+                f"exported as one package → {folder.name}",
                 STATUS_OK,
             )
         except (FileExistsError, OSError, ValueError) as exc:
             QMessageBox.critical(self, "Export Failed", str(exc))
+        self._update_preview_controls()
 
     def _copy_operator_notes(self) -> None:
         instance = QApplication.instance()
