@@ -979,9 +979,9 @@ class DraftPage(BasePage):
                 if embedded_images:
                     notes.append(
                         f"Showing {embedded_images} engraving image"
-                        f"{'s' if embedded_images != 1 else ''} from this SVG as a "
-                        "reference backdrop. Draft edits linework — open the file on "
-                        "the Pattern page to move, resize, or export the image."
+                        f"{'s' if embedded_images != 1 else ''} from this SVG. Click it "
+                        "for handles, or press Delete to remove it. Open the file on the "
+                        "Pattern page to change its engraving settings or export it."
                     )
                 if unsupported:
                     notes.append(
@@ -998,10 +998,10 @@ class DraftPage(BasePage):
     def _show_imported_svg_image(self, path: str) -> int:
         """Put any image inside an imported SVG on the canvas as a backdrop.
 
-        Draft has no image tooling, but the geometry was drawn *over* this
-        artwork — hiding it left the user looking at an empty square and no
-        way to tell the image had come across at all. It is deliberately not
-        editable here: Pattern owns placement.
+        Draft has no image *sidebar*, but the geometry was drawn over this
+        artwork, so it belongs on screen — and it has to be a real object, not
+        a stuck decal: click it for handles, drag or resize it, press Delete
+        to remove it. Pattern still owns the engraving settings and export.
         """
         import io
 
@@ -1023,11 +1023,27 @@ class DraftPage(BasePage):
                     first.y_mm,
                     first.rotation_deg,
                 )
-            self._canvas.set_background_image_editable(False)
+            self._canvas.set_background_image_editable(True, self._on_backdrop_transform)
+            self._canvas.set_background_image_key_callback(self._on_backdrop_key)
         except (OSError, ValueError):
             self._canvas.clear_background_image()
             return 0
         return len(placements)
+
+    def _on_backdrop_transform(
+        self, _x: float, _y: float, _w: float, _h: float, _rotation: float = 0.0
+    ) -> None:
+        """The canvas owns the backdrop's placement; nothing here to mirror."""
+        self._refresh_status()
+
+    def _on_backdrop_key(self, action: str, reverse: bool = False) -> None:
+        """Delete removes the reference image, the same as any other object."""
+        if action != "remove":
+            return
+        self._canvas.clear_background_image()
+        self._set_import_note("")
+        self._canvas._show_flash("Reference image removed", 1200)
+        self._refresh_status()
 
     def _review_dxf_import(self, path, by_layer, report, *, default_append: bool):
         dialog = DxfImportPreviewDialog(

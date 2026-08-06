@@ -108,6 +108,7 @@ from simple_stipple.features.pattern.zones import (
     select_zone_for_canvas_selection,
     show_zone_context_menu,
     snapshot_zone_jobs,
+    sync_engraving_visibility,
     update_zone_actions,
 )
 from simple_stipple.engine.patterns.fill import NULL_PATTERN
@@ -2608,13 +2609,21 @@ class PatternPage(BasePage):
         return update_zone_actions(self)
 
     def _set_advanced_mode(self, enabled: bool) -> None:
-        """Keep secondary engraving controls optional without hiding fill."""
+        """Keep laser calibration optional without hiding the image itself.
+
+        This used to hide the whole engraving section, which since the
+        inspector rework is the *only* place an image can be removed or
+        placed — turning Advanced off left an image on the canvas with no
+        way to delete or edit it. Image controls follow the selection; only
+        the power/speed/passes detail is advanced.
+        """
         enabled = bool(enabled)
         self._settings["pattern_advanced_mode"] = enabled
-        for name in ("_engraving_section",):
+        for name in ("_engraving_process_section",):
             section = getattr(self, name, None)
             if section is not None:
                 section.setVisible(enabled)
+        sync_engraving_visibility(self)
         if hasattr(self, "_zone_scroll"):
             self._zone_scroll.setVisible(True)
         self._set_status(

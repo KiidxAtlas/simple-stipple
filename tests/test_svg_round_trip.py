@@ -239,7 +239,64 @@ def test_draft_shows_an_imported_svg_image_instead_of_an_empty_outline(
     assert page._canvas._bg_x_mm == pytest.approx(-30.0)
     assert page._canvas._bg_y_mm == pytest.approx(-5.0)
     assert page._canvas._bg_w_mm == pytest.approx(90.0)
-    # Draft does not own placement, so the backdrop is not draggable here.
-    assert page._canvas._bg_editable is False
+    # It is a real object, not a stuck decal: pick it up, move it, delete it.
+    assert page._canvas._bg_editable is True
     assert "engraving image" in (page._import_note or "")
+    page.close()
+
+
+def test_a_backdrop_can_be_moved_and_deleted(app: QApplication, tmp_path) -> None:
+    """A reference image you cannot remove is worse than one you opted into.
+
+    Draft mounted the imported image non-editable and offered no way to clear
+    it, so it was stuck on the canvas for the rest of the session.
+    """
+    from simple_stipple.features.draft.page import DraftPage
+
+    target = tmp_path / "with-image.svg"
+    write_document_svg(
+        [SQUARE],
+        target,
+        images=[SvgImagePlacement(_png(), x_mm=1.0, y_mm=1.0, width_mm=20.0, height_mm=10.0)],
+    )
+    page = DraftPage(settings={})
+    page._load_vector(str(target))
+
+    assert page._canvas._bg_editable, "the backdrop cannot be picked up"
+    page._canvas.select_background_image(True)
+    assert page._canvas._bg_selected, "the backdrop cannot be selected"
+
+    page._on_backdrop_key("remove")
+    assert page._canvas._bg_pil is None, "the backdrop cannot be deleted"
+    assert not (page._import_note or ""), "the note outlived the image it described"
+    page.close()
+
+
+def test_image_controls_survive_turning_advanced_mode_off(
+    app: QApplication, tmp_path
+) -> None:
+    """Advanced hid the section that owns Remove, stranding the image.
+
+    Since the inspector rework the engraving section is the only place an
+    image can be removed or placed, so it follows the selection. Only the
+    power/speed/passes detail is advanced.
+    """
+    art = tmp_path / "art.png"
+    art.write_bytes(_png())
+
+    page = PatternPage(settings={})
+    page.load_outline_polys([SQUARE])
+    page._zone_list.setCurrentRow(0)
+    page._engraving_image_path = str(art)
+    page._attach_image_to_selected_region(str(art))
+
+    page._set_advanced_mode(False)
+    assert page._engraving_section.isVisibleTo(page), "the image controls vanished"
+    assert page._engrave_remove_btn.isVisibleTo(page), "Remove is unreachable"
+    assert page._engrave_x.isVisibleTo(page), "placement is unreachable"
+    assert not page._engraving_process_section.isVisibleTo(page), "calibration is not basic"
+
+    page._remove_engraving_image()
+    assert page._engraving_image_path == ""
+    page.shutdown()
     page.close()
