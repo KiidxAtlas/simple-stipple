@@ -37,6 +37,7 @@ from simple_stipple.engine.formats.service import (
     summarize_dxf_import_report,
     svg_to_dxf,
 )
+from simple_stipple.engine.formats.svg import read_svg_images
 from simple_stipple.engine.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
 from simple_stipple.engine.patterns.presets import ensure_builtins_seeded
 from simple_stipple.engine.patterns.processing import PATTERNS, PatternProcessor
@@ -94,6 +95,7 @@ from simple_stipple.features.pattern.layout import (
     build_right,
     refresh_pattern_properties_panel,
 )
+from simple_stipple.platform.paths import user_data_dir
 from simple_stipple.features.pattern.zones import (
     assign_zone,
     clear_zones,
@@ -1944,6 +1946,7 @@ class PatternPage(BasePage):
             self._load_dxf(path)
             return
         try:
+            images: list = []
             if suffix == ".fvi":
                 document = read_fvi(path)
                 polys = [list(poly) for poly in document.paths]
@@ -1952,14 +1955,80 @@ class PatternPage(BasePage):
                     converted = Path(folder) / "outline.dxf"
                     svg_to_dxf(path, converted)
                     polys, _report = load_dxf_polylines_with_report(str(converted))
+                images = read_svg_images(path)
             else:
                 raise ValueError("Choose a DXF, FVI, or SVG vector file.")
-            if not polys:
+            if not polys and not images:
                 raise ValueError(f"No supported outline geometry was found in {Path(path).name}.")
-            self.load_outline_polys(polys, source_label=Path(path).name)
+            if polys:
+                self.load_outline_polys(polys, source_label=Path(path).name)
             self._dxf_edit.setText(path)
+            if images:
+                self._restore_imported_image(images[0], Path(path).stem)
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
+
+    def _restore_imported_image(self, placement, stem: str) -> None:
+        """Put an image carried by an imported SVG back on the part.
+
+        Reopening our own export used to silently lose the artwork: the
+        importer only ever recovered linework. The raster is unpacked to the
+        app's data directory so the placement keeps a real file to point at
+        after the source SVG moves or the temp directory goes away.
+        """
+        folder = user_data_dir() / "imported-images"
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"{stem or 'imported'}.png"
+        try:
+            target.write_bytes(placement.png_bytes)
+        except OSError as exc:
+            self._set_status(f"Image in this SVG could not be unpacked: {exc}", STATUS_WARN)
+            return
+        self._engraving_image_path = str(target)
+        self._engrave_x.setValue(placement.x_mm)
+        self._engrave_y.setValue(placement.y_mm)
+        self._engrave_w.setValue(max(placement.width_mm, 0.01))
+        self._engrave_h.setValue(max(placement.height_mm, 0.01))
+        self._engrave_rotation.setValue(placement.rotation_deg)
+        # Land it in the region it sits inside, so it keeps its clip mask.
+        region_id = self._region_under_placement(placement)
+        if region_id is not None:
+            from simple_stipple.features.pattern.zones import row_for_region_id
+
+            self._zone_list.setCurrentRow(row_for_region_id(self, region_id))
+        self._attach_image_to_selected_region(str(target))
+        self._update_engraving_overlay()
+        self._refresh_engraving_ui()
+        self._refresh_output_panel()
+        self._set_status(
+            f"Imported the outline and its engraving image from {stem}.", STATUS_OK
+        )
+
+    def _region_under_placement(self, placement) -> str | None:
+        """The smallest region containing the image's centre, if any."""
+        from shapely.geometry import Point as ShapelyPoint
+        from shapely.geometry import Polygon as ShapelyPolygon
+
+        centre = ShapelyPoint(
+            placement.x_mm + placement.width_mm / 2.0,
+            placement.y_mm + placement.height_mm / 2.0,
+        )
+        best: str | None = None
+        best_area = float("inf")
+        for outline_id, poly in zip(self._outline_ids, self._edit_polys):
+            if len(poly) < 3:
+                continue
+            try:
+                shape = ShapelyPolygon(poly)
+            except (TypeError, ValueError):
+                continue
+            if not shape.is_valid:
+                shape = shape.buffer(0)
+            if shape.is_empty or shape.area <= 0 or shape.area >= best_area:
+                continue
+            if shape.covers(centre):
+                best, best_area = outline_id, shape.area
+        return best
 
     def load_outline_polys(
         self,

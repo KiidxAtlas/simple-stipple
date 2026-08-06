@@ -611,6 +611,90 @@ def _svg_output_size(
     return max(xs) - min(xs), max(ys) - min(ys)
 
 
+def read_svg_images(input_path: str | Path) -> list[SvgImagePlacement]:
+    """Read ``<image>`` placements back out of an SVG, in world millimetres.
+
+    ``svg_to_dxf`` recovers the linework and has nowhere to put a raster, so an
+    SVG written by this app could not be reopened without losing its artwork.
+    Placements come back through the same root matrix and y-flip the vector
+    path uses, so an image and the outlines around it land in one space.
+
+    Images referenced by an external path are resolved relative to the SVG;
+    ones that cannot be read are skipped rather than failing the whole import.
+    """
+    import base64
+
+    source = Path(input_path)
+    root = ET.parse(str(source)).getroot()
+    root_matrix, y_flip = _root_svg_matrix(root)
+    viewbox = [float(value) for value in re.findall(_NUM_RE, root.attrib.get("viewBox", ""))]
+    user_per_px_x, user_per_px_y = _viewport_user_units(root, viewbox)
+
+    placements: list[SvgImagePlacement] = []
+    for element in root.iter():
+        if not element.tag.endswith("image"):
+            continue
+        href = element.attrib.get("href") or element.attrib.get(
+            "{http://www.w3.org/1999/xlink}href", ""
+        )
+        if not href:
+            continue
+        if href.startswith("data:"):
+            _header, _, payload = href.partition(",")
+            try:
+                # validate=True so junk raises rather than decoding to b"" —
+                # an empty payload would otherwise become a zero-byte image
+                # placed on the part.
+                png_bytes = base64.b64decode(payload, validate=True)
+            except (ValueError, TypeError):
+                continue
+        else:
+            candidate = (source.parent / href).resolve()
+            try:
+                png_bytes = candidate.read_bytes()
+            except OSError:
+                continue
+        if not png_bytes:
+            continue
+
+        x = _svg_coordinate(element.attrib.get("x"), "x", user_per_px_x, user_per_px_y)
+        y = _svg_coordinate(element.attrib.get("y"), "y", user_per_px_x, user_per_px_y)
+        width = _svg_coordinate(element.attrib.get("width"), "x", user_per_px_x, user_per_px_y)
+        height = _svg_coordinate(element.attrib.get("height"), "y", user_per_px_x, user_per_px_y)
+        if width <= 0 or height <= 0:
+            continue
+        matrix = _matrix_multiply(
+            root_matrix, _parse_transform(element.attrib.get("transform") or "")
+        )
+        left, top = _apply_matrix(matrix, (x, y))
+        right, bottom = _apply_matrix(matrix, (x + width, y + height))
+        # SVG y grows downward, the document's grows up: the box's SVG bottom
+        # edge is its world *top*, so the origin is the flipped far corner.
+        world_x = min(left, right)
+        world_y = (y_flip - max(top, bottom)) if y_flip else -max(top, bottom)
+        rotation = _transform_rotation_deg(element.attrib.get("transform"))
+        placements.append(
+            SvgImagePlacement(
+                png_bytes=png_bytes,
+                x_mm=world_x,
+                y_mm=world_y,
+                width_mm=abs(right - left),
+                height_mm=abs(bottom - top),
+                # The writer negates rotation to cross the flip; undo that.
+                rotation_deg=-rotation,
+            )
+        )
+    return placements
+
+
+def _transform_rotation_deg(transform: str | None) -> float:
+    """The rotate() angle in a transform attribute, if it carries one."""
+    if not transform:
+        return 0.0
+    match = re.search(rf"rotate\s*\(\s*({_NUM_RE})", transform)
+    return float(match.group(1)) if match else 0.0
+
+
 def svg_to_dxf(
     input_path: str | Path,
     output_path: str | Path,
