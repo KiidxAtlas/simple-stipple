@@ -13,7 +13,7 @@ import pytest
 from PIL import Image
 from PySide6.QtWidgets import QApplication
 
-from simple_stipple.engine.formats.svg import (
+from simple_stipple.core.formats.svg import (
     SvgImagePlacement,
     read_svg_images,
     write_document_svg,
@@ -52,8 +52,8 @@ def test_the_image_lands_where_the_outlines_land(tmp_path) -> None:
     An image that drifted relative to its outlines would be worse than no
     import at all — it would look right and cut wrong.
     """
-    from simple_stipple.engine.formats.dxf import load_dxf_polylines_with_report
-    from simple_stipple.engine.formats.svg import svg_to_dxf
+    from simple_stipple.core.formats.dxf import load_dxf_polylines_with_report
+    from simple_stipple.core.formats.svg import svg_to_dxf
 
     placement = SvgImagePlacement(_png(), x_mm=12.5, y_mm=7.25, width_mm=40.0, height_mm=20.0)
     svg = tmp_path / "doc.svg"
@@ -152,8 +152,8 @@ NEGATIVE = [(-33.6, -10.0), (66.4, -10.0), (66.4, 51.5), (-33.6, 51.5), (-33.6, 
 
 
 def _reimport_outline(svg_path, tmp_path):
-    from simple_stipple.engine.formats.dxf import load_dxf_polylines_with_report
-    from simple_stipple.engine.formats.svg import svg_to_dxf
+    from simple_stipple.core.formats.dxf import load_dxf_polylines_with_report
+    from simple_stipple.core.formats.svg import svg_to_dxf
 
     dxf = tmp_path / "reimport.dxf"
     svg_to_dxf(svg_path, dxf)
@@ -190,7 +190,7 @@ def test_the_drawing_does_not_drift_across_repeated_round_trips(tmp_path) -> Non
 
 
 def test_draft_exports_are_origin_stable_too(tmp_path) -> None:
-    from simple_stipple.engine.formats.svg import write_polylines_svg
+    from simple_stipple.core.formats.svg import write_polylines_svg
 
     target = tmp_path / "draft.svg"
     write_polylines_svg([NEGATIVE], target)
@@ -211,6 +211,27 @@ def test_a_foreign_svg_still_normalises_onto_its_viewbox(tmp_path) -> None:
     outline = _reimport_outline(target, tmp_path)[0]
     # Unchanged behaviour: translated into the viewBox's positive space.
     assert outline[0][0] == pytest.approx(2.0)
+
+
+def test_a_curved_path_imports_as_a_flattened_polyline_not_dropped(tmp_path) -> None:
+    """Bezier paths used to be rejected outright as an unsupported command."""
+    from simple_stipple.core.formats.svg import svg_to_dxf
+
+    target = tmp_path / "curve.svg"
+    target.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" '
+        'width="20mm" height="20mm">'
+        '<path d="M0,0 C0,10 10,10 10,0 S20,-10 20,0"/>'
+        "</svg>"
+    )
+    dxf = tmp_path / "curve.dxf"
+    result = svg_to_dxf(target, dxf)
+    assert result["unsupported_paths"] == 0
+
+    polys = _reimport_outline(target, tmp_path)
+    assert len(polys) == 1
+    # A flattened curve has many more than the 4 anchor points of the d string.
+    assert len(polys[0]) > 10
 
 
 def test_draft_shows_an_imported_svg_image_instead_of_an_empty_outline(
@@ -272,9 +293,7 @@ def test_a_backdrop_can_be_moved_and_deleted(app: QApplication, tmp_path) -> Non
     page.close()
 
 
-def test_image_controls_survive_turning_advanced_mode_off(
-    app: QApplication, tmp_path
-) -> None:
+def test_image_controls_survive_turning_advanced_mode_off(app: QApplication, tmp_path) -> None:
     """Advanced hid the section that owns Remove, stranding the image.
 
     Since the inspector rework the engraving section is the only place an

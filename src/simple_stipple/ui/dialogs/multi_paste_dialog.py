@@ -5,8 +5,8 @@ from __future__ import annotations
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QSpinBox, QVBoxLayout
 
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
+from simple_stipple.ui.components.units import from_display, suffix, to_display
 from simple_stipple.ui.dialogs.base import BaseDialog
-from simple_stipple.ui.units import from_display, suffix, to_display
 
 
 class MultiPasteDialog(BaseDialog):

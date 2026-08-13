@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.engine.formats.service import FVI_UNIT_MM, DxfService, FviExportOptions
+from simple_stipple.core.formats.service import FVI_UNIT_MM, DxfService, FviExportOptions
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 
 

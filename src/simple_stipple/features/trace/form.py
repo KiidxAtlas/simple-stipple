@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.ui.components.collapsible import CollapsibleSection
+from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.inputs import NoWheelSlider
 
 

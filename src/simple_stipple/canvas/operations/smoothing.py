@@ -5,8 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Protocol
 
-from simple_stipple.engine.cad.geometry import fit_polyline_to_bezier
-from simple_stipple.engine.editing.smoothing import simplify, smooth
+from simple_stipple.core.cad.geometry import fit_polyline_to_bezier
+from simple_stipple.core.editing.smoothing import simplify, smooth
 
 
 class SignalEmitter(Protocol):

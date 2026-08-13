@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QTabWidget, QWidget
 
 from simple_stipple.features.convert import ConvertPage
 from simple_stipple.features.draft import DraftPage
-from simple_stipple.features.pattern.page import PatternPage
+from simple_stipple.features.pattern import PatternPage
 from simple_stipple.features.repository import RepoPage
 from simple_stipple.features.trace.page import TracePage
 
@@ -271,18 +271,6 @@ class PageRuntime:
                 if callable(setter):
                     setter(value)
 
-    def _connect_signals_to(self, slot: Callable[..., Any], signal_name: str) -> None:
-        """Connect ``canvas.<signal_name>`` to ``slot`` on every registered canvas."""
-        for spec in self._specs:
-            page = self.get(spec.page_id)
-            if page is None:
-                continue
-            for canvas_attr in spec.content_canvas_attrs:
-                canvas = getattr(page, canvas_attr, None)
-                signal = getattr(canvas, signal_name, None)
-                if signal is not None:
-                    signal.connect(slot)
-
     def apply(self, key: str, value: Any) -> None:
         """Push one setting to every canvas that supports its declared setter."""
         sync = next((item for item in SETTINGS_SYNC_TABLE if item.key == key), None)
@@ -308,79 +296,28 @@ class PageRuntime:
                 if signal is not None:
                     signal.connect(lambda value, key=sync.key: handler(key, value))
 
-    def apply_unit_system(self, unit: str) -> None:
-        """Push the active display-unit setting to every page's canvas(es)."""
-        self._apply_to_canvases("set_unit_system", unit)
-
     def apply_smoothing_method(self, method: str) -> None:
         """Push the chosen path-smoothing algorithm to every page's canvas(es)."""
         self._apply_to_canvases("set_smoothing_method", method)
-
-    def connect_smoothing_method_changed(self, slot: Callable[..., Any]) -> None:
-        """Connect every page's canvas(es) smoothingMethodChanged signal to
-        ``slot`` — used to persist a sidebar-driven method change and echo
-        it to every other tab's sidebar/Settings state."""
-        self._connect_signals_to(slot, "smoothingMethodChanged")
 
     def apply_smooth_iterations(self, iterations: int) -> None:
         """Push the remembered Smooth-prompt iteration count to every
         page's canvas(es)."""
         self._apply_to_canvases("set_smooth_iterations", iterations)
 
-    def connect_smooth_iterations_changed(self, slot: Callable[..., Any]) -> None:
-        self._connect_signals_to(slot, "smoothIterationsChanged")
-
     def apply_simplify_tolerance(self, tolerance: float) -> None:
         """Push the remembered Simplify-prompt tolerance to every page's
         canvas(es)."""
         self._apply_to_canvases("set_simplify_tolerance", tolerance)
-
-    def connect_simplify_tolerance_changed(self, slot: Callable[..., Any]) -> None:
-        self._connect_signals_to(slot, "simplifyToleranceChanged")
-
-    def apply_radial_menu_tools(self, tools: list[str]) -> None:
-        """Push the customized radial ("Q") menu wedge list to every page's
-        canvas(es) that support it (only DxfCanvas does)."""
-        self._apply_to_canvases("set_radial_menu_tools", tools)
 
     def apply_draw_sidebar_width(self, width: int) -> None:
         """Push the draw sidebar's width to every page's canvas(es), so
         resizing it on one tab keeps every tab's sidebar consistent."""
         self._apply_to_canvases("set_draw_sidebar_width", width)
 
-    def connect_draw_sidebar_width_changed(self, slot: Callable[..., Any]) -> None:
-        """Connect every page's canvas(es) drawSidebarWidthChanged signal to
-        ``slot`` — used to persist a live sidebar-resize drag and echo it to
-        every other tab's sidebar."""
-        self._connect_signals_to(slot, "drawSidebarWidthChanged")
-
     def apply_draw_sidebar_height(self, height: int | None) -> None:
         """Push the draw sidebar's height to every page's canvas(es), so
         resizing it on one tab keeps every tab's sidebar consistent."""
         self._apply_to_canvases("set_draw_sidebar_height", height)
 
-    def connect_draw_sidebar_height_changed(self, slot: Callable[..., Any]) -> None:
-        """Connect every page's canvas(es) drawSidebarHeightChanged signal
-        to ``slot`` — used to persist a live sidebar-resize drag and echo
-        it to every other tab's sidebar."""
-        self._connect_signals_to(slot, "drawSidebarHeightChanged")
 
-    def apply_draw_sidebar_sections(self, sections: list[str]) -> None:
-        """Push the customized draw-sidebar section list to every page's
-        canvas(es)."""
-        self._apply_to_canvases("set_draw_sidebar_sections", sections)
-
-    def apply_draw_sidebar_path_tools(self, tools: list[str]) -> None:
-        """Push the customized Path tool icon list (which show, in what
-        order) to every page's canvas(es)."""
-        self._apply_to_canvases("set_draw_sidebar_path_tools", tools)
-
-    def apply_draw_sidebar_shape_tools(self, tools: list[str]) -> None:
-        """Push the customized Shapes tool icon list (which show, in what
-        order) to every page's canvas(es)."""
-        self._apply_to_canvases("set_draw_sidebar_shape_tools", tools)
-
-    def apply_draw_sidebar_always_visible(self, enabled: bool) -> None:
-        """Push the "always visible" draw sidebar setting to every page's
-        canvas(es)."""
-        self._apply_to_canvases("set_draw_sidebar_always_visible", enabled)

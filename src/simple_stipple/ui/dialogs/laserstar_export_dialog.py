@@ -22,7 +22,7 @@ from simple_stipple.ui.components.layout import (
     sep,
     surface_frame,
 )
-from simple_stipple.ui.components.tokens import (
+from simple_stipple.ui.style import (
     SPACE_LG,
     SPACE_MD,
 )

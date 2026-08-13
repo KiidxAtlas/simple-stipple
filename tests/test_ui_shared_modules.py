@@ -8,9 +8,11 @@ from types import ModuleType
 
 import pytest
 
-from simple_stipple.ui import recent
+from simple_stipple.platform.settings import project_root, user_cache_dir
 from simple_stipple.ui.components import __all__ as component_exports
-from simple_stipple.ui.units import (
+from simple_stipple.ui.components import recent
+from simple_stipple.ui.components.feedback import notification_history, record_notification
+from simple_stipple.ui.components.units import (
     format_length,
     from_display,
     parse_numeric_expression,
@@ -28,6 +30,18 @@ def test_numeric_units_preserve_expression_behavior() -> None:
     assert format_length(25.4, "in") == "1.00 in"
     with pytest.raises(ValueError, match="Only arithmetic"):
         parse_numeric_expression("__import__('os')")
+
+
+def test_notification_history_records_messages() -> None:
+    before = len(notification_history())
+    record_notification("Shared UI notification characterization")
+    assert notification_history()[-1][1] == "Shared UI notification characterization"
+    assert len(notification_history()) == before + 1
+
+
+def test_settings_paths_resolve_under_the_project_and_cache_homes() -> None:
+    assert project_root().name == "simple-stipple"
+    assert user_cache_dir().name == "cache"
 
 
 def test_recent_files_dedupe_filter_and_persist(
@@ -53,6 +67,17 @@ def test_recent_files_dedupe_filter_and_persist(
     assert recent.list_recent(settings, recent.KIND_DXF) == [str(second.resolve())]
     recent.prune_missing(settings)
     assert settings["recent_files.dxf"] == [str(second.resolve())]
+    assert saved
+
+
+def test_recent_files_preserve_patchable_persistence_behavior(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    saved: list[dict] = []
+    monkeypatch.setattr(recent, "save_settings", lambda settings: saved.append(dict(settings)))
+    path = tmp_path / "recent.dxf"
+    path.touch()
+    recent.record_recent({}, recent.KIND_DXF, str(path))
     assert saved
 
 

@@ -1,1 +1,5 @@
-"""Pattern tab UI components."""
+"""Pattern-generation workflow public facade."""
+
+from .page import PatternPage
+
+__all__ = ["PatternPage"]

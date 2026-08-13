@@ -24,15 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.features.base import BasePage
-from simple_stipple.platform.config import save_settings
+from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.layout import (
     content_splitter,
     sidebar_panel,
     surface_frame,
 )
 from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.files import reveal_label
-from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
+from simple_stipple.ui.dialogs.files import reveal_label
+from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
 
 
 class RepoPage(BasePage):
@@ -451,7 +451,9 @@ class RepoPage(BasePage):
         if not identity["user.email"]:
             email, ok = QInputDialog.getText(self, "Git author email", "Email for this repository:")
             if not ok or not email.strip() or "@" not in email:
-                QMessageBox.warning(self, "Commit", "Enter a valid email address to create a commit.")
+                QMessageBox.warning(
+                    self, "Commit", "Enter a valid email address to create a commit."
+                )
                 return
             setup_commands.append(["config", "user.email", email.strip()])
         try:

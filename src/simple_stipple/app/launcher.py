@@ -83,7 +83,7 @@ def run_app(args: argparse.Namespace) -> int:
 
     # Compile numeric kernels after the first paint opportunity, keeping the
     # visible startup path responsive while avoiding a pause on first use.
-    from simple_stipple.engine.geometry.jit import prewarm
+    from simple_stipple.core.geometry import prewarm
 
     QTimer.singleShot(0, lambda: threading.Thread(target=prewarm, daemon=True).start())
 

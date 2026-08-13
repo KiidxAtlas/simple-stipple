@@ -27,26 +27,27 @@ from simple_stipple.app.window import App
 from simple_stipple.canvas.operations.draw_ops import DrawOpsService
 from simple_stipple.canvas.view.helpers import _animate_view_to
 from simple_stipple.canvas.widget import DxfCanvas
-from simple_stipple.engine.formats.dxf import load_dxf_polylines, write_polylines_dxf
-from simple_stipple.engine.formats.laserstar import export_laserstar_package
-from simple_stipple.engine.imaging.raster import (
+from simple_stipple.core.formats.dxf import load_dxf_polylines
+from simple_stipple.core.formats.dxf_write import write_polylines_dxf
+from simple_stipple.core.formats.laserstar import export_laserstar_package
+from simple_stipple.core.imaging import (
     RasterEngravingSpec,
     export_raster_job,
 )
-from simple_stipple.engine.imaging.trace import image_to_outlines
-from simple_stipple.engine.patterns.fill import FillSpec, apply_fill, build_fill_region
+from simple_stipple.core.imaging import image_to_outlines
+from simple_stipple.core.patterns.fill import FillSpec, apply_fill, build_fill_region
 from simple_stipple.features.help import HelpDialog
 from simple_stipple.features.pattern.workers import (
     CancellableTaskState,
     TaskPhase,
 )
 from simple_stipple.features.repository import RepoPage
-from simple_stipple.ui import files as file_dialogs
 from simple_stipple.ui.components import feedback
-from simple_stipple.ui.components.collapsible import CollapsibleSection
+from simple_stipple.ui.components.layout import CollapsibleSection
+from simple_stipple.ui.components.recent import KIND_DXF, list_recent
 from simple_stipple.ui.components.workflow import StatusRegion, set_status_label
-from simple_stipple.ui.recent import KIND_DXF, list_recent
-from simple_stipple.ui.style.theme import resolve_tokens
+from simple_stipple.ui.dialogs import files as file_dialogs
+from simple_stipple.ui.style import resolve_tokens
 
 
 @pytest.fixture(scope="module")
@@ -68,9 +69,7 @@ def close_test_windows(app: QApplication, monkeypatch: pytest.MonkeyPatch):
     modal recovery prompt forever, with no output saying why.
     """
     monkeypatch.setattr(App, "_confirm_discard_if_dirty", lambda _self, **_kwargs: True)
-    monkeypatch.setattr(
-        AutosaveController, "offer_startup_autosave_recovery", lambda _self: None
-    )
+    monkeypatch.setattr(AutosaveController, "offer_startup_autosave_recovery", lambda _self: None)
     existing = set(app.topLevelWidgets())
     yield
     for widget in set(app.topLevelWidgets()) - existing:
@@ -316,7 +315,7 @@ def test_recent_and_remembered_directory_flows_without_native_modals(
     saved: list[dict] = []
     monkeypatch.setattr(file_dialogs, "save_settings", lambda value: saved.append(dict(value)))
     monkeypatch.setattr(
-        "simple_stipple.ui.recent.save_settings", lambda value: saved.append(dict(value))
+        "simple_stipple.ui.components.recent.save_settings", lambda value: saved.append(dict(value))
     )
     source = tmp_path / "input.dxf"
     source.touch()
@@ -432,7 +431,7 @@ def test_frozen_jit_module_import_disables_file_cache() -> None:
         [
             sys.executable,
             "-c",
-            ("import sys; sys.frozen = True; import simple_stipple.engine.geometry.jit"),
+            ("import sys; sys.frozen = True; import simple_stipple.core.geometry"),
         ],
         check=False,
         capture_output=True,

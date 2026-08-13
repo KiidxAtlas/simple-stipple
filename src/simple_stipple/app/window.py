@@ -24,20 +24,21 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.app.menu import CommandController, MenuController
 from simple_stipple.app.pages import PageRuntime, PageSpec, default_page_specs
-from simple_stipple.app.settings_controller import SettingsController
 from simple_stipple.app.tasks import TaskController
 from simple_stipple.app.workspace_controller import WorkspaceController
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.platform.error_reporting import report_error
-from simple_stipple.platform.paths import user_data_dir
 from simple_stipple.platform.settings import (
     DEFAULT_KEYBINDINGS,
     DEFAULT_RADIAL_MENU_TOOLS,
     load_settings,
     save_settings,
     settings_bus,
+    user_data_dir,
 )
-from simple_stipple.ui.style.theme import accessibility_palette, apply_dark_theme, load_app_qss
+from simple_stipple.ui.style import accessibility_palette, apply_dark_theme, load_app_qss
+from typing import TYPE_CHECKING
+from simple_stipple.platform.settings import save_settings, settings_bus
 
 LOGGER = logging.getLogger(__name__)
 
@@ -106,7 +107,9 @@ class App(QMainWindow):
         self.restoreGeometry(geometry)
 
     def _save_window_geometry(self) -> None:
-        self._settings["window_geometry"] = bytes(self.saveGeometry().toHex().data()).decode("ascii")
+        self._settings["window_geometry"] = bytes(self.saveGeometry().toHex().data()).decode(
+            "ascii"
+        )
 
     def _autosave_path(self) -> Path:
         return user_data_dir() / "recovery" / f"{self._recovery_id}.workspace.json"
@@ -142,7 +145,7 @@ class App(QMainWindow):
         # never offer dead links. Done lazily after settings load so a stale
         # settings file never blocks startup.
         try:
-            from simple_stipple.ui.recent import prune_missing
+            from simple_stipple.ui.components.recent import prune_missing
 
             prune_missing(self._settings)
         except Exception:  # never block startup on a stale list
@@ -189,6 +192,15 @@ class App(QMainWindow):
             self._tabs.setTabToolTip(index, tooltip)
         self._workspace_controller = WorkspaceController(self, self._page_runtime, self._tabs)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
+
+        # ── Menus & actions (must precede shell header — the header reuses
+        #    the File-menu actions for its Workspace overflow dropdown) ──────
+        self._workspace_menu = self.menuBar().addMenu("File")
+        self._recent_workspaces_menu = self._workspace_menu.addMenu("Open Recent")
+        self._build_workspace_actions()
+        self._rebuild_recent_workspaces_menu()
+        self._build_edit_view_help_menus()
+
         self._shell_header = self._build_shell_header()
         central_layout.insertWidget(0, self._shell_header)
         self._system_banner = self._build_system_banner()
@@ -202,12 +214,6 @@ class App(QMainWindow):
         self._page_runtime.connect_echoes(self._on_setting_echo)
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
-
-        self._workspace_menu = self.menuBar().addMenu("File")
-        self._recent_workspaces_menu = self._workspace_menu.addMenu("Open Recent")
-        self._build_workspace_actions()
-        self._rebuild_recent_workspaces_menu()
-        self._build_edit_view_help_menus()
 
         # ── Keyboard shortcuts ────────────────────────────────────────────────
         self._global_actions: dict[str, QAction] = {}
@@ -561,7 +567,10 @@ class App(QMainWindow):
             return
         # Stop timers before children destroyed to avoid late callbacks.
         self._task_controller.shutdown()
-        settings_bus.changed.disconnect(self._on_external_setting_changed)
+        try:
+            settings_bus.changed.disconnect(self._on_external_setting_changed)
+        except (RuntimeError, TypeError):  # already disconnected (e.g. tests)
+            pass
         # Persist settings on exit so any in-memory changes survive.
         self._save_window_geometry()
         try:
@@ -601,3 +610,34 @@ class App(QMainWindow):
     def apply_theme(application: QApplication) -> None:
         """Apply presentation styling at the application composition boundary."""
         apply_dark_theme(application)
+
+
+if TYPE_CHECKING:
+    from simple_stipple.app.pages import PageRuntime
+
+
+class SettingsController:
+    """Own persistence and canvas fan-out for application settings."""
+
+    def __init__(self, settings: dict, page_runtime: PageRuntime, *, source: object) -> None:
+        self.settings = settings
+        self._page_runtime = page_runtime
+        self._source = source
+
+    def replace(self, settings: dict) -> None:
+        previous = dict(self.settings)
+        incoming = dict(settings)
+        self.settings.clear()
+        self.settings.update(incoming)
+        self._page_runtime.apply_all(self.settings)
+        for key, value in self.settings.items():
+            if previous.get(key) != value:
+                settings_bus.publish(key, value, self._source)
+
+    def update(self, key: str, value) -> None:
+        if self.settings.get(key) == value:
+            return
+        self.settings[key] = value
+        save_settings(self.settings)
+        self._page_runtime.apply(key, value)
+        settings_bus.publish(key, value, self._source)

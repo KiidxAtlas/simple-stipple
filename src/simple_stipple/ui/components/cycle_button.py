@@ -96,8 +96,6 @@ class CycleIconButton(QPushButton):
                 self._update_visuals()
                 return
 
-    def state_count(self) -> int:
-        return len(self._states)
 
     # -- event handlers ----------------------------------------------------
 

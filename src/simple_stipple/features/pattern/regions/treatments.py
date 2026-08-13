@@ -18,9 +18,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from simple_stipple.engine.patterns.fill import NULL_PATTERN
-from simple_stipple.engine.patterns.processing import migrate_pattern_name
-from simple_stipple.engine.patterns.regions import Region, build_region_tree
+from simple_stipple.core.patterns.fill import NULL_PATTERN
+from simple_stipple.core.patterns.processing import migrate_pattern_name
+from simple_stipple.core.patterns.tiling import Region, build_region_tree
 
 TREATMENT_KINDS = ("none", "pattern", "fill", "pattern_fill", "engrave", "cut")
 
@@ -141,10 +141,6 @@ def set_treatment(page: Any, region_id: str, treatment: dict) -> None:
     page._treatments[region_id] = {**deepcopy(treatment), "kind": kind}
 
 
-def clear_treatments(page: Any) -> None:
-    page._treatments = {}
-
-
 def prune_treatments(page: Any, valid_ids: set[str]) -> int:
     """Drop treatments whose region no longer exists. Returns how many went."""
     dropped = [rid for rid in page._treatments if rid not in valid_ids]
@@ -156,9 +152,7 @@ def prune_treatments(page: Any, valid_ids: set[str]) -> int:
 def zone_region_ids(page: Any) -> list[str]:
     """Region ids that produce a zone, in the engine's zone order."""
     return [
-        outline_id
-        for outline_id in page._outline_ids
-        if treatment_kind(page, outline_id) != "none"
+        outline_id for outline_id in page._outline_ids if treatment_kind(page, outline_id) != "none"
     ]
 
 

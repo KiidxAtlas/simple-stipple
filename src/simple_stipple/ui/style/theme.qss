@@ -27,11 +27,11 @@ QMenuBar {
     background: $bg_app;
     color: $text_muted;
     border-bottom: 1px solid $border;
-    padding: 2px 6px;
+    padding: 4px 8px;
 }
 QMenuBar::item {
     background: transparent;
-    padding: 5px 9px;
+    padding: 8px 12px;
     border-radius: $radius_sm;
 }
 QMenuBar::item:selected {
@@ -46,7 +46,7 @@ QMenu {
     padding: 5px;
 }
 QMenu::item {
-    padding: 7px 20px;
+    padding: 8px 16px;
     border-radius: $radius_sm;
     color: $text;
 }
@@ -57,7 +57,7 @@ QMenu::item:selected {
 QMenu::separator {
     height: 1px;
     background: $border;
-    margin: 5px 8px;
+    margin: 8px 8px;
 }
 
 /* ══ Tabs ════════════════════════════════════════════════════════════════
@@ -245,7 +245,7 @@ QLabel[role="text-preview"] {
     font-size: $font_xl;
 }
 QLabel[role="section-subtitle"] {
-    padding-left: 18px;
+    padding-left: 16px;
 }
 QLabel[role="section-subtitle"][dim="true"] {
     color: $text_subtle;
@@ -266,7 +266,7 @@ QLabel[role="shell-meta"] {
    "what do I do next" never needs a second look. */
 
 QPushButton, QToolButton {
-    min-height: 30px;
+    min-height: 40px;
     min-width: 24px;
     padding: 5px 12px;
     border: 1px solid $border;
@@ -373,6 +373,13 @@ QPushButton[role="icon-sm"] {
 QPushButton[role="browse-btn"] {
     padding: 4px 8px;
     font-size: $font_xs;
+}
+/* Dense editor controls use the same semantic button language, but do not
+   inherit the large general-purpose horizontal padding that caused labels to
+   run beneath a menu indicator at compact widths. */
+QPushButton[role="precision-control"], QToolButton[role="precision-control"] {
+    min-height: 36px;
+    padding: 4px 8px;
 }
 QPushButton[role="cycle-icon"] {
     background: $bg_input;

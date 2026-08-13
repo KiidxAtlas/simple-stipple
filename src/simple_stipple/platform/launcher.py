@@ -27,7 +27,7 @@ from pathlib import Path
 from PySide6.QtCore import QLockFile, QObject, QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
-from simple_stipple.platform.paths import user_log_dir, user_runtime_dir
+from simple_stipple.platform.settings import user_log_dir, user_runtime_dir
 
 _LOG = logging.getLogger(__name__)
 _ACTIVATE_MESSAGE = b"activate\n"
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None, *, run_app: Callable[[argparse.Namespace
     # cache directory rather than the user's generic ~/.cache which may be
     # restricted by OS privacy settings. Set `XDG_CACHE_HOME` early so libs
     # like ezdxf pick it up during import.
-    from simple_stipple.platform.paths import user_cache_dir
+    from simple_stipple.platform.settings import user_cache_dir
 
     os.environ.setdefault("XDG_CACHE_HOME", str(user_cache_dir()))
 

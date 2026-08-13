@@ -71,12 +71,6 @@ class CanvasRuntime:
                 break
         canvas.set_selection(idxs)
 
-    def reload_active_layer(self, *, fit: bool = False) -> None:
-        """Kept for API compatibility — entities never leave the canvas."""
-        if fit:
-            self._canvas.fit()
-        else:
-            self._canvas._redraw()
 
     # ── Layer operations ──────────────────────────────────────────────────
 

@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.platform.config import (
+from simple_stipple.platform.settings import (
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
     MAX_DRAW_SIDEBAR_HEIGHT,
@@ -68,7 +68,10 @@ class _ResizeHandle(QFrame):
         self._dragging = False
         self._drag_start_global_x = 0.0
         self._drag_start_width = 0
-        self.setFixedWidth(24)
+        # The old 24 px gutter consumed almost a quarter of the minimum
+        # drawer width. Twelve pixels still gives a reliable edge target
+        # without crowding the two tool columns.
+        self.setFixedWidth(12)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Resize draw sidebar width")
         self.setAccessibleDescription(
@@ -123,7 +126,7 @@ class _BottomResizeHandle(QFrame):
         self._dragging = False
         self._drag_start_global_y = 0.0
         self._drag_start_height = 0
-        self.setFixedHeight(24)
+        self.setFixedHeight(12)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Resize draw sidebar height")
         self.setAccessibleDescription(
@@ -210,7 +213,7 @@ class DrawSidebar(QFrame):
         self._apply_width(width if width is not None else MIN_DRAW_SIDEBAR_WIDTH + 12)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(4, 4, 4, 4)
         outer.setSpacing(4)
 
         scroll = QScrollArea(self)
@@ -229,8 +232,8 @@ class DrawSidebar(QFrame):
         # keeps controls visually separate without pretending padding can
         # compensate for an undersized viewport (the minimum-width contract
         # below guarantees both 44 px tool columns actually fit).
-        col.setContentsMargins(4, 4, 8, 4)
-        col.setSpacing(16)
+        col.setContentsMargins(2, 2, 4, 2)
+        col.setSpacing(10)
 
         title = QLabel("Draw")
         title.setProperty("role", "title")
@@ -409,8 +412,8 @@ class DrawSidebar(QFrame):
         section = QWidget(self)
         section.setProperty("role", "draw-section")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(8)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(6)
 
         # Qt QSS doesn't support text-transform, so the uppercase small-caps
         # look this role's letter-spacing implies has to come from the text
@@ -426,8 +429,8 @@ class DrawSidebar(QFrame):
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(6)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(4)
         for i, btn in enumerate(buttons):
             grid.addWidget(btn, i // columns, i % columns)
         grid_wrap = QWidget(section)

@@ -12,9 +12,9 @@ from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from shapely.geometry import LineString
 from shapely.ops import nearest_points
 
-from simple_stipple.canvas.tools.tools import DimensionTool as DimensionBackend
-from simple_stipple.document.model import EntityRecord
-from simple_stipple.ui.units import format_length as _format_length
+from simple_stipple.core.document.model import EntityRecord
+from simple_stipple.canvas.tools.dimension_backend import DimensionTool as DimensionBackend
+from simple_stipple.ui.components.units import format_length as _format_length
 
 
 class DimensionTool(DimensionBackend):

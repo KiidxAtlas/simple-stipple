@@ -37,12 +37,20 @@ from simple_stipple.canvas.runtime import (
     TraceCanvasPageRuntime,
 )
 from simple_stipple.canvas.widget import DxfCanvas
-from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
-from simple_stipple.engine.formats.service import DxfService
-from simple_stipple.engine.geometry.service import GeometryService
-from simple_stipple.engine.imaging.raster import RasterEngravingSpec, export_raster_job
-from simple_stipple.engine.imaging.trace import TraceCancelled, image_to_outlines
+from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
+from simple_stipple.core.cad.preflight import analyze_geometry
+from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job
+from simple_stipple.core.imaging import image_to_outlines
 from simple_stipple.features.base import BasePage
+from simple_stipple.features.trace.session import (
+    export_all as _export_all,
+)
+from simple_stipple.features.trace.session import (
+    export_selected as _export_selected,
+)
+from simple_stipple.features.trace.session import (
+    get_save_path as _get_save_path,
+)
 from simple_stipple.features.trace.form import (
     PathField,
     SliderField,
@@ -52,13 +60,14 @@ from simple_stipple.features.trace.form import (
     build_trace_kwargs,
     trace_default,
 )
+from simple_stipple.features.trace.session import run_trace_job
 from simple_stipple.features.trace.session import (
     apply_trace_workspace_state,
     clear_trace_workspace_state,
     get_trace_workspace_state,
 )
-from simple_stipple.platform.config import save_settings
-from simple_stipple.ui.components.collapsible import CollapsibleSection
+from simple_stipple.platform.settings import save_settings
+from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.feedback import parse_float_field_with_feedback, show_error
 from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
 from simple_stipple.ui.components.layout import (
@@ -66,12 +75,11 @@ from simple_stipple.ui.components.layout import (
     sidebar_panel,
     surface_frame,
 )
-from simple_stipple.ui.components.recent_files import RecentFilesButton
+from simple_stipple.ui.components.recent import KIND_IMAGE, record_recent
+from simple_stipple.ui.components.recent import RecentFilesButton
 from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.dialogs.export_preflight import export_preflight
-from simple_stipple.ui.files import pick_open_file, pick_save_file, reveal_label
-from simple_stipple.ui.recent import KIND_IMAGE, record_recent
-from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
+from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file, reveal_label
+from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
 TRACE_BG_BLEND_ALPHA = 0.7
@@ -256,6 +264,7 @@ class TracePage(BasePage):
         source_layout.addWidget(self._thumb_lbl)
         self._img_info_lbl = QLabel("")
         self._img_info_lbl.setProperty("role", "hint")
+        self._img_info_lbl.setWordWrap(True)
         source_layout.addWidget(self._img_info_lbl)
         self._bg_visible_cb = QCheckBox("Show image in background")
         self._bg_visible_cb.setChecked(True)
@@ -597,6 +606,7 @@ class TracePage(BasePage):
         layout.addWidget(self._lock_cb)
         self._size_info_lbl = QLabel("")
         self._size_info_lbl.setProperty("role", "hint-sm")
+        self._size_info_lbl.setWordWrap(True)
         layout.addWidget(self._size_info_lbl)
         self._update_thresh_controls()
 
@@ -1071,29 +1081,19 @@ class TracePage(BasePage):
                 return False
             return True
 
-        try:
-            if cancel_event and cancel_event.is_set():
-                emit(self._trace_cancelled, trace_token)
-                return
-            if not img_path:
-                raise RuntimeError("No image selected.")
-            result = image_to_outlines(
-                img_path,
-                cancel_check=(cancel_event.is_set if cancel_event else None),
-                **kwargs,
-            )
-            if cancel_event and cancel_event.is_set():
-                emit(self._trace_cancelled, trace_token)
-                return
-            emit(self._trace_done, (trace_token, *result, kwargs["width_mm"]))
-        except TraceCancelled:
+        outcome = run_trace_job(
+            img_path,
+            kwargs,
+            trace_token,
+            cancel_event,
+            trace_pipeline=image_to_outlines,
+        )
+        if outcome.cancelled:
             emit(self._trace_cancelled, trace_token)
-        except Exception as exc:  # noqa: BLE001 - worker boundary must always complete
-            LOGGER.exception("Trace worker failed")
-            if cancel_event and cancel_event.is_set():
-                emit(self._trace_cancelled, trace_token)
-                return
-            emit(self._trace_error, (trace_token, str(exc)))
+        elif outcome.error is not None:
+            emit(self._trace_error, (trace_token, outcome.error))
+        elif outcome.result is not None:
+            emit(self._trace_done, (trace_token, *outcome.result, kwargs["width_mm"]))
 
     def _handle_trace_done(self, payload: tuple) -> None:
         if self._shutting_down:
@@ -1104,7 +1104,7 @@ class TracePage(BasePage):
         width_mm_val = float(width_mm_val)
         height_mm_val = img_h_px / max(img_w_px, 1) * width_mm_val
         count = len(polys)
-        diagnostics = GeometryService.analyze_geometry(polys)
+        diagnostics = analyze_geometry(polys)
 
         self._running = False
         self._reload_btn.setText("Refresh Preview")
@@ -1344,86 +1344,6 @@ class TracePage(BasePage):
             return
         self._canvas_runtime.refresh_canvas_panels()
 
-    # ── Export ────────────────────────────────────────────────────────────────
-
-    def _get_save_path(self, title: str) -> str | None:
-        stem = Path(self._img_path).stem if self._img_path else "outline"
-        path = pick_save_file(
-            self,
-            self._settings,
-            "trace_output",
-            title,
-            f"{stem}_outline.dxf",
-            "DXF files (*.dxf);;All files (*)",
-        )
-        return path or None
-
-    def _export_all(self) -> None:
-        records = self._canvas.get_export_dxf_state()
-        if not records:
-            QMessageBox.critical(self, "Export", "No polylines to export.")
-            return
-        proceed, _report = export_preflight(
-            self,
-            [list(record["polyline"]) for record in records],
-            action="Export",
-            allow_open_paths=True,
-        )
-        if not proceed:
-            self._canvas.set_geometry_health_visible(True, announce=True)
-            return
-        out = self._get_save_path("Export all outlines as DXF")
-        if not out:
-            return
-        try:
-            DxfService.write_polylines_dxf(
-                [list(r["polyline"]) for r in records],
-                out,
-                close=False,
-                entity_kinds=[str(r.get("kind", "polyline")) for r in records],
-                entity_meta=[r.get("meta") for r in records],
-            )
-            self._last_out = out
-            self._reveal_action.setEnabled(True)
-            self._set_status(f"Exported {len(records)} shapes → {Path(out).name}", STATUS_OK)
-        except (OSError, ValueError) as exc:
-            show_error(self, "Export Error", exc)
-
-    def _export_selected(self) -> None:
-        selected = set(self._canvas.get_selected_ids())
-        records = [r for r in self._canvas.get_export_dxf_state() if r.get("entity_id") in selected]
-        if not records:
-            QMessageBox.information(self, "Export Selected", "Nothing is selected.")
-            return
-        proceed, _report = export_preflight(
-            self,
-            [list(record["polyline"]) for record in records],
-            action="Export Selected",
-            allow_open_paths=True,
-        )
-        if not proceed:
-            self._canvas.set_geometry_health_visible(True, announce=True)
-            return
-        out = self._get_save_path("Export selected outlines as DXF")
-        if not out:
-            return
-        try:
-            DxfService.write_polylines_dxf(
-                [list(r["polyline"]) for r in records],
-                out,
-                close=False,
-                entity_kinds=[str(r.get("kind", "polyline")) for r in records],
-                entity_meta=[r.get("meta") for r in records],
-            )
-            self._last_out = out
-            self._reveal_action.setEnabled(True)
-            self._set_status(
-                f"Exported {len(records)} selected shapes → {Path(out).name}",
-                STATUS_OK,
-            )
-        except (OSError, ValueError) as exc:
-            show_error(self, "Export Error", exc)
-
     def _export_raster_engraving(self) -> None:
         if not self._img_path or not Path(self._img_path).exists():
             QMessageBox.information(self, "Raster Engraving", "Choose an image first.")
@@ -1581,3 +1501,10 @@ class TracePage(BasePage):
 
     def clear_workspace_state(self) -> None:
         clear_trace_workspace_state(self)
+
+
+# Keep TracePage's established private action methods as the UI connection and
+# test patch surface; DXF workflow implementation lives with the Trace feature.
+TracePage._get_save_path = _get_save_path
+TracePage._export_all = _export_all
+TracePage._export_selected = _export_selected

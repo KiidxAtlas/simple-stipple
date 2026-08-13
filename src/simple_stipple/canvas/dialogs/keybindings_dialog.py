@@ -33,14 +33,14 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.canvas import commands as canvas_commands
-from simple_stipple.platform.config import DEFAULT_KEYBINDINGS
+from simple_stipple.platform.settings import DEFAULT_KEYBINDINGS
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.layout import (
     section_label,
     sep,
     surface_frame,
 )
-from simple_stipple.ui.components.tokens import (
+from simple_stipple.ui.style import (
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,

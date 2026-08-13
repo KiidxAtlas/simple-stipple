@@ -30,11 +30,13 @@ def _absolute_imports(path: Path) -> set[str]:
             modules.update(alias.name for alias in node.names)
         elif (
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "import_module"
             and node.args
             and isinstance(node.args[0], ast.Constant)
             and isinstance(node.args[0].value, str)
+            and (
+                (isinstance(node.func, ast.Attribute) and node.func.attr == "import_module")
+                or (isinstance(node.func, ast.Name) and node.func.id == "__import__")
+            )
         ):
             modules.add(node.args[0].value)
     return modules
@@ -56,23 +58,13 @@ def test_dependencies_point_toward_shared_subsystems() -> None:
         (
             "simple_stipple.app",
             "simple_stipple.canvas",
-            "simple_stipple.document",
-            "simple_stipple.engine",
+            "simple_stipple.core",
             "simple_stipple.features",
             "simple_stipple.ui",
         ),
     )
     violations += _violations(
-        "engine",
-        (
-            "simple_stipple.app",
-            "simple_stipple.canvas",
-            "simple_stipple.features",
-            "simple_stipple.ui",
-        ),
-    )
-    violations += _violations(
-        "document",
+        "core",
         (
             "simple_stipple.app",
             "simple_stipple.canvas",
@@ -85,36 +77,38 @@ def test_dependencies_point_toward_shared_subsystems() -> None:
     assert not violations, "\n".join(violations)
 
 
-def test_engine_may_only_reach_document_identity() -> None:
-    """engine may depend on document.identity (a dependency-free primitive
-    type module explicitly documented as shared across all layers) but must
-    not reach into document.model, document.service, or any other document
-    submodule that carries real document state or Qt-adjacent behavior.
+def test_core_algorithms_may_only_reach_document_identity() -> None:
+    """Algorithmic core modules may depend on core.document.identity — a
+    dependency-free primitive type module explicitly shared across layers —
+    but must not reach into core.document.model, core.document.service, or
+    any other submodule carrying real document state.
     """
     violations = [
         f"{path.relative_to(PACKAGE)} imports {module}"
-        for path in (PACKAGE / "engine").rglob("*.py")
+        for path in (PACKAGE / "core").rglob("*.py")
+        if "document" not in path.relative_to(PACKAGE / "core").parts
         for module in _absolute_imports(path)
-        if module.startswith("simple_stipple.document")
-        and not module.startswith("simple_stipple.document.identity")
+        if module.startswith("simple_stipple.core.document")
+        and not module.startswith("simple_stipple.core.document.identity")
     ]
     assert not violations, "\n".join(violations)
 
 
-def test_engine_and_document_do_not_depend_on_qt() -> None:
+def test_core_does_not_depend_on_qt() -> None:
+    """The whole Qt-free half of the codebase lives in core/, so this is the
+    single rule that keeps it testable without a display server."""
     violations = [
         f"{path.relative_to(PACKAGE)} imports {module}"
-        for layer in ("engine", "document")
-        for path in (PACKAGE / layer).rglob("*.py")
+        for path in (PACKAGE / "core").rglob("*.py")
         for module in _absolute_imports(path)
         if module.startswith(("PySide6", "PyQt"))
     ]
     assert not violations, "\n".join(violations)
 
 
-def test_engine_never_depends_on_feature_or_qt_presentation() -> None:
-    """Keep reusable engine code free of feature workflows and Qt imports."""
-    violations = _violations("engine", ("simple_stipple.features", "PySide6", "PyQt"))
+def test_core_never_depends_on_feature_workflows() -> None:
+    """Keep reusable core code free of feature workflows."""
+    violations = _violations("core", ("simple_stipple.features",))
     assert not violations, "\n".join(violations)
 
 
@@ -140,12 +134,10 @@ def test_features_do_not_import_other_feature_internals() -> None:
 
 
 def test_workflow_services_preserve_structured_results_and_dxf_surface() -> None:
-    from simple_stipple.engine.formats.service import DxfService
-    from simple_stipple.engine.geometry.service import GeometryService
+    from simple_stipple.core.cad.preflight import analyze_geometry
+    from simple_stipple.core.formats.service import DxfService
 
     assert callable(DxfService.load_dxf_polylines_by_layer_with_report)
-    diagnostics = GeometryService.analyze_geometry(
-        [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]]
-    )
+    diagnostics = analyze_geometry([[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]])
     assert diagnostics.paths == 1
     assert isinstance(diagnostics.closed, int)

@@ -22,9 +22,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.ui.components.collapsible import CollapsibleSection
-from simple_stipple.ui.units import parse_numeric_expression, to_display
-from simple_stipple.ui.units import suffix as unit_suffix
+from simple_stipple.ui.components.layout import CollapsibleSection
+from simple_stipple.ui.components.layout import container_with_layout
+from simple_stipple.ui.components.units import parse_numeric_expression, to_display
+from simple_stipple.ui.components.units import suffix as unit_suffix
 
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]
@@ -72,10 +73,8 @@ class CanvasPropertiesPanel(QWidget):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         root.addWidget(self._scroll, 1)
-        scroll_body = QWidget()
-        body_root = QVBoxLayout(scroll_body)
-        body_root.setContentsMargins(0, 0, 0, 0)
-        body_root.setSpacing(8)
+
+        scroll_body, body_root = container_with_layout(self._scroll, QVBoxLayout, spacing=8)
         self._scroll.setWidget(scroll_body)
 
         self._summary = QLabel("No selection")
@@ -94,9 +93,7 @@ class CanvasPropertiesPanel(QWidget):
         self._empty_hint.setWordWrap(True)
         body_root.addWidget(self._empty_hint)
 
-        self._dimension_container = QWidget()
-        dimension_layout = QGridLayout(self._dimension_container)
-        dimension_layout.setContentsMargins(0, 0, 0, 0)
+        self._dimension_container, dimension_layout = container_with_layout(None, QGridLayout)
         dimension_layout.addWidget(QLabel("Value"), 0, 0)
         self._dimension_value = _num_edit(self._commit_dimension_value)
         self._dimension_value.setToolTip(
@@ -111,17 +108,11 @@ class CanvasPropertiesPanel(QWidget):
         )
         body_root.addWidget(self._constraints_dimension_section)
 
-        self._fields_container = QWidget()
-        fields_root = QVBoxLayout(self._fields_container)
-        fields_root.setContentsMargins(0, 0, 0, 0)
-        fields_root.setSpacing(4)
+        self._fields_container, fields_root = container_with_layout(None, QVBoxLayout, spacing=4)
         body_root.addWidget(self._fields_container)
         body_root.addStretch()
 
-        geometry_content = QWidget()
-        geometry_layout = QVBoxLayout(geometry_content)
-        geometry_layout.setContentsMargins(0, 0, 0, 0)
-        geometry_layout.setSpacing(4)
+        geometry_content, geometry_layout = container_with_layout(None, QVBoxLayout, spacing=4)
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(6)
@@ -161,10 +152,7 @@ class CanvasPropertiesPanel(QWidget):
         self._geometry_section = CollapsibleSection("Geometry", geometry_content, expanded=True)
         fields_root.addWidget(self._geometry_section)
 
-        transform_content = QWidget()
-        transform_layout = QVBoxLayout(transform_content)
-        transform_layout.setContentsMargins(0, 0, 0, 0)
-        transform_layout.setSpacing(8)
+        transform_content, transform_layout = container_with_layout(None, QVBoxLayout, spacing=8)
         transform_actions = QGridLayout()
         transform_actions.setHorizontalSpacing(6)
         transform_actions.setVerticalSpacing(6)
@@ -202,14 +190,10 @@ class CanvasPropertiesPanel(QWidget):
         self._transform_section = CollapsibleSection("Transform", transform_content, expanded=True)
         fields_root.addWidget(self._transform_section)
 
-        constraints_content = QWidget()
-        constraints_layout = QGridLayout(constraints_content)
-        constraints_layout.setContentsMargins(0, 0, 0, 0)
+        constraints_content, constraints_layout = container_with_layout(None, QGridLayout)
         constraints_layout.setHorizontalSpacing(6)
         constraints_layout.setVerticalSpacing(6)
-        actions_content = QWidget()
-        actions_layout = QGridLayout(actions_content)
-        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_content, actions_layout = container_with_layout(None, QGridLayout)
         actions_layout.setHorizontalSpacing(6)
         actions_layout.setVerticalSpacing(6)
         self._actions_layout = actions_layout
@@ -317,9 +301,7 @@ class CanvasPropertiesPanel(QWidget):
         self._param_grid.setHorizontalSpacing(6)
         self._param_grid.setVerticalSpacing(3)
         self._param_grid.setColumnStretch(2, 1)
-        shape_content = QWidget()
-        shape_layout = QVBoxLayout(shape_content)
-        shape_layout.setContentsMargins(0, 0, 0, 0)
+        shape_content, shape_layout = container_with_layout(None, QVBoxLayout)
         shape_layout.addLayout(self._param_grid)
         self._shape_section = CollapsibleSection("Shape Parameters", shape_content, expanded=True)
         fields_root.addWidget(self._shape_section)
@@ -452,7 +434,7 @@ class CanvasPropertiesPanel(QWidget):
                 for constraint in getattr(self._canvas, "_constraints", [])
                 if selected_ids.intersection(constraint.entity_ids)
             )
-            from simple_stipple.engine.cad.constraints import constraint_residuals
+            from simple_stipple.core.cad.constraints import constraint_residuals
 
             residuals = constraint_residuals(
                 {entity.id: entity.points for entity in self._canvas._entities},

@@ -1,14 +1,14 @@
 """Canvas visual and interaction constants — single source of truth.
 
-``SNAP_DIST``/``MIN_SCALE`` are re-exported from ``simple_stipple.engine.cad.geometry``
+``SNAP_DIST``/``MIN_SCALE`` are re-exported from ``simple_stipple.core.cad.geometry``
 (the actual single source of truth for those two) rather than duplicated
 here, so the interactive canvas and the pure-Python snap-resolution logic in
-``simple_stipple.engine.cad.snapping`` can't silently drift apart.
+``simple_stipple.core.cad.snapping`` can't silently drift apart.
 """
 
 from PySide6.QtGui import QColor
 
-from simple_stipple.engine.cad.constants import MIN_SCALE, SNAP_DIST
+from simple_stipple.core.cad.constants import MIN_SCALE, SNAP_DIST
 
 # ── Base canvas palette ───────────────────────────────────────────────────────
 BG = "#0d1117"

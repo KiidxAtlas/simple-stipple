@@ -24,7 +24,7 @@ from simple_stipple.ui.components.feedback import (
     set_line_edit_error,
 )
 from simple_stipple.ui.components.inputs import NoWheelSlider
-from simple_stipple.ui.units import parse_numeric_expression
+from simple_stipple.ui.components.units import parse_numeric_expression
 
 
 class CanvasPrecisionBar(QFrame):
@@ -40,10 +40,11 @@ class CanvasPrecisionBar(QFrame):
         self.setProperty("role", "precision-bar")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
 
         self._pan_btn = QPushButton("Pan")
+        self._pan_btn.setProperty("role", "precision-control")
         self._pan_btn.setMinimumHeight(30)
         self._pan_btn.setCheckable(True)
         self._pan_btn.setToolTip("Pan the canvas by dragging (Shortcut: P)")
@@ -53,6 +54,7 @@ class CanvasPrecisionBar(QFrame):
         layout.addSpacing(8)
 
         self._grid_btn = QPushButton("Grid")
+        self._grid_btn.setProperty("role", "precision-control")
         self._grid_btn.setMinimumHeight(30)
         self._grid_btn.setCheckable(True)
         self._grid_btn.setToolTip("Toggle canvas grid overlay")
@@ -94,6 +96,7 @@ class CanvasPrecisionBar(QFrame):
 
         self._snap_btn = QToolButton()
         self._snap_btn.setText("Snap")
+        self._snap_btn.setProperty("role", "precision-control")
         self._snap_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._snap_btn.setToolTip("Choose the exact snap aids to use (hold Alt to bypass)")
         self._snap_btn.setAccessibleName("Snapping options")
@@ -138,7 +141,9 @@ class CanvasPrecisionBar(QFrame):
         strength_layout.addWidget(self._snap_strength_slider)
         self._snap_strength_value = QLabel("50%")
         self._snap_strength_value.setMinimumWidth(38)
-        self._snap_strength_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._snap_strength_value.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         strength_layout.addWidget(self._snap_strength_value)
         self._snap_strength_slider.valueChanged.connect(self._set_snap_strength)
         self._snap_strength_action = QWidgetAction(self._snap_menu)
@@ -148,6 +153,7 @@ class CanvasPrecisionBar(QFrame):
         layout.addWidget(self._snap_btn)
 
         self._construction_btn = QPushButton("Construction")
+        self._construction_btn.setProperty("role", "precision-control")
         self._construction_btn.setCheckable(True)
         self._construction_btn.setToolTip("Create new geometry as construction/reference geometry")
         self._construction_btn.setAccessibleName("Construction geometry")
@@ -156,6 +162,7 @@ class CanvasPrecisionBar(QFrame):
 
         self._constraints_btn = QToolButton()
         self._constraints_btn.setText("Constrain")
+        self._constraints_btn.setProperty("role", "precision-control")
         self._constraints_btn.setAccessibleName("Geometry constraints")
         self._constraints_btn.setAccessibleDescription(
             "Apply geometric constraints to selected edges or vertices"

@@ -13,9 +13,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.ui.style.theme import (
+from simple_stipple.ui.style import (
     STATUS_ERR,
 )
+from collections import deque
+from datetime import datetime
 
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
@@ -110,3 +112,15 @@ def clear_line_edit_error(widget) -> None:
     widget.setProperty("error", False)
     refresh_style(widget)
     widget.setToolTip("")
+
+
+_notification_history: deque[tuple[str, str]] = deque(maxlen=200)
+
+
+def record_notification(text: str) -> None:
+    if text:
+        _notification_history.append((datetime.now().strftime("%H:%M:%S"), str(text)))
+
+
+def notification_history() -> list[tuple[str, str]]:
+    return list(_notification_history)

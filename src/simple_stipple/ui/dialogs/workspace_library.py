@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from simple_stipple.document.workspace import (
+from simple_stipple.core.document.workspace import (
     WORKSPACE_FILE_SUFFIX,
     normalize_workspace_path,
 )
@@ -33,7 +33,7 @@ from simple_stipple.platform.storage import (
 )
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
-from simple_stipple.ui.files import reveal_label
+from simple_stipple.ui.dialogs.files import reveal_label
 
 
 class WorkspaceLibraryDialog(QDialog):
@@ -63,6 +63,7 @@ class WorkspaceLibraryDialog(QDialog):
         layout = QVBoxLayout(self)
         heading = QLabel(f"Workspaces\n{self.saves_dir}")
         heading.setToolTip(str(self.saves_dir))
+        heading.setWordWrap(True)
         layout.addWidget(heading)
 
         self._category = QComboBox()

@@ -4,18 +4,32 @@ Implementations live in concern-specific modules. Production code should
 prefer those concrete modules; this facade remains for external consumers.
 """
 
-from .collapsible import CollapsibleSection, collapsible_content_widget
-from .feedback import (
+from simple_stipple.ui.components.layout import CollapsibleSection, collapsible_content_widget
+from simple_stipple.ui.components.feedback import (
     clear_line_edit_error,
     parse_float_field,
     parse_float_field_with_feedback,
     refresh_style,
     set_line_edit_error,
 )
-from .focus import EscapeBlurFilter, blur_focused_line_edit, install_dialog_focus_lifecycle
-from .icons import download_icon, gear_icon, icon_from_painter, tool_icon
-from .inputs import ActionButton, browse_row, make_resettable_line_edit, primary_button
-from .layout import (
+from simple_stipple.ui.components.focus import (
+    EscapeBlurFilter,
+    blur_focused_line_edit,
+    install_dialog_focus_lifecycle,
+)
+from simple_stipple.ui.components.icons import (
+    download_icon,
+    gear_icon,
+    icon_from_painter,
+    tool_icon,
+)
+from simple_stipple.ui.components.inputs import (
+    ActionButton,
+    browse_row,
+    make_resettable_line_edit,
+    primary_button,
+)
+from simple_stipple.ui.components.layout import (
     ResponsiveContentSplitter,
     content_splitter,
     empty_state,
@@ -25,13 +39,16 @@ from .layout import (
     sidebar_panel,
     surface_frame,
 )
-from .recent_files import RecentFilesButton
-from .tokens import MOTION_DURATION_MS, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS
-from .workflow import (
-    OperationProgress,
-    StatusRegion,
-    set_status_label,
+from simple_stipple.ui.components.recent import RecentFilesButton
+from simple_stipple.ui.style import (
+    MOTION_DURATION_MS,
+    SPACE_LG,
+    SPACE_MD,
+    SPACE_SM,
+    SPACE_XL,
+    SPACE_XS,
 )
+from simple_stipple.ui.components.workflow import OperationProgress, StatusRegion, set_status_label
 
 __all__ = [
     "ActionButton",

@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import Polygon
 
-from simple_stipple.engine.patterns._shared import lattice_cells
-from simple_stipple.engine.patterns.processing import PatternProcessor
+from simple_stipple.core.patterns._shared import lattice_cells
+from simple_stipple.core.patterns.processing import PatternProcessor
 
 # Deliberately awkward: LEFT's width is not a whole number of 5 mm columns, so
 # a bbox-anchored lattice cannot help but disagree with RIGHT's.

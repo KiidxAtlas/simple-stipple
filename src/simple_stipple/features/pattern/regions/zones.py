@@ -2,7 +2,7 @@
 
 Every closed outline is a region; the Regions list shows all of them and the
 editor below it edits whichever one is selected. A region carries at most one
-treatment (``simple_stipple.features.pattern.treatments``), and a treated
+treatment (``simple_stipple.features.pattern.regions.treatments``), and a treated
 region subtracts itself from the region containing it — no cutout role, no
 zone-membership step.
 
@@ -19,9 +19,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QMenu, QMessageBox
 
+from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
 from simple_stipple.features.pattern.layout import refresh_pattern_properties_panel
-from simple_stipple.features.pattern.params import collect_form_state, restore_form_state
-from simple_stipple.features.pattern.treatments import (
+from simple_stipple.features.pattern.regions.treatments import (
     IMAGE_PATTERN,
     TREATMENT_LABELS,
     begin_treatment_change,
@@ -33,7 +33,7 @@ from simple_stipple.features.pattern.treatments import (
     set_treatment,
     treatment_kind,
 )
-from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
+from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 
 # ── Row ↔ region ↔ engine-zone index ──────────────────────────────────────
 
@@ -462,7 +462,9 @@ def invalidate_zones_for_geometry_change(page: Any, valid_outline_ids: set[str])
 def update_zone_actions(page: Any) -> None:
     # A region can be picked on the canvas or in the Regions list. Requiring
     # the canvas made the list a dead end.
-    has_selection = bool(getattr(page._canvas, "sel_count", 0)) or selected_region_id(page) is not None
+    has_selection = (
+        bool(getattr(page._canvas, "sel_count", 0)) or selected_region_id(page) is not None
+    )
     page._assign_zone_btn.setEnabled(has_selection)
     page._assign_zone_btn.setToolTip(
         "Select a region on the canvas or in the Regions list"

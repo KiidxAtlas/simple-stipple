@@ -9,11 +9,11 @@ from typing import Any, ClassVar
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from simple_stipple.engine.cad.editor_geometry import (
+from simple_stipple.core.cad.editor_geometry import (
     transform_entity_metadata,
     update_entity_parameter,
 )
-from simple_stipple.engine.cad.shapes import transform_meta
+from simple_stipple.core.cad.shape_factory import transform_meta
 
 
 class GizmoService:
@@ -128,6 +128,14 @@ class GizmoService:
             return dict(meta) if isinstance(meta, dict) else None
 
         self._host._gizmo_meta_snapshot = {eid: _meta_copy(eid) for eid in mutable_ids}
+        # A non-uniform scale can change kind mid-drag (arc -> elliptical_arc),
+        # so later mouse-move events must keep deriving from the drag-start
+        # kind + meta pair, not the live (possibly already-converted) entity —
+        # otherwise the next move reconstructs the wrong shape from a kind
+        # that no longer matches its own snapshot meta.
+        self._host._gizmo_kind_snapshot = {
+            eid: self._host._entities_by_id[eid].kind for eid in mutable_ids
+        }
         self._host._gizmo_drag_moved = False
         self._host._gizmo_undo_pushed = False
         return bool(self._host._gizmo_snapshot)
@@ -215,26 +223,51 @@ class GizmoService:
             # repeated mouse-move events don't compound the transform.
             snap_meta = self._host._gizmo_meta_snapshot.get(eid)
             if isinstance(snap_meta, dict):
+                entity_kind = self._host._gizmo_kind_snapshot.get(
+                    eid, self._host._entities_by_id[eid].kind
+                )
                 if abs(sx - sy) <= 1e-9:
-                    new_meta = transform_meta(
-                        self._host._entities_by_id[eid].kind,
+                    result = transform_meta(
+                        entity_kind,
                         snap_meta,
                         transform="scale",
                         center=(ax, ay),
                         factor=sx,
+                        points=src_poly,
                     )
-                    self._host._entities_by_id[eid].meta = (
-                        new_meta if new_meta is not None else snap_meta
-                    )
+                    if result is not None:
+                        new_kind, new_meta = result
+                        self._host._entities_by_id[eid].kind = new_kind
+                        self._host._entities_by_id[eid].meta = new_meta
+                    else:
+                        self._host._entities_by_id[eid].meta = snap_meta
                 else:
-                    # A world-axis non-uniform scale can turn circles into
-                    # ellipses and rotated rectangles into parallelograms.
-                    # Those results cannot be represented truthfully by the
-                    # original parametric schema. Keep the transformed points
-                    # as canonical geometry instead of leaving stale metadata
-                    # that redraw would use to restore the old shape.
-                    self._host._entities_by_id[eid].kind = "polyline"
-                    self._host._entities_by_id[eid].meta = None
+                    # Curves (bezier/spline) and lines are affine-invariant —
+                    # they stay parametric under a non-uniform scale via
+                    # Shape.scale_xy, and a circular arc becomes an elliptical
+                    # one the same way. A world-axis non-uniform scale of a
+                    # circle/ellipse/rectangle, though, can turn it into a
+                    # shape (ellipse, parallelogram) its own schema can't
+                    # represent; transform_meta returns None for those, and
+                    # the transformed points become the canonical geometry
+                    # instead of leaving stale metadata that redraw would
+                    # use to restore the old shape.
+                    result = transform_meta(
+                        entity_kind,
+                        snap_meta,
+                        transform="scale",
+                        center=(ax, ay),
+                        factor=sx,
+                        factor_y=sy,
+                        points=src_poly,
+                    )
+                    if result is not None:
+                        new_kind, new_meta = result
+                        self._host._entities_by_id[eid].kind = new_kind
+                        self._host._entities_by_id[eid].meta = new_meta
+                    else:
+                        self._host._entities_by_id[eid].kind = "polyline"
+                        self._host._entities_by_id[eid].meta = None
         self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
@@ -361,17 +394,24 @@ class GizmoService:
             # after a uniform corner-scale or rotate gizmo drag too.
             snap_meta = self._host._gizmo_meta_snapshot.get(eid)
             if isinstance(snap_meta, dict):
-                new_meta = transform_meta(
-                    self._host._entities_by_id[eid].kind,
+                entity_kind = self._host._gizmo_kind_snapshot.get(
+                    eid, self._host._entities_by_id[eid].kind
+                )
+                result = transform_meta(
+                    entity_kind,
                     snap_meta,
                     transform=("rotate" if self._host._gizmo_drag_mode == "rotate" else "scale"),
                     center=(cx, cy),
                     angle_deg=math.degrees(angle),
                     factor=scale,
+                    points=src_poly,
                 )
-                self._host._entities_by_id[eid].meta = (
-                    new_meta if new_meta is not None else snap_meta
-                )
+                if result is not None:
+                    new_kind, new_meta = result
+                    self._host._entities_by_id[eid].kind = new_kind
+                    self._host._entities_by_id[eid].meta = new_meta
+                else:
+                    self._host._entities_by_id[eid].meta = snap_meta
         self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
@@ -390,6 +430,7 @@ class GizmoService:
         self._host._gizmo_handle_w = None
         self._host._gizmo_snapshot = {}
         self._host._gizmo_meta_snapshot = {}
+        self._host._gizmo_kind_snapshot = {}
         self._host._gizmo_local_shape = None
         self._host._gizmo_drag_moved = False
         self._host._gizmo_undo_pushed = False

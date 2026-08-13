@@ -5,12 +5,12 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import Polygon
 
-from simple_stipple.engine.patterns.processing import (
+from simple_stipple.core.patterns.processing import (
     PATTERNS,
     PatternProcessor,
     migrate_pattern_name,
 )
-from simple_stipple.features.pattern.form_spec import PARAM_SPECS
+from simple_stipple.features.pattern.form import PARAM_SPECS
 
 PANEL = Polygon([(0, 0), (60, 0), (60, 40), (0, 40)])
 

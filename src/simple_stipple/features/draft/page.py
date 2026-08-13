@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas.runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
@@ -36,32 +37,40 @@ from simple_stipple.canvas.runtime import (
 )
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
-from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
-from simple_stipple.document.model import EntityRecord
-from simple_stipple.engine.cad.recognition import (
+from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
+from simple_stipple.core.cad.detection import (
     convert_to_parametric,
-    recognized_entities,
+    detected_entities,
 )
-from simple_stipple.engine.formats.service import DxfService, summarize_dxf_import_report
-from simple_stipple.engine.formats.svg import read_svg_images
+from simple_stipple.core.formats.service import DxfService, summarize_dxf_import_report
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.draft.recognition_dialog import ShapeRecognitionDialog
+from simple_stipple.features.draft.session import build_dxf_export_plan
+from simple_stipple.features.draft.detection_dialog import ShapeDetectionDialog
 from simple_stipple.features.draft.session import (
     apply_draft_workspace_state,
     clear_draft_workspace_state,
     get_draft_workspace_state,
+)
+from simple_stipple.features.draft.session import (
+    on_backdrop_key as _on_backdrop_key,
+)
+from simple_stipple.features.draft.session import (
+    on_backdrop_transform as _on_backdrop_transform,
+)
+from simple_stipple.features.draft.session import (
+    show_imported_svg_image as _show_imported_svg_image,
 )
 from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.layout import (
     content_splitter,
     surface_frame,
 )
-from simple_stipple.ui.components.recent_files import RecentFilesButton
+from simple_stipple.ui.components.recent import KIND_VECTOR, record_recent
+from simple_stipple.ui.components.recent import RecentFilesButton
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
+from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
-from simple_stipple.ui.dialogs.import_dialog import DxfImportPreviewDialog, VectorImportModeDialog
-from simple_stipple.ui.files import pick_open_file, pick_save_file
-from simple_stipple.ui.recent import KIND_VECTOR, record_recent
+from simple_stipple.ui.dialogs.files import DxfImportPreviewDialog, VectorImportModeDialog
 
 LOGGER = logging.getLogger(__name__)
 
@@ -354,9 +363,6 @@ class DraftPage(BasePage):
         # Do NOT call _refresh_status() — that rebuilds the tree and clears
         # the selection highlight the user just created.
 
-    def _reload_active_layer(self, *, fit: bool = False) -> None:
-        self._rt().reload_active_layer(fit=fit)
-
     def _switch_active_layer(self, layer: str, *, fit: bool = False) -> None:
         if self._rt().switch_active_layer(layer, fit=fit):
             self._refresh_status()
@@ -367,11 +373,11 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
 
-    def _offer_shape_recognition(self) -> None:
-        candidates = recognized_entities(self._canvas._entities)
+    def _offer_shape_detection(self) -> None:
+        candidates = detected_entities(self._canvas._entities)
         if not candidates:
             return
-        dialog = ShapeRecognitionDialog([shape for _, shape in candidates], self)
+        dialog = ShapeDetectionDialog([shape for _, shape in candidates], self)
 
         def convert() -> None:
             chosen = set(dialog.selected_indices())
@@ -398,8 +404,8 @@ class DraftPage(BasePage):
             self._canvas._show_flash(f"Converted {len(selected_by_id)} parametric shape(s)", 1400)
 
         dialog.accepted.connect(convert)
-        dialog.finished.connect(lambda _result: setattr(self, "_shape_recognition_dialog", None))
-        self._shape_recognition_dialog = dialog
+        dialog.finished.connect(lambda _result: setattr(self, "_shape_detection_dialog", None))
+        self._shape_detection_dialog = dialog
         dialog.open()
 
     def _on_layer_activated(self, layer: str) -> None:
@@ -571,20 +577,14 @@ class DraftPage(BasePage):
     # ── Export ─────────────────────────────────────────────────────────────
 
     def _export(self) -> None:
-        records = self._canvas.get_export_dxf_state()
         active_name = self._rt().current_layer_name()
-        for dimension in self._canvas._dimensions:
-            p1 = tuple(dimension["p1"])
-            p2 = tuple(dimension["p2"])
-            records.append(
-                {
-                    "polyline": [p1, p2],
-                    "kind": "dimension",
-                    "meta": dict(dimension),
-                    "layer": str(dimension.get("layer") or active_name),
-                }
-            )
-        if not records:
+        export_plan = build_dxf_export_plan(
+            self._canvas.get_export_dxf_state(),
+            self._canvas._dimensions,
+            active_layer_name=active_name,
+            layer_names=self._canvas.layer_names(),
+        )
+        if not export_plan.records:
             QMessageBox.information(
                 self,
                 "Nothing to Export",
@@ -593,7 +593,7 @@ class DraftPage(BasePage):
             return
         proceed, _report = export_preflight(
             self,
-            [list(record["polyline"]) for record in records],
+            [list(record["polyline"]) for record in export_plan.records],
             action="Export",
             allow_open_paths=True,
         )
@@ -614,31 +614,22 @@ class DraftPage(BasePage):
             return
 
         try:
-            # Group export records by document layer, preserving layer order.
-            # Entities carry their layer, so no graph capture is needed.
-            by_layer: dict[str, list[dict[str, Any]]] = {}
-            for r in records:
-                by_layer.setdefault(str(r.get("layer") or active_name), []).append(r)
-            order = [n for n in self._canvas.layer_names() if n in by_layer]
-            if not order:
-                order = list(by_layer)
-
             # The first layer becomes the main entity stream so it can carry
             # kind/meta info (lines, circles, ellipses, arcs); remaining
             # layers are emitted as additional DXF layers. Emit onto a named
             # layer (instead of the AutoCAD default "0") so downstream CAM
             # tools assign it a real color and can fill it.
-            first_name = order[0] if order else (active_name or "Layer")
-            first = by_layer.get(first_name, [])
-            extra_records = {name: by_layer[name] for name in order[1:]}
             DxfService.write_polylines_dxf(
-                [list(r["polyline"]) for r in first],
+                [list(record["polyline"]) for record in export_plan.first_layer_records],
                 out_path,
                 close=False,
-                pattern_layer=first_name,
-                entity_kinds=[str(r.get("kind", "polyline")) for r in first],
-                entity_meta=[r.get("meta") for r in first],
-                extra_layer_records=extra_records or None,
+                pattern_layer=export_plan.first_layer_name,
+                entity_kinds=[
+                    str(record.get("kind", "polyline"))
+                    for record in export_plan.first_layer_records
+                ],
+                entity_meta=[record.get("meta") for record in export_plan.first_layer_records],
+                extra_layer_records=export_plan.extra_layer_records,
             )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
@@ -708,7 +699,6 @@ class DraftPage(BasePage):
         if hasattr(self, "_layers_tree"):
             self._layer_sidebar.refresh_tree()
 
-
     def _update_action_buttons(self) -> None:
         """Update Explode, Merge, and Export button enabled states.
 
@@ -724,12 +714,6 @@ class DraftPage(BasePage):
             self._merge_btn.setEnabled(selected > 1)
         if hasattr(self, "_export_btn"):
             self._export_btn.setEnabled(n > 0 or bool(self._canvas._dimensions))
-
-    def _refresh_command_guidance(self) -> None:
-        if hasattr(self, "_canvas_status") and hasattr(self._canvas, "get_command_guidance"):
-            text, tone = self._canvas.get_command_guidance()
-            self._canvas_status.set_readiness(text, tone)
-            self._canvas_status.set_context_actions(self._canvas.get_context_actions())
 
     def _on_context_action(self, action: str) -> None:
         """Execute a canvas-owned action then refresh only the affected UI."""
@@ -995,56 +979,6 @@ class DraftPage(BasePage):
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import SVG Failed", exc)
 
-    def _show_imported_svg_image(self, path: str) -> int:
-        """Put any image inside an imported SVG on the canvas as a backdrop.
-
-        Draft has no image *sidebar*, but the geometry was drawn over this
-        artwork, so it belongs on screen — and it has to be a real object, not
-        a stuck decal: click it for handles, drag or resize it, press Delete
-        to remove it. Pattern still owns the engraving settings and export.
-        """
-        import io
-
-        from PIL import Image as PILImage
-
-        placements = read_svg_images(path)
-        if not placements:
-            return 0
-        first = placements[0]
-        try:
-            with PILImage.open(io.BytesIO(first.png_bytes)) as source:
-                backdrop = source.convert("RGBA")
-                backdrop.putalpha(110)
-                self._canvas.set_background_image(
-                    backdrop.copy(),
-                    first.width_mm,
-                    first.height_mm,
-                    first.x_mm,
-                    first.y_mm,
-                    first.rotation_deg,
-                )
-            self._canvas.set_background_image_editable(True, self._on_backdrop_transform)
-            self._canvas.set_background_image_key_callback(self._on_backdrop_key)
-        except (OSError, ValueError):
-            self._canvas.clear_background_image()
-            return 0
-        return len(placements)
-
-    def _on_backdrop_transform(
-        self, _x: float, _y: float, _w: float, _h: float, _rotation: float = 0.0
-    ) -> None:
-        """The canvas owns the backdrop's placement; nothing here to mirror."""
-        self._refresh_status()
-
-    def _on_backdrop_key(self, action: str, reverse: bool = False) -> None:
-        """Delete removes the reference image, the same as any other object."""
-        if action != "remove":
-            return
-        self._canvas.clear_background_image()
-        self._set_import_note("")
-        self._canvas._show_flash("Reference image removed", 1200)
-        self._refresh_status()
-
     def _review_dxf_import(self, path, by_layer, report, *, default_append: bool):
         dialog = DxfImportPreviewDialog(
             path,
@@ -1107,7 +1041,7 @@ class DraftPage(BasePage):
         self._refresh_status()
         self._emit_state_changed()
         if source_kind == "DXF":
-            self._offer_shape_recognition()
+            self._offer_shape_detection()
 
     def load_outline_polys(
         self,
@@ -1163,3 +1097,10 @@ class DraftPage(BasePage):
 
     def apply_preset_state(self, state: dict | None) -> None:
         pass
+
+
+# Preserve DraftPage's existing canvas callback and import patch surfaces;
+# implementation is owned by the SVG imported-artwork workflow module.
+DraftPage._show_imported_svg_image = _show_imported_svg_image
+DraftPage._on_backdrop_transform = _on_backdrop_transform
+DraftPage._on_backdrop_key = _on_backdrop_key

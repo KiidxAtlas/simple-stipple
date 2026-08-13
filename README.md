@@ -2,9 +2,8 @@
 
 Desktop app for drafting, tracing, and generating pattern fills for laser/vector workflows.
 
-The source layout and placement rules are documented in
-[ARCHITECTURE.md](ARCHITECTURE.md). That file is the maintained project memory
-for module responsibilities and dependency boundaries.
+The source layout, onboarding guide, lifecycle, extension points, and
+dependency boundaries are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## StarFX FVI workflow
 
@@ -47,7 +46,7 @@ pip install .[cad]
 From your Mac, create and push a version tag to trigger the GitHub Actions release workflow for both platforms:
 
 ```bash
-./scripts/release.sh v0.3.5
+./scripts/release.sh v0.3.6
 ```
 
 That single tag push builds and publishes:

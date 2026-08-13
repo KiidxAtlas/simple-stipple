@@ -16,8 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.ui.notifications import record_notification
-from simple_stipple.ui.style.theme import (
+from simple_stipple.ui.style import (
     STATUS_ERR,
     STATUS_NEUTRAL,
     STATUS_OK,
@@ -25,8 +24,9 @@ from simple_stipple.ui.style.theme import (
     icon_path,
 )
 
-from .feedback import announce_accessible, refresh_style
-from .inputs import ActionButton
+from simple_stipple.ui.components.feedback import announce_accessible, refresh_style
+from simple_stipple.ui.components.inputs import ActionButton
+from simple_stipple.ui.components.feedback import record_notification
 
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
@@ -132,7 +132,7 @@ def set_status_label(
     """Set a status label's text and color→role styling.
 
     ``color`` is compared against the standard status colors
-    (:data:`~simple_stipple.ui.style.theme.STATUS_OK`/``STATUS_ERR``/``STATUS_WARN``/
+    (:data:`~simple_stipple.ui.style.STATUS_OK`/``STATUS_ERR``/``STATUS_WARN``/
     ``STATUS_NEUTRAL``) to pick a ``role`` property for the stylesheet. Pass
     ``hide_when_empty=False`` for labels that should stay visible with a
     blank/neutral role instead of hiding on empty text.

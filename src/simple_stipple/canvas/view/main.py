@@ -14,16 +14,16 @@ from PySide6.QtCore import (
     QPointF,
     QRectF,
     Qt,
-    QTimer,
     Signal,
 )
 from PySide6.QtGui import QPainter, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
+from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
-from simple_stipple.canvas.model import CanvasModel
-from simple_stipple.canvas.operations.hit_test import HitTestService
+from simple_stipple.canvas.objects import CanvasModel
+from simple_stipple.canvas.hit_testing import HitTestService
 from simple_stipple.canvas.operations.select import SelectionService
 from simple_stipple.canvas.view.commands import (
     _cancel_active_drag,
@@ -81,15 +81,47 @@ from simple_stipple.canvas.view.interactions import (
     mousePressEvent,
     mouseReleaseEvent,
 )
-from simple_stipple.document.model import CanvasDocument, EntityRecord
-from simple_stipple.engine.cad.constraints import GeometricConstraint
-from simple_stipple.engine.cad.editor_geometry import (
+from simple_stipple.canvas.view.preferences import (
+    _context_menu_section_enabled,
+    _emit_cursor_position_update,
+    _queue_cursor_position_update,
+    get_cursor_world_pos,
+    get_zoom_percent,
+    set_aspect_ratio_locked,
+    set_construction_mode,
+    set_context_menu_overflow_sections,
+    set_context_menu_profile,
+    set_context_menu_profiles,
+    set_context_menu_sections,
+    set_grid_snap,
+    set_grid_spacing,
+    set_grid_visible,
+    set_property_highlight,
+    set_rotation_snap_increment,
+    set_snap_align_x,
+    set_snap_align_y,
+    set_snap_angle,
+    set_snap_axis_alignment,
+    set_snap_edge,
+    set_snap_equal_length,
+    set_snap_extension,
+    set_snap_intersection,
+    set_snap_master,
+    set_snap_midpoint,
+    set_snap_parallel,
+    set_snap_perpendicular,
+    set_snap_strength,
+    set_snap_tangent,
+    set_snap_vertex,
+)
+from simple_stipple.core.cad.constraints import GeometricConstraint
+from simple_stipple.core.cad.editor_geometry import (
     CanvasGeometry,
     entity_shows_point_handles,
     geometry_for_entity,
     shape_for_entity,
 )
-from simple_stipple.engine.cad.shapes import ShapeFactory
+from simple_stipple.core.cad.shape_factory import ShapeFactory
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 
@@ -181,7 +213,7 @@ class CanvasView(
 
     @_sel.setter
     def _sel(self, selection: set[str]) -> None:
-        from simple_stipple.document.commands import SelectCommand
+        from simple_stipple.core.document.commands import SelectCommand
 
         service = self.__dict__.get("_canvas_service")
         if service is None:
@@ -340,8 +372,6 @@ class CanvasView(
         self._reset_edit_interaction_state()
         self._redraw()
 
-    def _drop_inactive_selection(self) -> None:
-        self._layer_service.drop_inactive_selection()
 
     @property
     def _clipboard(self) -> list[dict[str, Any]]:
@@ -354,9 +384,6 @@ class CanvasView(
     def _copy_selected(self) -> None:
         self._clipboard_service.copy_selected()
 
-    def _paste_records(self, dx: float, dy: float | None = None) -> list[int]:
-        return self._clipboard_service.paste_records(dx, dy)
-
     def _paste_clipboard(self) -> None:
         self._clipboard_service.paste()
 
@@ -366,26 +393,11 @@ class CanvasView(
     def _duplicate_selected_with_offset(self) -> None:
         self._clipboard_service.duplicate_with_offset()
 
-    def _paste_clipboard_with_offset(self, offset: float) -> None:
-        self._clipboard_service.paste_with_offset(offset)
-
-    def _paste_clipboard_multiple(self) -> None:
-        self._clipboard_service.prompt_multi_paste()
-
     def _array_duplicate_grid(self) -> None:
         self._clipboard_service.prompt_grid()
 
-    def _apply_grid_array(self, columns: int, rows: int, spacing: float) -> bool:
-        return self._clipboard_service.apply_grid(columns, rows, spacing)
-
     def _array_duplicate_radial(self) -> None:
         self._clipboard_service.prompt_radial()
-
-    def _apply_radial_array(self, count: int, radius: float) -> bool:
-        return self._clipboard_service.apply_radial(count, radius)
-
-    def _array_duplicate_along_path(self) -> None:
-        self._clipboard_service.prompt_along_path()
 
     def _cut_selected(self) -> None:
         self._clipboard_service.cut_selected()
@@ -436,10 +448,6 @@ class CanvasView(
         self._canvas_service.update_entities([updated])
         self._notify()
 
-    @staticmethod
-    def _poly_closed_n(poly: list[tuple[float, float]]) -> int:
-        return HitTestService.segment_count(poly)
-
     def _closest_point_on_poly(
         self,
         poly: list[tuple[float, float]],
@@ -451,11 +459,6 @@ class CanvasView(
         return_segment: bool = False,
     ):
         return self._hit_test.closest_point(poly, wx, wy, cx, cy, return_segment=return_segment)
-
-    def _find_nearest_edge(
-        self, cx: float, cy: float
-    ) -> tuple[str, int, tuple[float, float]] | None:
-        return self._hit_test.nearest_edge(cx, cy)
 
     def _find_poly_at(self, cx: float, cy: float) -> str | None:
         return self._hit_test.entity_at(cx, cy)
@@ -471,10 +474,6 @@ class CanvasView(
 
     def _find_inactive_poly_at(self, cx: float, cy: float) -> str | None:
         return self._hit_test.inactive_entity_at(cx, cy)
-
-    def _find_ghost_poly_at(self, cx: float, cy: float) -> int | None:
-        """Find ghost polyline index at screen coords. Ghost polys don't have entity IDs."""
-        return self._hit_test.ghost_at(cx, cy)
 
     def _object_snap_adjust(self, dx: float, dy: float):
         return self._snap_service._object_snap_adjust(dx, dy)
@@ -753,12 +752,6 @@ class CanvasView(
     def _is_locked(self, entity_id: str) -> bool:
         return (entity := self._entities_by_id.get(entity_id)) is not None and entity.locked
 
-    @staticmethod
-    def _clone_polys(
-        polys: list[list[tuple[float, float]]],
-    ) -> list[list[tuple[float, float]]]:
-        return [list(poly) for poly in polys]
-
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -872,23 +865,6 @@ class CanvasView(
     def get_selected(self) -> list[list[tuple[float, float]]]:
         return [self._flattened_points_by_id(eid) for eid in sorted(self._sel)]
 
-    def _append_entity(
-        self,
-        poly: list[tuple[float, float]],
-        *,
-        kind: str = "polyline",
-        meta: dict[str, Any] | None = None,
-    ) -> int:
-        entity = EntityRecord(
-            points=list(poly),
-            kind=kind,
-            meta=deepcopy(meta) if meta is not None else None,
-            layer=self._active_layer,
-        )
-        self._canvas_service.append_entity(entity)
-        self._sync_shape_storage_from_entities()
-        return len(self._entities) - 1
-
     def _reset_edit_interaction_state(self) -> None:
         self._hover_poly = None
         self._edit_poly = None
@@ -937,13 +913,6 @@ class CanvasView(
         self._sel = new_sel
         self._redraw()
         self._notify()
-
-    def set_locked_ids(self, entity_ids: list[str]) -> None:
-        new_locked = {eid for eid in entity_ids if eid in self._entities_by_id}
-        if new_locked == self._flagged("locked"):
-            return
-        self._set_flagged("locked", new_locked)
-        self._redraw()
 
     def set_result_polylines(
         self,
@@ -1083,7 +1052,7 @@ class CanvasView(
         }
         if not drop:
             return 0
-        from simple_stipple.document.commands import DeleteCommand
+        from simple_stipple.core.document.commands import DeleteCommand
 
         result = self._canvas_service.execute(DeleteCommand(entity_ids=tuple(drop)))
         if not result.changed:
@@ -1099,7 +1068,7 @@ class CanvasView(
         n = len(delete_set)
         if not n:
             return 0
-        from simple_stipple.document.commands import DeleteCommand
+        from simple_stipple.core.document.commands import DeleteCommand
 
         result = self._canvas_service.execute(DeleteCommand(entity_ids=tuple(delete_set)))
         if not result.changed:
@@ -1225,7 +1194,6 @@ class CanvasView(
     def rotate_selected(self, *args, **kwargs):
         return self._editing.rotate_selected(*args, **kwargs)
 
-
     def scale_by_reference(self, *args, **kwargs):
         return self._editing.scale_by_reference(*args, **kwargs)
 
@@ -1238,11 +1206,8 @@ class CanvasView(
     def _offset_polyline(self, *args, **kwargs):
         return self._editing._offset_polyline(*args, **kwargs)
 
-
-
     def _update_shape_size_fields_from_preview(self, *args, **kwargs):
         return self._editing._update_shape_size_fields_from_preview(*args, **kwargs)
-
 
     def offset_selected(self, *args, **kwargs):
         return self._editing.offset_selected(*args, **kwargs)
@@ -1268,37 +1233,17 @@ class CanvasView(
     def _use_selected_as_custom_tile(self, *args, **kwargs):
         return self._editing._use_selected_as_custom_tile(*args, **kwargs)
 
-
-
-
-
-
-
-
-
-
-
-
     def explode_selected_to_segments(self, *args, **kwargs):
         return self._editing.explode_selected_to_segments(*args, **kwargs)
 
     def merge_selected_segments_to_objects(self, *args, **kwargs):
         return self._editing.merge_selected_segments_to_objects(*args, **kwargs)
 
-
-
-
-
-
-
     def knife_cut(self, *args, **kwargs):
         return self._editing.knife_cut(*args, **kwargs)
 
     def _apply_operation_result(self, *args, **kwargs):
         return self._editing._apply_operation_result(*args, **kwargs)
-
-
-
 
     def _set_repeat_action(self, *args, **kwargs):
         return self._editing._set_repeat_action(*args, **kwargs)
@@ -1328,28 +1273,6 @@ class CanvasView(
         self._sel = {e.id for e in self._entities if e.id not in self._noninteractive_ids()}
         self._all_dimensions_selected = bool(self._dimensions)
         self._selected_dimension = 0 if self._dimensions else None
-        self._redraw()
-        self._notify()
-
-    def select_open_paths(self) -> None:
-        """Select every interactive path whose endpoints do not close."""
-        blocked = self._noninteractive_ids()
-        self._sel = {
-            entity.id
-            for entity in self._entities
-            if entity.id not in blocked and not self._is_poly_closed(entity.points)
-        }
-        self._redraw()
-        self._notify()
-
-    def select_closed_paths(self) -> None:
-        """Select every interactive closed path."""
-        blocked = self._noninteractive_ids()
-        self._sel = {
-            entity.id
-            for entity in self._entities
-            if entity.id not in blocked and self._is_poly_closed(entity.points)
-        }
         self._redraw()
         self._notify()
 
@@ -1467,9 +1390,6 @@ class CanvasView(
         if self._bg_selected != was_selected:
             self.backgroundSelectionChanged.emit(self._bg_selected)
 
-    def is_background_image_selected(self) -> bool:
-        return self._bg_selected
-
     def _background_contains(self, cx: float, cy: float) -> bool:
         if not self._bg_editable or self._bg_pil is None:
             return False
@@ -1547,30 +1467,6 @@ class CanvasView(
         self._view_forward.clear()
         self._last_view_record_time = now
 
-    def previous_view(self) -> bool:
-        if not self._view_back:
-            self._show_flash("No previous view", 800)
-            return False
-        self._view_forward.append(self._view_transform())
-        transform = self._view_back.pop()
-        self._restoring_view = True
-        self._scale, self._ox, self._oy = transform
-        self._restoring_view = False
-        self._redraw()
-        return True
-
-    def next_view(self) -> bool:
-        if not self._view_forward:
-            self._show_flash("No next view", 800)
-            return False
-        self._view_back.append(self._view_transform())
-        transform = self._view_forward.pop()
-        self._restoring_view = True
-        self._scale, self._ox, self._oy = transform
-        self._restoring_view = False
-        self._redraw()
-        return True
-
     def set_empty_message(self, message: str) -> None:
         """Set the hint shown on an empty canvas ("Title\\nhint line")."""
         self._empty_message = message
@@ -1616,165 +1512,6 @@ class CanvasView(
             max(0, self.height() // 2 + 40),
         )
         bar.raise_()
-
-    def set_grid_visible(self, visible: bool) -> None:
-        self._grid_visible = bool(visible)
-        self._redraw()
-
-    def set_context_menu_sections(self, sections: list[str]) -> None:
-        from simple_stipple.platform.config import normalize_context_menu_sections
-
-        normalized = normalize_context_menu_sections(sections)
-        self._context_menu_sections = set(normalized)
-        self._context_menu_section_order = normalized
-
-    def set_context_menu_overflow_sections(self, sections: list[str]) -> None:
-        from simple_stipple.platform.config import normalize_context_menu_overflow_sections
-
-        self._context_menu_overflow_sections = set(
-            normalize_context_menu_overflow_sections(sections)
-        )
-
-    def set_context_menu_profile(self, profile: str) -> None:
-        self._context_menu_profile = str(profile)
-
-    def set_context_menu_profiles(self, profiles: dict) -> None:
-        from simple_stipple.platform.config import normalize_context_menu_profiles
-
-        profile = normalize_context_menu_profiles(profiles).get(self._context_menu_profile, {})
-        self.set_context_menu_sections(profile.get("sections", []))
-        self.set_context_menu_overflow_sections(profile.get("overflow", []))
-        self._context_menu_transform_items = list(profile.get("transform", []))
-        self._context_menu_item_order = list(profile.get("items", []))
-        self._context_menu_overflow_items = set(profile.get("overflow_items", []))
-        self._context_menu_actions_configured = bool(profile.get("action_items_configured", []))
-
-    def _context_menu_section_enabled(self, section: str) -> bool:
-        if self._context_menu_actions_configured or self._context_menu_item_order:
-            # Action-level configuration filters the completed menu once all
-            # possible leaf actions have been built.
-            return True
-        return section in self._context_menu_sections
-
-    def set_grid_snap(self, enabled: bool) -> None:
-        self._grid_snap = bool(enabled)
-        self._refresh_draw_sidebar_state()
-        self._redraw()
-
-    def set_grid_spacing(self, spacing: float) -> None:
-        self._grid_spacing = max(0.001, float(spacing))
-        self._redraw()
-
-    def set_snap_master(self, enabled: bool) -> None:
-        self._snap_master_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-        self._redraw()
-
-    def set_snap_vertex(self, enabled: bool) -> None:
-        self._snap_vertex_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_midpoint(self, enabled: bool) -> None:
-        self._snap_midpoint_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_intersection(self, enabled: bool) -> None:
-        self._snap_intersection_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_edge(self, enabled: bool) -> None:
-        self._snap_edge_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_tangent(self, enabled: bool) -> None:
-        self._snap_tangent_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_extension(self, enabled: bool) -> None:
-        self._snap_extension_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_angle(self, enabled: bool) -> None:
-        self._snap_angle_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_parallel(self, enabled: bool) -> None:
-        self._snap_parallel_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_perpendicular(self, enabled: bool) -> None:
-        self._snap_perpendicular_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_equal_length(self, enabled: bool) -> None:
-        self._snap_equal_length_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_strength(self, strength: float) -> None:
-        """Set the screen-space magnetic capture radius multiplier."""
-        try:
-            self._snap_strength = max(0.0, min(2.0, float(strength)))
-        except (TypeError, ValueError):
-            self._snap_strength = 1.0
-        self._refresh_draw_sidebar_state()
-        self._redraw()
-
-    def set_snap_axis_alignment(self, enabled: bool) -> None:
-        self._snap_axis_alignment_enabled = bool(enabled)
-        self._snap_align_x_enabled = bool(enabled)
-        self._snap_align_y_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_align_x(self, enabled: bool) -> None:
-        self._snap_align_x_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    def set_snap_align_y(self, enabled: bool) -> None:
-        self._snap_align_y_enabled = bool(enabled)
-        self._refresh_draw_sidebar_state()
-
-    # ── Inlined from removed mixins (methods actually called from view.py) ──
-
-    def set_construction_mode(self, enabled: bool) -> None:
-        self._draw_construction_mode = bool(enabled)
-        self._refresh_draw_sidebar_state()
-        self._redraw()
-
-    def set_rotation_snap_increment(self, value: float) -> None:
-        self._rotation_snap_increment = max(0.1, min(180.0, float(value)))
-
-    def set_aspect_ratio_locked(self, enabled: bool) -> None:
-        """Keep width/height proportional for both the properties panel's
-        typed W/H fields and gizmo-handle drags, until turned off again."""
-        self._aspect_ratio_locked = bool(enabled)
-
-    def set_property_highlight(self, key: str | None) -> None:
-        """Highlight the geometry controlled by a focused inspector field."""
-        self._property_highlight = str(key) if key else None
-        self._redraw()
-
-    def get_zoom_percent(self) -> int:
-        if self._fit_scale < _MIN_SCALE:
-            return 100
-        return round(self._scale / self._fit_scale * 100)
-
-    def get_cursor_world_pos(self) -> tuple[float, float] | None:
-        if self._cursor_wx is not None and self._cursor_wy is not None:
-            return (self._cursor_wx, self._cursor_wy)
-        return None
-
-    def _queue_cursor_position_update(self) -> None:
-        """Publish the final mouse-move position after snapping has resolved."""
-        if getattr(self, "_cursor_position_update_queued", False):
-            return
-        self._cursor_position_update_queued = True
-        QTimer.singleShot(0, self._emit_cursor_position_update)
-
-    def _emit_cursor_position_update(self) -> None:
-        self._cursor_position_update_queued = False
-        position = self.get_cursor_world_pos()
-        if position is not None:
-            self.cursorPositionChanged.emit(*position)
 
     def duplicate_selected(self) -> None:
         self._duplicate_selected()
@@ -2112,3 +1849,34 @@ CanvasView.mouseDoubleClickEvent = mouseDoubleClickEvent
 CanvasView.mouseMoveEvent = mouseMoveEvent
 CanvasView.mousePressEvent = mousePressEvent
 CanvasView.mouseReleaseEvent = mouseReleaseEvent
+CanvasView.set_grid_visible = set_grid_visible
+CanvasView.set_context_menu_sections = set_context_menu_sections
+CanvasView.set_context_menu_overflow_sections = set_context_menu_overflow_sections
+CanvasView.set_context_menu_profile = set_context_menu_profile
+CanvasView.set_context_menu_profiles = set_context_menu_profiles
+CanvasView._context_menu_section_enabled = _context_menu_section_enabled
+CanvasView.set_grid_snap = set_grid_snap
+CanvasView.set_grid_spacing = set_grid_spacing
+CanvasView.set_snap_master = set_snap_master
+CanvasView.set_snap_vertex = set_snap_vertex
+CanvasView.set_snap_midpoint = set_snap_midpoint
+CanvasView.set_snap_intersection = set_snap_intersection
+CanvasView.set_snap_edge = set_snap_edge
+CanvasView.set_snap_tangent = set_snap_tangent
+CanvasView.set_snap_extension = set_snap_extension
+CanvasView.set_snap_angle = set_snap_angle
+CanvasView.set_snap_parallel = set_snap_parallel
+CanvasView.set_snap_perpendicular = set_snap_perpendicular
+CanvasView.set_snap_equal_length = set_snap_equal_length
+CanvasView.set_snap_strength = set_snap_strength
+CanvasView.set_snap_axis_alignment = set_snap_axis_alignment
+CanvasView.set_snap_align_x = set_snap_align_x
+CanvasView.set_snap_align_y = set_snap_align_y
+CanvasView.set_construction_mode = set_construction_mode
+CanvasView.set_rotation_snap_increment = set_rotation_snap_increment
+CanvasView.set_aspect_ratio_locked = set_aspect_ratio_locked
+CanvasView.set_property_highlight = set_property_highlight
+CanvasView.get_zoom_percent = get_zoom_percent
+CanvasView.get_cursor_world_pos = get_cursor_world_pos
+CanvasView._queue_cursor_position_update = _queue_cursor_position_update
+CanvasView._emit_cursor_position_update = _emit_cursor_position_update

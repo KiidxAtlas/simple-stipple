@@ -10,7 +10,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QMenu
 
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
-from simple_stipple.engine.cad.constraints import GeometricConstraint
+from simple_stipple.core.cad.constraints import GeometricConstraint
 
 
 def set_view_state(self, state: dict[str, Any]) -> None:

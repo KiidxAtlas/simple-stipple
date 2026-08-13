@@ -29,27 +29,22 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.canvas.runtime import CanvasGridModule
 from simple_stipple.canvas.widget import DxfCanvas
-from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
-from simple_stipple.engine.formats.service import DxfService
+from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
+from simple_stipple.core.formats.service import DxfService
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.convert.tasks import (
-    FixerSubTab,
-    FviSubTab,
-    SvgSubTab,
-    SvgToDxfSubTab,
-    _ConversionSubTab,
-)
-from simple_stipple.platform.config import save_settings
+from simple_stipple.features.convert.svg_tasks import SvgSubTab, SvgToDxfSubTab
+from simple_stipple.features.convert.tasks import FixerSubTab, FviSubTab, _ConversionSubTab
+from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.layout import (
     content_splitter,
     surface_frame,
 )
-from simple_stipple.ui.components.recent_files import RecentFilesButton
+from simple_stipple.ui.components.recent import KIND_VECTOR, record_recent
+from simple_stipple.ui.components.recent import RecentFilesButton
 from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.files import reveal_label
-from simple_stipple.ui.recent import KIND_VECTOR, record_recent
-from simple_stipple.ui.style.theme import STATUS_NEUTRAL, STATUS_WARN
+from simple_stipple.ui.dialogs.files import reveal_label
+from simple_stipple.ui.style import STATUS_NEUTRAL, STATUS_WARN
 
 LOGGER = logging.getLogger(__name__)
 

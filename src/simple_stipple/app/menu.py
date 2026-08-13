@@ -155,6 +155,8 @@ class MenuController:
         add(help_menu, "Notification History…", self._show_notification_history)
         help_menu.addSeparator()
         add(help_menu, "Check for Updates…", self._app._open_update_check)
+        add(help_menu, "Support Me", lambda: self._show_support_dialog())
+        help_menu.addSeparator()
         add(help_menu, "About Simple Stipple", self._show_about)
 
     def _show_about(self) -> None:
@@ -167,7 +169,7 @@ class MenuController:
         )
 
     def _show_notification_history(self) -> None:
-        from simple_stipple.ui.notifications import notification_history
+        from simple_stipple.ui.components.feedback import notification_history
 
         history = notification_history()
         dialog = QDialog(self._app)
@@ -188,12 +190,17 @@ class MenuController:
         layout.addWidget(buttons)
         dialog.exec()
 
+    def _show_support_dialog(self) -> None:
+        """Open the Support Me dialog with donation link."""
+        from simple_stipple.ui.dialogs.support import SupportMeDialog
+
+        dialog = SupportMeDialog(self._app)
+        dialog.exec()
+
     def _refresh_shortcut_tooltips(self) -> None:
         """(Re)build tooltips that embed a shortcut hint, e.g. "Save (Ctrl+S)".
 
         Rebinding a shortcut in Settings already updates the real QAction
-        shortcuts (see ``_open_settings``) but these header-button tooltips
-        were only ever set once at construction — without this, hovering
         kept showing the OLD/default shortcut text forever after a rebind.
         """
         for btn, base_text, shortcut_id in self._app._shortcut_tooltip_specs:
@@ -348,20 +355,17 @@ class MenuController:
         workspace_btn.setAccessibleName("Workspace actions")
         workspace_btn.setToolTip("New, open, and browse saved workspaces")
         workspace_menu = QMenu(workspace_btn)
-        for text, slot, shortcut_id in (
-            ("New Workspace", self._app._new_workspace, "workspace.new"),
-            ("New Window", self._app._new_window, "workspace.new_window"),
-            ("Open…", self._app._open_workspace, "workspace.open"),
-            ("Save As…", self._app._save_workspace_as, "workspace.save_as"),
+        # Reuse the File-menu actions so each shortcut belongs to exactly one
+        # QAction. Creating duplicates here makes Qt report ambiguous shortcuts.
+        for action in (
+            self._app._new_workspace_action,
+            self._app._new_window_action,
+            self._app._open_workspace_action,
+            self._app._save_workspace_as_action,
         ):
-            action = workspace_menu.addAction(text, slot)
-            keys = _native_keys(self._app._shortcut(shortcut_id))
-            if keys:
-                action.setShortcut(QKeySequence(self._app._shortcut(shortcut_id)))
+            workspace_menu.addAction(action)
         workspace_menu.addSeparator()
-        workspace_menu.addAction(
-            "Browse Saved Workspaces…", self._app._open_saved_workspaces
-        )
+        workspace_menu.addAction("Browse Saved Workspaces…", self._app._open_saved_workspaces)
         workspace_btn.setMenu(workspace_menu)
         layout.addWidget(workspace_btn)
 

@@ -15,7 +15,7 @@ from PySide6.QtCore import (
 )
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 
-from simple_stipple.document.commands import (
+from simple_stipple.core.document.commands import (
     BooleanOpCommand,
     ExplodeCommand,
     MergeCommand,
@@ -23,19 +23,19 @@ from simple_stipple.document.commands import (
     SplitCommand,
     TransformCommand,
 )
-from simple_stipple.document.model import (
+from simple_stipple.core.document.model import (
     EntityRecord,
     OperationResult,
     new_entity_id,
 )
-from simple_stipple.engine.cad.editor_geometry import (
+from simple_stipple.core.cad.editor_geometry import (
     transform_entity_metadata,
     update_entity_parameter,
 )
-from simple_stipple.engine.cad.geometry import minimum_clearance
-from simple_stipple.engine.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
-from simple_stipple.engine.editing.boolean import offset_polyline
-from simple_stipple.engine.editing.topology import (
+from simple_stipple.core.cad.geometry import minimum_clearance
+from simple_stipple.core.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
+from simple_stipple.core.editing.boolean import offset_polyline
+from simple_stipple.core.editing.topology import (
     extension_point,
     split_paths,
     trim_polyline,
@@ -807,12 +807,12 @@ class EditingService:
             display_kind = e.kind
             display_meta: dict[str, Any] = info["meta"]  # type: ignore[assignment]
             if e.kind == "polyline":
-                from simple_stipple.engine.cad.recognition import recognize_polyline
+                from simple_stipple.core.cad.detection import detect_primitive
 
-                recognized = recognize_polyline(e.points)
-                if recognized is not None:
-                    display_kind = recognized.kind
-                    display_meta = dict(recognized.metadata)
+                detected = detect_primitive(e.points)
+                if detected is not None:
+                    display_kind = detected.kind
+                    display_meta = dict(detected.metadata)
                     sides = int(display_meta.get("sides", 0) or 0)
                     if display_kind == "polygon" and sides == 3:
                         display_kind = "triangle"
@@ -1009,7 +1009,6 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
-
     def scale_by_reference(self, factor: float, origin: tuple[float, float]) -> bool:
         """Uniformly scale the current selection (or all visible geometry).
 
@@ -1101,8 +1100,6 @@ class EditingService:
     ) -> list[tuple[float, float]] | None:
         return offset_polyline(poly, distance)
 
-
-
     def _update_shape_size_fields_from_preview(self) -> None:
         if self._host._draw_shape_w_edit is None or self._host._draw_shape_h_edit is None:
             return
@@ -1121,7 +1118,6 @@ class EditingService:
         ex, ey = self._host._draw_shape_cursor_w
         self._host._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
         self._host._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
-
 
     def offset_selected(self, distance: float) -> int:
         """Public command/API wrapper for the canonical offset operation."""
@@ -1269,17 +1265,6 @@ class EditingService:
         cb([[(x, y) for x, y in poly] for poly in selected])
         self._host._show_flash("Custom tile set", 900)
 
-
-
-
-
-
-
-
-
-
-
-
     def explode_selected_to_segments(self) -> int:
         indices = self._host._mutable_selected_ids()
         entity_ids = tuple(
@@ -1313,12 +1298,6 @@ class EditingService:
         return len(result.selected_ids)
 
     # ── Base right-click handling + vertex ops (restored from _select/_edit mixins) ──
-
-
-
-
-
-
 
     def knife_cut(
         self,
@@ -1362,9 +1341,6 @@ class EditingService:
         if text:
             self._host._show_flash(text, 1200 if result.warnings or not result.changed else 900)
         return result
-
-
-
 
     def _set_repeat_action(self, label: str, callback) -> None:
         self._host._last_repeat_action = (str(label), callback)

@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.platform.config import (
+from simple_stipple.platform.settings import (
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
     DEFAULT_DRAW_SIDEBAR_PATH_TOOLS,
     DEFAULT_DRAW_SIDEBAR_SECTIONS,
@@ -46,12 +46,12 @@ from simple_stipple.ui.components.layout import (
     sep,
     surface_frame,
 )
-from simple_stipple.ui.components.tokens import (
+from simple_stipple.ui.style import (
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,
 )
-from simple_stipple.ui.units import DEFAULT_UNIT_SYSTEM
+from simple_stipple.ui.components.units import DEFAULT_UNIT_SYSTEM
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -389,7 +389,9 @@ class SettingsDialog(QDialog):
         trace_hint.setWordWrap(True)
         form.addRow(trace_hint)
         for key, label, tooltip in self._trace_default_fields:
-            default_value = self._trace_default_fn(self._settings, key) if self._trace_default_fn else ""
+            default_value = (
+                self._trace_default_fn(self._settings, key) if self._trace_default_fn else ""
+            )
             entry = self._add_text_field(form, label, default_value)
             entry.setToolTip(tooltip)
             self._trace_default_entries[key] = entry

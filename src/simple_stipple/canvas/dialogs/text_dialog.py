@@ -20,14 +20,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.canvas.operations.hud_text import (
-    install_font_file,
-    load_user_fonts,
-    user_fonts_dir,
-)
+from simple_stipple.canvas.operations.text import install_font_file, load_user_fonts, user_fonts_dir
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
-from simple_stipple.ui.units import from_display, to_display
-from simple_stipple.ui.units import suffix as unit_suffix
+from simple_stipple.ui.components.units import from_display, to_display
+from simple_stipple.ui.components.units import suffix as unit_suffix
 
 
 class AddTextDialog(QDialog):
@@ -125,8 +121,7 @@ class AddTextDialog(QDialog):
         # those dynamic properties local; the preview's surface and type
         # scale are defined by its semantic QSS role.
         self._preview.setStyleSheet(
-            f'font-family: "{family}"; '
-            f"font-weight: {weight}; font-style: {style};"
+            f'font-family: "{family}"; font-weight: {weight}; font-style: {style};'
         )
         self._preview.setText(self._text_edit.toPlainText() or "Preview")
 

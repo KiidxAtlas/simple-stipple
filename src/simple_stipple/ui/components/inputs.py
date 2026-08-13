@@ -96,7 +96,7 @@ def browse_row(
     btn = QPushButton(btn_label)
     btn.setAccessibleName(f"{btn_label} {heading or 'file'}")
     if btn_width is not None:
-        btn.setFixedWidth(btn_width)
+        btn.setMinimumWidth(btn_width)
     if btn_tooltip:
         btn.setToolTip(btn_tooltip)
     btn.clicked.connect(on_browse)

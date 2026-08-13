@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from simple_stipple.engine.patterns.regions import build_region_tree
+from simple_stipple.core.patterns.tiling import build_region_tree
 
 
 def square(x: float, y: float, size: float) -> list[tuple[float, float]]:

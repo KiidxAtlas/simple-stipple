@@ -10,7 +10,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from simple_stipple.features.pattern.page import PatternPage
-from simple_stipple.features.pattern.treatments import treatment_kind
+from simple_stipple.features.pattern.regions.treatments import treatment_kind
 
 OUTER = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
 CIRCLE = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]

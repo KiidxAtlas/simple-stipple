@@ -1,5 +1,169 @@
 # Changelog
 
+## 0.3.6 — 2026-08-12
+
+### Added
+
+#### Product workflows
+
+- Added a rebuilt, searchable in-app Help system as the `features.help` package, with a
+  dedicated dialog and browsable sections for getting started, Draft, Pattern, Trace,
+  Convert, Repository, commands, shortcuts, production safety, troubleshooting, settings,
+  updates, recovery, and support.
+- Added a Support dialog reachable from the Help menu.
+- Added structured Convert task forms for FVI conversion, DXF repair, SVG conversion, and
+  shared task-form behavior, replacing the previous single oversized task implementation.
+- Added named background-job builders for Pattern preview work and Trace work so page classes
+  retain UI coordination while jobs carry immutable processing inputs.
+- Added a named Draft DXF export-plan builder that collects dimensions, layer order, entity
+  kinds, metadata, and extra layers before serialization.
+- Added a named Trace outlined-DXF export workflow covering geometry preflight, destination
+  selection, metadata-aware export, reveal availability, and visible result status.
+- Added a reusable imported-SVG backdrop workflow for Draft. SVG artwork embedded alongside
+  imported paths is placed as editable reference art, updates status while transformed, and
+  can be removed through the existing canvas interaction.
+- Added pure Pattern outline helpers for import/transfer normalization, stable-ID
+  reconciliation, canvas-record and layer construction, bounds, and smallest-containing
+  region selection.
+- Added dedicated Pattern outline-file import routing for DXF, FVI, and SVG assets.
+
+#### Editor and geometry
+
+- Added `editor.rendering.dense_preview`, which owns retained-path batching and overscan
+  raster-cache behavior for dense previews while preserving the renderer's scene ordering.
+- Added `editor.view.preferences`, which owns CanvasView grid, snap, context-menu,
+  presentation, zoom, and cursor-status preferences while retaining CanvasView's public Qt
+  surface.
+- Added `engine.cad.curves` for authored spline and Bezier control-point behavior without
+  changing ShapeFactory's serialization/deserialization role.
+- Added focused editor modules for model ownership, document bridging, objects, hit testing,
+  grouping, layer services, tool bases, dimension backend, and radial-menu behavior.
+- Added engine-focused geometry, imaging, and editing implementations as the canonical homes
+  for JIT, spatial indexing, Voronoi, raster processing, tracing, boolean operations, and
+  clipping.
+
+#### Quality and documentation
+
+- Added focused regression suites for document replacement, SVG backdrops, dense preview
+  caching, editor hit testing, view preferences, engine behavior, Pattern outline state,
+  anisotropic shape scaling, Trace DXF export, and phase characterization.
+- Added architecture guards for canonical module homes, direct and dynamic imports, feature
+  isolation, Qt-free engine/document boundaries, and retired module absence.
+- Expanded [ARCHITECTURE.md](ARCHITECTURE.md) into an onboarding guide with the eight
+  capability homes, dependency rules, lifecycle diagrams, execution paths, placement guide,
+  extension seams, and release-verification expectations.
+
+### Changed
+
+#### Application structure
+
+- Completed the capability-first runtime consolidation. The canonical top-level homes are now
+  `app`, `document`, `editor`, `engine`, `features`, `platform`, `resources`, and `ui`.
+- Renamed the reusable vector-editor package from `canvas` to `editor`, including the widget,
+  renderer, runtime, commands, snapping, dialogs, layers, operations, tools, views, and
+  widgets. Application code, tests, dynamic imports, monkeypatch targets, frozen-build
+  configuration, and module-home checks now use `editor`.
+- Consolidated pure geometry, imaging, and editing code under `engine`; all ordinary consumers
+  now use the focused engine modules rather than a parallel domain facade.
+- Moved shared UI services to their final semantic homes:
+  `ui.components.units`, `ui.components.notifications`, `ui.components.recent`, and
+  `ui.dialogs.files`. Platform path policy now lives in `platform.settings`.
+- Reorganized Pattern internals into named responsibilities: form widgets/specification,
+  regions/treatments, export jobs/output, outline I/O/state, preview jobs, and inline preset
+  behavior.
+- Reorganized Help from one module into a feature package with content, assembly, and dialog
+  responsibilities so the manual stays browsable without becoming a single large source file.
+- Reorganized Convert form construction into dedicated FVI, repair, and SVG task-form modules.
+- Reorganized Draft, Pattern, Trace, renderer, view, and CAD coordinators by extracting only
+  cohesive responsibilities while preserving their existing public callback/action surfaces.
+- Updated packaging, hidden-import handling, package exports, launcher imports, and module
+  metadata for the final canonical package tree.
+
+#### Canvas, document, and file behavior
+
+- Kept the document service as the command-oriented mutation boundary while moving its
+  geometry calls to the focused CAD/editing APIs.
+- Clarified transform semantics: command-based scaling is uniform; the editor's preview and
+  commit path remains responsible for non-uniform gizmo scaling and metadata preservation.
+- Updated DXF, SVG, and FVI adapters to use the canonical engine geometry/imaging/editing
+  implementations and preserve the tested round-trip/import behavior after consolidation.
+- Updated Draft export preparation to consistently preserve dimensions, layers, entity kinds,
+  and metadata through a single export plan.
+- Updated Pattern engraving-job construction and preview worker invocation to take explicit
+  parameter snapshots rather than relying on page-owned implementation details.
+
+#### User interface and accessibility
+
+- Tightened the Draw sidebar: resize gutters are now 12 px instead of 24 px, outer/content
+  margins and section spacing are reduced, and tool grids use compact gaps. This returns useful
+  width to the two-column tool palette and reduces unnecessary vertical whitespace.
+- Added the semantic `precision-control` theme role and applied it to Pan, Grid, Snap,
+  Construction, and Constraints controls so the precision bar uses compact, consistent padding
+  rather than inheriting oversized general-purpose button spacing.
+- Made Pattern preset actions fit narrow inspectors without truncation: `Apply Preset` is now
+  context-aware `Apply`, `Options` is now `More`, fixed action widths were removed, and both
+  actions have explicit accessible names/tooltips.
+- Kept long Pattern outline paths readable by placing the line-edit cursor at the beginning
+  after selection, drop, recent-file load, reload, and workspace restore; the full path remains
+  available in the field tooltip.
+- Made recent-file controls use a minimum-width layout policy so their label and disclosure
+  affordance do not compete with adjacent file actions.
+- Pattern parameter sliders now round decimal values to two places. Dragging a slider shows
+  readable values such as `1.05` instead of floating-point interpolation artifacts.
+- Updated the Help manual and changelog references for two-decimal Pattern slider precision.
+
+### Fixed
+
+- Fixed clipped Pattern preset labels in narrow side panels.
+- Fixed long selected vector paths appearing horizontally scrolled to an unhelpful trailing
+  fragment instead of their leading context.
+- Fixed Draw sidebar padding and resize chrome consuming disproportionate canvas/tool space.
+- Fixed compact precision-bar controls inheriting spacing that could crowd labels and menu
+  indicators at narrower widths.
+- Fixed workspace Pattern-path restoration to preserve readable path presentation while
+  retaining a safe fallback for minimal non-Qt state harnesses.
+- Fixed direct imports, string-based imports, frozen-build imports, and test monkeypatch paths
+  that still referenced retired `canvas`, `domain`, UI-facade, or platform-path modules.
+- Fixed Help and architecture documentation drift so the documented package tree uses
+  `editor`, not the retired `canvas` name.
+
+### Removed
+
+- Removed the retired `canvas/` package after migration to `editor/`.
+- Removed the retired parallel `domain/` facade tree after restoring its focused engine
+  implementations.
+- Removed retired shared-UI facades: `ui.units`, `ui.notifications`, `ui.recent`, and
+  `ui.files`.
+- Removed the retired `platform.paths` facade in favor of `platform.settings`.
+- Removed obsolete geometry-service facade code now represented by focused engine modules.
+- Removed superseded restructuring inventories and stale release documentation that described
+  the previous package layout.
+
+### Breaking changes for integrations
+
+- Python integrations importing `simple_stipple.canvas.*` must import the corresponding
+  `simple_stipple.canvas.*` module instead.
+- Python integrations importing `simple_stipple.domain.*` must import the corresponding
+  `simple_stipple.core.{geometry,imaging,editing}` module instead.
+- Python integrations importing `simple_stipple.ui.{units,notifications,recent,files}` must
+  use `simple_stipple.ui.components.{units,notifications,recent}` or
+  `simple_stipple.ui.dialogs.files` instead.
+- Python integrations importing `simple_stipple.platform.paths` must use
+  `simple_stipple.platform.settings` instead.
+- The Help implementation is now imported from `simple_stipple.features.help` rather than the
+  retired single-file `simple_stipple.features.help.py` module; its package-level public API is
+  retained.
+
+### Verification
+
+- Added and updated focused regression coverage for the new module homes, behavior seams,
+  slider precision, long-path presentation, compact preset actions, compact precision roles,
+  Draw-sidebar resize space, Help content, and architecture boundaries.
+- `ruff check src tests`, `git diff --check`, focused offscreen UI regression tests, and the
+  canonical dependency/module-home suites pass for the current changes. Some local combined
+  Qt runs may still be affected by the documented PySide6 `QListWidgetItem` teardown crash; an
+  incomplete runner summary is not represented as a full-suite pass.
+
 ## 0.3.5 — 2026-07-27
 
 Baseline: `v0.3.1` (`c000273`, 2026-07-15)

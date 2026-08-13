@@ -5,25 +5,25 @@ from typing import Any, cast
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
-from simple_stipple.canvas.model import CanvasModel
+from simple_stipple.core.document.model import OperationResult
+from simple_stipple.canvas.objects import CanvasModel, CanvasModelPort, CanvasService
 from simple_stipple.canvas.operations.clipboard import ClipboardService
-from simple_stipple.canvas.operations.draw_ops import ConstructionService, DrawOpsService
+from simple_stipple.canvas.operations.construction import ConstructionService
+from simple_stipple.canvas.operations.draw_ops import DrawOpsService
 from simple_stipple.canvas.operations.editing import EditingService
 from simple_stipple.canvas.operations.gizmo import GizmoService
-from simple_stipple.canvas.operations.grouping import GroupingService
-from simple_stipple.canvas.operations.hit_test import HitTestService
-from simple_stipple.canvas.operations.hud_text import HudTextService, TextService
-from simple_stipple.canvas.operations.layer_service import LayerService
+from simple_stipple.canvas.objects import GroupingService, LayerService
+from simple_stipple.canvas.hit_testing import HitTestService
+from simple_stipple.canvas.operations.hud_text import HudTextService
+from simple_stipple.canvas.operations.text import TextService
 from simple_stipple.canvas.operations.select import SelectionService
 from simple_stipple.canvas.operations.smoothing import SmoothingService
 from simple_stipple.canvas.operations.snap_service import SnapService
 from simple_stipple.canvas.renderer import CanvasRenderer
-from simple_stipple.canvas.service import CanvasModelPort, CanvasService
 from simple_stipple.canvas.snap import SnapEngine
 from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
-from simple_stipple.document.model import OperationResult
-from simple_stipple.platform.config import (
+from simple_stipple.platform.settings import (
     DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
     DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE,
@@ -36,7 +36,7 @@ from simple_stipple.platform.config import (
     DEFAULT_SMOOTHING_METHOD,
 )
 from simple_stipple.ui.components.focus import CanvasEscapeRouter
-from simple_stipple.ui.units import DEFAULT_UNIT_SYSTEM
+from simple_stipple.ui.components.units import DEFAULT_UNIT_SYSTEM
 
 
 def _initialize_view(
@@ -173,7 +173,7 @@ def _initialize_view(
     self._last_repeat_action = None
     self._operation_preview_polys = []
 
-    # Undo / redo history (delta-based; see src/simple_stipple/document/history.py)
+    # Undo / redo history (delta-based; see src/simple_stipple/core/document/history.py)
 
     # Unified snap engine (src/simple_stipple/canvas/snap.py) and guide lines
     # (("h", y_world) or ("v", x_world)); guides participate in snapping.
@@ -444,6 +444,11 @@ def _initialize_view(
     # center from its ORIGINAL (pre-drag) value every mouse-move event,
     # instead of compounding the transform onto an already-updated value.
     self._gizmo_meta_snapshot = {}
+    # Parallel snapshot of each entity's kind at drag start — a non-uniform
+    # scale can change kind mid-drag (arc -> elliptical_arc), so later
+    # mouse-move events must keep reconstructing from the drag-start kind,
+    # not the live one, or it no longer matches _gizmo_meta_snapshot.
+    self._gizmo_kind_snapshot = {}
     self._gizmo_local_shape = None
     self._gizmo_drag_moved = False
     self._gizmo_undo_pushed = False

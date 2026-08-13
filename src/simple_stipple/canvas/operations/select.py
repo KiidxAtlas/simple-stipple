@@ -6,13 +6,13 @@ import math
 from copy import deepcopy
 from typing import Any
 
-from simple_stipple.document.model import EntityRecord
-from simple_stipple.engine.cad.editor_geometry import (
+from simple_stipple.core.document.model import EntityRecord
+from simple_stipple.core.cad.editor_geometry import (
     move_entity_control_point,
     synchronize_entity_control_points,
     transform_entity_metadata,
 )
-from simple_stipple.engine.cad.shapes import transform_meta
+from simple_stipple.core.cad.shape_factory import transform_meta
 
 
 class SelectionService:
@@ -38,7 +38,7 @@ class SelectionService:
         """Transform an entity's parametric metadata via its Shape class.
 
         All per-kind transform math lives on the Shape subclasses in
-        src/simple_stipple/engine/cad/shapes.py — this is a thin delegation shim kept for
+        src/simple_stipple/core/cad/shapes.py — this is a thin delegation shim kept for
         the legacy kind+meta storage until the canvas migrates to shapes.
         """
         entity = self._host._entity_for_id(entity_id)
@@ -62,50 +62,11 @@ class SelectionService:
         dx: float,
         dy: float,
     ) -> dict[str, Any] | None:
-        return transform_meta(kind, meta, transform="translate", dx=dx, dy=dy)
-
-    @staticmethod
-    def _rotate_point(
-        point: tuple[float, float],
-        center: tuple[float, float],
-        angle_deg: float,
-    ) -> tuple[float, float]:
-        if abs(angle_deg) < 1e-9:
-            return point
-        ang = math.radians(angle_deg)
-        ca = math.cos(ang)
-        sa = math.sin(ang)
-        px, py = point
-        cx, cy = center
-        dx = px - cx
-        dy = py - cy
-        return (cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
-
-    @staticmethod
-    def _scale_point(
-        point: tuple[float, float],
-        center: tuple[float, float],
-        factor: float,
-    ) -> tuple[float, float]:
-        if abs(factor - 1.0) < 1e-9:
-            return point
-        px, py = point
-        cx, cy = center
-        return (cx + (px - cx) * factor, cy + (py - cy) * factor)
-
-    @staticmethod
-    def _mirror_point(
-        point: tuple[float, float],
-        center: tuple[float, float],
-        axis: str,
-    ) -> tuple[float, float]:
-        px, py = point
-        cx, cy = center
-        if axis == "horizontal":
-            return (2 * cx - px, py)
-        if axis == "vertical":
-            return (px, 2 * cy - py)
-        return point
+        # Translate never changes kind (only a non-uniform scale can, via
+        # Shape.scale_xy), so the caller's own `kind` stays valid — only
+        # the metadata needs the transformed result.
+        result = transform_meta(kind, meta, transform="translate", dx=dx, dy=dy)
+        return result[1] if result is not None else None
 
     def _key_delete(self) -> None:
         if self._host._selected_guide is not None:
@@ -423,11 +384,11 @@ class SelectionService:
             kind = "line"
             meta = {"start": tuple(poly[0]), "end": tuple(poly[-1])}
         elif primitive == "arc" and len(poly) >= 3:
-            from simple_stipple.engine.cad.geometry import (
+            from simple_stipple.core.cad.geometry import (
                 arc_spec_from_center_start_end,
                 arc_spec_from_three_points,
             )
-            from simple_stipple.engine.cad.shapes import ShapeFactory
+            from simple_stipple.core.cad.shape_factory import ShapeFactory
 
             if getattr(self._host, "_draw_arc_mode", "center-start-end") == "center-start-end":
                 spec = arc_spec_from_center_start_end(poly[0], poly[1], poly[2])
@@ -452,7 +413,7 @@ class SelectionService:
                     ).points
                 )
         elif primitive == "spline" and len(poly) >= 2:
-            from simple_stipple.engine.cad.geometry import build_spline_poly
+            from simple_stipple.core.cad.geometry import build_spline_poly
 
             kind = "spline"
             meta = {
@@ -549,7 +510,7 @@ class SelectionService:
         if len(self._host._pen_pts) < 2:
             self._cancel_pen()
             return False
-        from simple_stipple.engine.cad.geometry import build_bezier_poly
+        from simple_stipple.core.cad.geometry import build_bezier_poly
 
         entity = EntityRecord(
             # Keep one anchor per tangent.  ``build_bezier_poly`` closes the

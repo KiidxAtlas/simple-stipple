@@ -14,9 +14,14 @@ from typing import Any, cast
 
 from pydantic import ValidationError
 
-from simple_stipple.document.model import PatternTabState
-from simple_stipple.features.pattern.params import collect_form_state, restore_form_state
-from simple_stipple.features.pattern.treatments import migrate_workspace_zones
+from simple_stipple.core.document.model import PatternTabState
+from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
+from simple_stipple.features.pattern.outline_state import smallest_containing_outline
+from simple_stipple.features.pattern.regions.treatments import migrate_workspace_zones
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
@@ -82,7 +87,14 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     page._suspend_state = True
     pattern_state = _coerce_to_pattern_state(state)
 
-    page._dxf_edit.setText(pattern_state.dxf_path)
+    show_outline_path = getattr(page, "_show_outline_path", None)
+    if callable(show_outline_path):
+        show_outline_path(pattern_state.dxf_path)
+    else:
+        # Keep the state serializer usable by minimal non-Qt harnesses. Live
+        # PatternPage instances always take the readable-path presentation
+        # route above.
+        page._dxf_edit.setText(pattern_state.dxf_path)
     restore_form_state(page, pattern_state.params)
     page._orig_polys = [list(poly) for poly in pattern_state.orig_polys]
     page._edit_polys = [list(poly) for poly in pattern_state.edit_polys]
@@ -170,31 +182,18 @@ def _region_under_image(page: Any, options: dict) -> str | None:
     the smallest region it sits inside is the best available answer — and it
     matches what the user drew.
     """
-    from shapely.geometry import Point, Polygon
-
-    centre = Point(
-        float(options.get("x", 0.0)) + float(options.get("width", 0.0)) / 2.0,
-        float(options.get("y", 0.0)) + float(options.get("height", 0.0)) / 2.0,
+    return smallest_containing_outline(
+        page._outline_ids,
+        page._edit_polys,
+        (
+            float(options.get("x", 0.0)) + float(options.get("width", 0.0)) / 2.0,
+            float(options.get("y", 0.0)) + float(options.get("height", 0.0)) / 2.0,
+        ),
     )
-    best: tuple[float, str] | None = None
-    for region_id, poly in zip(page._outline_ids, page._edit_polys):
-        if len(poly) < 3:
-            continue
-        try:
-            shape = Polygon(poly)
-            if not shape.is_valid:
-                shape = shape.buffer(0)
-        except (TypeError, ValueError):
-            continue
-        if shape.is_empty or not shape.covers(centre):
-            continue
-        if best is None or shape.area < best[0]:
-            best = (shape.area, region_id)
-    return best[1] if best else None
 
 
 def _migrate_page_engraving_to_region(page: Any, pattern_state: Any) -> None:
-    from simple_stipple.features.pattern.treatments import engraving_regions, treatment_kind
+    from simple_stipple.features.pattern.regions.treatments import engraving_regions, treatment_kind
 
     path = str(pattern_state.engraving_image_path or "")
     if not path or engraving_regions(page):
@@ -227,3 +226,78 @@ def clear_pattern_workspace_state(page: Any) -> None:
     page._treatments = {}
     page._set_status("")
     page._refresh_canvas_panels()
+
+
+@dataclass(frozen=True)
+class PreviewWorkerCall:
+    """One fully prepared invocation of a Pattern preview worker."""
+
+    target: Callable[..., None]
+    args: tuple[Any, ...]
+    kwargs: dict[str, Any]
+
+
+def build_preview_worker_call(
+    *,
+    zones: list[dict[str, Any]],
+    all_polys: list[list[tuple[float, float]]],
+    pattern: str,
+    params: dict[str, Any],
+    scale: tuple[float, float],
+    border_polys: list[list[tuple[float, float]]] | None,
+    border_fade: float,
+    preview_token: int,
+    cancel_event: threading.Event,
+    pattern_service: Any,
+    orig_w: float,
+    orig_h: float,
+    on_done: Callable,
+    on_error: Callable,
+    fill_options: dict[str, Any] | None,
+    compute_preview: Callable[..., None],
+    compute_preview_zones: Callable[..., None],
+) -> PreviewWorkerCall:
+    """Choose the existing zone or outline worker and preserve its contract."""
+    common_kwargs = {
+        "pattern_service": pattern_service,
+        "orig_w": orig_w,
+        "orig_h": orig_h,
+        "on_done": on_done,
+        "on_error": on_error,
+        "fill_options": fill_options,
+    }
+    if zones:
+        return PreviewWorkerCall(
+            target=compute_preview_zones,
+            args=(
+                zones,
+                all_polys,
+                False,  # invert_fill
+                False,  # mirror_v
+                False,  # mirror_h
+                border_fade,
+                None,  # exclusion_polys
+                preview_token,
+                cancel_event,
+            ),
+            kwargs=common_kwargs,
+        )
+    return PreviewWorkerCall(
+        target=compute_preview,
+        args=(
+            all_polys,
+            pattern,
+            params,
+            scale,
+            border_polys,
+            False,  # interlace
+            False,  # invert_fill
+            False,  # mirror_v
+            False,  # mirror_h
+            border_fade,
+            None,  # exclusion_polys
+            preview_token,
+            cancel_event,
+        ),
+        kwargs=common_kwargs,
+    )

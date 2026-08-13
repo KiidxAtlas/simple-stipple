@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import platform
-import tempfile
 import threading
 from datetime import date
 from pathlib import Path
@@ -31,28 +30,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.engine.formats.service import (
+from simple_stipple.core.formats.service import (
     load_dxf_polylines_with_report,
     read_fvi,
     summarize_dxf_import_report,
     svg_to_dxf,
 )
-from simple_stipple.engine.formats.svg import read_svg_images
-from simple_stipple.engine.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
-from simple_stipple.engine.patterns.presets import ensure_builtins_seeded
-from simple_stipple.engine.patterns.processing import PATTERNS, PatternProcessor
+from simple_stipple.core.formats.svg import read_svg_images
+from simple_stipple.core.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
+from simple_stipple.core.patterns.presets import ensure_builtins_seeded
+from simple_stipple.core.patterns.processing import PATTERNS, PatternProcessor
 from simple_stipple.canvas.constants import DIM
 from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.pattern.export_jobs import (
+from simple_stipple.features.pattern.export import (
     EXPORT_BUTTON_LABEL,
     EXPORT_FORMAT_KEYS,
-    EngravingJob,
+    build_engraving_job,
     export_document_file,
     export_format_suffix,
     export_laserstar_job,
 )
-from simple_stipple.ui.components.collapsible import CollapsibleSection
+from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.feedback import (
     clear_line_edit_error,
     parse_float_field_with_feedback,
@@ -66,7 +65,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
+from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 from simple_stipple.features.pattern.session import (
     apply_pattern_workspace_state,
     clear_pattern_workspace_state,
@@ -74,7 +73,7 @@ from simple_stipple.features.pattern.session import (
 )
 from simple_stipple.ui.dialogs.laserstar_export_dialog import LaserStarExportDialog
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
-from simple_stipple.features.pattern.params import (
+from simple_stipple.features.pattern.form import (
     collect_pattern_params,
     restore_form_state,
 )
@@ -95,8 +94,17 @@ from simple_stipple.features.pattern.layout import (
     build_right,
     refresh_pattern_properties_panel,
 )
-from simple_stipple.platform.paths import user_data_dir
-from simple_stipple.features.pattern.zones import (
+from simple_stipple.features.pattern.outline_state import read_outline_vector
+from simple_stipple.features.pattern.outline_state import (
+    canvas_records,
+    normalize_outline_items,
+    outline_bounds,
+    reconcile_outline_ids,
+    smallest_containing_outline,
+)
+from simple_stipple.features.pattern.session import build_preview_worker_call
+from simple_stipple.platform.settings import user_data_dir
+from simple_stipple.features.pattern.regions.zones import (
     assign_zone,
     clear_zones,
     highlight_zone_on_canvas,
@@ -111,8 +119,8 @@ from simple_stipple.features.pattern.zones import (
     sync_engraving_visibility,
     update_zone_actions,
 )
-from simple_stipple.engine.patterns.fill import NULL_PATTERN
-from simple_stipple.features.pattern.treatments import (
+from simple_stipple.core.patterns.fill import NULL_PATTERN
+from simple_stipple.features.pattern.regions.treatments import (
     IMAGE_PATTERN,
     engraving_mask_polys,
     region_engraving,
@@ -150,9 +158,9 @@ from simple_stipple.features.pattern.workers import CancellableTaskState
 # because tests monkeypatch "simple_stipple.features.pattern.page.save_settings" to
 # avoid touching disk. See domain/custom_tiles.py and domain/presets.py for
 # the module attributes tests must patch for those extracted call sites.
-from simple_stipple.platform.config import custom_tiles_dir, save_settings  # noqa: F401
-from simple_stipple.ui.files import pick_open_file, pick_save_file
-from simple_stipple.ui.recent import KIND_DXF, KIND_IMAGE, record_recent
+from simple_stipple.platform.settings import custom_tiles_dir, save_settings  # noqa: F401
+from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
+from simple_stipple.ui.components.recent import KIND_DXF, KIND_IMAGE, record_recent
 
 LOGGER = logging.getLogger(__name__)
 
@@ -200,7 +208,7 @@ class PatternPage(BasePage):
             self._presets = seeded
             self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
             try:
-                from simple_stipple.platform.config import save_settings
+                from simple_stipple.platform.settings import save_settings
 
                 save_settings(self._settings)
             except OSError:
@@ -291,7 +299,7 @@ class PatternPage(BasePage):
             self._presets = seeded
             self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
             try:
-                from simple_stipple.platform.config import save_settings
+                from simple_stipple.platform.settings import save_settings
 
                 save_settings(self._settings)
             except OSError:
@@ -378,7 +386,7 @@ class PatternPage(BasePage):
                     if answer != QMessageBox.StandardButton.Yes:
                         event.ignore()
                         return
-                self._dxf_edit.setText(path)
+                self._show_outline_path(path)
                 self._load_outline_file(path)
                 event.acceptProposedAction()
                 return
@@ -690,16 +698,6 @@ class PatternPage(BasePage):
         assert value is not None
         return int(value)
 
-    def _parse_path_field(self, entry, label: str) -> str:
-        value = entry.text().strip()
-        if not value:
-            message = f"{label} is required."
-            set_line_edit_error(entry, message)
-            self._set_status(message, STATUS_ERR)
-            raise ValueError(message)
-        clear_line_edit_error(entry)
-        return value
-
     def _collect_scale(self) -> tuple[float, float]:
         sw = self._parse_float_field(
             self._scale_w,
@@ -770,13 +768,6 @@ class PatternPage(BasePage):
             new_entity_ids=entity_ids,
         )
 
-    def _resolve_outline_ids(self, ids: list[str]) -> list[list[tuple[float, float]]]:
-        return self._pattern_service.resolve_outline_ids(
-            ids,
-            self._outline_ids,
-            self._edit_polys,
-        )
-
     def _region_tree(self) -> dict:
         return region_tree(self)
 
@@ -810,7 +801,7 @@ class PatternPage(BasePage):
     # from the treatments, and one Export writes every enabled one.
 
     def _document_operations(self) -> list:
-        from simple_stipple.features.pattern.output import document_operations
+        from simple_stipple.features.pattern.export import document_operations
 
         operations = document_operations(self)
         order = {key: index for index, key in enumerate(self._output_order)}
@@ -876,8 +867,8 @@ class PatternPage(BasePage):
         """
         if not hasattr(self, "_output_preflight"):
             return
-        from simple_stipple.engine.cad.preflight import analyze_geometry
-        from simple_stipple.features.pattern.output import density_issues
+        from simple_stipple.core.cad.preflight import analyze_geometry
+        from simple_stipple.features.pattern.export import density_issues
 
         report = analyze_geometry([list(poly) for poly in self._edit_polys])
         # An open endpoint is only informational when open paths are a valid
@@ -998,7 +989,9 @@ class PatternPage(BasePage):
             )
             self._engrave_choose_btn.setText("Replace image…")
         else:
-            self._engraving_image_label.setText("No image selected — add one to place and engrave it.")
+            self._engraving_image_label.setText(
+                "No image selected — add one to place and engrave it."
+            )
             self._engraving_section.set_subtitle("Add an image to begin")
             self._engrave_choose_btn.setText("Add image…")
         self._engrave_remove_btn.setEnabled(has_image)
@@ -1036,7 +1029,9 @@ class PatternPage(BasePage):
             self._engrave_canvas_edit.setChecked(True)
         self._update_engraving_overlay()
         self._canvas.select_background_image(True)
-        self._set_status("Image selected — drag it, use handles, or press Tab for placement fields.", STATUS_OK)
+        self._set_status(
+            "Image selected — drag it, use handles, or press Tab for placement fields.", STATUS_OK
+        )
 
     def _center_engraving_image(self) -> None:
         if not self._engraving_image_path:
@@ -1212,7 +1207,7 @@ class PatternPage(BasePage):
 
     def _drop_image_into_region(self, path: str, event) -> bool:
         """Engrave a dropped image into the region under the cursor."""
-        from simple_stipple.features.pattern.zones import row_for_region_id
+        from simple_stipple.features.pattern.regions.zones import row_for_region_id
 
         canvas_pos = self._canvas.mapFrom(self, event.position().toPoint())
         region_id = self._canvas._find_region_at(canvas_pos.x(), canvas_pos.y())
@@ -1241,7 +1236,7 @@ class PatternPage(BasePage):
         return True
 
     def _selected_region_id(self) -> str | None:
-        from simple_stipple.features.pattern.zones import selected_region_id
+        from simple_stipple.features.pattern.regions.zones import selected_region_id
 
         return selected_region_id(self)
 
@@ -1322,14 +1317,13 @@ class PatternPage(BasePage):
         """Point at the one Export button; the image is already an operation."""
         self._output_section.set_expanded(True)
         self._set_status(
-            "This image is an Engrave operation in Output — Export writes it with "
-            "everything else.",
+            "This image is an Engrave operation in Output — Export writes it with everything else.",
             STATUS_OK,
         )
 
     def _active_engraving(self) -> tuple[str, dict] | None:
         """The image to export: the selected region's, else the first one."""
-        from simple_stipple.features.pattern.treatments import engraving_regions
+        from simple_stipple.features.pattern.regions.treatments import engraving_regions
 
         found = engraving_regions(self)
         if not found:
@@ -1379,9 +1373,7 @@ class PatternPage(BasePage):
         """One Export: every enabled operation, in the chosen format."""
         operations = self._enabled_operations()
         if not operations:
-            self._set_status(
-                "Nothing to export — give a region a treatment first.", STATUS_WARN
-            )
+            self._set_status("Nothing to export — give a region a treatment first.", STATUS_WARN)
             return
         engraving = any(op.kind == "engrave" for op in operations)
         if engraving and self._engrave_min_power.value() > self._engrave_max_power.value():
@@ -1414,7 +1406,7 @@ class PatternPage(BasePage):
             self._sync_engraving_widgets_from_region(active[0])
         if not self._engraving_image_path:
             return None, None, None
-        job = EngravingJob(
+        job = build_engraving_job(
             x_mm=self._engrave_x.value(),
             y_mm=self._engrave_y.value(),
             width_mm=self._engrave_w.value(),
@@ -1444,7 +1436,9 @@ class PatternPage(BasePage):
             return
         vectors = list(self._preview_polys_cache) if wants_vectors else []
         if self._export_format == "laserstar":
-            self._write_laserstar_package(operations, vectors, raster_source, engraving_job, raster_mask)
+            self._write_laserstar_package(
+                operations, vectors, raster_source, engraving_job, raster_mask
+            )
             return
         self._write_single_file(operations, vectors, raster_source, engraving_job, raster_mask)
 
@@ -1604,9 +1598,6 @@ class PatternPage(BasePage):
 
     def _save_tile_motif(self):
         return save_tile_motif(self)
-
-    def _load_tile_motif(self):
-        return load_tile_motif(self)
 
     def _delete_tile_motif(self):
         return delete_tile_motif(self)
@@ -1814,31 +1805,6 @@ class PatternPage(BasePage):
         ]
         return commands
 
-    def _on_scale_w_changed(self, *_) -> None:
-        if self._updating_dims or not self._ar_lock_btn.isChecked() or self._orig_w <= 0:
-            return
-        try:
-            w = float(self._scale_w.text())
-            h = w * self._orig_h / self._orig_w
-            self._updating_dims = True
-            self._scale_h.setText(f"{h:.2f}")
-        except ValueError:
-            return
-        finally:
-            self._updating_dims = False
-
-    def _on_scale_h_changed(self, *_) -> None:
-        if self._updating_dims or not self._ar_lock_btn.isChecked() or self._orig_h <= 0:
-            return
-        try:
-            h = float(self._scale_h.text())
-            w = h * self._orig_w / self._orig_h
-            self._updating_dims = True
-            self._scale_w.setText(f"{w:.2f}")
-        except ValueError:
-            return
-        finally:
-            self._updating_dims = False
 
     # ── Preview ───────────────────────────────────────────────────────────────
 
@@ -1890,25 +1856,6 @@ class PatternPage(BasePage):
             "cell_instance_cutouts": [list(poly) for poly in self._pattern_cell_instance_cutouts],
         }
 
-    def _collect_fabrication_options(self) -> dict:
-        try:
-            minimum_segment = max(
-                0.0, float(self._minimum_segment_edit.text() or DEFAULT_MIN_SEGMENT)
-            )
-        except ValueError:
-            minimum_segment = 0.0
-        try:
-            minimum_area = max(
-                0.0, float(self._minimum_area_edit.text() or DEFAULT_MIN_ISLAND_AREA)
-            )
-        except ValueError:
-            minimum_area = 0.0
-        return {
-            "minimum_segment": minimum_segment,
-            "minimum_area": minimum_area,
-            "optimize_order": self._optimize_paths_cb.isChecked(),
-        }
-
     def _refresh_preset_combo(self):
         return refresh_preset_combo(self)
 
@@ -1926,6 +1873,19 @@ class PatternPage(BasePage):
 
     # ── DXF loading, outlines, pattern library ────────────────────────────────
 
+    def _show_outline_path(self, path: str) -> None:
+        """Show an outline path from its beginning, with its full value discoverable.
+
+        ``QLineEdit.setText`` places its cursor at the end on some Qt styles,
+        which horizontally scrolls a long path until the filename's context is
+        cut off. Keeping the cursor at the beginning makes the field stable;
+        the full, untruncated path remains available in the tooltip and is
+        still the editable value used by reload.
+        """
+        self._dxf_edit.setText(path)
+        self._dxf_edit.setCursorPosition(0)
+        self._dxf_edit.setToolTip(path or "Path to the current outline file")
+
     def _browse_dxf(self) -> None:
         path = pick_open_file(
             self,
@@ -1938,7 +1898,7 @@ class PatternPage(BasePage):
             fallback_dir=self._settings.get("outline_dxf_dir", ""),
         )
         if path:
-            self._dxf_edit.setText(path)
+            self._show_outline_path(path)
             self._load_outline_file(path)
 
     def _load_outline_file(self, path: str) -> None:
@@ -1947,25 +1907,22 @@ class PatternPage(BasePage):
             self._load_dxf(path)
             return
         try:
-            images: list = []
-            if suffix == ".fvi":
-                document = read_fvi(path)
-                polys = [list(poly) for poly in document.paths]
-            elif suffix == ".svg":
-                with tempfile.TemporaryDirectory(prefix="simple-stipple-pattern-svg-") as folder:
-                    converted = Path(folder) / "outline.dxf"
-                    svg_to_dxf(path, converted)
-                    polys, _report = load_dxf_polylines_with_report(str(converted))
-                images = read_svg_images(path)
-            else:
-                raise ValueError("Choose a DXF, FVI, or SVG vector file.")
-            if not polys and not images:
+            imported = read_outline_vector(
+                path,
+                # Keep the established page-module dependency bindings
+                # injectable for downstream integrations and tests.
+                read_fvi_file=read_fvi,
+                convert_svg=svg_to_dxf,
+                read_dxf=load_dxf_polylines_with_report,
+                read_svg_artwork=read_svg_images,
+            )
+            if not imported.polylines and not imported.images:
                 raise ValueError(f"No supported outline geometry was found in {Path(path).name}.")
-            if polys:
-                self.load_outline_polys(polys, source_label=Path(path).name)
-            self._dxf_edit.setText(path)
-            if images:
-                self._restore_imported_image(images[0], Path(path).stem)
+            if imported.polylines:
+                self.load_outline_polys(imported.polylines, source_label=Path(path).name)
+            self._show_outline_path(path)
+            if imported.images:
+                self._restore_imported_image(imported.images[0], Path(path).stem)
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
 
@@ -1994,42 +1951,25 @@ class PatternPage(BasePage):
         # Land it in the region it sits inside, so it keeps its clip mask.
         region_id = self._region_under_placement(placement)
         if region_id is not None:
-            from simple_stipple.features.pattern.zones import row_for_region_id
+            from simple_stipple.features.pattern.regions.zones import row_for_region_id
 
             self._zone_list.setCurrentRow(row_for_region_id(self, region_id))
         self._attach_image_to_selected_region(str(target))
         self._update_engraving_overlay()
         self._refresh_engraving_ui()
         self._refresh_output_panel()
-        self._set_status(
-            f"Imported the outline and its engraving image from {stem}.", STATUS_OK
-        )
+        self._set_status(f"Imported the outline and its engraving image from {stem}.", STATUS_OK)
 
     def _region_under_placement(self, placement) -> str | None:
         """The smallest region containing the image's centre, if any."""
-        from shapely.geometry import Point as ShapelyPoint
-        from shapely.geometry import Polygon as ShapelyPolygon
-
-        centre = ShapelyPoint(
-            placement.x_mm + placement.width_mm / 2.0,
-            placement.y_mm + placement.height_mm / 2.0,
+        return smallest_containing_outline(
+            self._outline_ids,
+            self._edit_polys,
+            (
+                placement.x_mm + placement.width_mm / 2.0,
+                placement.y_mm + placement.height_mm / 2.0,
+            ),
         )
-        best: str | None = None
-        best_area = float("inf")
-        for outline_id, poly in zip(self._outline_ids, self._edit_polys):
-            if len(poly) < 3:
-                continue
-            try:
-                shape = ShapelyPolygon(poly)
-            except (TypeError, ValueError):
-                continue
-            if not shape.is_valid:
-                shape = shape.buffer(0)
-            if shape.is_empty or shape.area <= 0 or shape.area >= best_area:
-                continue
-            if shape.covers(centre):
-                best, best_area = outline_id, shape.area
-        return best
 
     def load_outline_polys(
         self,
@@ -2041,21 +1981,8 @@ class PatternPage(BasePage):
         if not polys:
             return
         self._pre_transfer_state = self.get_workspace_state() if offer_undo else None
-        incoming: list[list[tuple[float, float]]] = []
-        layers: list[str | None] = []
-        for item in polys:
-            if isinstance(item, dict):
-                points = item.get("points", [])
-                layer = item.get("layer")
-            else:
-                points, layer = item, None
-            try:
-                poly = [(float(x), float(y)) for x, y in points]
-            except (TypeError, ValueError):
-                continue
-            if len(poly) >= 2:
-                incoming.append(poly)
-                layers.append(str(layer) if layer else None)
+        normalized = normalize_outline_items(polys)
+        incoming, layers = normalized.polylines, normalized.layers
         if not incoming:
             return
         self._suspend_state = True
@@ -2107,20 +2034,10 @@ class PatternPage(BasePage):
                 len(ids),
                 len(paths),
             )
-            ids = list(ids[: len(paths)]) + self._fresh_outline_ids(
-                max(0, len(paths) - len(ids))
-            )
+            ids = reconcile_outline_ids(ids, paths, self._fresh_outline_ids)
             if entity_ids is None:
                 self._outline_ids = ids
-        records = [
-            {
-                "id": entity_id,
-                "points": poly,
-                "layer": self._outline_layers.get(entity_id, "Outline"),
-            }
-            for entity_id, poly in zip(ids, paths, strict=True)
-        ]
-        layer_order = list(dict.fromkeys(str(record["layer"]) for record in records))
+        records, layer_order = canvas_records(paths, ids, self._outline_layers)
         self._canvas.set_layer_model(layer_order, layer_order[0] if layer_order else None)
         self._canvas.set_entity_records(records, fit=fit)
 
@@ -2135,11 +2052,9 @@ class PatternPage(BasePage):
         self._emit_state_changed()
 
     def _update_dims_from_polys(self, polys: list[list[tuple[float, float]]]) -> None:
-        all_pts = [pt for p in polys for pt in p]
-        if all_pts:
-            xs, ys = zip(*all_pts)
-            self._orig_w = max(xs) - min(xs)
-            self._orig_h = max(ys) - min(ys)
+        bounds = outline_bounds(polys)
+        if bounds is not None:
+            self._orig_w, self._orig_h = bounds
             self._orig_dims_label.setText(f"{self._orig_w:.2f} × {self._orig_h:.2f} mm")
             self._scale_w.blockSignals(True)
             self._scale_h.blockSignals(True)
@@ -2159,6 +2074,7 @@ class PatternPage(BasePage):
     def _load_dxf(self, path: str) -> None:
         try:
             polys, report = load_dxf_polylines_with_report(path)
+            self._show_outline_path(path)
             self._orig_polys = polys
             self._edit_polys = list(polys)
             self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
@@ -2183,40 +2099,8 @@ class PatternPage(BasePage):
         except (OSError, ValueError, RuntimeError) as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
 
-    def _close_selected_outlines(self) -> None:
-        changed = self._canvas.close_selected_polylines()
-        if changed:
-            self._edit_polys = list(self._canvas.get_polylines_state())
-            self._outline_ids = self._sync_outline_ids(
-                self._edit_polys,
-                entity_ids=self._canvas.get_entity_ids(),
-            )
-            self._invalidate_zones_for_geometry_change(set(self._outline_ids))
-            self._set_status(f"Closed {changed} outline(s).", STATUS_OK)
-            self._refresh_canvas_panels()
-            self._schedule_preview()
-            self._emit_state_changed()
-        else:
-            self._set_status("No open outlines selected.")
-
-    def _open_selected_outlines(self) -> None:
-        changed = self._canvas.open_selected_polylines()
-        if changed:
-            self._edit_polys = list(self._canvas.get_polylines_state())
-            self._outline_ids = self._sync_outline_ids(
-                self._edit_polys,
-                entity_ids=self._canvas.get_entity_ids(),
-            )
-            self._invalidate_zones_for_geometry_change(set(self._outline_ids))
-            self._set_status(f"Opened {changed} outline(s).", STATUS_OK)
-            self._refresh_canvas_panels()
-            self._schedule_preview()
-            self._emit_state_changed()
-        else:
-            self._set_status("No closed outlines selected.")
-
     def _quick_load(self, path: str) -> None:
-        self._dxf_edit.setText(path)
+        self._show_outline_path(path)
         self._load_dxf(path)
 
     def _reveal_in_finder(self) -> None:
@@ -2349,14 +2233,13 @@ class PatternPage(BasePage):
             self._set_preview_status(str(exc), "error")
             self._update_preview_controls()
             return
-        interlace = invert_fill = mirror_v = mirror_h = False
         try:
             border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
         except ValueError:
             border_fade = 0.0
-        excl_polys = None
         fill_options = self._collect_fill_options()
         self._set_preview_status("Solving…")
+        border_polys = None
         if self._zones:
             try:
                 zones_snap = self._snapshot_zone_jobs()
@@ -2366,61 +2249,37 @@ class PatternPage(BasePage):
                 self._update_preview_controls()
                 return
             all_polys_snap = self._generation_polys()
-            self._preview_thread = threading.Thread(
-                target=compute_preview_zones,
-                args=(
-                    zones_snap,
-                    all_polys_snap,
-                    invert_fill,
-                    mirror_v,
-                    mirror_h,
-                    border_fade,
-                    excl_polys,
-                    preview_token,
-                    cancel_event,
-                ),
-                kwargs={
-                    "pattern_service": self._pattern_service,
-                    "orig_w": self._orig_w,
-                    "orig_h": self._orig_h,
-                    "on_done": self._preview_done.emit,
-                    "on_error": self._preview_error.emit,
-                    "fill_options": fill_options,
-                },
-                daemon=True,
-            )
-            self._preview_thread.start()
         else:
             polys_snap = self._generation_polys()
             border_polys = self._apply_scale(polys_snap, *scale) if include_border else None
-            self._preview_thread = threading.Thread(
-                target=compute_preview,
-                args=(
-                    polys_snap,
-                    pattern,
-                    params,
-                    scale,
-                    border_polys,
-                    interlace,
-                    invert_fill,
-                    mirror_v,
-                    mirror_h,
-                    border_fade,
-                    excl_polys,
-                    preview_token,
-                    cancel_event,
-                ),
-                kwargs={
-                    "pattern_service": self._pattern_service,
-                    "orig_w": self._orig_w,
-                    "orig_h": self._orig_h,
-                    "on_done": self._preview_done.emit,
-                    "on_error": self._preview_error.emit,
-                    "fill_options": fill_options,
-                },
-                daemon=True,
-            )
-            self._preview_thread.start()
+            zones_snap = []
+            all_polys_snap = polys_snap
+        worker_call = build_preview_worker_call(
+            zones=zones_snap,
+            all_polys=all_polys_snap,
+            pattern=pattern,
+            params=params,
+            scale=scale,
+            border_polys=border_polys,
+            border_fade=border_fade,
+            preview_token=preview_token,
+            cancel_event=cancel_event,
+            pattern_service=self._pattern_service,
+            orig_w=self._orig_w,
+            orig_h=self._orig_h,
+            on_done=self._preview_done.emit,
+            on_error=self._preview_error.emit,
+            fill_options=fill_options,
+            compute_preview=compute_preview,
+            compute_preview_zones=compute_preview_zones,
+        )
+        self._preview_thread = threading.Thread(
+            target=worker_call.target,
+            args=worker_call.args,
+            kwargs=worker_call.kwargs,
+            daemon=True,
+        )
+        self._preview_thread.start()
 
     def _handle_preview_done(self, payload: tuple) -> None:
         if self._shutting_down:
@@ -2473,7 +2332,7 @@ class PatternPage(BasePage):
             for poly in self._pattern_cell_instance_cutouts
             if self._pattern_service._poly_signature(poly) in generated_signatures
         ]
-        from simple_stipple.engine.patterns.output import diagnose_output
+        from simple_stipple.core.patterns.output import diagnose_output
 
         diagnostics = diagnose_output(
             self._preview_categories.get("pattern", []) + self._preview_categories.get("fill", [])
@@ -2568,9 +2427,7 @@ class PatternPage(BasePage):
         # keep its metadata so a cell can still be picked during the rebuild.
         # Both are replaced atomically when the worker completes.
         if had_cache:
-            self._canvas.setToolTip(
-                "Re-solving — the geometry shown is the last completed result."
-            )
+            self._canvas.setToolTip("Re-solving — the geometry shown is the last completed result.")
             self._set_preview_status("Refreshing pattern…")
         self._update_preview_controls()
 
@@ -2633,139 +2490,6 @@ class PatternPage(BasePage):
         )
 
     # ── Generation ────────────────────────────────────────────────────────────
-
-    def _generate(self) -> None:
-        # ponytail: the async high-quality DXF writer, with its own preflight,
-        # layer split and cleanup options. The one-job export writes the solved
-        # geometry directly instead; fold this in if a job ever needs the
-        # background-thread write.
-        from simple_stipple.features.pattern.workers import run_generate, run_generate_zones
-
-        if self._generate_task.running:
-            self._cancel_generation()
-            return
-        if not self._edit_polys and not self._zones:
-            self._set_status("Load an outline before exporting.", STATUS_WARN)
-            return
-        pattern = self._current_pattern_key()
-        try:
-            zones_snap = self._snapshot_zone_jobs() if self._zones else None
-            scale = self._collect_scale() if not self._zones else None
-            params = (
-                self._collect_pattern_params(pattern)
-                if not self._zones and pattern != "— None —"
-                else {}
-            )
-            params["quality"] = "high"
-        except ValueError as exc:
-            self._set_status(str(exc), STATUS_ERR)
-            return
-        open_paths = self._export_open_paths_cb.isChecked()
-        proceed, _report = export_preflight(
-            self,
-            [list(poly) for poly in self._edit_polys],
-            action="Export",
-            allow_open_paths=open_paths,
-        )
-        if not proceed:
-            self._canvas.set_geometry_health_visible(True, announce=True)
-            self._set_status("Export paused — review highlighted geometry.", STATUS_WARN)
-            return
-        out_path = pick_save_file(
-            self,
-            self._settings,
-            "pattern_output",
-            "Save pattern DXF",
-            "pattern.dxf",
-            "DXF files (*.dxf);;All files (*)",
-            fallback_dir=self._settings.get("pattern_output_dir", ""),
-        )
-        if not out_path:
-            return
-        include_border = self._include_border_cb.isChecked()
-        invert_fill = mirror_v = mirror_h = False
-        try:
-            border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
-        except ValueError:
-            border_fade = 0.0
-        excl_polys = None
-        gen_fill_options = self._collect_fill_options()
-        fabrication_options = self._collect_fabrication_options()
-        self._gen_btn.setEnabled(False)
-        self._cancel_generate_btn.setEnabled(True)
-        self._cancel_generate_btn.setVisible(True)
-        self._progress.setVisible(True)
-        self._progress.setRange(0, 0)
-        self._set_status("Generating…")
-        self._generation_revision += 1
-        generation_token = self._generation_revision
-        _, cancel_event = self._generate_task.request_start()
-        if self._zones:
-            assert zones_snap is not None
-            self._generate_thread = threading.Thread(
-                target=run_generate_zones,
-                args=(
-                    zones_snap,
-                    out_path,
-                    include_border,
-                    open_paths,
-                    invert_fill,
-                    mirror_v,
-                    mirror_h,
-                    border_fade,
-                    excl_polys,
-                    generation_token,
-                    cancel_event,
-                ),
-                kwargs={
-                    "pattern_service": self._pattern_service,
-                    "orig_w": self._orig_w,
-                    "orig_h": self._orig_h,
-                    "on_done": self._gen_done.emit,
-                    "on_error": self._gen_error.emit,
-                    "fill_options": gen_fill_options,
-                    "canvas_polys": self._generation_polys(),
-                    "fabrication_options": fabrication_options,
-                },
-                daemon=True,
-            )
-            self._generate_thread.start()
-        else:
-            polys_snap = self._generation_polys()
-            assert scale is not None
-            border_polys = self._apply_scale(polys_snap, *scale) if include_border else None
-            interlace = False
-            self._generate_thread = threading.Thread(
-                target=run_generate,
-                args=(
-                    polys_snap,
-                    out_path,
-                    pattern,
-                    params,
-                    scale,
-                    border_polys,
-                    open_paths,
-                    interlace,
-                    invert_fill,
-                    mirror_v,
-                    mirror_h,
-                    border_fade,
-                    excl_polys,
-                    generation_token,
-                    cancel_event,
-                ),
-                kwargs={
-                    "pattern_service": self._pattern_service,
-                    "orig_w": self._orig_w,
-                    "orig_h": self._orig_h,
-                    "on_done": self._gen_done.emit,
-                    "on_error": self._gen_error.emit,
-                    "fill_options": gen_fill_options,
-                    "fabrication_options": fabrication_options,
-                },
-                daemon=True,
-            )
-            self._generate_thread.start()
 
     def _handle_gen_done(self, payload: tuple) -> None:
         if self._shutting_down:

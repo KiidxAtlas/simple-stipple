@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from simple_stipple.platform.paths import user_data_dir
+from simple_stipple.platform.settings import user_data_dir
 from simple_stipple.platform.storage import (
     MAX_WORKSPACE_FILE_BYTES,
     read_json_file,
@@ -193,7 +193,7 @@ class AutosaveController(QObject):
         self._app._workspace_state_chip.setAccessibleDescription(
             f"{kind} failed. {message}. Manage storage or choose another location."
         )
-        from simple_stipple.ui.notifications import record_notification
+        from simple_stipple.ui.components.feedback import record_notification
 
         if not duplicate:
             record_notification(
@@ -240,14 +240,6 @@ class AutosaveController(QObject):
         # old QInputDialog made snapshots with similar workspace names appear
         # indistinguishable and offered no direct management actions.
         self._app._open_saved_workspaces(initial_source="recovery")
-
-    def open_recovery_manager(self) -> None:
-        """Open the shared workspace library directly on Recovery."""
-        self._app._open_saved_workspaces(initial_source="recovery")
-
-    def _open_recovery_manager(self) -> None:
-        """Compatibility alias retained for callers from older integrations."""
-        self.open_recovery_manager()
 
     def shutdown(self) -> None:
         """Stops all timers and cleans up the autosave file."""

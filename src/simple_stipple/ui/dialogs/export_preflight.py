@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QMessageBox, QWidget
 
-from simple_stipple.engine.cad.preflight import GeometryPreflight, analyze_geometry
+from simple_stipple.core.cad.preflight import GeometryPreflight, analyze_geometry
 
 
 def export_preflight(

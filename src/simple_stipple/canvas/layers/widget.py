@@ -453,9 +453,7 @@ class DxfLayersTree(QFrame):
                     if bool(row_data.get("visible", True))
                     else Qt.CheckState.Unchecked,
                 )
-                for child, shape in zip(
-                    (item.child(i) for i in range(item.childCount())), shapes
-                ):
+                for child, shape in zip((item.child(i) for i in range(item.childCount())), shapes):
                     shape_data = shape if isinstance(shape, dict) else {}
                     child.setText(0, str(shape_data.get("label", "Shape")))
                     child.setCheckState(
@@ -872,7 +870,9 @@ class DxfLayersTree(QFrame):
         if kind == "layer":
             menu.addSeparator()
             menu.addAction("Activate layer", lambda: self.layerActivated.emit(layer_name))
-            menu.addAction("Open layer settings…", lambda: self.layerSettingsRequested.emit(layer_name))
+            menu.addAction(
+                "Open layer settings…", lambda: self.layerSettingsRequested.emit(layer_name)
+            )
             menu.addAction("Rename layer\tF2", lambda: self._tree.editItem(item, 0))
             color_menu = menu.addMenu("Set color")
             for hex_color in _SWATCH_PALETTE:

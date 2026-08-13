@@ -15,16 +15,26 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QPoint, QPointF
+from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 import simple_stipple.canvas.view.main as canvas_view_main
 import simple_stipple.features.trace.page as trace_page_module
 from simple_stipple.canvas.renderer import CanvasRenderer
+from simple_stipple.canvas.tools import radial_menu
+from simple_stipple.canvas.tools import tools as canvas_tools_module
+from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
+from simple_stipple.canvas.tools.tools import DimensionTool as DimensionBackend
+from simple_stipple.canvas.tools.tools import RadialMenuService
 from simple_stipple.canvas.view.main import CanvasView
 from simple_stipple.canvas.widget import DxfCanvas
-from simple_stipple.features.pattern import export_jobs
+from simple_stipple.features.draft.session import build_dxf_export_plan
 from simple_stipple.features.pattern import workers as pattern_workers
+from simple_stipple.features.pattern import export as export_jobs
+from simple_stipple.features.pattern.outline_state import read_outline_vector
+from simple_stipple.features.pattern.session import build_preview_worker_call
 from simple_stipple.features.pattern.workers import run_generate
+from simple_stipple.features.trace.session import run_trace_job
 from simple_stipple.features.trace.page import TracePage
 
 
@@ -165,6 +175,61 @@ def test_renderer_scene_and_selection_passes_keep_internal_layer_order() -> None
     ]
 
 
+def test_radial_menu_filters_hits_dispatches_and_paints(app: QApplication, monkeypatch) -> None:
+    """The radial service has a stable standalone host contract before its move."""
+    assert RadialMenuService is radial_menu.RadialMenuService
+    assert canvas_tools_module.RadialMenuService is radial_menu.RadialMenuService
+    redraws: list[None] = []
+    host = SimpleNamespace(
+        _radial_active=False,
+        _radial_hover_index=None,
+        _radial_tools=[],
+        _radial_center_c=QPoint(200, 200),
+        _cursor_wx=None,
+        _cursor_wy=None,
+        width=lambda: 400,
+        height=lambda: 400,
+        _redraw=lambda: redraws.append(None),
+    )
+    service = RadialMenuService(host)
+    service.set_radial_menu_tools(
+        ["invalid.command", "mode.draw", "canvas.rectangle", "canvas.rectangle", "canvas.circle"]
+    )
+
+    assert host._radial_tools == ["mode.draw", "canvas.rectangle", "canvas.circle"]
+    assert service._radial_index_at(260.0, 200.0) == 0
+    assert service._radial_index_at(200.0, 140.0) == 1
+    assert service._radial_index_at(200.0, 200.0) is None
+
+    dispatched: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        "simple_stipple.canvas.tools.tools.canvas_commands.run",
+        lambda target, command: dispatched.append((target, command)),
+    )
+    service._execute_radial_action(1)
+    service._execute_radial_action(9)
+    assert dispatched == [(host, "canvas.rectangle")]
+
+    image = QImage(400, 400, QImage.Format.Format_ARGB32)
+    image.fill(0)
+    painter = QPainter(image)
+    service._paint_radial_menu(painter)
+    painter.end()
+    assert image.pixelColor(200, 200).alpha() > 0
+
+
+def test_dimension_backend_keeps_geometry_and_driver_contract() -> None:
+    """The sketch workflow inherits its associative-dimension backend intact."""
+    backend = DimensionBackend(SimpleNamespace())
+
+    assert issubclass(SketchDimensionTool, DimensionBackend)
+    assert DimensionBackend._inclusive_intersection(
+        {"p1": (0.0, 0.0), "p2": (10.0, 0.0)},
+        {"p1": (5.0, -5.0), "p2": (5.0, 5.0)},
+    ) == (5.0, 0.0)
+    assert backend.value({"p1": (0.0, 0.0), "p2": (3.0, 4.0)}) == 5.0
+
+
 def test_pattern_export_job_builds_then_writes_and_reports_complete_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -221,7 +286,7 @@ def test_pattern_export_jobs_keep_engraving_and_laserstar_payloads_together(
     tmp_path,
 ) -> None:
     """Feature export jobs own payload construction; the page only owns UI state."""
-    job = export_jobs.EngravingJob(
+    job = export_jobs.build_engraving_job(
         x_mm=1.0,
         y_mm=2.0,
         width_mm=30.0,
@@ -242,8 +307,9 @@ def test_pattern_export_jobs_keep_engraving_and_laserstar_payloads_together(
     monkeypatch.setattr(
         export_jobs,
         "export_raster_job",
-        lambda source, output, spec, mask: calls.append((source, output, spec, mask))
-        or (positioned, {}, None),
+        lambda source, output, spec, mask: (
+            calls.append((source, output, spec, mask)) or (positioned, {}, None)
+        ),
     )
     monkeypatch.setattr(
         export_jobs,
@@ -251,10 +317,16 @@ def test_pattern_export_jobs_keep_engraving_and_laserstar_payloads_together(
         lambda *args, **kwargs: calls.append((args, kwargs)) or package,
     )
 
-    assert export_jobs.export_positioned_engraving("source.png", "out.png", job, [[(0.0, 0.0)]]) == positioned
-    assert export_jobs.export_laserstar_job(
-        "exports", "job", [[(0.0, 0.0)]], engraving_source="source.png", engraving_job=job
-    ) == package
+    assert (
+        export_jobs.export_positioned_engraving("source.png", "out.png", job, [[(0.0, 0.0)]])
+        == positioned
+    )
+    assert (
+        export_jobs.export_laserstar_job(
+            "exports", "job", [[(0.0, 0.0)]], engraving_source="source.png", engraving_job=job
+        )
+        == package
+    )
     raster_spec = calls[0][2]
     assert (raster_spec.x_mm, raster_spec.width_mm, raster_spec.invert) == (1.0, 30.0, True)
     assert calls[1][1]["raster_spec"].rotation_deg == 15.0
@@ -273,7 +345,9 @@ def test_trace_job_emits_success_or_cancellation_without_touching_page_widgets(
         _trace_cancelled=SimpleNamespace(emit=cancelled.append),
     )
     image_result = ("display", [[(0.0, 0.0), (1.0, 1.0)]], 200, 100)
-    monkeypatch.setattr(trace_page_module, "image_to_outlines", lambda *_args, **_kwargs: image_result)
+    monkeypatch.setattr(
+        trace_page_module, "image_to_outlines", lambda *_args, **_kwargs: image_result
+    )
 
     TracePage._run_trace(page, "source.png", {"width_mm": 40.0}, 31, threading.Event())
     TracePage._run_trace(page, "source.png", {"width_mm": 40.0}, 32, _set_event())
@@ -281,6 +355,124 @@ def test_trace_job_emits_success_or_cancellation_without_touching_page_widgets(
     assert done == [(31, *image_result, 40.0)]
     assert errors == []
     assert cancelled == [32]
+
+
+def test_trace_job_classifies_success_cancellation_and_failures() -> None:
+    image_result = ("display", [[(0.0, 0.0), (1.0, 1.0)]], 200, 100)
+
+    outcome = run_trace_job(
+        "source.png",
+        {"width_mm": 40.0},
+        31,
+        trace_pipeline=lambda *_args, **_kwargs: image_result,
+    )
+    assert outcome.result == image_result
+    assert not outcome.cancelled
+    assert outcome.error is None
+
+    cancelled = _set_event()
+    assert run_trace_job("source.png", {}, 32, cancelled).cancelled
+
+    failed = run_trace_job("source.png", {}, 33, trace_pipeline=lambda *_args, **_kwargs: 1 / 0)
+    assert failed.error == "division by zero"
+
+
+def test_draft_dxf_export_plan_preserves_layers_and_adds_dimensions() -> None:
+    plan = build_dxf_export_plan(
+        [{"polyline": [(0.0, 0.0), (1.0, 1.0)], "kind": "line", "layer": "Cut"}],
+        [{"p1": (1.0, 0.0), "p2": (1.0, 2.0), "layer": "Notes", "text": "2 mm"}],
+        active_layer_name="Cut",
+        layer_names=["Notes", "Cut"],
+    )
+
+    assert plan.first_layer_name == "Notes"
+    assert plan.first_layer_records[0]["kind"] == "dimension"
+    assert plan.extra_layer_records == {
+        "Cut": [{"polyline": [(0.0, 0.0), (1.0, 1.0)], "kind": "line", "layer": "Cut"}]
+    }
+
+
+def test_pattern_fvi_outline_reader_is_ui_independent() -> None:
+    document = SimpleNamespace(paths=[[(0.0, 0.0), (1.0, 1.0)]])
+
+    imported = read_outline_vector("outline.fvi", read_fvi_file=lambda _path: document)
+
+    assert imported.polylines == [[(0.0, 0.0), (1.0, 1.0)]]
+    assert imported.images == []
+
+
+def test_pattern_preview_dispatch_preserves_worker_payload(app: QApplication, monkeypatch) -> None:
+    """The later payload extraction must not alter the page's worker contract."""
+    from simple_stipple.features.pattern import page as pattern_page_module
+    from simple_stipple.features.pattern.page import PatternPage
+    from simple_stipple.features.pattern.workers import compute_preview
+
+    captured: dict = {}
+
+    class CapturingThread:
+        def __init__(self, *, target, args, kwargs, daemon):
+            captured.update(target=target, args=args, kwargs=kwargs, daemon=daemon)
+
+        def start(self) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return False
+
+    page = PatternPage(settings={})
+    page.load_outline_polys([[(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0), (0.0, 0.0)]])
+    page._preview_timer.stop()
+    page._preview_task.running = False
+    page._preview_task.pending = False
+    monkeypatch.setattr(pattern_page_module.threading, "Thread", CapturingThread)
+
+    page._start_preview_thread()
+
+    assert captured["target"] is compute_preview
+    assert captured["daemon"] is True
+    assert captured["args"][0] == page._generation_polys()
+    assert captured["args"][2]["quality"] == page._preview_quality_combo.currentData()
+    assert captured["kwargs"]["pattern_service"] is page._pattern_service
+    assert captured["kwargs"]["orig_w"] == page._orig_w
+    assert captured["kwargs"]["orig_h"] == page._orig_h
+    page.shutdown()
+    page.close()
+
+
+def test_pattern_preview_worker_call_selects_zone_worker() -> None:
+    def preview(*_args, **_kwargs) -> None:
+        return None
+
+    def zones(*_args, **_kwargs) -> None:
+        return None
+
+    def done(_payload) -> None:
+        return None
+
+    call = build_preview_worker_call(
+        zones=[{"region_id": "outer"}],
+        all_polys=[[(0.0, 0.0)]],
+        pattern="Grid",
+        params={},
+        scale=(1.0, 1.0),
+        border_polys=None,
+        border_fade=0.2,
+        preview_token=7,
+        cancel_event=threading.Event(),
+        pattern_service=object(),
+        orig_w=10.0,
+        orig_h=5.0,
+        on_done=done,
+        on_error=done,
+        fill_options={"spacing": 1.0},
+        compute_preview=preview,
+        compute_preview_zones=zones,
+    )
+
+    assert call.target is zones
+    assert call.args[0] == [{"region_id": "outer"}]
+    assert call.args[5] == 0.2
+    assert call.kwargs["fill_options"] == {"spacing": 1.0}
 
 
 def _set_event() -> threading.Event:

@@ -6,8 +6,8 @@ import math
 from copy import deepcopy
 from typing import Any
 
-from simple_stipple.document.commands import MoveEntityCommand
-from simple_stipple.document.model import EntityRecord
+from simple_stipple.core.document.commands import MoveEntityCommand
+from simple_stipple.core.document.model import EntityRecord
 
 _SHARED_CLIPBOARD: list[dict[str, Any]] = []
 
@@ -102,35 +102,6 @@ class ClipboardService:
             return
         self._finish(self.paste_records(offset))
 
-    def paste_multiple(
-        self, distance: float, count: int, direction: tuple[float, float] = (1.0, 0.0)
-    ) -> None:
-        if not self.records or count < 1:
-            return
-        before = self._host._canvas_service.begin_preview()
-        dx, dy = direction
-        created = [
-            eid
-            for copy in range(1, count + 1)
-            for eid in self.paste_records(
-                dx * distance * copy, dy * distance * copy, record_history=False
-            )
-        ]
-        self._host._canvas_service.commit_preview(before)
-        self._finish(created)
-
-    def prompt_multi_paste(self) -> None:
-        if not self.records:
-            return
-        from PySide6.QtWidgets import QDialog
-
-        from simple_stipple.ui.dialogs.multi_paste_dialog import MultiPasteDialog
-
-        dialog = MultiPasteDialog(self._host, unit=str(getattr(self._host, "_unit_system", "mm")))
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            distance, count, direction = dialog.values()
-            self.paste_multiple(distance, count, direction)
-
     def prompt_grid(self) -> None:
         host = self._host
         if not host._sel:
@@ -212,67 +183,6 @@ class ClipboardService:
         self._finish(created)
         host._set_repeat_action(f"Radial array ×{count}", lambda: self.apply_radial(count, radius))
         return True
-
-    def prompt_along_path(self) -> None:
-        host = self._host
-        selected_ids = [eid for eid in host._sel if host._entity_for_id(eid) is not None]
-        if len(selected_ids) < 2:
-            host._show_flash("Select source shape(s) and one path", 1400)
-            return
-
-        def length(entity_id: str) -> float:
-            entity = host._entity_for_id(entity_id)
-            if entity is None:
-                return 0.0
-            return sum(math.dist(a, b) for a, b in zip(entity.points, entity.points[1:]))
-
-        path_id = max(selected_ids, key=length)
-        path_entity = host._entity_for_id(path_id)
-        if path_entity is None:
-            host._show_flash("Selected path entity not found", 1400)
-            return
-        path = list(path_entity.points)
-        sources = [eid for eid in selected_ids if eid != path_id]
-        if len(path) < 2 or length(path_id) <= 1e-9 or not sources:
-            host._show_flash("Selected path has no usable length", 1400)
-            return
-
-        def apply(value: float) -> None:
-            count = max(2, int(round(value)))
-            segments = [(a, b, math.dist(a, b)) for a, b in zip(path, path[1:])]
-            total = sum(segment[2] for segment in segments)
-            source_points = [
-                point
-                for eid in sources
-                for point in (host._entity_for_id(eid).points if host._entity_for_id(eid) else [])
-            ]
-            origin = (
-                (min(p[0] for p in source_points) + max(p[0] for p in source_points)) / 2.0,
-                (min(p[1] for p in source_points) + max(p[1] for p in source_points)) / 2.0,
-            )
-            current_sel = set(host._sel)
-            host._sel = set(sources)
-            self.copy_selected()
-            host._sel = current_sel
-            created: list[str] = []
-            for copy in range(count):
-                distance = total * copy / (count - 1)
-                walked = 0.0
-                target = path[-1]
-                for start, end, segment_length in segments:
-                    if walked + segment_length >= distance:
-                        ratio = (distance - walked) / segment_length if segment_length else 0.0
-                        target = (
-                            start[0] + (end[0] - start[0]) * ratio,
-                            start[1] + (end[1] - start[1]) * ratio,
-                        )
-                        break
-                    walked += segment_length
-                created.extend(self.paste_records(target[0] - origin[0], target[1] - origin[1]))
-            self._finish(created)
-            host._show_flash(f"Array along path: {count} positions", 1200)
-
-        host._show_hud_prompt("Copies along path", 6.0, apply, minimum=2, is_length=False)
 
     def cut_selected(self) -> None:
         host = self._host

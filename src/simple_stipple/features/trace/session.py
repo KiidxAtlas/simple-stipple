@@ -11,8 +11,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
-from simple_stipple.document.model import TraceTabState
+from simple_stipple.core.document.model import TraceTabState
 from simple_stipple.features.trace.form import trace_default
+import logging
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+from PIL import Image
+from simple_stipple.core.imaging import TraceCancelled, image_to_outlines
+from PySide6.QtWidgets import QMessageBox
+from simple_stipple.core.formats.service import DxfService
+from simple_stipple.ui.components.feedback import show_error
+from simple_stipple.ui.dialogs.export_preflight import export_preflight
+from simple_stipple.ui.dialogs.files import pick_save_file
+from simple_stipple.ui.style import STATUS_OK
 
 
 def _coerce_to_trace_state(state: dict | None) -> TraceTabState:
@@ -123,3 +136,126 @@ def clear_trace_workspace_state(page: Any) -> None:
     page._set_status("No image loaded.")
     page._update_trace_action_states()
     page._refresh_canvas_panels()
+
+
+LOGGER = logging.getLogger(__name__)
+
+TracePipelineResult = tuple[Image.Image, list[list[tuple[float, float]]], int, int]
+TracePipeline = Callable[..., TracePipelineResult]
+
+
+@dataclass(frozen=True)
+class TraceJobOutcome:
+    """The terminal state of one background image-trace request."""
+
+    trace_token: int
+    result: TracePipelineResult | None = None
+    error: str | None = None
+    cancelled: bool = False
+
+
+def run_trace_job(
+    image_path: str | None,
+    kwargs: dict[str, Any],
+    trace_token: int,
+    cancel_event: threading.Event | None = None,
+    *,
+    trace_pipeline: TracePipeline = image_to_outlines,
+) -> TraceJobOutcome:
+    """Run one trace request without accessing page or Qt state.
+
+    ``trace_pipeline`` is injectable so the page's established patch seam and
+    focused characterization tests continue to observe the same pipeline.
+    """
+    if cancel_event and cancel_event.is_set():
+        return TraceJobOutcome(trace_token, cancelled=True)
+    if not image_path:
+        return TraceJobOutcome(trace_token, error="No image selected.")
+    try:
+        result = trace_pipeline(
+            image_path,
+            cancel_check=(cancel_event.is_set if cancel_event else None),
+            **kwargs,
+        )
+        if cancel_event and cancel_event.is_set():
+            return TraceJobOutcome(trace_token, cancelled=True)
+        return TraceJobOutcome(trace_token, result=result)
+    except TraceCancelled:
+        return TraceJobOutcome(trace_token, cancelled=True)
+    except Exception as exc:  # noqa: BLE001 - worker boundary must always complete
+        LOGGER.exception("Trace worker failed")
+        if cancel_event and cancel_event.is_set():
+            return TraceJobOutcome(trace_token, cancelled=True)
+        return TraceJobOutcome(trace_token, error=str(exc))
+
+
+def get_save_path(self, title: str) -> str | None:
+    """Choose the destination for a traced-outline DXF export."""
+    stem = Path(self._img_path).stem if self._img_path else "outline"
+    path = pick_save_file(
+        self,
+        self._settings,
+        "trace_output",
+        title,
+        f"{stem}_outline.dxf",
+        "DXF files (*.dxf);;All files (*)",
+    )
+    return path or None
+
+
+def _export_records(self, records: list[dict], *, title: str, selected: bool) -> None:
+    if not records:
+        message = "Nothing is selected." if selected else "No polylines to export."
+        if selected:
+            QMessageBox.information(self, "Export Selected", message)
+        else:
+            QMessageBox.critical(self, "Export", message)
+        return
+    action = "Export Selected" if selected else "Export"
+    proceed, _report = export_preflight(
+        self,
+        [list(record["polyline"]) for record in records],
+        action=action,
+        allow_open_paths=True,
+    )
+    if not proceed:
+        self._canvas.set_geometry_health_visible(True, announce=True)
+        return
+    out = get_save_path(self, title)
+    if not out:
+        return
+    try:
+        DxfService.write_polylines_dxf(
+            [list(record["polyline"]) for record in records],
+            out,
+            close=False,
+            entity_kinds=[str(record.get("kind", "polyline")) for record in records],
+            entity_meta=[record.get("meta") for record in records],
+        )
+        self._last_out = out
+        self._reveal_action.setEnabled(True)
+        qualifier = " selected" if selected else ""
+        self._set_status(f"Exported {len(records)}{qualifier} shapes → {Path(out).name}", STATUS_OK)
+    except (OSError, ValueError) as exc:
+        show_error(self, "Export Error", exc)
+
+
+def export_all(self) -> None:
+    """Preflight and export every traced outline as native DXF where possible."""
+    _export_records(
+        self,
+        self._canvas.get_export_dxf_state(),
+        title="Export all outlines as DXF",
+        selected=False,
+    )
+
+
+def export_selected(self) -> None:
+    """Preflight and export just the currently selected traced outlines."""
+    selected = set(self._canvas.get_selected_ids())
+    records = [
+        record
+        for record in self._canvas.get_export_dxf_state()
+        if record.get("entity_id") in selected
+    ]
+    _export_records(self, records, title="Export selected outlines as DXF", selected=True)

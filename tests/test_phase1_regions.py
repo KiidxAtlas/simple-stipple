@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from simple_stipple.engine.patterns.processing import PatternProcessor
-from simple_stipple.features.pattern.treatments import (
+from simple_stipple.core.patterns.processing import PatternProcessor
+from simple_stipple.features.pattern.regions.treatments import (
     engraving_mask_polys,
     migrate_workspace_zones,
     region_ids,

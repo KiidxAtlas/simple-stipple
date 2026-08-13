@@ -10,10 +10,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
-from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QPushButton, QWidget
 from shapely.geometry import Point, Polygon
 
 import simple_stipple.canvas.dialogs.customize_dialogs as customize_dialogs
+from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.canvas.dialogs.customize_dialogs import (
     _CONTEXT_ACTION_LABELS,
     ContextMenuActionCustomizeDialog,
@@ -22,29 +23,29 @@ from simple_stipple.canvas.dialogs.customize_dialogs import (
     _ordered_keys,
 )
 from simple_stipple.canvas.layers.logic import describe_polyline
-from simple_stipple.canvas.operations.hud_text import HudTextService, text_to_polylines
+from simple_stipple.canvas.operations.hud_text import HudTextService
+from simple_stipple.canvas.operations.text import text_to_polylines
 from simple_stipple.canvas.snap import SnapEngine
 from simple_stipple.canvas.widget import _CONTEXT_STATIC_ACTION_IDS, DxfCanvas
 from simple_stipple.canvas.widgets.draw_sidebar import DrawSidebar, _ResizeHandle
 from simple_stipple.canvas.widgets.precision_bar import CanvasPrecisionBar
 from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
-from simple_stipple.canvas.widgets.status_strip import CanvasStatusStrip
+from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.canvas.widgets.toolbar import canvas_toolbar
-from simple_stipple.document.model import CanvasDocument, EntityRecord
-from simple_stipple.engine.cad.constraints import GeometricConstraint, solve_constraints
-from simple_stipple.engine.editing.topology import split_paths
-from simple_stipple.engine.formats.dxf import polylines_to_outline
-from simple_stipple.engine.patterns.fill import FillSpec, apply_fill
-from simple_stipple.engine.patterns.processing import PatternProcessor
+from simple_stipple.core.cad.constraints import GeometricConstraint, solve_constraints
+from simple_stipple.core.editing.topology import split_paths
+from simple_stipple.core.formats.dxf import polylines_to_outline
+from simple_stipple.core.patterns.fill import FillSpec, apply_fill
+from simple_stipple.core.patterns.processing import PatternProcessor
 from simple_stipple.features.convert import ConvertPage
 from simple_stipple.features.help import HelpDialog
 from simple_stipple.features.pattern.page import PatternPage
-from simple_stipple.features.pattern.treatments import treatment_kind
-from simple_stipple.features.pattern.workers import compute_preview
-from simple_stipple.features.pattern.zones import (
+from simple_stipple.features.pattern.regions.treatments import treatment_kind
+from simple_stipple.features.pattern.regions.zones import (
     highlight_zone_on_canvas,
     select_zone_for_canvas_selection,
 )
+from simple_stipple.features.pattern.workers import compute_preview
 from simple_stipple.platform.settings import (
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
     MIN_DRAW_SIDEBAR_WIDTH,
@@ -53,16 +54,16 @@ from simple_stipple.platform.updates import UpdateInfo
 from simple_stipple.ui.components.cycle_button import CycleIconButton
 from simple_stipple.ui.components.focus import CanvasEscapeRouter
 from simple_stipple.ui.components.inputs import NoWheelSlider
+from simple_stipple.ui.components.feedback import notification_history
 from simple_stipple.ui.components.workflow import (
     OperationProgress,
     set_status_label,
 )
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
-from simple_stipple.ui.dialogs.import_dialog import VectorImportModeDialog
+from simple_stipple.ui.dialogs.files import VectorImportModeDialog
 from simple_stipple.ui.dialogs.settings_dialog import SettingsDialog
 from simple_stipple.ui.dialogs.update_dialog import UpdateDialog
-from simple_stipple.ui.notifications import notification_history
-from simple_stipple.ui.style.theme import STATUS_OK, accessibility_palette, load_app_qss
+from simple_stipple.ui.style import STATUS_OK, accessibility_palette, load_app_qss
 
 
 @pytest.fixture(scope="module")
@@ -612,6 +613,32 @@ def test_draw_sidebar_reserves_space_for_its_scrollbar(app: QApplication) -> Non
     sidebar.close()
 
 
+def test_draw_sidebar_uses_a_compact_resize_gutter(app: QApplication) -> None:
+    def noop(*_args: object) -> None:
+        return None
+
+    sidebar = DrawSidebar(
+        parent=None,
+        on_polyline_family=noop,
+        on_shapes_family=noop,
+        on_text=noop,
+        on_arc_mode=noop,
+        on_constraint=noop,
+        on_split=noop,
+        on_dimension=noop,
+        on_smoothing_method=noop,
+        on_finish_open=noop,
+        on_close_edit=noop,
+        on_undo_point=noop,
+        on_cancel_draw=noop,
+        on_back_to_select=noop,
+    )
+
+    handle = next(handle for handle in sidebar.findChildren(_ResizeHandle))
+    assert handle.width() == 12
+    sidebar.close()
+
+
 def test_relationship_snaps_require_a_nearby_reference_and_retain_its_source() -> None:
     near = SimpleNamespace(id="intended", points=[(0.0, 0.0), (10.0, 0.0)])
     far = SimpleNamespace(id="unrelated", points=[(0.0, 100.0), (10.0, 100.0)])
@@ -928,7 +955,8 @@ def test_context_menu_customizer_supports_none_and_a_reorderable_more_list(
     more_item = next(
         dialog._overflow_list.item(index)
         for index in range(dialog._overflow_list.count())
-        if dialog._overflow_list.item(index).data(Qt.ItemDataRole.UserRole) == "constraint.horizontal"
+        if dialog._overflow_list.item(index).data(Qt.ItemDataRole.UserRole)
+        == "constraint.horizontal"
     )
     more_item.setCheckState(Qt.CheckState.Checked)
     assert _checked_keys(dialog._list) == ["constraint.horizontal"]
@@ -1101,9 +1129,7 @@ def test_context_menu_hides_every_action_for_an_intentionally_empty_profile(
     app: QApplication,
 ) -> None:
     canvas = DxfCanvas()
-    canvas.set_context_menu_profiles(
-        {"draft": {"items": [], "action_items_configured": ["yes"]}}
-    )
+    canvas.set_context_menu_profiles({"draft": {"items": [], "action_items_configured": ["yes"]}})
     menu = QMenu()
     menu.addAction("Fit View  [F]")
     menu.addAction("Copy  [⌘C]")
@@ -1182,9 +1208,7 @@ def test_context_menu_customization_keeps_every_destination_layer(app: QApplicat
     canvas._apply_context_menu_overflow(menu)
 
     assert [action.text() for action in menu.actions()] == ["Move selected to layer"]
-    assert [
-        action.text() for action in menu.actions()[0].menu().actions()
-    ] == ["Cut", "Engrave"]
+    assert [action.text() for action in menu.actions()[0].menu().actions()] == ["Cut", "Engrave"]
     menu.close()
     canvas.close()
 
@@ -1821,12 +1845,8 @@ def test_nested_zone_exclusion_uses_repaired_coverage() -> None:
 
 def test_preview_fill_quality_does_not_change_fill_geometry() -> None:
     base = FillSpec.from_dict({"mode": "lines", "spacing": 2.0})
-    fast = FillSpec.from_dict(
-        {"mode": "lines", "spacing": 2.0, "_preview_quality": "fast"}
-    )
-    balanced = FillSpec.from_dict(
-        {"mode": "lines", "spacing": 2.0, "_preview_quality": "balanced"}
-    )
+    fast = FillSpec.from_dict({"mode": "lines", "spacing": 2.0, "_preview_quality": "fast"})
+    balanced = FillSpec.from_dict({"mode": "lines", "spacing": 2.0, "_preview_quality": "balanced"})
     assert base.spacing == 2.0
     assert fast.spacing == base.spacing
     assert balanced.spacing == base.spacing
@@ -2126,7 +2146,13 @@ def test_regions_list_scrolls_and_keeps_every_row_reachable(app: QApplication) -
     """
     page = PatternPage(settings={})
     squares = [
-        [(i * 10.0, 0.0), (i * 10.0 + 8, 0.0), (i * 10.0 + 8, 8.0), (i * 10.0, 8.0), (i * 10.0, 0.0)]
+        [
+            (i * 10.0, 0.0),
+            (i * 10.0 + 8, 0.0),
+            (i * 10.0 + 8, 8.0),
+            (i * 10.0, 8.0),
+            (i * 10.0, 0.0),
+        ]
         for i in range(12)
     ]
     page.load_outline_polys(squares)
@@ -2361,7 +2387,7 @@ def test_every_pattern_builds_its_form_fields(app: QApplication) -> None:
     added to PARAM_SPECS but missed there got no widgets, and the first preview
     died in collect_pattern_params on the missing page attribute.
     """
-    from simple_stipple.features.pattern.form_spec import PARAM_SPECS
+    from simple_stipple.features.pattern.form import PARAM_SPECS
 
     page = PatternPage(settings={})
     missing = [
@@ -2393,7 +2419,7 @@ def test_editing_a_region_parameter_keeps_the_field_alive(app: QApplication) -> 
     page._zone_list.setCurrentRow(0)
     page._pattern_combo.setCurrentText("Honeycomb")
 
-    from simple_stipple.features.pattern.form_spec import PARAM_SPECS
+    from simple_stipple.features.pattern.form import PARAM_SPECS
 
     attr = PARAM_SPECS["Honeycomb"][0].attr
     field = getattr(page, attr)
@@ -2450,7 +2476,7 @@ def test_image_belongs_to_a_region_and_is_undoable(app: QApplication) -> None:
     removes that choice, allows more than one engraved region, and makes the
     whole thing undoable like every other treatment change.
     """
-    from simple_stipple.features.pattern.treatments import region_engraving, treatment_kind
+    from simple_stipple.features.pattern.regions.treatments import region_engraving, treatment_kind
 
     outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
     circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
@@ -2489,7 +2515,7 @@ def test_image_flow_is_region_owned_end_to_end(app: QApplication, tmp_path) -> N
     """Attach, drag, undo, export, save/reload and legacy migration."""
     from PIL import Image
 
-    from simple_stipple.features.pattern.treatments import (
+    from simple_stipple.features.pattern.regions.treatments import (
         engraving_regions,
         region_engraving,
         treatment_kind,
@@ -2562,7 +2588,7 @@ def test_image_flow_is_region_owned_end_to_end(app: QApplication, tmp_path) -> N
 def test_image_is_a_pattern_choice_not_a_sidebar_section(app: QApplication) -> None:
     """A region either carries a generated pattern or an image, so both live in
     the same dropdown and the image controls belong to the selected region."""
-    from simple_stipple.features.pattern.treatments import IMAGE_PATTERN, treatment_kind
+    from simple_stipple.features.pattern.regions.treatments import IMAGE_PATTERN, treatment_kind
 
     outer = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
     circle = [(30.0, 30.0), (70.0, 30.0), (70.0, 70.0), (30.0, 70.0), (30.0, 30.0)]
@@ -2723,6 +2749,60 @@ def test_common_dimension_fields_display_two_decimal_places(app: QApplication) -
     page._update_dims_from_polys([[(0.0, 0.0), (12.3456, 7.8912)]])
     assert page._scale_w.text() == "12.35"
     assert page._scale_h.text() == "7.89"
+
+
+def test_pattern_parameter_sliders_snap_float_values_to_two_decimals(app: QApplication) -> None:
+    page = PatternPage(settings={})
+    slider = page._hex_gap_slider
+
+    slider.setValue(52)
+
+    assert page._hex_gap.text() == "1.04"
+
+
+def test_help_explains_pattern_slider_precision() -> None:
+    from simple_stipple.features.help import build_help_html
+
+    manual = build_help_html()
+
+    assert "Slider-driven decimal values are rounded" in manual
+    assert "two decimal places" in manual
+
+
+def test_pattern_outline_path_stays_readable_when_it_is_long(app: QApplication) -> None:
+    page = PatternPage(settings={})
+    path = "/Users/example/Documents/laser/vectors/tiles/Weave.dxf"
+
+    page._show_outline_path(path)
+
+    assert page._dxf_edit.text() == path
+    assert page._dxf_edit.cursorPosition() == 0
+    assert page._dxf_edit.toolTip() == path
+
+
+def test_pattern_preset_actions_use_compact_unambiguous_labels(app: QApplication) -> None:
+    page = PatternPage(settings={})
+    buttons = {button.text(): button for button in page.findChildren(QPushButton)}
+
+    assert buttons["Apply"].accessibleName() == "Apply selected preset"
+    assert buttons["Save"].toolTip() == "Save current parameters as a new preset"
+
+
+def test_precision_bar_uses_the_compact_semantic_control_role(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    bar = CanvasPrecisionBar(canvas)
+
+    for control in (
+        bar._pan_btn,
+        bar._grid_btn,
+        bar._snap_btn,
+        bar._construction_btn,
+        bar._constraints_btn,
+    ):
+        assert control.property("role") == "precision-control"
+
+    bar.close()
+    canvas.close()
 
 
 def test_update_result_replaces_content_without_deleting_dialog_actions(

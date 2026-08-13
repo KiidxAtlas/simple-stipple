@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.canvas import commands as canvas_commands
-from simple_stipple.platform.config import (
+from simple_stipple.platform.settings import (
     CONTEXT_MENU_SECTION_LABELS,
     CONTEXT_MENU_TRANSFORM_ITEMS,
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
@@ -41,7 +41,7 @@ from simple_stipple.platform.config import (
 )
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.layout import sep
-from simple_stipple.ui.components.tokens import (
+from simple_stipple.ui.style import (
     SPACE_LG,
     SPACE_MD,
 )
@@ -261,34 +261,8 @@ def _checked_keys(widget: QListWidget) -> list[str]:
     return keys
 
 
-def _build_ordered_list(labels: dict[str, str], keys: list[str]) -> QListWidget:
-    """Build a drag-reorder list containing only explicitly assigned rows."""
-    widget = QListWidget()
-    widget.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-    widget.setUniformItemSizes(True)
-    widget.setSpacing(2)
-    widget.setWordWrap(False)
-    widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-    _fill_ordered_list(widget, labels, keys)
-    return widget
-
-
-def _fill_ordered_list(widget: QListWidget, labels: dict[str, str], keys: list[str]) -> None:
-    widget.clear()
-    for key in dict.fromkeys(key for key in keys if key in labels):
-        item = QListWidgetItem(labels[key])
-        item.setData(Qt.ItemDataRole.UserRole, key)
-        item.setSizeHint(QSize(0, 36))
-        item.setToolTip(labels[key])
-        widget.addItem(item)
-    widget.doItemsLayout()
-
-
 def _ordered_keys(widget: QListWidget) -> list[str]:
-    return [
-        widget.item(index).data(Qt.ItemDataRole.UserRole)
-        for index in range(widget.count())
-    ]
+    return [widget.item(index).data(Qt.ItemDataRole.UserRole) for index in range(widget.count())]
 
 
 class DrawSidebarCustomizeDialog(QDialog):
@@ -483,9 +457,9 @@ class ContextMenuCustomizeDialog(QDialog):
                 "sections": list((profiles or {}).get(name, {}).get("sections", current)),
                 "overflow": list((profiles or {}).get(name, {}).get("overflow", overflow)),
                 "transform": list(
-                    (profiles or {}).get(name, {}).get(
-                        "transform", [key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS]
-                    )
+                    (profiles or {})
+                    .get(name, {})
+                    .get("transform", [key for key, _label in CONTEXT_MENU_TRANSFORM_ITEMS])
                 ),
             }
             for name in ("draft", "pattern", "trace")
@@ -611,9 +585,11 @@ class ContextMenuCustomizeDialog(QDialog):
         if "view" not in checked:
             checked.append("view")
         active = str(self._profile_combo.currentData())
-        self._profiles[active] = {"sections": checked, "overflow": [
-            key for key in _checked_keys(self._overflow_list) if key in checked
-        ], "transform": _checked_keys(self._transform_list)}
+        self._profiles[active] = {
+            "sections": checked,
+            "overflow": [key for key in _checked_keys(self._overflow_list) if key in checked],
+            "transform": _checked_keys(self._transform_list),
+        }
 
     def _switch_profile(self, _index: int) -> None:
         self._save_current_profile()
@@ -630,9 +606,6 @@ class ContextMenuCustomizeDialog(QDialog):
 
     def get_sections(self) -> list[str]:
         return list(self._result)
-
-    def get_overflow_sections(self) -> list[str]:
-        return list(self._overflow_result)
 
     def get_profiles(self) -> dict[str, dict[str, list[str]]]:
         return {
@@ -726,9 +699,11 @@ class ContextMenuActionCustomizeDialog(QDialog):
                 if action_items_configured and isinstance(raw_items, list)
                 else list(default_items)
             )
-            overflow = [
-                key for key in saved.get("overflow_items", []) if key in _CONTEXT_ACTION_LABELS
-            ] if action_items_configured else list(DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS)
+            overflow = (
+                [key for key in saved.get("overflow_items", []) if key in _CONTEXT_ACTION_LABELS]
+                if action_items_configured
+                else list(DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS)
+            )
             self._profiles[name] = {
                 "items": items,
                 "overflow_items": overflow,
@@ -865,9 +840,7 @@ class ContextMenuActionCustomizeDialog(QDialog):
     def _prioritize_enabled_action(self, item: QListWidgetItem) -> None:
         """Append a newly enabled action without losing drag-set order."""
         if item.checkState() != Qt.CheckState.Checked:
-            self._set_more_action_checked(
-                str(item.data(Qt.ItemDataRole.UserRole)), checked=False
-            )
+            self._set_more_action_checked(str(item.data(Qt.ItemDataRole.UserRole)), checked=False)
         self._prioritize_checked_row(self._list, item, "_reordering_actions")
 
     def _prioritize_more_action(self, item: QListWidgetItem) -> None:
@@ -920,8 +893,14 @@ class ContextMenuActionCustomizeDialog(QDialog):
         try:
             items = [widget.takeItem(0) for _ in range(widget.count())]
             ordered = [
-                item for item in items if item is not None and item.checkState() == Qt.CheckState.Checked
-            ] + [item for item in items if item is not None and item.checkState() != Qt.CheckState.Checked]
+                item
+                for item in items
+                if item is not None and item.checkState() == Qt.CheckState.Checked
+            ] + [
+                item
+                for item in items
+                if item is not None and item.checkState() != Qt.CheckState.Checked
+            ]
             for item in ordered:
                 widget.addItem(item)
         finally:

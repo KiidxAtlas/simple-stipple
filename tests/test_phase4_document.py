@@ -7,7 +7,7 @@ same picture in the same place.
 
 from __future__ import annotations
 
-from simple_stipple.document.model import Document, EntityRecord, PlacedImage
+from simple_stipple.core.document.model import Document, EntityRecord, PlacedImage
 
 SQUARE = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
 

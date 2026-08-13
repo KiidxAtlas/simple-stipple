@@ -88,7 +88,9 @@ from simple_stipple.canvas.constants import (
 from simple_stipple.canvas.constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
-from simple_stipple.engine.cad.geometry import (
+from simple_stipple.canvas.rendering import DensePreviewRenderer
+from simple_stipple.core.cad.editor_geometry import angle_between_rays, polyline_is_closed
+from simple_stipple.core.cad.geometry import (
     arc_from_center_start_end,
     arc_from_three_points,
     build_circle_poly,
@@ -100,13 +102,13 @@ from simple_stipple.engine.cad.geometry import (
     build_star_poly,
     shape_slot,
 )
-from simple_stipple.ui.units import (
+from simple_stipple.ui.components.units import (
     format_length as _fmt_len,
 )
-from simple_stipple.ui.units import (
+from simple_stipple.ui.components.units import (
     suffix as _unit_suffix,
 )
-from simple_stipple.ui.units import (
+from simple_stipple.ui.components.units import (
     to_display as _to_display,
 )
 
@@ -133,25 +135,33 @@ class CanvasRenderer:
 
     def __init__(self, host) -> None:
         self._host = host
-        # Dense pattern previews can contain thousands of exact strokes. Keep
-        # their flattened world-space paths until the document or selection
-        # changes, instead of rebuilding screen-space paths on every repaint.
-        self._dense_preview_batches: dict[tuple[str, float, int], QPainterPath] | None = None
-        self._dense_preview_raster: QPixmap | None = None
-        self._dense_preview_raster_origin: tuple[float, float] | None = None
-        self._dense_preview_raster_size: tuple[int, int, float] | None = None
-        self._dense_preview_raster_scale: float | None = None
+        self._dense_preview = DensePreviewRenderer(host)
 
-    _DENSE_RASTER_MIN_ENTITIES = 2_000
-    _DENSE_RASTER_MARGIN = 384
+    # These properties preserve the established renderer cache inspection
+    # seam while the cache's implementation has a focused render-only home.
+    @property
+    def _dense_preview_batches(self):
+        return self._dense_preview.batches
+
+    @property
+    def _dense_preview_raster(self):
+        return self._dense_preview.raster
+
+    @property
+    def _dense_preview_raster_origin(self):
+        return self._dense_preview.raster_origin
+
+    @property
+    def _dense_preview_raster_size(self):
+        return self._dense_preview.raster_size
+
+    @property
+    def _dense_preview_raster_scale(self):
+        return self._dense_preview.raster_scale
 
     def invalidate_dense_preview_cache(self, *_) -> None:
         """Drop retained dense-preview paths after a visual state change."""
-        self._dense_preview_batches = None
-        self._dense_preview_raster = None
-        self._dense_preview_raster_origin = None
-        self._dense_preview_raster_size = None
-        self._dense_preview_raster_scale = None
+        self._dense_preview.invalidate()
 
     def _paint_bg_image(self, painter: QPainter) -> None:
         if self._host._bg_w_mm <= 0 or self._host._bg_h_mm <= 0:
@@ -217,10 +227,7 @@ class CanvasRenderer:
             for pt in poly[1:]:
                 px, py_ = self._host._w2c(*pt)
                 gpath.lineTo(px, py_)
-            if (
-                len(poly) >= 3
-                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
-            ):
+            if len(poly) >= 3 and polyline_is_closed(poly):
                 gpath.closeSubpath()
             painter.drawPath(gpath)
 
@@ -384,127 +391,9 @@ class CanvasRenderer:
             for pt in render_poly[1:]:
                 px, py_ = self._host._w2c(*pt)
                 path.lineTo(px, py_)
-            if (
-                len(poly) >= 3
-                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
-            ):
+            if len(poly) >= 3 and polyline_is_closed(poly):
                 path.closeSubpath()
             painter.drawPath(path)
-
-    def _build_dense_preview_batches(self) -> dict[tuple[str, float, int], QPainterPath]:
-        """Build exact dense-preview paths once in world coordinates."""
-        batches: dict[tuple[str, float, int], QPainterPath] = {}
-        for ent in self._host._entities:
-            poly = ent.points
-            if ent.hidden or len(poly) < 2:
-                continue
-            if not self._host._on_active_layer(ent) and ent.id not in self._host._sel:
-                layer_hex = (
-                    self._host._layer_colors.get(ent.layer) if ent.layer is not None else None
-                )
-                color = QColor(layer_hex) if layer_hex else QColor(POLY)
-                color.setAlpha(140)
-                width = 1.2
-                # PySide6 enum wrappers are not directly int-castable on
-                # newer Qt bindings; store the primitive value in the batch
-                # key and reconstruct the enum when applying the pen.
-                style = Qt.PenStyle.DashLine.value
-            else:
-                selected = ent.id in self._host._sel
-                if selected:
-                    color = QColor(SEL)
-                elif ent.id in self._host._accent_polys:
-                    color = QColor(self._host._accent_polys[ent.id])
-                elif ent.construction:
-                    color = QColor(_GUIDE_COLOR)
-                elif layer_hex := (
-                    self._host._layer_colors.get(ent.layer) if ent.layer is not None else None
-                ):
-                    color = QColor(layer_hex)
-                else:
-                    color = QColor(POLY)
-                if ent.locked:
-                    color = QColor("#8b949e")
-                width = 2.0 if selected else (1.2 if ent.construction else 1.5)
-                style = (
-                    Qt.PenStyle.DashLine.value
-                    if ent.construction or ent.locked
-                    else Qt.PenStyle.SolidLine.value
-                )
-            key = (color.name(QColor.NameFormat.HexArgb), width, style)
-            path = batches.setdefault(key, QPainterPath())
-            render_poly = self._host._flattened_points_by_id(ent.id)
-            if len(render_poly) < 2:
-                continue
-            path.moveTo(*render_poly[0])
-            for point in render_poly[1:]:
-                path.lineTo(*point)
-            if (
-                len(poly) >= 3
-                and math.hypot(poly[-1][0] - poly[0][0], poly[-1][1] - poly[0][1]) < 0.5
-            ):
-                path.closeSubpath()
-        return batches
-
-    def _paint_dense_preview_paths(self, painter: QPainter, ox: float, oy: float) -> None:
-        """Paint retained world-space paths using a supplied view origin."""
-        if self._dense_preview_batches is None:
-            self._dense_preview_batches = self._build_dense_preview_batches()
-        painter.setWorldTransform(
-            QTransform(
-                self._host._scale,
-                0.0,
-                0.0,
-                -self._host._scale,
-                ox,
-                oy,
-            )
-        )
-        for (color_name, width, style), path in self._dense_preview_batches.items():
-            pen = QPen(QColor(color_name), width)
-            pen.setStyle(Qt.PenStyle(style))
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(path)
-
-    def _can_reuse_dense_preview_raster(self, width: int, height: int, dpr: float) -> bool:
-        """Whether the current view stays inside the cached overscan area."""
-        if (
-            self._dense_preview_raster is None
-            or self._dense_preview_raster_origin is None
-            or self._dense_preview_raster_size != (width, height, dpr)
-            or self._dense_preview_raster_scale != self._host._scale
-        ):
-            return False
-        ox, oy = self._dense_preview_raster_origin
-        return (
-            abs(self._host._ox - ox) <= self._DENSE_RASTER_MARGIN
-            and abs(self._host._oy - oy) <= self._DENSE_RASTER_MARGIN
-        )
-
-    def _rebuild_dense_preview_raster(self, width: int, height: int, dpr: float) -> None:
-        """Rasterize the exact retained paths slightly beyond the viewport."""
-        margin = self._DENSE_RASTER_MARGIN
-        image = QImage(
-            round((width + margin * 2) * dpr),
-            round((height + margin * 2) * dpr),
-            QImage.Format.Format_ARGB32_Premultiplied,
-        )
-        image.setDevicePixelRatio(dpr)
-        image.fill(Qt.GlobalColor.transparent)
-        cache_painter = QPainter(image)
-        cache_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self._paint_dense_preview_paths(
-            cache_painter,
-            self._host._ox + margin,
-            self._host._oy + margin,
-        )
-        cache_painter.end()
-        self._dense_preview_raster = QPixmap.fromImage(image)
-        self._dense_preview_raster_origin = (self._host._ox, self._host._oy)
-        self._dense_preview_raster_size = (width, height, dpr)
-        self._dense_preview_raster_scale = self._host._scale
 
     def _paint_dense_preview_polys(self, painter: QPainter, _visible: QRectF) -> None:
         """Render exact dense preview paths without per-repaint geometry work.
@@ -514,29 +403,7 @@ class CanvasRenderer:
         so geometry and stroke placement stay exact while short pans only
         shift a pixmap instead of re-rasterizing every stroke.
         """
-        if self._dense_preview_batches is None:
-            self._dense_preview_batches = self._build_dense_preview_batches()
-
-        width = max(1, self._host.width())
-        height = max(1, self._host.height())
-        dpr = painter.device().devicePixelRatioF()
-        if len(self._host._entities) >= self._DENSE_RASTER_MIN_ENTITIES:
-            if not self._can_reuse_dense_preview_raster(width, height, dpr):
-                self._rebuild_dense_preview_raster(width, height, dpr)
-            if self._dense_preview_raster is not None and self._dense_preview_raster_origin is not None:
-                cached_ox, cached_oy = self._dense_preview_raster_origin
-                painter.drawPixmap(
-                    QPointF(
-                        self._host._ox - cached_ox - self._DENSE_RASTER_MARGIN,
-                        self._host._oy - cached_oy - self._DENSE_RASTER_MARGIN,
-                    ),
-                    self._dense_preview_raster,
-                )
-                return
-
-        painter.save()
-        self._paint_dense_preview_paths(painter, self._host._ox, self._host._oy)
-        painter.restore()
+        self._dense_preview.paint(painter)
 
     _RULER_STEPS = (
         0.1,
@@ -644,9 +511,7 @@ class CanvasRenderer:
             bx, by = dim["p2"]
             if dim.get("type") == "angle" and "p3" in dim:
                 cx, cy = dim["p3"]
-                a1 = math.atan2(ay - by, ax - bx)
-                a2 = math.atan2(cy - by, cx - bx)
-                angle = abs(math.degrees((a2 - a1 + math.pi) % math.tau - math.pi))
+                angle = angle_between_rays((bx, by), (ax, ay), (cx, cy))
                 painter.setPen(QPen(color, 1.4))
                 first_c = self._host._w2c(ax, ay)
                 vertex_c = self._host._w2c(bx, by)
@@ -1774,13 +1639,17 @@ class CanvasRenderer:
         # edge and lie about which relationship would be committed.
         relationship_type = getattr(self._host, "_draw_snap_type", None)
         reference = self._host._snap_engine.last_relationship_reference
-        if relationship_type in {
-            "parallel",
-            "perpendicular",
-            "equal_length",
-            "parallel_equal_length",
-            "perpendicular_equal_length",
-        } and reference:
+        if (
+            relationship_type
+            in {
+                "parallel",
+                "perpendicular",
+                "equal_length",
+                "parallel_equal_length",
+                "perpendicular_equal_length",
+            }
+            and reference
+        ):
             entity_id, _segment_index, first, second = reference
             entity = next((e for e in self._host._entities if e.id == entity_id), None)
             reference_points = (
@@ -1818,7 +1687,7 @@ class CanvasRenderer:
         """Overlay locatable topology findings without modifying geometry."""
         if not getattr(self._host, "_geometry_health_visible", False):
             return
-        from simple_stipple.engine.cad.preflight import analyze_geometry
+        from simple_stipple.core.cad.preflight import analyze_geometry
 
         polylines = [
             entity.points
@@ -1914,7 +1783,7 @@ class CanvasRenderer:
         if not constraints:
             return
         entity_by_id = {entity.id: entity for entity in self._host._entities}
-        from simple_stipple.engine.cad.constraints import constraint_residuals
+        from simple_stipple.core.cad.constraints import constraint_residuals
 
         residuals = constraint_residuals(
             {entity.id: entity.points for entity in self._host._entities},
@@ -2225,7 +2094,11 @@ class CanvasRenderer:
             angle = math.degrees(math.atan2(by - ay, bx - ax))
             badge_y = max(canvas_y0, canvas_y1) + 20
             self._host._sel_badge_l_rect = self._draw_badge(
-                painter, midpoint_x - 42, badge_y, f"L {_fmt_len(length, self._host._unit_system)}", 10
+                painter,
+                midpoint_x - 42,
+                badge_y,
+                f"L {_fmt_len(length, self._host._unit_system)}",
+                10,
             )
             self._host._sel_badge_a_rect = self._draw_badge(
                 painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 10
@@ -2540,7 +2413,9 @@ class CanvasRenderer:
         """Rulers paint over everything else (chrome layer)."""
         self._paint_rulers(painter, max(self._host.width(), 100), max(self._host.height(), 100))
 
-    def _paint_document_scene(self, painter: QPainter, width: int, height: int, visible: Any) -> None:
+    def _paint_document_scene(
+        self, painter: QPainter, width: int, height: int, visible: Any
+    ) -> None:
         """Paint persistent document content below selection and interaction chrome."""
         self._paint_guides(painter, width, height)
         self._paint_dimensions(painter, width, height)

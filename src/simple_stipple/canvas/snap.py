@@ -2,7 +2,7 @@
 
 One entry point (``query``) merges every snap source — polyline vertices,
 midpoints, edges, intersections (via the pure candidate functions in
-src/simple_stipple/engine/cad/snapping.py), parametric-shape points (circle centers, arc
+src/simple_stipple/core/cad/snapping.py), parametric-shape points (circle centers, arc
 endpoints, …), the grid, and guide lines — and returns the best candidate in
 screen space. Previously this logic was split across three modules plus four
 glue methods on the view, and drag vs. hover snapping threaded 13+ parameters
@@ -19,8 +19,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from simple_stipple.engine.cad.constants import SNAP_DIST
-from simple_stipple.engine.cad.shapes import (
+from simple_stipple.core.cad.constants import SNAP_DIST
+from simple_stipple.core.cad.shapes import (
     ArcShape,
     CircleShape,
     EllipseShape,
@@ -28,10 +28,10 @@ from simple_stipple.engine.cad.shapes import (
     RectangleShape,
     RoundedRectangleShape,
     SlotShape,
-    SplineShape,
     StarShape,
 )
-from simple_stipple.engine.cad.snapping import (
+from simple_stipple.core.cad.primitives import SplineShape
+from simple_stipple.core.cad.snapping import (
     angle_snap,
     resolve_drag_snap,
     resolve_snap,
@@ -39,7 +39,7 @@ from simple_stipple.engine.cad.snapping import (
 
 if TYPE_CHECKING:
     from simple_stipple.canvas.view.main import CanvasView
-    from simple_stipple.engine.cad.shapes import Shape
+    from simple_stipple.core.cad.shape_base import Shape
 
 SnapResult = tuple[float, float, str]
 RelationshipReference = tuple[str, int, tuple[float, float], tuple[float, float]]
@@ -229,9 +229,18 @@ class SnapEngine:
                     cx, cy, wx, wy, reference_point, exclude=exclude_polys
                 ),
             )
-        if allow_inferred and allow_polyline and vertex_enabled and (
-            getattr(v, "_snap_align_x_enabled", getattr(v, "_snap_axis_alignment_enabled", True))
-            or getattr(v, "_snap_align_y_enabled", getattr(v, "_snap_axis_alignment_enabled", True))
+        if (
+            allow_inferred
+            and allow_polyline
+            and vertex_enabled
+            and (
+                getattr(
+                    v, "_snap_align_x_enabled", getattr(v, "_snap_axis_alignment_enabled", True)
+                )
+                or getattr(
+                    v, "_snap_align_y_enabled", getattr(v, "_snap_axis_alignment_enabled", True)
+                )
+            )
         ):
             best = self._pick_better(
                 cx,
@@ -251,9 +260,7 @@ class SnapEngine:
                 cx,
                 cy,
                 best,
-                self._extension_candidate(
-                    cx, cy, reference=reference_point, exclude=exclude_polys
-                ),
+                self._extension_candidate(cx, cy, reference=reference_point, exclude=exclude_polys),
             )
         best = self._pick_better(cx, cy, best, self._guide_candidate(cx, cy, wx, wy))
         if best is None or best[2] not in {
@@ -301,7 +308,8 @@ class SnapEngine:
         sources = [
             (entity.id, entity.points, False)
             for entity in self.v._entities
-            if entity.id not in (exclude or ()) and entity.id not in hidden_ids
+            if entity.id not in (exclude or ())
+            and entity.id not in hidden_ids
             and getattr(entity, "kind", "polyline") not in {"spline", "bezier"}
         ]
         draw_points = list(getattr(self.v, "_draw_pts", []))
@@ -572,10 +580,13 @@ class SnapEngine:
             return is_locked
         if always_available:
             return True
-        return min(
-            self._screen_distance_to_segment(cx, cy, start_c, end_c),
-            self._screen_distance_to_segment(*reference_c, start_c, end_c),
-        ) <= self.RELATIONSHIP_REFERENCE_PX
+        return (
+            min(
+                self._screen_distance_to_segment(cx, cy, start_c, end_c),
+                self._screen_distance_to_segment(*reference_c, start_c, end_c),
+            )
+            <= self.RELATIONSHIP_REFERENCE_PX
+        )
 
     @staticmethod
     def _screen_distance_to_segment(
@@ -628,9 +639,7 @@ class SnapEngine:
             )
             for px, py in points:
                 endpoint_c = self.v._w2c(px, py)
-                if not self._source_is_local(
-                    cx, cy, endpoint_c, endpoint_c, reference_c
-                ):
+                if not self._source_is_local(cx, cy, endpoint_c, endpoint_c, reference_c):
                     continue
                 pcx, _ = self.v._w2c(px, wy)
                 x_distance = abs(cx - pcx)
@@ -948,7 +957,15 @@ class SnapEngine:
             snap_type in {"intersection", "center", "midpoint", "edge", "tangent"}
             or snap_type == "vertex"
             or snap_type.startswith(
-                ("vertex_", "spline_control_", "arc_start", "arc_end", "circle_", "ellipse_", "quadrant_")
+                (
+                    "vertex_",
+                    "spline_control_",
+                    "arc_start",
+                    "arc_end",
+                    "circle_",
+                    "ellipse_",
+                    "quadrant_",
+                )
             )
         )
 

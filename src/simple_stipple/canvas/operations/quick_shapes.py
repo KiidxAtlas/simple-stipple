@@ -6,7 +6,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 
-from simple_stipple.engine.cad.geometry import shape_circle, shape_polygon, shape_rect, shape_slot
+from simple_stipple.core.cad.geometry import shape_circle, shape_polygon, shape_rect, shape_slot
 
 
 def mode_from_modifiers(host: Any, modifiers) -> str:
@@ -27,9 +27,7 @@ def start_drag(host: Any, mode: str, position) -> None:
     host._shape_end_c = pos
 
 
-def translate(
-    coords: list[tuple[float, float]], cx: float, cy: float
-) -> list[tuple[float, float]]:
+def translate(coords: list[tuple[float, float]], cx: float, cy: float) -> list[tuple[float, float]]:
     return [(x + cx, y + cy) for x, y in coords]
 
 
@@ -55,18 +53,11 @@ def build_shapes(
     return []
 
 
-def build_first_shape(
-    host: Any, mode: str, sx: float, sy: float, ex: float, ey: float
-) -> list[tuple[float, float]]:
-    shapes = build_shapes(host, mode, sx, sy, ex, ey)
-    return shapes[0] if shapes else []
-
-
 def build_procedural_shapes(
     mode: str, width: float, height: float, cx: float, cy: float
 ) -> list[list[tuple[float, float]]]:
     """Scale a procedural primitive into the drag bounds, preserving holes."""
-    from simple_stipple.engine.cad.primitives import (
+    from simple_stipple.core.cad.primitives import (
         chamfered_star,
         dovetail_box,
         finger_joint_box,

@@ -16,9 +16,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from simple_stipple.engine.formats.service import DxfService
-from simple_stipple.engine.patterns.cancellation import cancellation_scope
-from simple_stipple.engine.patterns.output import prepare_output
+from simple_stipple.core.formats.service import DxfService
+from simple_stipple.core.patterns.cancellation import cancellation_scope
+from simple_stipple.core.patterns.output import prepare_output
 
 LOGGER = logging.getLogger(__name__)
 CANCELLED_MESSAGE = "__task_cancelled__"
@@ -183,82 +183,6 @@ def run_generate(
             _report_cancel(on_error, generation_token)
             return
         LOGGER.warning("Pattern generation failed: %s", exc, exc_info=True)
-        on_error((generation_token, str(exc)))
-
-
-def run_generate_zones(
-    zones: list[dict],
-    out_path: str,
-    include_border: bool,
-    open_paths: bool = False,
-    invert_fill: bool = False,
-    mirror_v: bool = False,
-    mirror_h: bool = False,
-    border_fade: float = 0.0,
-    exclusion_polys: list[list[tuple[float, float]]] | None = None,
-    generation_token: int = 0,
-    cancel_event: threading.Event | None = None,
-    *,
-    pattern_service: Any,
-    orig_w: float,
-    orig_h: float,
-    on_done: Callable,
-    on_error: Callable,
-    fill_options: dict | None = None,
-    canvas_polys: list[list[tuple[float, float]]] | None = None,
-    fabrication_options: dict | None = None,
-) -> None:
-    """Worker: generate all zone patterns and write to a single DXF.
-
-    ``canvas_polys`` is the FULL set of outlines on the canvas (not just
-    those assigned to a zone) — needed so an open shape that was never
-    explicitly assigned to any zone can still act as an automatic cutout
-    for whichever zone's fill region happens to contain it.
-    """
-    try:
-        fill_polys: list[list[tuple[float, float]]] = []
-        all_polys, border_polys = _run_cancellable(
-            cancel_event,
-            pattern_service.build_zone_pattern_polys,
-            zones,
-            include_border=include_border,
-            orig_w=orig_w,
-            orig_h=orig_h,
-            all_polys=canvas_polys,
-            invert_fill=invert_fill,
-            mirror_v=mirror_v,
-            mirror_h=mirror_h,
-            border_fade=border_fade,
-            exclusion_polys=exclusion_polys,
-            fill_options=fill_options,
-            fill_polys_out=fill_polys,
-        )
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, generation_token)
-            return
-        all_polys = prepare_output(all_polys, fabrication_options)
-        fill_polys = prepare_output(fill_polys, fabrication_options)
-        extra: dict[str, list] = {}
-        if fill_polys:
-            extra["fill"] = fill_polys
-        DxfService.write_polylines_dxf(
-            all_polys,
-            out_path,
-            close=True,
-            open_paths=open_paths,
-            border_polys=border_polys if border_polys else None,
-            pattern_layer="pattern",
-            border_layer_prefix="outline",
-            extra_layers=extra or None,
-        )
-        count = len(all_polys) + len(fill_polys)
-        name = Path(out_path).name
-        on_done((generation_token, count, name, out_path, all_polys + fill_polys))
-    except Exception as exc:  # noqa: BLE001 - see run_generate
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, generation_token)
-            return
-        LOGGER.warning("Zone pattern generation failed: %s", exc, exc_info=True)
         on_error((generation_token, str(exc)))
 
 

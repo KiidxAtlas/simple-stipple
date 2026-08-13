@@ -76,10 +76,7 @@ def _draw_download(painter: QPainter, size: float, color: QColor) -> None:
     cx = size / 2.0
     top = size * 0.22
     shaft_bottom = size * 0.58
-    pen = QPen(color, max(1.4, size * 0.09))
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-    painter.setPen(pen)
+    painter.setPen(_line_pen(color, size))
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawLine(QPointF(cx, top), QPointF(cx, shaft_bottom))
 
@@ -95,9 +92,7 @@ def _draw_download(painter: QPainter, size: float, color: QColor) -> None:
     )
 
     tray_y = size * 0.78
-    tray_pen = QPen(color, max(1.4, size * 0.09))
-    tray_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(tray_pen)
+    painter.setPen(_line_pen(color, size))
     painter.drawLine(QPointF(size * 0.24, tray_y), QPointF(size * 0.76, tray_y))
 
 
@@ -130,10 +125,15 @@ def _line_pen(color: QColor, size: float) -> QPen:
     return pen
 
 
-def _draw_polyline_icon(painter: QPainter, size: float, color: QColor) -> None:
-    r = _icon_rect(size)
+def _setup_standard_line_icon(painter: QPainter, color: QColor, size: float) -> QRectF:
+    """Sets pen to _line_pen and brush to NoBrush, returns icon rect."""
     painter.setPen(_line_pen(color, size))
     painter.setBrush(Qt.BrushStyle.NoBrush)
+    return _icon_rect(size)
+
+
+def _draw_polyline_icon(painter: QPainter, size: float, color: QColor) -> None:
+    r = _setup_standard_line_icon(painter, color, size)
     path = QPainterPath()
     path.moveTo(r.left(), r.bottom())
     path.lineTo(r.center().x() - size * 0.05, r.center().y())
@@ -142,9 +142,7 @@ def _draw_polyline_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 
 def _draw_spline_icon(painter: QPainter, size: float, color: QColor) -> None:
-    r = _icon_rect(size)
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+    r = _setup_standard_line_icon(painter, color, size)
     path = QPainterPath()
     path.moveTo(r.left(), r.bottom())
     path.cubicTo(
@@ -159,9 +157,7 @@ def _draw_spline_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 
 def _draw_arc_icon(painter: QPainter, size: float, color: QColor) -> None:
-    r = _icon_rect(size)
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
+    r = _setup_standard_line_icon(painter, color, size)
     path = QPainterPath()
     path.moveTo(r.left(), r.bottom())
     path.quadTo(r.center().x(), r.top() - size * 0.05, r.right(), r.bottom())
@@ -201,18 +197,15 @@ def _draw_bezier_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 
 def _draw_rectangle_icon(painter: QPainter, size: float, color: QColor) -> None:
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawRect(_icon_rect(size))
+    r = _setup_standard_line_icon(painter, color, size)
+    painter.drawRect(r)
 
 
 def _draw_rounded_rectangle_icon(painter: QPainter, size: float, color: QColor) -> None:
     """Rounded rectangle matching the canvas primitive, not its sharp sibling."""
-    rect = _icon_rect(size)
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    radius = min(rect.width(), rect.height()) * 0.18
-    painter.drawRoundedRect(rect, radius, radius)
+    r = _setup_standard_line_icon(painter, color, size)
+    radius = min(r.width(), r.height()) * 0.18
+    painter.drawRoundedRect(r, radius, radius)
 
 
 def _draw_slot_icon(painter: QPainter, size: float, color: QColor) -> None:
@@ -228,9 +221,8 @@ def _draw_slot_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 
 def _draw_circle_icon(painter: QPainter, size: float, color: QColor) -> None:
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawEllipse(_icon_rect(size))
+    r = _setup_standard_line_icon(painter, color, size)
+    painter.drawEllipse(r)
 
 
 def _draw_ellipse_icon(painter: QPainter, size: float, color: QColor) -> None:
@@ -241,10 +233,8 @@ def _draw_ellipse_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 
 def _draw_polygon_icon(painter: QPainter, size: float, color: QColor) -> None:
-    r = _icon_rect(size)
+    r = _setup_standard_line_icon(painter, color, size)
     cx, cy = r.center().x(), r.center().y()
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
     path = QPainterPath()
     n = 6
     for i in range(n):
@@ -260,12 +250,10 @@ def _draw_polygon_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 def _draw_star_icon(painter: QPainter, size: float, color: QColor) -> None:
     """Five-point star matching the default Star canvas primitive."""
-    r = _icon_rect(size)
+    r = _setup_standard_line_icon(painter, color, size)
     cx, cy = r.center().x(), r.center().y()
     outer = min(r.width(), r.height()) / 2.0
     inner = outer * 0.45
-    painter.setPen(_line_pen(color, size))
-    painter.setBrush(Qt.BrushStyle.NoBrush)
     path = QPainterPath()
     for i in range(10):
         angle = math.radians(-90.0 + i * 36.0)
@@ -280,8 +268,7 @@ def _draw_star_icon(painter: QPainter, size: float, color: QColor) -> None:
 
 
 def _draw_text_icon(painter: QPainter, size: float, color: QColor) -> None:
-    r = _icon_rect(size)
-    painter.setPen(_line_pen(color, size))
+    r = _setup_standard_line_icon(painter, color, size)
     painter.drawLine(QPointF(r.left(), r.top()), QPointF(r.right(), r.top()))
     painter.drawLine(QPointF(r.center().x(), r.top()), QPointF(r.center().x(), r.bottom()))
 

@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from simple_stipple.document.model import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
-from simple_stipple.document.workspace import (
+from simple_stipple.core.document.model import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
+from simple_stipple.core.document.workspace import (
     apply_workspace_document,
     clear_workspace_state,
     collect_workspace_document,
@@ -17,8 +17,7 @@ from simple_stipple.document.workspace import (
     workspace_default_dir,
     workspace_title,
 )
-from simple_stipple.platform.paths import saved_workspaces_dir, user_data_dir
-from simple_stipple.platform.settings import save_settings
+from simple_stipple.platform.settings import save_settings, saved_workspaces_dir, user_data_dir
 from simple_stipple.platform.storage import (
     MAX_WORKSPACE_FILE_BYTES,
     read_json_file,
@@ -206,15 +205,6 @@ class WorkspaceController(_WorkspaceStateController):
         )
         self._app._refresh_workspace_header()
 
-    def _load_recent_workspace_action(self) -> None:
-        action = self._app.sender()
-        if not isinstance(action, QAction):
-            return
-        path_str = action.data()
-        if not path_str:
-            return
-        self._load_workspace_file(Path(str(path_str)))
-
     def _confirm_discard_if_dirty(self, *, quitting: bool = False) -> bool:
         self._update_workspace_dirty()
         # Dirty alone triggers the prompt: non-geometry state (trace
@@ -255,12 +245,6 @@ class WorkspaceController(_WorkspaceStateController):
             # baseline as clean allowed restored work to close without warning.
             self._app._workspace_dirty = self._app._has_unsaved_changes
         self._update_title()
-
-    def _workspace_pages(self):
-        return self._page_runtime.iter_workspace_pages()
-
-    def _preset_pages(self):
-        return self._page_runtime.iter_preset_pages()
 
     def _rebuild_recent_workspaces_menu(self) -> None:
         self._app._recent_workspaces_menu.clear()

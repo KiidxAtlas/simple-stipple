@@ -223,7 +223,9 @@ def apply_item_customization(host: Any, menu: QMenu) -> None:  # noqa: C901
                 result.append((action, group))
         return result
 
-    identified = [(action, action_id(action), group) for action, group in leaves(menu) if isValid(action)]
+    identified = [
+        (action, action_id(action), group) for action, group in leaves(menu) if isValid(action)
+    ]
     known: dict[str, list] = {}
     for action, item_id, group in identified:
         if item_id is not None:

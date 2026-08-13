@@ -16,16 +16,16 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QMessageBox
 
-from simple_stipple.engine.formats.service import (
+from simple_stipple.core.formats.service import (
     load_dxf_polylines_with_report,
     read_fvi,
     svg_to_dxf,
     write_polylines_dxf,
 )
-from simple_stipple.features.pattern.params import collect_form_state
-from simple_stipple.platform.config import custom_tiles_dir, save_settings
-from simple_stipple.ui.files import pick_open_file
-from simple_stipple.ui.style.theme import STATUS_ERR, STATUS_OK, STATUS_WARN
+from simple_stipple.features.pattern.form import collect_form_state
+from simple_stipple.platform.settings import custom_tiles_dir, save_settings
+from simple_stipple.ui.dialogs.files import pick_open_file
+from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 
 LOGGER = logging.getLogger(__name__)
 

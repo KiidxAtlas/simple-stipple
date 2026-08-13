@@ -13,13 +13,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLineEdit, QMenu
 
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.operations import context_menu, quick_shapes
 from simple_stipple.canvas.tools import tools as canvas_tools
-from simple_stipple.canvas.tools.tools import RadialMenuService
+from simple_stipple.canvas.tools.radial_menu import RadialMenuService
 from simple_stipple.canvas.view.main import CanvasView
-from simple_stipple.document.model import EntityRecord
-from simple_stipple.platform.config import (
+from simple_stipple.platform.settings import (
     CONTEXT_MENU_TRANSFORM_ITEMS,
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
     DEFAULT_RADIAL_MENU_TOOLS,
@@ -123,8 +123,10 @@ class DxfSelectTool(canvas_tools.SelectTool):
 
     def move(self, event: QMouseEvent) -> bool:
         c = self.v
-        if c._selectable and c._shape_drag_active and (
-            c._shape_click_placement_active or event.buttons() & Qt.MouseButton.LeftButton
+        if (
+            c._selectable
+            and c._shape_drag_active
+            and (c._shape_click_placement_active or event.buttons() & Qt.MouseButton.LeftButton)
         ):
             pos = event.position().toPoint()
             c._shape_end_c = pos
@@ -207,7 +209,9 @@ class DxfCanvas(CanvasView):
             "tabbed_panel",
         }
     )
-    _VALID_QUICK_SHAPES = frozenset({"rectangle", "circle", "slot", "hexagon"}) | _PROCEDURAL_QUICK_SHAPES
+    _VALID_QUICK_SHAPES = (
+        frozenset({"rectangle", "circle", "slot", "hexagon"}) | _PROCEDURAL_QUICK_SHAPES
+    )
 
     _CUTOUT_COLOR = "#f0883e"
     _context_static_action_ids = _CONTEXT_STATIC_ACTION_IDS
@@ -344,15 +348,6 @@ class DxfCanvas(CanvasView):
         self.set_mode("draw")
         self._set_draw_primitive(primitive)
 
-    def set_pattern_cell_context(
-        self, entity_ids: set[str], cutout_indices: set[str] | None = None
-    ) -> None:
-        """Identify generated preview cells that can be removed from the fill."""
-        self._pattern_cell_indices = set(entity_ids)
-        cutout_ids = cutout_indices or set()
-        self._pattern_cell_cutout_indices = cutout_ids
-        self.set_accent_polys({eid: self._CUTOUT_COLOR for eid in cutout_ids})
-
     def mousePressEvent(self, event: QMouseEvent) -> None:
         # Handled here (not in a per-mode tool) so the radial menu opens and
         # works identically no matter which mode/tool was active when "Q"
@@ -418,8 +413,6 @@ class DxfCanvas(CanvasView):
     def _apply_context_menu_overflow(self, menu: QMenu) -> None:
         context_menu.apply_overflow(self, menu)
 
-    def _apply_context_menu_item_customization(self, menu: QMenu) -> None:
-        context_menu.apply_item_customization(self, menu)
 
     # ── Context menu builders ──────────────────────────────────────────────
 
@@ -709,18 +702,15 @@ class DxfCanvas(CanvasView):
 
     def _build_transform_actions(self, menu, _run_transform, _run_prompted_transform) -> None:
         transform_menu = menu.addMenu("Transform")
+
         def add(item_id, label, callback):
             action = transform_menu.addAction(label, callback)
             action.setProperty("context_item", item_id)
             return action
 
+        add("rotate_cw", "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0)))
         add(
-            "rotate_cw",
-            "Rotate +90°", lambda: _run_transform(lambda: self.rotate_selected(90.0))
-        )
-        add(
-            "rotate_ccw",
-            "Rotate -90°", lambda: _run_transform(lambda: self.rotate_selected(-90.0))
+            "rotate_ccw", "Rotate -90°", lambda: _run_transform(lambda: self.rotate_selected(-90.0))
         )
         add(
             "mirror_horizontal",
@@ -733,10 +723,7 @@ class DxfCanvas(CanvasView):
             lambda: _run_transform(lambda: self.mirror_selected("vertical")),
         )
         transform_menu.addSeparator()
-        add(
-            "size",
-            "Edit width + height…", lambda: _run_transform(self._show_size_hud)
-        )
+        add("size", "Edit width + height…", lambda: _run_transform(self._show_size_hud))
         add(
             "length",
             "Set line length…",
@@ -973,11 +960,6 @@ class DxfCanvas(CanvasView):
     ) -> list[list[tuple[float, float]]]:
         return quick_shapes.build_shapes(self, mode, sx, sy, ex, ey)
 
-    def _build_drag_shape(
-        self, mode: str, sx: float, sy: float, ex: float, ey: float
-    ) -> list[tuple[float, float]]:
-        """Compatibility helper for callers that only need the first contour."""
-        return quick_shapes.build_first_shape(self, mode, sx, sy, ex, ey)
 
     @staticmethod
     def _build_drag_procedural_shapes(

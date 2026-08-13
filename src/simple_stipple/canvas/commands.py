@@ -20,7 +20,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 
-from simple_stipple.ui.units import format_length as _format_length
+from simple_stipple.ui.components.units import format_length as _format_length
 
 
 @dataclass(frozen=True)

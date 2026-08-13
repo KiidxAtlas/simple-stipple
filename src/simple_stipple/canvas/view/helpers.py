@@ -9,9 +9,9 @@ from typing import Any
 from PySide6.QtCore import QEasingCurve, QEvent, Qt, QVariantAnimation
 from PySide6.QtWidgets import QApplication, QWidget
 
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
-from simple_stipple.document.model import EntityRecord
-from simple_stipple.engine.cad.snapping import polygon_centroid as _polygon_centroid
+from simple_stipple.core.cad.snapping import polygon_centroid as _polygon_centroid
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features; mirrors view/main.py
 
@@ -586,7 +586,7 @@ def _background_edit_hit(self, cx: float, cy: float) -> str | None:
 
 def show_coordinate_entry(self, initial: str = "") -> None:
     """Place a draw point or selection using CAD coordinate notation."""
-    from simple_stipple.engine.cad.geometry import parse_coordinate
+    from simple_stipple.core.cad.geometry import parse_coordinate
 
     origin = self._draw_pts[-1] if self._mode == "draw" and self._draw_pts else (0.0, 0.0)
     unit_scale = 25.4 if self._unit_system == "in" else 1.0
@@ -724,7 +724,7 @@ def set_ghost_polylines(
 def get_status_summary(self) -> dict[str, object]:
     precision = []
     if self._grid_visible:
-        from simple_stipple.ui.units import format_length
+        from simple_stipple.ui.components.units import format_length
 
         precision.append(f"Grid {format_length(self._grid_spacing, self._unit_system)}")
     if self._grid_snap:

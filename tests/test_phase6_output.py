@@ -9,8 +9,8 @@ from __future__ import annotations
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from simple_stipple.engine.cad.preflight import GeometryIssue
-from simple_stipple.features.pattern.output import density_issues, document_operations
+from simple_stipple.core.cad.preflight import GeometryIssue
+from simple_stipple.features.pattern.export import density_issues, document_operations
 from simple_stipple.features.pattern.page import PatternPage
 
 OUTER = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
@@ -132,7 +132,9 @@ def _export_and_wait(page, done, *, timeout_ms: int = 8000) -> None:
         timeout_ms -= 50
 
 
-@pytest.mark.parametrize("export_format,suffix", [("dxf", ".dxf"), ("svg", ".svg"), ("fvi", ".fvi")])
+@pytest.mark.parametrize(
+    "export_format,suffix", [("dxf", ".dxf"), ("svg", ".svg"), ("fvi", ".fvi")]
+)
 def test_every_single_file_format_exports(
     app: QApplication,
     monkeypatch: pytest.MonkeyPatch,
@@ -279,7 +281,7 @@ def test_the_format_menu_picks_a_format_and_never_starts_an_export(
     app: QApplication,
 ) -> None:
     """The dropdown chooses what the file is; Export is the only trigger."""
-    from simple_stipple.features.pattern.export_jobs import EXPORT_FORMAT_KEYS
+    from simple_stipple.features.pattern.export import EXPORT_FORMAT_KEYS
 
     page = PatternPage(settings={})
     calls: list[bool] = []
