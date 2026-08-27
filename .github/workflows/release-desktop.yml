@@ -150,6 +150,34 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
+      - name: Prepare release notes from changelog
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          version = tag.removeprefix("v")
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          heading = re.compile(
+              rf"^## {re.escape(version)} — \d{{4}}-\d{{2}}-\d{{2}}$",
+              re.MULTILINE,
+          )
+          match = heading.search(changelog)
+          if match is None:
+              raise SystemExit(f"Missing dated changelog heading for {version}.")
+          remainder = changelog[match.end():]
+          next_release = re.search(r"^## ", remainder, re.MULTILINE)
+          body = remainder[: next_release.start()] if next_release else remainder
+          Path("release-notes.md").write_text(body.strip() + "\n", encoding="utf-8")
+          PY
+
       - name: Download desktop artifacts
         uses: actions/download-artifact@v4
         with:
@@ -169,5 +197,5 @@ jobs:
         with:
           files: release/*
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: release-notes.md
           overwrite_files: true

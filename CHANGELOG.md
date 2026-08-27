@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Release readiness
+
+- Expanded the repository landing page with download CTAs, workflow guidance, safety notes,
+  support routes, and development instructions.
+- Added contributor, security, release checklist, issue-form, and pull-request guidance.
+- Hardened desktop publication so tagged releases require macOS signing and notarization,
+  publish both platform artifacts together, include checksums, and use the matching changelog
+  section as release notes.
+- Added a release-notes action to the About dialog.
+
 ## 0.3.6 — 2026-08-12
 
 ### Added
