@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="200mm" height="120mm" viewBox="0 0 200 120">
+  <title>Simple Stipple engraving badge</title>
+  <desc>A closed badge outline, circular center, and star motif for Draft and Pattern.</desc>
+  <path id="badge" d="M12 12 H188 V108 H12 Z" fill="none" stroke="#111" stroke-width="1"/>
+  <circle id="center" cx="100" cy="60" r="28" fill="none" stroke="#111" stroke-width="1"/>
+  <path id="star" d="M100 39 L106.5 51.1 L120 52.7 L110 62.2 L112.4 75.5 L100 69.2 L87.6 75.5 L90 62.2 L80 52.7 L93.5 51.1 Z" fill="none" stroke="#111" stroke-width="1"/>
+</svg>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="140mm" height="100mm" viewBox="0 0 140 100">
+  <title>Simple Stipple leaf outline</title>
+  <desc>A closed organic outline with a center vein for tracing and pattern experiments.</desc>
+  <path id="leaf" d="M70 8 C38 15 18 38 22 66 C26 87 47 95 70 92 C93 95 114 87 118 66 C122 38 102 15 70 8 Z" fill="none" stroke="#111" stroke-width="1"/>
+  <path id="vein" d="M70 86 C68 65 68 40 70 14" fill="none" stroke="#111" stroke-width="1"/>
+  <path id="left-vein" d="M68 58 C54 51 44 43 37 31" fill="none" stroke="#111" stroke-width="1"/>
+  <path id="right-vein" d="M69 55 C83 48 94 40 103 28" fill="none" stroke="#111" stroke-width="1"/>
+</svg>

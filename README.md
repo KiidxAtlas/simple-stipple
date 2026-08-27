@@ -86,6 +86,8 @@ python -m pip install -e '.[cad]'
 5. Generate and inspect the result in the canvas.
 6. Export, then verify scale, units, layers, and operation order in your machine software.
 
+Try the included [sample SVG projects](examples/) if you want to test the workflow before preparing your own artwork.
+
 For the complete in-app guide, use **Help → User Manual**. The architecture and extension boundaries are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## File and safety notes
@@ -120,6 +122,7 @@ Useful reports include the Simple Stipple version, operating system, source file
 ## Project links
 
 - [Releases](https://github.com/KiidxAtlas/simple-stipple/releases)
+- [Launch kit](docs/LAUNCH_KIT.md)
 - [Changelog](CHANGELOG.md)
 - [Architecture guide](ARCHITECTURE.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
