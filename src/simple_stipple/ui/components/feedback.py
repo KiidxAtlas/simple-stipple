@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 import platform as _platform
+from collections import deque
 from collections.abc import Callable
+from datetime import datetime
 
 from PySide6.QtGui import QAccessible, QAccessibleEvent
 from PySide6.QtWidgets import (
@@ -16,8 +18,6 @@ from PySide6.QtWidgets import (
 from simple_stipple.ui.style import (
     STATUS_ERR,
 )
-from collections import deque
-from datetime import datetime
 
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 

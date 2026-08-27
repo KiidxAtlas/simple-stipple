@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import platform as _platform
-from typing import TypeVar
+from typing import TypeVar, cast
 
-from PySide6.QtCore import QChildEvent, QEvent, QObject, Qt
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtCore import (
+    QChildEvent,
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPropertyAnimation,
+    Qt,
+)
+from PySide6.QtGui import QIcon, QResizeEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -19,26 +27,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import (
-    QEasingCurve,
-    QPropertyAnimation,
-    Qt,
-)
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import (
-    QApplication,
-    QFrame,
-    QLabel,
-    QSizePolicy,
-    QToolButton,
-    QVBoxLayout,
-    QWidget,
-)
+
+from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.style import (
+    MOTION_DURATION_MS,
     icon_path,
 )
-from simple_stipple.ui.components.feedback import refresh_style
-from simple_stipple.ui.style import MOTION_DURATION_MS
 
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
@@ -47,13 +41,14 @@ L = TypeVar("L", QHBoxLayout, QVBoxLayout, QGridLayout)
 
 def container_with_layout(
     parent: QWidget | None = None,
-    layout_class: type[L] = QVBoxLayout,
+    layout_class: type[L] | None = None,
     margins: tuple[int, int, int, int] | None = None,
     spacing: int | None = None,
 ) -> tuple[QWidget, L]:
     """Create a container widget with an attached layout."""
     container = QWidget(parent)
-    layout = layout_class(container)
+    chosen_layout = layout_class or QVBoxLayout
+    layout = chosen_layout(container)
 
     if margins is not None:
         layout.setContentsMargins(*margins)
@@ -63,7 +58,7 @@ def container_with_layout(
     if spacing is not None:
         layout.setSpacing(spacing)
 
-    return container, layout
+    return container, cast(L, layout)
 
 
 def section_label(parent_layout, text: str) -> QLabel:

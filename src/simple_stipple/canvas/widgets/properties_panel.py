@@ -22,8 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.ui.components.layout import CollapsibleSection
-from simple_stipple.ui.components.layout import container_with_layout
+from simple_stipple.ui.components.layout import CollapsibleSection, container_with_layout
 from simple_stipple.ui.components.units import parse_numeric_expression, to_display
 from simple_stipple.ui.components.units import suffix as unit_suffix
 

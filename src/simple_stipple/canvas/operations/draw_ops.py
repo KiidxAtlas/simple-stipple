@@ -3,19 +3,12 @@
 from __future__ import annotations
 
 import math
-from copy import deepcopy
-from typing import Any, cast
+from typing import Any
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation
 from PySide6.QtWidgets import QApplication
 
-from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas.widgets.draw_sidebar import DrawSidebar
-from simple_stipple.core.cad.constraints import (
-    ConstraintKind,
-    GeometricConstraint,
-    solve_constraints,
-)
 from simple_stipple.core.cad.geometry import (
     build_circle_poly,
     build_ellipse_poly,
@@ -25,7 +18,7 @@ from simple_stipple.core.cad.geometry import (
     build_star_poly,
     shape_slot,
 )
-from simple_stipple.core.cad.shape_factory import ShapeFactory
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import normalize_draw_sidebar_shape_tools
 
 
@@ -133,7 +126,7 @@ class DrawOpsService:
 
     def _draw_sidebar_y(self) -> int:
         """Place the drawer below both the ruler and the canvas toolbar."""
-        # _chrome_top only reserves ruler pixels.  The canvas toolbar is
+        # Host chrome only reserves ruler pixels. The canvas toolbar is
         # painted above the scene as well, so anchoring at +8 caused the
         # drawer title to overlap its active-mode/guidance text.
         return self._host._chrome_top() + 60
@@ -458,5 +451,3 @@ class DrawOpsService:
 
 
 # Construction and constraint state adaptation
-
-

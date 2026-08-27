@@ -8,7 +8,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen, QPixmap, QTransform
 
 from simple_stipple.canvas.constants import GUIDE_COLOR, POLY, SEL
-from simple_stipple.core.cad.editor_geometry import polyline_is_closed
+from simple_stipple.core.document.geometry import polyline_is_closed
 
 
 class DensePreviewRenderer:
@@ -44,7 +44,7 @@ class DensePreviewRenderer:
             poly = entity.points
             if entity.hidden or len(poly) < 2:
                 continue
-            if not self._host._on_active_layer(entity) and entity.id not in self._host._sel:
+            if not self._host._layer_service.on_active(entity) and entity.id not in self._host._sel:
                 layer_hex = (
                     self._host._layer_colors.get(entity.layer) if entity.layer is not None else None
                 )

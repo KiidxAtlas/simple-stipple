@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import io
 import logging
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
+from PIL import Image
 from pydantic import ValidationError
 
 from simple_stipple.core.document.model import DraftTabState
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
-from typing import Any
-import io
-from PIL import Image
 from simple_stipple.core.formats.svg import read_svg_images
 
 LOGGER = logging.getLogger(__name__)

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import platform as _platform
+from typing import cast
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QResizeEvent
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QIcon, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -18,9 +20,6 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.canvas import commands as canvas_commands
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QAction, QIcon, QResizeEvent
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QToolButton
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.layout import info_chip
 from simple_stipple.ui.components.units import suffix as _unit_suffix
@@ -352,7 +351,10 @@ class CanvasStatusStrip(QFrame):
 
     def add_status_widget(self, widget) -> None:  # type: ignore[no-untyped-def]
         """Mount a page-specific transient control in the strip."""
-        self.layout().insertWidget(self._extras_index, widget)
+        layout = self.layout()
+        if layout is None:
+            return
+        cast(QHBoxLayout, layout).insertWidget(self._extras_index, widget)
         self._extras_index += 1
 
     @staticmethod

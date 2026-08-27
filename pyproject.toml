@@ -69,19 +69,20 @@ max-complexity = 15
 "src/simple_stipple/core/cad/preflight.py" = ["C901"]
 "src/simple_stipple/core/cad/snapping.py" = ["C901"]
 "src/simple_stipple/core/formats/dxf_backend.py" = ["C901"]
+"src/simple_stipple/core/formats/dxf_write.py" = ["C901"]
 "src/simple_stipple/core/formats/dxf.py" = ["C901"]
 "src/simple_stipple/core/formats/svg.py" = ["C901"]
 "src/simple_stipple/core/document/model.py" = ["C901"]
-"src/simple_stipple/core/patterns/_shared.py" = ["C901"]
+"src/simple_stipple/core/patterns/geometry.py" = ["C901"]
 "src/simple_stipple/core/patterns/fill.py" = ["C901"]
 "src/simple_stipple/core/patterns/processing.py" = ["C901"]
 "src/simple_stipple/canvas/widget.py" = ["C901"]
 "src/simple_stipple/canvas/renderer.py" = ["C901"]
-"src/simple_stipple/canvas/operations/editing.py" = ["C901"]
 "src/simple_stipple/canvas/operations/gizmo.py" = ["C901"]
-"src/simple_stipple/canvas/operations/snap_service.py" = ["C901"]
+"src/simple_stipple/canvas/snap.py" = ["C901"]
 "src/simple_stipple/canvas/operations/select.py" = ["C901"]
 "src/simple_stipple/canvas/tools/tools.py" = ["C901"]
+"src/simple_stipple/canvas/tools/selection.py" = ["C901"]
 "src/simple_stipple/canvas/view/commands.py" = ["C901"]
 "src/simple_stipple/canvas/view/interactions.py" = ["C901"]
 "src/simple_stipple/canvas/view/main.py" = ["C901"]
@@ -109,6 +110,9 @@ exclude = ["src/simple_stipple.egg-info"]
 [[tool.mypy.overrides]]
 module = [
     "simple_stipple.canvas.tools.dimension_tool",
+    "simple_stipple.canvas.tools.dimension_backend",
+    "simple_stipple.canvas.tools.dragging",
+    "simple_stipple.canvas.tools.selection",
     "simple_stipple.canvas.tools.tools",
     "simple_stipple.canvas.view.config",
     "simple_stipple.canvas.view.main",

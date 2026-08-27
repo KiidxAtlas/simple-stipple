@@ -12,8 +12,8 @@ from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
 from shapely.geometry import LineString
 from shapely.ops import nearest_points
 
+from simple_stipple.canvas.tools.dimension_backend import DimensionBackend
 from simple_stipple.core.document.model import EntityRecord
-from simple_stipple.canvas.tools.dimension_backend import DimensionTool as DimensionBackend
 from simple_stipple.ui.components.units import format_length as _format_length
 
 
@@ -85,7 +85,7 @@ class DimensionTool(DimensionBackend):
         return None
 
     def _vertex_at(self, cx: float, cy: float) -> dict[str, Any] | None:
-        hit = self.v._find_nearest_vertex(cx, cy)
+        hit = self.v._hit_test.nearest_vertex(cx, cy)
         if hit is None:
             return None
         entity_id, vertex_index = hit

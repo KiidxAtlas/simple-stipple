@@ -13,12 +13,12 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLineEdit, QMenu
 
-from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.operations import context_menu, quick_shapes
-from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.radial_menu import RadialMenuService
+from simple_stipple.canvas.tools.selection import SelectTool
 from simple_stipple.canvas.view.main import CanvasView
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import (
     CONTEXT_MENU_TRANSFORM_ITEMS,
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
@@ -80,7 +80,7 @@ _CONTEXT_STATIC_ACTION_IDS = {
 }
 
 
-class DxfSelectTool(canvas_tools.SelectTool):
+class DxfSelectTool(SelectTool):
     """Select tool with DxfCanvas extras: radial menu, quick-shape drag,
     and click-to-activate for shapes on non-active layers."""
 
@@ -107,11 +107,11 @@ class DxfSelectTool(canvas_tools.SelectTool):
         # and works the same regardless of which mode/tool is active — it
         # used to be select-mode-only because it lived here.
         if c._selectable and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
-            hit = c._find_poly_at(pos.x(), pos.y())
+            hit = c._hit_test.entity_at(pos.x(), pos.y())
             if hit is None:
                 # Clicking a shape on a non-active layer activates that layer
                 # and selects the shape (entity index passed to the callback).
-                inactive_hit = c._find_inactive_poly_at(pos.x(), pos.y())
+                inactive_hit = c._hit_test.inactive_entity_at(pos.x(), pos.y())
                 if inactive_hit is not None and callable(c._on_ghost_click):
                     c._on_ghost_click(inactive_hit)
                     return True
@@ -215,6 +215,15 @@ class DxfCanvas(CanvasView):
 
     _CUTOUT_COLOR = "#f0883e"
     _context_static_action_ids = _CONTEXT_STATIC_ACTION_IDS
+
+    # Constraint actions are part of DxfCanvas's public embeddable API. Keep
+    # that boundary here rather than making CanvasView a façade for every
+    # operation service.
+    def add_geometric_constraint(self, kind: str) -> int:
+        return self._construction_service.add_geometric_constraint(kind)
+
+    def remove_constraints_for_selection(self) -> int:
+        return self._construction_service.remove_constraints_for_selection()
 
     def __init__(
         self,
@@ -518,7 +527,7 @@ class DxfCanvas(CanvasView):
                 )
             ),
         )
-        vertex_hit = self._find_nearest_vertex_by_id(cx, cy)
+        vertex_hit = self._hit_test.nearest_vertex_by_id(cx, cy)
         if vertex_hit is not None and vertex_hit[0] in self._sel:
             entity_id, vertex_index = vertex_hit
             corner_menu = menu.addMenu("Corner")
@@ -564,7 +573,7 @@ class DxfCanvas(CanvasView):
         if len(self._sel) >= 2:
             menu.addAction(canvas_commands.menu_text("group.create"), self._group_selected)
         if any(
-            self._entity_for_id(eid) is not None and self._group_of(eid) is not None
+            self._entity_for_id(eid) is not None and self._grouping_service.group_of(eid) is not None
             for eid in self._sel
         ):
             menu.addAction(canvas_commands.menu_text("group.dissolve"), self._ungroup_selected)

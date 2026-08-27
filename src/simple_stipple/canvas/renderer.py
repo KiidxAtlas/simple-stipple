@@ -89,7 +89,6 @@ from simple_stipple.canvas.constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
 from simple_stipple.canvas.rendering import DensePreviewRenderer
-from simple_stipple.core.cad.editor_geometry import angle_between_rays, polyline_is_closed
 from simple_stipple.core.cad.geometry import (
     arc_from_center_start_end,
     arc_from_three_points,
@@ -102,6 +101,7 @@ from simple_stipple.core.cad.geometry import (
     build_star_poly,
     shape_slot,
 )
+from simple_stipple.core.document.geometry import angle_between_rays, polyline_is_closed
 from simple_stipple.ui.components.units import (
     format_length as _fmt_len,
 )
@@ -236,7 +236,7 @@ class CanvasRenderer:
     _RESULT_COLOR = "#56d364"
 
     def invalidate_result_cache(self) -> None:
-        self._result_path = None
+        self._result_path: QPainterPath | None = None
 
     def _paint_result_polys(self, painter: QPainter, _visible: QRectF) -> None:
         """Paint the solved pattern beneath the editable outlines.
@@ -271,6 +271,7 @@ class CanvasRenderer:
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
+        assert self._result_path is not None
         painter.drawPath(self._result_path)
         painter.restore()
 
@@ -325,7 +326,7 @@ class CanvasRenderer:
             _poly_rect = self._host._poly_rect_for_culling(poly)
             if not visible.intersects(_poly_rect):
                 continue
-            if not self._host._on_active_layer(ent) and ent.id not in self._host._sel:
+            if not self._host._layer_service.on_active(ent) and ent.id not in self._host._sel:
                 # Non-active layer: dimmed dashed outline, no handles. Uses
                 # the layer's assigned color (dimmed) when set, so switching
                 # the active layer doesn't lose the multi-layer color context.

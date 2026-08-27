@@ -6,13 +6,13 @@ import math
 from copy import deepcopy
 from typing import Any
 
-from simple_stipple.core.document.model import EntityRecord
-from simple_stipple.core.cad.editor_geometry import (
+from simple_stipple.core.cad.shape_factory import transform_meta
+from simple_stipple.core.document.geometry import (
     move_entity_control_point,
     synchronize_entity_control_points,
     transform_entity_metadata,
 )
-from simple_stipple.core.cad.shape_factory import transform_meta
+from simple_stipple.core.document.model import EntityRecord
 
 
 class SelectionService:

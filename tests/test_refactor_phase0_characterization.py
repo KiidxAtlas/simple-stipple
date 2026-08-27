@@ -23,19 +23,19 @@ import simple_stipple.features.trace.page as trace_page_module
 from simple_stipple.canvas.renderer import CanvasRenderer
 from simple_stipple.canvas.tools import radial_menu
 from simple_stipple.canvas.tools import tools as canvas_tools_module
+from simple_stipple.canvas.tools.dimension_backend import DimensionBackend
 from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
-from simple_stipple.canvas.tools.tools import DimensionTool as DimensionBackend
 from simple_stipple.canvas.tools.tools import RadialMenuService
 from simple_stipple.canvas.view.main import CanvasView
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.features.draft.session import build_dxf_export_plan
-from simple_stipple.features.pattern import workers as pattern_workers
 from simple_stipple.features.pattern import export as export_jobs
+from simple_stipple.features.pattern import workers as pattern_workers
 from simple_stipple.features.pattern.outline_state import read_outline_vector
 from simple_stipple.features.pattern.session import build_preview_worker_call
 from simple_stipple.features.pattern.workers import run_generate
-from simple_stipple.features.trace.session import run_trace_job
 from simple_stipple.features.trace.page import TracePage
+from simple_stipple.features.trace.session import run_trace_job
 
 
 @pytest.fixture(scope="module")

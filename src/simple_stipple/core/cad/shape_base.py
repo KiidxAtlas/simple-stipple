@@ -1,12 +1,12 @@
 """Shape abstraction and the point helpers every concrete shape shares."""
 
 from __future__ import annotations
+
 import math
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
-
+from typing import Literal
 
 Point = tuple[float, float]
 
@@ -207,7 +207,7 @@ class _CenterBasedShapeMixin:
     """
 
     def _map_points(self, fn) -> None:
-        self.center = fn(self.center)  # type: ignore[attr-defined]
+        self.center = fn(self.center)  # type: ignore[attr-defined, has-type]
         self.invalidate_cache()  # type: ignore[attr-defined]
 
 
@@ -220,6 +220,6 @@ class _ParametricRotateMixin:
     """
 
     def rotate(self, center: Point, angle_deg: float) -> None:
-        self.center = _rotate_pt(self.center, center, angle_deg)  # type: ignore[attr-defined]
-        self.rotation = (self.rotation + angle_deg) % 360.0  # type: ignore[attr-defined]
+        self.center = _rotate_pt(self.center, center, angle_deg)  # type: ignore[attr-defined, has-type]
+        self.rotation = (self.rotation + angle_deg) % 360.0  # type: ignore[attr-defined, has-type]
         self.invalidate_cache()  # type: ignore[attr-defined]

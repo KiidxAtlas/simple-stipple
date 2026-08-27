@@ -34,23 +34,13 @@ from simple_stipple.canvas.runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
     CanvasToolbarModule,
-    TraceCanvasPageRuntime,
 )
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.core.cad.preflight import analyze_geometry
-from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job
-from simple_stipple.core.imaging import image_to_outlines
+from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job, image_to_outlines
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.trace.session import (
-    export_all as _export_all,
-)
-from simple_stipple.features.trace.session import (
-    export_selected as _export_selected,
-)
-from simple_stipple.features.trace.session import (
-    get_save_path as _get_save_path,
-)
+from simple_stipple.features.trace.canvas_runtime import TraceCanvasPageRuntime
 from simple_stipple.features.trace.form import (
     PathField,
     SliderField,
@@ -60,23 +50,32 @@ from simple_stipple.features.trace.form import (
     build_trace_kwargs,
     trace_default,
 )
-from simple_stipple.features.trace.session import run_trace_job
+from simple_stipple.features.trace.model import TraceModel
 from simple_stipple.features.trace.session import (
     apply_trace_workspace_state,
     clear_trace_workspace_state,
     get_trace_workspace_state,
+    run_trace_job,
+)
+from simple_stipple.features.trace.session import (
+    export_all as _export_all,
+)
+from simple_stipple.features.trace.session import (
+    export_selected as _export_selected,
+)
+from simple_stipple.features.trace.session import (
+    get_save_path as _get_save_path,
 )
 from simple_stipple.platform.settings import save_settings
-from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.feedback import parse_float_field_with_feedback, show_error
 from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
 from simple_stipple.ui.components.layout import (
+    CollapsibleSection,
     content_splitter,
     sidebar_panel,
     surface_frame,
 )
-from simple_stipple.ui.components.recent import KIND_IMAGE, record_recent
-from simple_stipple.ui.components.recent import RecentFilesButton
+from simple_stipple.ui.components.recent import KIND_IMAGE, RecentFilesButton, record_recent
 from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file, reveal_label
 from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
@@ -109,8 +108,44 @@ class TracePage(BasePage):
     sendSelectedToPatternRequested = Signal(object)
     customTileRequested = Signal(object)
 
+    _MODEL_STATE_FIELDS = {
+        "_img_path": "image_path",
+        "_running": "running",
+        "_trace_pending": "trace_pending",
+        "_cancel_event": "cancel_event",
+        "_trace_thread": "trace_thread",
+        "_shutting_down": "shutting_down",
+        "_last_out": "last_output",
+        "_last_display_img": "last_display_image",
+        "_last_width_mm": "last_width_mm",
+        "_last_height_mm": "last_height_mm",
+        "_img_w_px": "image_width_px",
+        "_img_h_px": "image_height_px",
+        "_img_aspect": "image_aspect",
+        "_aspect_locked": "aspect_locked",
+        "_trace_revision": "trace_revision",
+        "_needs_view_fit": "needs_view_fit",
+        "_trace_result_stale": "trace_result_stale",
+    }
+
+    def __getattr__(self, name: str) -> Any:
+        field = self._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            return getattr(model, field)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        field = self._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            setattr(model, field, value)
+            return
+        super().__setattr__(name, value)
+
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
+        self._model = TraceModel()
         self._img_path: str | None = None
         self._running: bool = False
         self._trace_pending: bool = False

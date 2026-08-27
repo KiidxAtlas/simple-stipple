@@ -112,3 +112,37 @@ def test_shared_ui_and_platform_homes_have_no_root_level_facades() -> None:
         "storage.py",
         "updates.py",
     }
+
+
+def test_document_entity_geometry_lives_with_the_document_model() -> None:
+    """Entity-record adapters are document concerns, not CAD primitives."""
+    assert (PACKAGE / "core" / "document" / "geometry.py").is_file()
+    assert not (PACKAGE / "core" / "cad" / "editor_geometry.py").exists()
+
+
+def test_document_organization_services_live_with_document_state() -> None:
+    """Layer and grouping mutations are core document concerns, not canvas UI."""
+    organization = (PACKAGE / "core" / "document" / "organization.py").read_text(encoding="utf-8")
+    canvas_objects = (PACKAGE / "canvas" / "objects.py").read_text(encoding="utf-8")
+    assert "class LayerService" in organization
+    assert "class GroupingService" in organization
+    assert "class LayerService" not in canvas_objects
+    assert "class GroupingService" not in canvas_objects
+
+
+def test_workflow_canvas_runtimes_live_with_their_features() -> None:
+    canvas_runtime = (PACKAGE / "canvas" / "runtime.py").read_text(encoding="utf-8")
+    assert "TraceCanvasPageRuntime" not in canvas_runtime
+    assert "PatternCanvasPageRuntime" not in canvas_runtime
+    assert (PACKAGE / "features" / "trace" / "canvas_runtime.py").is_file()
+    assert (PACKAGE / "features" / "pattern" / "canvas_runtime.py").is_file()
+
+
+def test_large_workflow_pages_delegate_non_widget_state_to_qt_free_models() -> None:
+    """R1 keeps workflow state testable without constructing a QWidget."""
+    for workflow, model in (("trace", "TraceModel"), ("pattern", "PatternModel"), ("draft", "DraftModel")):
+        model_source = (PACKAGE / "features" / workflow / "model.py").read_text(encoding="utf-8")
+        page_source = (PACKAGE / "features" / workflow / "page.py").read_text(encoding="utf-8")
+        assert f"class {model}" in model_source
+        assert "PySide6" not in model_source
+        assert f"self._model = {model}()" in page_source

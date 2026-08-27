@@ -9,9 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from simple_stipple.core.cad.preflight import GeometryIssue
 from simple_stipple.core.formats.laserstar import export_laserstar_package
 from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job
-from simple_stipple.core.cad.preflight import GeometryIssue
 from simple_stipple.features.pattern.regions.treatments import (
     IMAGE_PATTERN,
     region_engraving,

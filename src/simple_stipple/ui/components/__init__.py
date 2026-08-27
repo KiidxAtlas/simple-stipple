@@ -4,7 +4,6 @@ Implementations live in concern-specific modules. Production code should
 prefer those concrete modules; this facade remains for external consumers.
 """
 
-from simple_stipple.ui.components.layout import CollapsibleSection, collapsible_content_widget
 from simple_stipple.ui.components.feedback import (
     clear_line_edit_error,
     parse_float_field,
@@ -30,7 +29,9 @@ from simple_stipple.ui.components.inputs import (
     primary_button,
 )
 from simple_stipple.ui.components.layout import (
+    CollapsibleSection,
     ResponsiveContentSplitter,
+    collapsible_content_widget,
     content_splitter,
     empty_state,
     info_chip,
@@ -40,6 +41,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent import RecentFilesButton
+from simple_stipple.ui.components.workflow import OperationProgress, StatusRegion, set_status_label
 from simple_stipple.ui.style import (
     MOTION_DURATION_MS,
     SPACE_LG,
@@ -48,7 +50,6 @@ from simple_stipple.ui.style import (
     SPACE_XL,
     SPACE_XS,
 )
-from simple_stipple.ui.components.workflow import OperationProgress, StatusRegion, set_status_label
 
 __all__ = [
     "ActionButton",

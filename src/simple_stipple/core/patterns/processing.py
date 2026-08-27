@@ -7,7 +7,6 @@ import logging
 import math
 from copy import deepcopy
 from typing import Any, cast
-from uuid import uuid4
 
 from shapely import prepared as _shp_prepared  # type: ignore[import-untyped]
 
@@ -15,43 +14,62 @@ from simple_stipple.core.formats.dxf import (
     analyze_outline_polylines,
     polylines_to_outline,
 )
-from simple_stipple.core.patterns._shared import (
-    _collect_lines as _collect_lines_shared,
+from simple_stipple.core.patterns.complexity import (
+    MAX_ESTIMATED_ELEMENTS as _MAX_ESTIMATED_ELEMENTS,
 )
-from simple_stipple.core.patterns._shared import (
-    _extract_all_rings as _extract_all_rings_shared,
+from simple_stipple.core.patterns.complexity import (
+    apply_scale as _apply_scale,
 )
-from simple_stipple.core.patterns._shared import (
-    _extract_polys as _extract_polys_shared,
+from simple_stipple.core.patterns.complexity import (
+    estimate_pattern_elements as _estimate_pattern_elements,
 )
-from simple_stipple.core.patterns._shared import (
-    _polygon_from_polyline as _polygon_from_polyline_shared,
-)
-from simple_stipple.core.patterns._shared import (
-    apply_border_fade,
-    apply_interlace,
-    apply_invert_fill,
-    apply_mirror,
-)
-from simple_stipple.core.patterns._shared import (
-    gen_custom_tile as _gen_custom_tile,
-)
-from simple_stipple.core.patterns._shared import (
-    is_open_polyline as _is_open_polyline_shared,
-)
-from simple_stipple.core.patterns._shared import (
-    merge_and_classify_outlines as _merge_and_classify_outlines_shared,
+from simple_stipple.core.patterns.complexity import (
+    validate_pattern_complexity as _validate_pattern_complexity,
 )
 from simple_stipple.core.patterns.fill import (
     NULL_PATTERN,
     FillSpec,
     apply_fill,
     build_fill_region,
-)
-from simple_stipple.core.patterns.fill import (
     gen_stipple_dots,
     gen_stipple_interlaced,
     gen_voronoi,
+)
+from simple_stipple.core.patterns.geometry import (
+    _collect_lines as _collect_lines_shared,
+)
+from simple_stipple.core.patterns.geometry import (
+    _extract_all_rings as _extract_all_rings_shared,
+)
+from simple_stipple.core.patterns.geometry import (
+    _extract_polys as _extract_polys_shared,
+)
+from simple_stipple.core.patterns.geometry import (
+    _polygon_from_polyline as _polygon_from_polyline_shared,
+)
+from simple_stipple.core.patterns.geometry import (
+    apply_border_fade,
+    apply_interlace,
+    apply_invert_fill,
+    apply_mirror,
+)
+from simple_stipple.core.patterns.geometry import (
+    gen_custom_tile as _gen_custom_tile,
+)
+from simple_stipple.core.patterns.geometry import (
+    merge_and_classify_outlines as _merge_and_classify_outlines_shared,
+)
+from simple_stipple.core.patterns.outline_identity import (
+    fresh_outline_ids as _fresh_outline_ids,
+)
+from simple_stipple.core.patterns.outline_identity import (
+    poly_signature as _poly_signature_domain,
+)
+from simple_stipple.core.patterns.outline_identity import (
+    resolve_outline_ids as _resolve_outline_ids,
+)
+from simple_stipple.core.patterns.outline_identity import (
+    sync_outline_ids as _sync_outline_ids,
 )
 from simple_stipple.core.patterns.tiling import (
     gen_basketweave,
@@ -220,7 +238,7 @@ class PatternProcessor:
         "Stipple Dots",
         "Truchet",
     }
-    MAX_ESTIMATED_ELEMENTS = 100_000
+    MAX_ESTIMATED_ELEMENTS = _MAX_ESTIMATED_ELEMENTS
 
     # ── Document lattice ──────────────────────────────────────────────────
     #
@@ -234,61 +252,11 @@ class PatternProcessor:
 
     @classmethod
     def estimate_pattern_elements(cls, outline: Any, pattern: str, params: dict) -> int:
-        """Conservative pre-generation estimate used to reject runaway jobs."""
-        if pattern == NULL_PATTERN or outline is None or outline.is_empty:
-            return 0
-        minx, miny, maxx, maxy = outline.bounds
-        width = max(0.0, maxx - minx)
-        height = max(0.0, maxy - miny)
-        area = max(float(getattr(outline, "area", width * height)), 0.0)
-
-        def positive(key: str, default: float = 1.0) -> float:
-            value = float(params.get(key, default) or default)
-            if not math.isfinite(value):
-                return max(float(default), 1e-6)
-            return max(value, 1e-6)
-
-        if pattern == "Voronoi":
-            return max(0, int(params.get("n_cells", 0) or 0))
-        if pattern == "Knurling":
-            return int(math.hypot(width, height) / positive("pitch") * 2) + 2
-        if pattern == "Truchet":
-            return int(area / positive("tile") ** 2 * 2) + 2
-        if pattern == "Seigaiha":
-            return int(area / positive("r") ** 2 * 2 * max(1.0, positive("rings", 3.0))) + 2
-        if pattern in {"Stipple Dots", "Mesh"}:
-            return int(area / positive("spacing") ** 2 * 1.5) + 1
-        if pattern == "Honeycomb":
-            radius = positive("r", positive("r_min", 1.0))
-            step = radius + max(float(params.get("gap", 0) or 0), 0.0)
-            return int(area / max(step * step * 2.0, 1e-9)) + 1
-        if pattern == "Brick":
-            cell = (positive("brick_w") + max(float(params.get("gap", 0) or 0), 0.0)) * (
-                positive("brick_h") + max(float(params.get("gap", 0) or 0), 0.0)
-            )
-            return int(area / max(cell, 1e-9) * 1.5) + 1
-        if pattern == "Basketweave":
-            cell = positive("strip_w") * positive("strip_l")
-            return int(area / max(cell, 1e-9) * 2.0) + 1
-        if pattern == "Custom Tile":
-            points = [point for poly in params.get("tile_polys", []) for point in poly]
-            if points:
-                tile_w = max(x for x, _y in points) - min(x for x, _y in points)
-                tile_h = max(y for _x, y in points) - min(y for _x, y in points)
-                gap = max(float(params.get("gap", 0) or 0), 0.0)
-                copies = area / max((tile_w + gap) * (tile_h + gap), 1e-9)
-                return int(copies * max(len(params.get("tile_polys", [])), 1) * 1.5) + 1
-        return 0
+        return _estimate_pattern_elements(outline, pattern, params)
 
     @classmethod
     def validate_pattern_complexity(cls, outline: Any, pattern: str, params: dict) -> int:
-        estimate = cls.estimate_pattern_elements(outline, pattern, params)
-        if estimate > cls.MAX_ESTIMATED_ELEMENTS:
-            raise ValueError(
-                f"Estimated {estimate:,} pattern elements exceeds the {cls.MAX_ESTIMATED_ELEMENTS:,} safety limit. "
-                "Increase spacing/size or use a smaller outline."
-            )
-        return estimate
+        return _validate_pattern_complexity(outline, pattern, params)
 
     @staticmethod
     def should_close_pattern(pattern: str) -> bool:
@@ -303,30 +271,17 @@ class PatternProcessor:
         orig_w: float,
         orig_h: float,
     ) -> list[list[tuple[float, float]]]:
-        if orig_w <= 0 or orig_h <= 0:
-            return polys
-        if sw <= 0 or sh <= 0:
-            return polys
-        sx = sw / orig_w
-        sy = sh / orig_h
-        if abs(sx - 1.0) < 1e-9 and abs(sy - 1.0) < 1e-9:
-            return polys
-        all_pts = [pt for p in polys for pt in p]
-        if not all_pts:
-            return polys
-        xs, ys = zip(*all_pts)
-        ox, oy = min(xs), min(ys)
-        return [[(ox + (x - ox) * sx, oy + (y - oy) * sy) for x, y in poly] for poly in polys]
+        return _apply_scale(polys, sw, sh, orig_w=orig_w, orig_h=orig_h)
 
     @staticmethod
     def fresh_outline_ids(count: int) -> list[str]:
-        return [uuid4().hex for _ in range(count)]
+        return _fresh_outline_ids(count)
 
     @staticmethod
     def _poly_signature(
         poly: list[tuple[float, float]],
     ) -> tuple[tuple[float, float], ...]:
-        return tuple((round(x, 6), round(y, 6)) for x, y in poly)
+        return _poly_signature_domain(poly)
 
     @staticmethod
     def _poly_repeat_signature(poly: list[tuple[float, float]]) -> tuple:
@@ -400,39 +355,7 @@ class PatternProcessor:
         old_ids: list[str],
         new_entity_ids: list[str] | None = None,
     ) -> list[str]:
-        # Fast-path: identical length and matching signatures in the same
-        # order — reuse the existing ids unchanged.
-        if len(new_polys) == len(old_ids):
-            same_order = True
-            for npoly, opoly in zip(new_polys, old_polys):
-                if PatternProcessor._poly_signature(npoly) != PatternProcessor._poly_signature(
-                    opoly
-                ):
-                    same_order = False
-                    break
-            if same_order:
-                return list(old_ids)
-
-        # Otherwise reconcile by signature so moved/renamed outlines keep IDs
-        sig_to_ids: dict[tuple[tuple[float, float], ...], list[str]] = {}
-        for poly, oid in zip(old_polys, old_ids):
-            sig = PatternProcessor._poly_signature(poly)
-            sig_to_ids.setdefault(sig, []).append(oid)
-        resolved: list[str] = []
-        for index, poly in enumerate(new_polys):
-            sig = PatternProcessor._poly_signature(poly)
-            ids = sig_to_ids.get(sig, [])
-            if ids:
-                resolved.append(ids.pop(0))
-            else:
-                # Geometry drawn directly on the canvas already has a stable
-                # entity id. Reuse it so selection/zone assignment can resolve
-                # the selected canvas entity instead of inventing a second id.
-                if new_entity_ids is not None and index < len(new_entity_ids):
-                    resolved.append(new_entity_ids[index])
-                else:
-                    resolved.append(uuid4().hex)
-        return resolved
+        return _sync_outline_ids(new_polys, old_polys, old_ids, new_entity_ids)
 
     @staticmethod
     def resolve_outline_ids(
@@ -440,13 +363,7 @@ class PatternProcessor:
         outline_ids: list[str],
         edit_polys: list[list[tuple[float, float]]],
     ) -> list[list[tuple[float, float]]]:
-        id_map = {oid: poly for oid, poly in zip(outline_ids, edit_polys)}
-        resolved: list[list[tuple[float, float]]] = []
-        for oid in ids:
-            if oid in id_map:
-                poly = id_map[oid]
-                resolved.append([(float(x), float(y)) for x, y in poly])
-        return resolved
+        return _resolve_outline_ids(ids, outline_ids, edit_polys)
 
     @staticmethod
     def validate_outline_inputs(polys: list[list[tuple[float, float]]]) -> str | None:
@@ -746,7 +663,7 @@ class PatternProcessor:
         """Weld + merge end-to-end-connected outline polylines before
         classifying open vs. closed, then return (closed_polys, open_polys).
 
-        Delegates to ``simple_stipple.core.patterns._shared.merge_and_classify_outlines``
+        Delegates to ``simple_stipple.core.patterns.geometry.merge_and_classify_outlines``
         — the SAME logic is also needed by the custom-tile generator
         (``gen_custom_tile``), so it lives in the shared backend module and
         this is just a thin wrapper kept for existing call sites here.

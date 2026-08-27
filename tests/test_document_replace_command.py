@@ -8,8 +8,8 @@ untouched by the mutation survive the round trip.
 
 from __future__ import annotations
 
-from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.canvas.objects import CanvasService
+from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 
 
 class _Model:

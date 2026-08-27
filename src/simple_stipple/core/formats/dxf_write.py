@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
+import math
+import re
+from typing import Any
+
+from simple_stipple.core.cad.constants import (
+    DXF_CLOSURE_EPS,
+    DXF_DEDUP_EPS,
+)
+from simple_stipple.core.cad.shape_factory import shape_from_meta
 from simple_stipple.core.formats.dxf import (
     _LOG,
     _ezdxf_new,
     validate_dxf_document,
 )
-import math
-import re
-from typing import Any, NamedTuple, Protocol, cast
-import ezdxf  # type: ignore[attr-defined]
-from simple_stipple.core.cad.constants import (
-    DXF_CLOSURE_EPS,
-    DXF_DEDUP_EPS,
-    DXF_PLANAR_Z_TOLERANCE,
-    OUTLINE_CLOSE_TOLERANCE_MM,
-    OUTLINE_MIN_AREA_MM2,
-)
-from simple_stipple.core.cad.shape_factory import shape_from_meta
 
 
 def _normalize_polyline_for_dxf(

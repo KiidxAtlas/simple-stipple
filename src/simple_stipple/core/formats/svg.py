@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TypeAlias, cast
 
 import ezdxf  # type: ignore[attr-defined]
 import svgelements as se
@@ -340,7 +340,7 @@ _NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 # Curve segments (path C/S/Q/T/A) are flattened at this resolution — matches
 # build_bezier_poly's default elsewhere in the codebase.
 _CURVE_SEGMENTS = 32
-Matrix = se.Matrix
+Matrix: TypeAlias = se.Matrix
 
 
 def _matrix_multiply(left: Matrix, right: Matrix) -> Matrix:

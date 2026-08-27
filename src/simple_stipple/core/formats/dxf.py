@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -24,13 +23,10 @@ from shapely.geometry.base import BaseGeometry  # type: ignore[import-untyped]
 from shapely.ops import unary_union  # type: ignore[import-untyped]
 
 from simple_stipple.core.cad.constants import (
-    DXF_CLOSURE_EPS,
-    DXF_DEDUP_EPS,
     DXF_PLANAR_Z_TOLERANCE,
     OUTLINE_CLOSE_TOLERANCE_MM,
     OUTLINE_MIN_AREA_MM2,
 )
-from simple_stipple.core.cad.shape_factory import shape_from_meta
 
 _LOG = logging.getLogger(__name__)
 MAX_DXF_FILE_BYTES = 64 * 1024 * 1024
@@ -542,43 +538,43 @@ def _load_dxf_polylines_by_layer_with_report(
                 flattened_entities["POLYLINE (bulge arcs)"] += 1
             _append(layer_name, pts, closed)
         elif dxftype == "LINE":
-            result = _process_line(entity)
-            if result is None:
+            line_result = _process_line(entity)
+            if line_result is None:
                 invalid_polylines += 1
             else:
-                pts, closed = result
+                pts, closed = line_result
                 _append(layer_name, pts, closed)
                 flattened_entities[dxftype] += 1
         elif dxftype == "ARC":
-            result = _process_arc(entity, flattening_distance)
-            if result is None:
+            arc_result = _process_arc(entity, flattening_distance)
+            if arc_result is None:
                 invalid_polylines += 1
             else:
-                pts, closed = result
+                pts, closed = arc_result
                 _append(layer_name, pts, closed)
                 flattened_entities[dxftype] += 1
         elif dxftype == "CIRCLE":
-            result = _process_circle(entity, flattening_distance)
-            if result is None:
+            circle_result = _process_circle(entity, flattening_distance)
+            if circle_result is None:
                 invalid_polylines += 1
             else:
-                pts, closed = result
+                pts, closed = circle_result
                 _append(layer_name, pts, closed)
                 flattened_entities[dxftype] += 1
         elif dxftype == "ELLIPSE":
-            result = _process_ellipse(entity, flattening_distance)
-            if result is None:
+            ellipse_result = _process_ellipse(entity, flattening_distance)
+            if ellipse_result is None:
                 invalid_polylines += 1
             else:
-                pts, closed = result
+                pts, closed = ellipse_result
                 _append(layer_name, pts, closed)
                 flattened_entities[dxftype] += 1
         elif dxftype == "SPLINE":
-            result = _process_spline(entity, flattening_distance)
-            if result is None:
+            spline_result = _process_spline(entity, flattening_distance)
+            if spline_result is None:
                 invalid_polylines += 1
             else:
-                pts, closed = result
+                pts, closed = spline_result
                 _append(layer_name, pts, closed)
                 flattened_entities[dxftype] += 1
         else:
@@ -803,5 +799,4 @@ def polylines_to_outline(polylines: list[list[tuple[float, float]]]) -> BaseGeom
         if not result.is_empty
         else max(analysis.usable_polygons, key=lambda p: p.area).convex_hull
     )
-
 

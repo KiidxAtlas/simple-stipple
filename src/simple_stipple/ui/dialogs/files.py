@@ -6,12 +6,9 @@ import platform as _platform
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtWidgets import QFileDialog
-
-from simple_stipple.platform.settings import save_settings
-from simple_stipple.ui.components.recent import record_recent
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -20,14 +17,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
 from simple_stipple.core.formats.service import DxfImportReport, summarize_dxf_import_report
+from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.layout import (
     section_label,
     surface_frame,
 )
-from simple_stipple.ui.style import SPACE_MD
+from simple_stipple.ui.components.recent import record_recent
 from simple_stipple.ui.dialogs.base import BaseDialog
+from simple_stipple.ui.style import SPACE_MD
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget

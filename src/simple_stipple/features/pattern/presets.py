@@ -9,6 +9,7 @@ reads :attr:`PresetManagerDialog.result_presets` after :meth:`exec` returns
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -24,20 +25,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.core.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
 from simple_stipple.core.patterns.presets import (
     export_to_file,
     import_from_file,
     merge_presets,
     reset_to_builtins,
 )
+from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
+from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
-from typing import Any
-from PySide6.QtWidgets import QDialog, QMessageBox
-from simple_stipple.core.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
-from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
-from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.style import STATUS_ERR, STATUS_OK
 
 

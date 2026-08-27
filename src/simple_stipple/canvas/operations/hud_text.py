@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import logging
 import math
-import shutil
-from copy import deepcopy
-from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath
 from PySide6.QtWidgets import QLabel, QLineEdit, QSpinBox, QWidget
 
-from simple_stipple.core.document.model import EntityRecord
-from simple_stipple.platform.settings import user_data_dir
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.units import (
     parse_numeric_expression as _parse_expression,

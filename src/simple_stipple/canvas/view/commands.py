@@ -190,7 +190,7 @@ def _rightclick_cb(self, cx: float, cy: float) -> None:
         return
 
     if self._mode == "edit":
-        hit = self._find_nearest_vertex_by_id(cx, cy)
+        hit = self._hit_test.nearest_vertex_by_id(cx, cy)
         if hit is not None:
             entity_id, vi = hit
             menu = QMenu()

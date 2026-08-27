@@ -17,14 +17,14 @@ from shapely.geometry import LineString
 from shapely.ops import nearest_points
 
 from simple_stipple.canvas.tools.base import CanvasTool
-from simple_stipple.core.cad.editor_geometry import (
+from simple_stipple.core.document.geometry import (
     angle_between_rays,
     transform_entity_metadata,
 )
 from simple_stipple.core.editing.transform import rotate, translate
 
 
-class DimensionTool(CanvasTool):
+class DimensionBackend(CanvasTool):
     """Persistent drafting-dimension placement (any mode): click p1, click
     p2 (same snap + Shift-angle-snap as ScaleTool), then click again to
     set how far the dimension line sits from the measured segment and
@@ -46,7 +46,7 @@ class DimensionTool(CanvasTool):
                 continue
             distance, result = cast(
                 tuple[float | None, tuple[int, tuple[float, float]] | None],
-                v._closest_point_on_poly(points, wx, wy, cx, cy, return_segment=True),
+                v._hit_test.closest_point(points, wx, wy, cx, cy, return_segment=True),
             )
             if distance is None or result is None or distance >= best_distance:
                 continue
@@ -459,7 +459,7 @@ class DimensionTool(CanvasTool):
                     )
                     <= 8.0
                 ),
-                v._find_poly_at(pos.x(), pos.y()),
+                v._hit_test.entity_at(pos.x(), pos.y()),
             )
             if entity_id is not None:
                 entity = v._document.entity_for_id(entity_id)
@@ -491,7 +491,7 @@ class DimensionTool(CanvasTool):
         # Smart linear workflow: explicit vertex clicks retain point-to-point
         # dimensions, while clicking an edge selects its exact segment.
         if v._dimension_kind == "linear" and v._dim_pending_p1 is None:
-            vertex_hit = v._find_nearest_vertex(pos.x(), pos.y())
+            vertex_hit = v._hit_test.nearest_vertex(pos.x(), pos.y())
             segment = self._segment_at(pos.x(), pos.y())
             if segment is not None and (v._dim_selected_segments or vertex_hit is None):
                 if not v._dim_selected_segments:

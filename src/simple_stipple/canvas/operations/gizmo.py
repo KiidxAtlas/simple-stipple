@@ -9,11 +9,11 @@ from typing import Any, ClassVar
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
-from simple_stipple.core.cad.editor_geometry import (
+from simple_stipple.core.cad.shape_factory import transform_meta
+from simple_stipple.core.document.geometry import (
     transform_entity_metadata,
     update_entity_parameter,
 )
-from simple_stipple.core.cad.shape_factory import transform_meta
 
 
 class GizmoService:
@@ -162,7 +162,7 @@ class GizmoService:
         # center of other shapes (any layer) plus grid/guides — mirrors
         # move-drag snapping so resize feels consistent. Alt disables it.
         allow_snap = not bool(mods & Qt.KeyboardModifier.AltModifier)
-        snap_result = self._host._resize_handle_snap_adjust(wx, wy) if allow_snap else None
+        snap_result = self._host._snap_engine._resize_handle_snap_adjust(wx, wy) if allow_snap else None
         if snap_result is not None:
             wx, wy, snap_type = snap_result
             self._host._hover_snap = (wx, wy)

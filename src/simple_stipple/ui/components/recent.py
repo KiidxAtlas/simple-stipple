@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import platform as _platform
 from collections.abc import Iterable
 from pathlib import Path
 
-from simple_stipple.platform.settings import save_settings
-import platform as _platform
 from PySide6.QtCore import (
     QPoint,
     Signal,
@@ -18,6 +17,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QWidget,
 )
+
+from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.style import (
     icon_path,
 )

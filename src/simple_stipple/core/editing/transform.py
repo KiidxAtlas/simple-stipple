@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
-from copy import deepcopy
-from typing import Any
 
 Point = tuple[float, float]
 Polyline = list[Point]

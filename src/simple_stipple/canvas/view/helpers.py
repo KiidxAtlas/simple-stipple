@@ -9,9 +9,8 @@ from typing import Any
 from PySide6.QtCore import QEasingCurve, QEvent, Qt, QVariantAnimation
 from PySide6.QtWidgets import QApplication, QWidget
 
-from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
-from simple_stipple.core.cad.snapping import polygon_centroid as _polygon_centroid
+from simple_stipple.core.document.model import EntityRecord
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features; mirrors view/main.py
 
@@ -31,59 +30,8 @@ def _rehydrate_meta(meta: dict) -> dict:
     return out
 
 
-def _chamfer_vertex(self, entity_id: str, vi: int, dist: float) -> bool:
-    if entity_id not in self._entities_by_id or dist <= 0:
-        return False
-    poly = self._entities_by_id[entity_id].points
-    closed = self._is_poly_closed(poly)
-    pts = poly[:-1] if closed else list(poly)
-    n = len(pts)
-    if n < 3:
-        return False
-    if closed and vi == n:
-        vi = 0
-    if not (0 <= vi < n):
-        return False
-    if not closed and (vi == 0 or vi == n - 1):
-        return False
-
-    prev_i = (vi - 1) % n
-    next_i = (vi + 1) % n
-    ax, ay = pts[prev_i]
-    bx, by = pts[vi]
-    cx, cy = pts[next_i]
-    v1 = (ax - bx, ay - by)
-    v2 = (cx - bx, cy - by)
-    l1 = math.hypot(*v1)
-    l2 = math.hypot(*v2)
-    if l1 < 1e-9 or l2 < 1e-9:
-        return False
-    d = min(dist, l1 * 0.45, l2 * 0.45)
-    u1 = (v1[0] / l1, v1[1] / l1)
-    u2 = (v2[0] / l2, v2[1] / l2)
-    p1 = (bx + u1[0] * d, by + u1[1] * d)
-    p2 = (bx + u2[0] * d, by + u2[1] * d)
-
-    new_pts = pts[:vi] + [p1, p2] + pts[vi + 1 :]
-    if closed:
-        new_poly = new_pts + [new_pts[0]]
-    else:
-        new_poly = new_pts
-    entity = copy.deepcopy(self._entities_by_id[entity_id])
-    entity.points = new_poly
-    # Corner surgery changes topology and can no longer be represented by
-    # the source rectangle/polygon's old parametric metadata.
-    entity.kind = "polyline"
-    entity.meta = None
-    self._canvas_service.update_entities([entity])
-    self._redraw()
-    self._notify()
-    self._fire_poly_change()
-    return True
-
-
 def eventFilter(self, obj, event) -> bool:
-    """Intercept Tab/Backtab on the draw-mode dim-input QLineEdits."""
+    """Intercept Tab/Backtab on the draw-mode dimension inputs."""
     if event.type() == QEvent.Type.KeyPress:
         key = event.key()
         if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
@@ -171,15 +119,16 @@ def set_entity_records(self, records: list[dict[str, Any]], *, fit: bool = False
     self._notify()
 
 
-def _connected_entities(self, start_id: str) -> set[str]:
-    """Return polylines connected to *start_id* via shared vertices."""
-    if start_id not in self._entities_by_id:
+def connected_entity_ids(
+    entities: list[EntityRecord], entities_by_id: dict[str, EntityRecord], start_id: str
+) -> set[str]:
+    """Return entity IDs connected to *start_id* through shared vertices."""
+    if start_id not in entities_by_id:
         return set()
 
     def _key(pt: tuple[float, float]) -> tuple[int, int]:
         return (round(pt[0] * 1_000_000), round(pt[1] * 1_000_000))
 
-    entities = self._entities
     graph: dict[str, set[str]] = {e.id: set() for e in entities}
     point_to_polys: dict[tuple[int, int], set[str]] = {}
     for entity in entities:
@@ -384,15 +333,15 @@ def get_context_actions(self) -> tuple[tuple[str, str, str], ...]:
         )
     if point_count == 0:
         return ()
-    actions: list[tuple[str, str, str]] = [
+    draw_actions: list[tuple[str, str, str]] = [
         ("undo-point", "Undo point", "Remove the last drawn point"),
     ]
     if point_count >= 2:
-        actions.append(("finish-path", "Finish path", "Finish the open path"))
+        draw_actions.append(("finish-path", "Finish path", "Finish the open path"))
     if point_count >= 3:
-        actions.append(("close-path", "Close path", "Finish and close the path"))
-    actions.append(("cancel-draw", "Cancel", "Discard the in-progress drawing"))
-    return tuple(actions)
+        draw_actions.append(("close-path", "Close path", "Finish and close the path"))
+    draw_actions.append(("cancel-draw", "Cancel", "Discard the in-progress drawing"))
+    return tuple(draw_actions)
 
 
 def trigger_context_action(self, action: str) -> bool:
@@ -425,73 +374,7 @@ def trigger_context_action(self, action: str) -> bool:
     return True
 
 
-def _moving_sample_points(self) -> list[tuple[float, float]]:
-    """Sampled vertices of the selection at drag start (for object snap).
-
-    Includes each selected shape's own CENTER (circle/arc/ellipse exact
-    center, or polygon centroid) as an extra sample point — otherwise
-    only the shape's rim/vertex points are tested against other shapes'
-    snap targets, so dragging one circle's center onto another circle's
-    center (object-centroid snapping) would never actually trigger.
-
-    Centers are collected SEPARATELY from rim points and appended AFTER
-    the rim-point subsampling below, rather than being appended to the
-    same list before subsampling — a rim tessellated with >=64 points
-    (e.g. the default 64-segment circle) plus one appended center
-    already exceeds `_MOVE_SNAP_SAMPLE`, and the naive stride subsample
-    `pts[int(i * step)]` for i in range(64) never actually lands on the
-    last (center) index, silently dropping it every time. That's why
-    circle-to-circle center snapping could appear to simply not work.
-    """
-    rim_pts: list[tuple[float, float]] = []
-    center_pts: list[tuple[float, float]] = []
-    for entity_id in self._sel:
-        if entity_id in self._entities_by_id and not self._is_locked(entity_id):
-            rim_pts.extend(self._entities_by_id[entity_id].points)
-            center = self._entity_center(entity_id)
-            if center is not None:
-                center_pts.append(center)
-    if len(rim_pts) > self._MOVE_SNAP_SAMPLE:
-        step = len(rim_pts) / self._MOVE_SNAP_SAMPLE
-        rim_pts = [rim_pts[int(i * step)] for i in range(self._MOVE_SNAP_SAMPLE)]
-    return rim_pts + center_pts
-
-
 # ── Drawing ───────────────────────────────────────────────────────────────
-
-
-def _update_cursor(self) -> None:
-    if self._space_pan_active:
-        self.setCursor(
-            Qt.CursorShape.ClosedHandCursor
-            if self._space_pan_dragging
-            else Qt.CursorShape.OpenHandCursor
-        )
-        return
-    if self._mode == "pan":
-        self.setCursor(
-            Qt.CursorShape.ClosedHandCursor
-            if self._lmb_prev is not None
-            else Qt.CursorShape.OpenHandCursor
-        )
-        return
-    if (
-        self._measure_mode
-        or self._dimension_mode
-        or self._mode
-        in (
-            "draw",
-            "edit",
-            "trim",
-            "extend",
-            "knife",
-        )
-    ):
-        self.setCursor(Qt.CursorShape.CrossCursor)
-    elif self._mode == "select" and self._hover_vert is not None and self._sel:
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
-    else:
-        self.unsetCursor()
 
 
 def toggle_dimension_mode(self, kind: str = "linear") -> None:
@@ -689,7 +572,7 @@ def get_view_state(self) -> dict[str, Any]:
         "layer_colors": dict(self._layer_colors),
         "hidden_indices": sorted(self._flagged("hidden")),
         "locked_indices": sorted(self._flagged("locked")),
-        "groups": {str(i): g for i, g in self._group_map().items()},
+        "groups": {str(i): g for i, g in self._grouping_service.group_map().items()},
         "group_labels": {str(k): v for k, v in self._group_labels.items()},
         "symbols": copy.deepcopy(self._symbol_library),
     }
@@ -745,31 +628,6 @@ def get_status_summary(self) -> dict[str, object]:
     }
 
 
-def _remove_dimensions_for_entities(self, entity_ids: set[str]) -> int:
-    """Remove annotations whose driving references include deleted geometry."""
-
-    def references_deleted(dimension: dict) -> bool:
-        driving = dimension.get("driving")
-        if not isinstance(driving, dict):
-            return False
-        sources = driving.get("sources", [])
-        return any(
-            isinstance(source, dict) and str(source.get("entity_id", "")) in entity_ids
-            for source in sources
-        )
-
-    before = len(self._dimensions)
-    self._dimensions = [
-        dimension for dimension in self._dimensions if not references_deleted(dimension)
-    ]
-    removed = before - len(self._dimensions)
-    if removed:
-        self._selected_dimension = None
-        self._all_dimensions_selected = False
-        self._dimension_drag = None
-    return removed
-
-
 def get_entity_records(self) -> list[dict[str, Any]]:
     """Serialize entities (geometry + kind/meta/flags/group) for layer
     storage and sessions. JSON-safe: points become [x, y] lists."""
@@ -790,49 +648,3 @@ def get_entity_records(self) -> list[dict[str, Any]]:
             }
         )
     return out
-
-
-def _entity_center(self, entity_id: str) -> tuple[float, float] | None:
-    """An entity's true center point, if it has one: the exact
-    meta-defined center for parametric shapes (circle/arc/ellipse —
-    precise even for coarse tessellation or open arcs), else the
-    area-weighted centroid for any other closed polygon. Returns None
-    for open polylines/lines, which have no meaningful "center".
-    """
-    if entity_id not in self._entities_by_id:
-        return None
-    e = self._entities_by_id[entity_id]
-    meta = e.meta
-    if isinstance(meta, dict):
-        center = meta.get("center")
-        if isinstance(center, (tuple, list)) and len(center) == 2:
-            return (float(center[0]), float(center[1]))
-    poly = self._geometry_for_entity_by_id(entity_id).tessellate()
-    if len(poly) >= 3 and self._is_poly_closed(poly):
-        return _polygon_centroid(poly)
-    return None
-
-
-def _dismiss_shape_dim_inputs(self) -> None:
-    for edit in (
-        self._draw_shape_w_edit,
-        self._draw_shape_h_edit,
-        self._draw_shape_sides_spin,
-    ):
-        if edit is None:
-            continue
-        if bool(edit.property("shape_hud_temp")):
-            edit.hide()
-            edit.deleteLater()
-    if self._draw_shape_w_edit is not None and bool(
-        self._draw_shape_w_edit.property("shape_hud_temp")
-    ):
-        self._draw_shape_w_edit = None
-    if self._draw_shape_h_edit is not None and bool(
-        self._draw_shape_h_edit.property("shape_hud_temp")
-    ):
-        self._draw_shape_h_edit = None
-    if self._draw_shape_sides_spin is not None and bool(
-        self._draw_shape_sides_spin.property("shape_hud_temp")
-    ):
-        self._draw_shape_sides_spin = None

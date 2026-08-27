@@ -15,6 +15,9 @@ from PySide6.QtCore import (
 )
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 
+from simple_stipple.canvas.hit_testing import HitTestService
+from simple_stipple.core.cad.geometry import minimum_clearance
+from simple_stipple.core.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
 from simple_stipple.core.document.commands import (
     BooleanOpCommand,
     ExplodeCommand,
@@ -23,17 +26,15 @@ from simple_stipple.core.document.commands import (
     SplitCommand,
     TransformCommand,
 )
+from simple_stipple.core.document.geometry import (
+    transform_entity_metadata,
+    update_entity_parameter,
+)
 from simple_stipple.core.document.model import (
     EntityRecord,
     OperationResult,
     new_entity_id,
 )
-from simple_stipple.core.cad.editor_geometry import (
-    transform_entity_metadata,
-    update_entity_parameter,
-)
-from simple_stipple.core.cad.geometry import minimum_clearance
-from simple_stipple.core.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
 from simple_stipple.core.editing.boolean import offset_polyline
 from simple_stipple.core.editing.topology import (
     extension_point,
@@ -206,7 +207,7 @@ class EditingService:
             self._host._c2w,
             self._host._poly_bounds,
             self._host._is_poly_closed,
-            self._host._segment_intersection_point,
+            HitTestService.segment_intersection,
             reference_point=reference_point,
             draw_points=self._host._draw_pts,
             mode=self._host._mode,
@@ -326,7 +327,7 @@ class EditingService:
 
     def _fire_poly_change(self) -> None:
         """Notify the on_poly_change callback when polylines are structurally modified."""
-        self._host._solve_geometric_constraints()
+        self._host._construction_service._solve_geometric_constraints()
         self._host._sync_shape_storage_from_entities()
         self._host._model.notify_geometry_changed()
         if callable(self._host._on_poly_change):
@@ -533,7 +534,7 @@ class EditingService:
     def trim_at(self, cx: float, cy: float) -> bool:
         """Remove the clicked portion of a polyline up to its nearest
         intersections with other shapes."""
-        eid = self._host._find_poly_at(cx, cy)
+        eid = self._host._hit_test.entity_at(cx, cy)
         if eid is None:
             self._host._apply_operation_result(OperationResult.unchanged("Click a segment to trim"))
             return False
@@ -589,7 +590,7 @@ class EditingService:
 
     def preview_trim_at(self, cx: float, cy: float) -> None:
         """Preview the exact segment that a trim click would remove."""
-        eid = self._host._find_poly_at(cx, cy)
+        eid = self._host._hit_test.entity_at(cx, cy)
         if eid is None:
             self._host._clear_operation_preview()
             return
@@ -667,7 +668,7 @@ class EditingService:
         if best is None:
             # Fall back to the polyline under the cursor: extend whichever
             # open end is closer to the click.
-            poly_hit = self._host._find_poly_at(cx, cy)
+            poly_hit = self._host._hit_test.entity_at(cx, cy)
             if (
                 poly_hit is not None
                 and not self._host._is_locked(poly_hit)
@@ -772,6 +773,15 @@ class EditingService:
             "h": bounds[3] - bounds[1],
             "count": len(indices),
         }
+        info.update(self._selection_metrics(indices))
+        if len(indices) == 1:
+            eid = next(iter(indices))
+            if not self._add_single_entity_geometry(info, eid):
+                return None
+        return info
+
+    def _selection_metrics(self, indices: set[str]) -> dict[str, float]:
+        """Return aggregate dimensions that apply to any selection size."""
         total_length = 0.0
         total_area = 0.0
         for eid in indices:
@@ -784,8 +794,7 @@ class EditingService:
                 total_area += (
                     abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:]))) / 2.0
                 )
-        info["length"] = total_length
-        info["area"] = total_area
+        metrics = {"length": total_length, "area": total_area}
         if 2 <= len(indices) <= 100:
             clearance = minimum_clearance(
                 [
@@ -795,52 +804,68 @@ class EditingService:
                 ]
             )
             if clearance is not None:
-                info["clearance"] = clearance
-        if len(indices) == 1:
-            eid = next(iter(indices))
-            e = self._host._entity_for_id(eid)
-            if e is None:
-                return None
-            info["kind"] = e.kind
-            info["meta"] = deepcopy(e.meta) if e.meta else {}
-            info["entity_id"] = eid
-            display_kind = e.kind
-            display_meta: dict[str, Any] = info["meta"]  # type: ignore[assignment]
-            if e.kind == "polyline":
-                from simple_stipple.core.cad.detection import detect_primitive
+                metrics["clearance"] = clearance
+        return metrics
 
-                detected = detect_primitive(e.points)
-                if detected is not None:
-                    display_kind = detected.kind
-                    display_meta = dict(detected.metadata)
-                    sides = int(display_meta.get("sides", 0) or 0)
-                    if display_kind == "polygon" and sides == 3:
-                        display_kind = "triangle"
-            info["display_kind"] = display_kind
-            rotation = display_meta.get("rotation")
-            if rotation is None and len(e.points) >= 2:
-                for first, second in zip(e.points, e.points[1:]):
-                    dx, dy = second[0] - first[0], second[1] - first[1]
-                    if math.hypot(dx, dy) > 1e-9:
-                        rotation = math.degrees(math.atan2(dy, dx))
-                        break
-            info["rotation"] = float(rotation or 0.0) % 360.0
-            if e.meta:
-                if e.kind in {"rectangle", "rounded_rectangle"}:
-                    info["w"] = float(e.meta.get("width", info["w"]))
-                    info["h"] = float(e.meta.get("height", info["h"]))
-                elif e.kind == "ellipse":
-                    info["w"] = 2.0 * float(e.meta.get("rx", info["w"] / 2.0))
-                    info["h"] = 2.0 * float(e.meta.get("ry", info["h"] / 2.0))
-                elif e.kind == "circle":
-                    diameter = 2.0 * float(e.meta.get("radius", info["w"] / 2.0))
-                    info["w"] = info["h"] = diameter
-                elif e.kind == "slot":
-                    info["w"] = float(e.meta.get("length", info["w"]))
-                    info["h"] = float(e.meta.get("width", info["h"]))
-            if e.kind == "circle" and e.meta and e.meta.get("radius") is not None:
-                info["diameter"] = 2.0 * float(e.meta["radius"])
-        return info
+    def _add_single_entity_geometry(self, info: dict[str, Any], eid: str) -> bool:
+        """Add parametric display fields for one selected entity."""
+        entity = self._host._entity_for_id(eid)
+        if entity is None:
+            return False
+        info["kind"] = entity.kind
+        info["meta"] = deepcopy(entity.meta) if entity.meta else {}
+        info["entity_id"] = eid
+        display_kind, display_meta = self._display_shape_info(entity)
+        info["display_kind"] = display_kind
+        rotation = display_meta.get("rotation")
+        if rotation is None:
+            rotation = self._first_segment_angle(entity.points)
+        info["rotation"] = float(rotation or 0.0) % 360.0
+        self._apply_parametric_dimensions(info, entity)
+        return True
+
+    @staticmethod
+    def _first_segment_angle(points: list[tuple[float, float]]) -> float | None:
+        for first, second in zip(points, points[1:]):
+            dx, dy = second[0] - first[0], second[1] - first[1]
+            if math.hypot(dx, dy) > 1e-9:
+                return math.degrees(math.atan2(dy, dx))
+        return None
+
+    @staticmethod
+    def _apply_parametric_dimensions(info: dict[str, Any], entity: EntityRecord) -> None:
+        meta = entity.meta or {}
+        if entity.kind in {"rectangle", "rounded_rectangle"}:
+            info["w"] = float(meta.get("width", info["w"]))
+            info["h"] = float(meta.get("height", info["h"]))
+        elif entity.kind == "ellipse":
+            info["w"] = 2.0 * float(meta.get("rx", info["w"] / 2.0))
+            info["h"] = 2.0 * float(meta.get("ry", info["h"] / 2.0))
+        elif entity.kind == "circle":
+            diameter = 2.0 * float(meta.get("radius", info["w"] / 2.0))
+            info["w"] = info["h"] = diameter
+            if meta.get("radius") is not None:
+                info["diameter"] = 2.0 * float(meta["radius"])
+        elif entity.kind == "slot":
+            info["w"] = float(meta.get("length", info["w"]))
+            info["h"] = float(meta.get("width", info["h"]))
+
+    @staticmethod
+    def _display_shape_info(entity: EntityRecord) -> tuple[str, dict[str, Any]]:
+        display_kind = entity.kind
+        display_meta = deepcopy(entity.meta) if entity.meta else {}
+        if entity.kind != "polyline":
+            return display_kind, display_meta
+        from simple_stipple.core.cad.detection import detect_primitive
+
+        detected = detect_primitive(entity.points)
+        if detected is None:
+            return display_kind, display_meta
+        display_kind = detected.kind
+        display_meta = dict(detected.metadata)
+        if display_kind == "polygon" and int(display_meta.get("sides", 0) or 0) == 3:
+            display_kind = "triangle"
+        return display_kind, display_meta
 
     def move_selection_to(self, x: float | None, y: float | None) -> bool:
         """Place the selection bbox's bottom-left corner at (x, y)."""
@@ -899,18 +924,9 @@ class EditingService:
         if len(indices) < 2 or bounds is None:
             self._warn_if_locked_selection(indices)
             return False
-        bx0, by0, bx1, by1 = bounds
-        center_x = (bx0 + bx1) / 2.0
-        center_y = (by0 + by1) / 2.0
-
-        units: dict[object, list[str]] = {}
-        for eid in indices:
-            entity = self._host._entity_for_id(eid)
-            if entity is None:
-                continue
-            gid = entity.group
-            key: object = ("group", gid) if gid is not None else ("shape", eid)
-            units.setdefault(key, []).append(eid)
+        center_x = (bounds[0] + bounds[2]) / 2.0
+        center_y = (bounds[1] + bounds[3]) / 2.0
+        units = self._alignment_units(indices)
         if len(units) < 2:
             return False  # a single shape (or single group) has nothing to align to
         if mode not in ("left", "center-x", "right", "top", "center-y", "bottom"):
@@ -925,20 +941,7 @@ class EditingService:
             unit_bounds = self._host._selection_bounds(member_indices)
             if unit_bounds is None:
                 continue
-            px0, py0, px1, py1 = unit_bounds
-            dx = dy = 0.0
-            if mode == "left":
-                dx = bx0 - px0
-            elif mode == "center-x":
-                dx = center_x - (px0 + px1) / 2.0
-            elif mode == "right":
-                dx = bx1 - px1
-            elif mode == "top":
-                dy = by1 - py1
-            elif mode == "center-y":
-                dy = center_y - (py0 + py1) / 2.0
-            elif mode == "bottom":
-                dy = by0 - py0
+            dx, dy = self._alignment_delta(mode, bounds, unit_bounds)
             if dx == 0.0 and dy == 0.0:
                 continue
             for eid in member_indices:
@@ -958,6 +961,38 @@ class EditingService:
         self._host._notify()
         self._host._fire_poly_change()
         return True
+
+    def _alignment_units(self, indices: list[str]) -> dict[object, list[str]]:
+        """Treat selected groups as rigid alignment units."""
+        units: dict[object, list[str]] = {}
+        for eid in indices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
+                continue
+            key: object = ("group", entity.group) if entity.group is not None else ("shape", eid)
+            units.setdefault(key, []).append(eid)
+        return units
+
+    @staticmethod
+    def _alignment_delta(
+        mode: str,
+        selection_bounds: tuple[float, float, float, float],
+        unit_bounds: tuple[float, float, float, float],
+    ) -> tuple[float, float]:
+        """Calculate one unit's translation against the full selection."""
+        bx0, by0, bx1, by1 = selection_bounds
+        px0, py0, px1, py1 = unit_bounds
+        if mode == "left":
+            return bx0 - px0, 0.0
+        if mode == "center-x":
+            return (bx0 + bx1 - px0 - px1) / 2.0, 0.0
+        if mode == "right":
+            return bx1 - px1, 0.0
+        if mode == "top":
+            return 0.0, by1 - py1
+        if mode == "center-y":
+            return 0.0, (by0 + by1 - py0 - py1) / 2.0
+        return 0.0, by0 - py0
 
     def mirror_selected(self, axis: str) -> bool:
         indices = self._host._mutable_selected_ids()

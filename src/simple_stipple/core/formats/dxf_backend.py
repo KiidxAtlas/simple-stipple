@@ -6,12 +6,23 @@ backend.dxf.svg_dxf, backend.dxf.schema.
 
 from __future__ import annotations
 
+import logging
+import math
+import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
+import ezdxf  # type: ignore[attr-defined]
+from ezdxf import units  # type: ignore[attr-defined]
+from shapely.geometry import LineString  # type: ignore[import-untyped]
 from shapely.geometry.base import BaseGeometry
 
+from simple_stipple.core.cad.constants import (
+    DXF_DEDUP_EPS,
+    DXF_FIX_CLOSE_TOL,
+    DXF_FIX_COLINEAR_TOL,
+)
 from simple_stipple.core.formats.dxf import (
     DxfImportReport,
     OutlinePreflight,
@@ -21,10 +32,10 @@ from simple_stipple.core.formats.dxf import (
     polylines_to_outline,
     summarize_dxf_import_report,
 )
-from simple_stipple.core.formats.dxf_write import write_polylines_dxf
 from simple_stipple.core.formats.dxf import (
     load_dxf_polylines_with_report as _load_dxf_polylines_with_report,
 )
+from simple_stipple.core.formats.dxf_write import _normalize_polyline_for_dxf, write_polylines_dxf
 from simple_stipple.core.formats.fvi import (
     FviDocument,
     FviExportOptions,
@@ -58,23 +69,6 @@ from simple_stipple.core.formats.svg import (
 from simple_stipple.core.formats.svg import (
     write_polylines_svg as _write_polylines_svg,
 )
-import logging
-import math
-import shutil
-from typing import Any, Literal, cast
-import ezdxf  # type: ignore[attr-defined]
-from ezdxf import units  # type: ignore[attr-defined]
-from shapely.geometry import LineString  # type: ignore[import-untyped]
-from simple_stipple.core.cad.constants import (
-    DXF_DEDUP_EPS,
-    DXF_FIX_CLOSE_TOL,
-    DXF_FIX_COLINEAR_TOL,
-)
-from simple_stipple.core.formats.dxf import (
-    load_dxf_polylines_with_report,
-    summarize_dxf_import_report,
-)
-from simple_stipple.core.formats.dxf_write import _normalize_polyline_for_dxf
 from simple_stipple.platform.storage import atomic_write_via
 
 

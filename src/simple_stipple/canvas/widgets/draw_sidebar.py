@@ -68,10 +68,9 @@ class _ResizeHandle(QFrame):
         self._dragging = False
         self._drag_start_global_x = 0.0
         self._drag_start_width = 0
-        # The old 24 px gutter consumed almost a quarter of the minimum
-        # drawer width. Twelve pixels still gives a reliable edge target
-        # without crowding the two tool columns.
-        self.setFixedWidth(12)
+        # Match the shared minimum pointer target while keeping the visual
+        # affordance unobtrusive through the stylesheet.
+        self.setFixedWidth(24)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Resize draw sidebar width")
         self.setAccessibleDescription(

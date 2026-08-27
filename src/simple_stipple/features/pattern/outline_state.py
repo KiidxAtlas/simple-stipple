@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from shapely.geometry import Point as ShapelyPoint
 from shapely.geometry import Polygon as ShapelyPolygon
-import tempfile
-from collections.abc import Callable
-from pathlib import Path
+
 from simple_stipple.core.formats.service import (
     load_dxf_polylines_with_report,
     read_fvi,

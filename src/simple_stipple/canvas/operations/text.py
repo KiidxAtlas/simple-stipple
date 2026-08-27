@@ -1,12 +1,15 @@
 """Text entity creation, font management, and glyph tessellation."""
 
 from __future__ import annotations
+
 import math
 import shutil
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+
 from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics, QPainterPath
+
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import user_data_dir
 

@@ -428,6 +428,8 @@ def _render_circle(
     """Render a full circle as two DRAWARC commands. Returns (commands, new_cursor, arc_count)."""
     meta = record.get("meta") or {}
     center_raw = meta.get("center")
+    if not isinstance(center_raw, (tuple, list)) or len(center_raw) < 2:
+        raise ValueError("Circle record requires a two-coordinate center")
     center = (float(center_raw[0]), float(center_raw[1]))
     start = record["polyline"][0]
     opposite = (2.0 * center[0] - start[0], 2.0 * center[1] - start[1])

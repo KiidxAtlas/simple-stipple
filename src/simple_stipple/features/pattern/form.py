@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import (
@@ -16,12 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
-from PySide6.QtWidgets import (
-    QGridLayout,
-    QLabel,
-    QLineEdit,
-)
+
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
     DEFAULT_DENSITY_ANGLE,
@@ -36,7 +32,7 @@ from simple_stipple.features.pattern.defaults import (
     DEFAULT_PATTERN_ROTATION,
     DEFAULT_PREVIEW_QUALITY,
 )
-from simple_stipple.ui.components.inputs import make_resettable_line_edit
+from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
 
 MAX_PATTERN_DIMENSION_MM = 20.0
 

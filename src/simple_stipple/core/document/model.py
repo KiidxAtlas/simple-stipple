@@ -28,8 +28,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
-from simple_stipple.core.document.identity import EntityId, new_entity_id
 from simple_stipple.core.cad.constraints import GeometricConstraint
+from simple_stipple.core.document.identity import EntityId, new_entity_id
 
 Point = tuple[float, float]
 

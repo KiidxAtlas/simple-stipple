@@ -3,26 +3,25 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 import shapely  # type: ignore[import-untyped]
 from shapely import prepared  # type: ignore[import-untyped]
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.ops import polygonize, unary_union
+from shapely.prepared import prep
 
 from simple_stipple.core.geometry import tessellate_circles
-from simple_stipple.core.patterns._shared import (
+from simple_stipple.core.patterns.cancellation import cancellation_checkpoint
+from simple_stipple.core.patterns.geometry import (
     _clip_to_outline,
     _extract_all_rings,
     _extract_polys,
     _hex_verts,
+    is_open_polyline,
     lattice_cells,
 )
-from simple_stipple.core.patterns.cancellation import cancellation_checkpoint
-from dataclasses import dataclass
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
-from shapely.prepared import prep
-from simple_stipple.core.patterns._shared import is_open_polyline
 
 
 def gen_honeycomb(

@@ -15,18 +15,14 @@ unchanged.
 from __future__ import annotations
 
 import math
-from copy import deepcopy
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QMouseEvent, QPen
-from shapely.errors import GEOSException
-from shapely.geometry import LineString, Point, Polygon
 
 from simple_stipple.canvas import commands as canvas_commands  # noqa: F401 - legacy patch seam
 from simple_stipple.canvas.constants import DRAG_THRESH
 from simple_stipple.canvas.tools.base import CanvasTool
-from simple_stipple.canvas.tools.dimension_backend import DimensionTool  # noqa: F401 - facade
 from simple_stipple.canvas.tools.radial_menu import RadialMenuService  # noqa: F401 - facade
 from simple_stipple.core.cad.geometry import (
     arc_from_center_start_end,
@@ -34,7 +30,7 @@ from simple_stipple.core.cad.geometry import (
 )
 
 if TYPE_CHECKING:
-    from simple_stipple.canvas.view.main import CanvasView
+    pass
 
 
 class ScaleTool(CanvasTool):
@@ -248,7 +244,7 @@ class DrawTool(CanvasTool):
             return True
         # Connect to existing polyline endpoint when starting a new draw
         if not v._draw_pts:
-            endpoint_snap = v._find_nearest_endpoint(pos.x(), pos.y())
+            endpoint_snap = v._hit_test.nearest_endpoint(pos.x(), pos.y())
             if endpoint_snap is not None:
                 wx, wy = endpoint_snap
                 v._draw_snap_type = "vertex"
@@ -560,7 +556,7 @@ class TrimExtendTool(CanvasTool):
             v.preview_trim_at(pos.x(), pos.y())
         else:
             v.preview_extend_at(pos.x(), pos.y())
-        hover = v._find_poly_at(pos.x(), pos.y())
+        hover = v._hit_test.entity_at(pos.x(), pos.y())
         if hover != v._hover_poly:
             v._hover_poly = hover
             v._redraw()

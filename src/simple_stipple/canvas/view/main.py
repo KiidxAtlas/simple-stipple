@@ -19,11 +19,9 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QPainter, QWheelEvent
 from PySide6.QtWidgets import QWidget
 
-from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.canvas.objects import CanvasModel
-from simple_stipple.canvas.hit_testing import HitTestService
 from simple_stipple.canvas.operations.select import SelectionService
 from simple_stipple.canvas.view.commands import (
     _cancel_active_drag,
@@ -41,13 +39,6 @@ from simple_stipple.canvas.view.config import _initialize_view
 from simple_stipple.canvas.view.helpers import (
     _animate_view_to,
     _background_edit_hit,
-    _chamfer_vertex,
-    _connected_entities,
-    _dismiss_shape_dim_inputs,
-    _entity_center,
-    _moving_sample_points,
-    _remove_dimensions_for_entities,
-    _update_cursor,
     add_polylines_state,
     eventFilter,
     get_command_guidance,
@@ -115,13 +106,15 @@ from simple_stipple.canvas.view.preferences import (
     set_snap_vertex,
 )
 from simple_stipple.core.cad.constraints import GeometricConstraint
-from simple_stipple.core.cad.editor_geometry import (
+from simple_stipple.core.cad.shape_factory import ShapeFactory
+from simple_stipple.core.document.geometry import (
     CanvasGeometry,
+    entity_center,
     entity_shows_point_handles,
     geometry_for_entity,
     shape_for_entity,
 )
-from simple_stipple.core.cad.shape_factory import ShapeFactory
+from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 
@@ -291,12 +284,6 @@ class CanvasView(
         """Set boolean ``attr`` to exactly ``entity_ids`` (wholesale assignment)."""
         self._document.set_flagged_ids(attr, entity_ids)
 
-    def _group_of(self, entity_id: str) -> int | None:
-        return self._grouping_service.group_of(entity_id)
-
-    def _group_map(self) -> dict[str, int | None]:
-        return self._grouping_service.group_map()
-
     def _group_selected(self) -> None:
         self._grouping_service.group_selected()
 
@@ -349,9 +336,6 @@ class CanvasView(
     def move_indices_to_layer(self, entity_ids: list[str], layer: str) -> int:
         return self._layer_service.move_entities(entity_ids, layer)
 
-    def _on_active_layer(self, entity: EntityRecord) -> bool:
-        return self._layer_service.on_active(entity)
-
     def _entity_selectable(self, entity_id: str) -> bool:
         if entity_id in self._render_only_entity_ids:
             return False
@@ -371,7 +355,6 @@ class CanvasView(
         self._sel.difference_update(self._render_only_entity_ids)
         self._reset_edit_interaction_state()
         self._redraw()
-
 
     @property
     def _clipboard(self) -> list[dict[str, Any]]:
@@ -405,24 +388,6 @@ class CanvasView(
     def _nudge_selected(self, dx: float, dy: float) -> None:
         self._clipboard_service.nudge_selected(dx, dy)
 
-    @staticmethod
-    def _segment_intersection_point(
-        a1: tuple[float, float],
-        a2: tuple[float, float],
-        b1: tuple[float, float],
-        b2: tuple[float, float],
-    ) -> tuple[float, float] | None:
-        return HitTestService.segment_intersection(a1, a2, b1, b2)
-
-    def _find_nearest_endpoint(self, cx: float, cy: float) -> tuple[float, float] | None:
-        return self._hit_test.nearest_endpoint(cx, cy)
-
-    def _find_nearest_vertex(self, cx: float, cy: float) -> tuple[str, int] | None:
-        return self._hit_test.nearest_vertex(cx, cy)
-
-    def _find_nearest_vertex_by_id(self, cx: float, cy: float) -> tuple[str, int] | None:
-        return self._hit_test.nearest_vertex_by_id(cx, cy)
-
     def _delete_poly(self, entity_id: str) -> None:
         if entity_id not in self._entities_by_id:
             return
@@ -447,39 +412,6 @@ class CanvasView(
             updated.points[-1] = updated.points[0]
         self._canvas_service.update_entities([updated])
         self._notify()
-
-    def _closest_point_on_poly(
-        self,
-        poly: list[tuple[float, float]],
-        wx: float,
-        wy: float,
-        cx: float,
-        cy: float,
-        *,
-        return_segment: bool = False,
-    ):
-        return self._hit_test.closest_point(poly, wx, wy, cx, cy, return_segment=return_segment)
-
-    def _find_poly_at(self, cx: float, cy: float) -> str | None:
-        return self._hit_test.entity_at(cx, cy)
-
-    def _find_polys_at(self, cx: float, cy: float) -> list[str]:
-        return self._hit_test.entities_at(cx, cy)
-
-    def _find_profile_at(self, cx: float, cy: float) -> set[str]:
-        return self._hit_test.profile_at(cx, cy)
-
-    def _find_guide_at(self, cx: float, cy: float) -> int | None:
-        return self._hit_test.guide_at(cx, cy)
-
-    def _find_inactive_poly_at(self, cx: float, cy: float) -> str | None:
-        return self._hit_test.inactive_entity_at(cx, cy)
-
-    def _object_snap_adjust(self, dx: float, dy: float):
-        return self._snap_service._object_snap_adjust(dx, dy)
-
-    def _resize_handle_snap_adjust(self, wx: float, wy: float) -> tuple[float, float, str] | None:
-        return self._snap_service._resize_handle_snap_adjust(wx, wy)
 
     def _start_gizmo_drag(
         self, mode: str, wx: float, wy: float, *, from_center: bool = False
@@ -608,33 +540,6 @@ class CanvasView(
     def _set_draw_primitive(self, tool: str) -> None:
         self._draw_ops._set_draw_primitive(tool)
 
-    def _solve_geometric_constraints(self) -> int:
-        return self._construction_service._solve_geometric_constraints()
-
-    def add_geometric_constraint(self, kind: str) -> int:
-        return self._construction_service.add_geometric_constraint(kind)
-
-    def remove_constraints_for_selection(self) -> int:
-        return self._construction_service.remove_constraints_for_selection()
-
-    def construction_line_from_selection(self, *, ray: bool = False) -> int:
-        return self._construction_service.construction_line_from_selection(ray=ray)
-
-    def create_angle_bisector(self) -> int:
-        return self._construction_service.create_angle_bisector()
-
-    def create_centerline(self) -> int:
-        return self._construction_service.create_centerline()
-
-    def create_circle_through_three_points(self) -> int:
-        return self._construction_service.create_circle_through_three_points()
-
-    def create_tangents_from_point(self) -> int:
-        return self._construction_service.create_tangents_from_point()
-
-    def create_common_circle_tangents(self) -> int:
-        return self._construction_service.create_common_circle_tangents()
-
     def _append_draw_polyline(
         self,
         poly: list[tuple[float, float]],
@@ -715,12 +620,6 @@ class CanvasView(
 
     def _prompt_offset_selected(self) -> None:
         self._selection_service._prompt_offset_selected()
-
-    def _chrome_left(self) -> int:
-        return self._renderer._chrome_left()
-
-    def _chrome_top(self) -> int:
-        return self._renderer._chrome_top()
 
     def set_smoothing_method(self, method: str) -> None:
         self._smoothing_service.set_method(method)
@@ -1686,6 +1585,14 @@ class CanvasView(
         self.sync_empty_actions()
         self.update()
 
+    def _chrome_left(self) -> int:
+        """Canvas-host protocol seam used by draw/sidebar services."""
+        return self._renderer._chrome_left()
+
+    def _chrome_top(self) -> int:
+        """Canvas-host protocol seam used by draw/sidebar services."""
+        return self._renderer._chrome_top()
+
     def paintEvent(self, event) -> None:
         """Render the canvas, then paint active-tool and chrome overlays."""
         self._renderer.paintEvent(event)
@@ -1723,6 +1630,29 @@ class CanvasView(
         self._apply_shape_size_inputs()
         self._dismiss_shape_dim_inputs()
         self._commit_shape_preview()
+
+    def _dismiss_shape_dim_inputs(self) -> None:
+        """Dispose temporary dimension controls created for draw previews."""
+        for edit in (
+            self._draw_shape_w_edit,
+            self._draw_shape_h_edit,
+            self._draw_shape_sides_spin,
+        ):
+            if edit is not None and bool(edit.property("shape_hud_temp")):
+                edit.hide()
+                edit.deleteLater()
+        if self._draw_shape_w_edit is not None and bool(
+            self._draw_shape_w_edit.property("shape_hud_temp")
+        ):
+            self._draw_shape_w_edit = None
+        if self._draw_shape_h_edit is not None and bool(
+            self._draw_shape_h_edit.property("shape_hud_temp")
+        ):
+            self._draw_shape_h_edit = None
+        if self._draw_shape_sides_spin is not None and bool(
+            self._draw_shape_sides_spin.property("shape_hud_temp")
+        ):
+            self._draw_shape_sides_spin = None
 
     def _hit_measure_button(self, cx: float, cy: float) -> bool:
         x1, y1, x2, y2 = self._mbtn_rect
@@ -1799,6 +1729,93 @@ class CanvasView(
         cx, cy = self.width() / 2.0, self.height() / 2.0
         self._animate_view_to(target, cx, cy)
 
+    def _remove_dimensions_for_entities(self, entity_ids: set[str]) -> int:
+        """Remove annotations whose driving references include deleted geometry."""
+
+        def references_deleted(dimension: dict) -> bool:
+            driving = dimension.get("driving")
+            if not isinstance(driving, dict):
+                return False
+            sources = driving.get("sources", [])
+            return any(
+                isinstance(source, dict) and str(source.get("entity_id", "")) in entity_ids
+                for source in sources
+            )
+
+        before = len(self._dimensions)
+        self._dimensions = [
+            dimension for dimension in self._dimensions if not references_deleted(dimension)
+        ]
+        removed = before - len(self._dimensions)
+        if removed:
+            self._selected_dimension = None
+            self._all_dimensions_selected = False
+            self._dimension_drag = None
+        return removed
+
+    def _chamfer_vertex(self, entity_id: str, vi: int, dist: float) -> bool:
+        """Replace one eligible vertex with a bounded chamfer edge."""
+        if entity_id not in self._entities_by_id or dist <= 0:
+            return False
+        poly = self._entities_by_id[entity_id].points
+        closed = self._is_poly_closed(poly)
+        points = poly[:-1] if closed else list(poly)
+        if len(points) < 3:
+            return False
+        if closed and vi == len(points):
+            vi = 0
+        if not 0 <= vi < len(points) or (not closed and vi in {0, len(points) - 1}):
+            return False
+        previous, current, following = points[(vi - 1) % len(points)], points[vi], points[(vi + 1) % len(points)]
+        incoming = (previous[0] - current[0], previous[1] - current[1])
+        outgoing = (following[0] - current[0], following[1] - current[1])
+        incoming_length, outgoing_length = math.hypot(*incoming), math.hypot(*outgoing)
+        if incoming_length < 1e-9 or outgoing_length < 1e-9:
+            return False
+        length = min(dist, incoming_length * 0.45, outgoing_length * 0.45)
+        first = (current[0] + incoming[0] / incoming_length * length, current[1] + incoming[1] / incoming_length * length)
+        second = (current[0] + outgoing[0] / outgoing_length * length, current[1] + outgoing[1] / outgoing_length * length)
+        updated = points[:vi] + [first, second] + points[vi + 1 :]
+        entity = deepcopy(self._entities_by_id[entity_id])
+        entity.points = updated + [updated[0]] if closed else updated
+        entity.kind = "polyline"
+        entity.meta = None
+        self._canvas_service.update_entities([entity])
+        self._redraw()
+        self._notify()
+        self._fire_poly_change()
+        return True
+
+    def _moving_sample_points(self) -> list[tuple[float, float]]:
+        """Collect selected drag samples, retaining parametric centers."""
+        rim_points: list[tuple[float, float]] = []
+        centers: list[tuple[float, float]] = []
+        for entity_id in self._sel:
+            entity = self._entities_by_id.get(entity_id)
+            if entity is None or self._is_locked(entity_id):
+                continue
+            rim_points.extend(entity.points)
+            center = entity_center(entity)
+            if center is not None:
+                centers.append(center)
+        if len(rim_points) > self._MOVE_SNAP_SAMPLE:
+            step = len(rim_points) / self._MOVE_SNAP_SAMPLE
+            rim_points = [rim_points[int(i * step)] for i in range(self._MOVE_SNAP_SAMPLE)]
+        return rim_points + centers
+
+    def _update_cursor(self) -> None:
+        """Reflect the active interaction state in the pointer cursor."""
+        if self._space_pan_active:
+            self.setCursor(Qt.CursorShape.ClosedHandCursor if self._space_pan_dragging else Qt.CursorShape.OpenHandCursor)
+        elif self._mode == "pan":
+            self.setCursor(Qt.CursorShape.ClosedHandCursor if self._lmb_prev is not None else Qt.CursorShape.OpenHandCursor)
+        elif self._measure_mode or self._dimension_mode or self._mode in {"draw", "edit", "trim", "extend", "knife"}:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._mode == "select" and self._hover_vert is not None and self._sel:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.unsetCursor()
+
 
 CanvasView._cancel_active_drag = _cancel_active_drag
 CanvasView._cancel_draw_in_progress = _cancel_draw_in_progress
@@ -1812,13 +1829,6 @@ CanvasView.get_export_dxf_state = get_export_dxf_state
 CanvasView.set_view_state = set_view_state
 CanvasView._animate_view_to = _animate_view_to
 CanvasView._background_edit_hit = _background_edit_hit
-CanvasView._chamfer_vertex = _chamfer_vertex
-CanvasView._connected_entities = _connected_entities
-CanvasView._dismiss_shape_dim_inputs = _dismiss_shape_dim_inputs
-CanvasView._entity_center = _entity_center
-CanvasView._moving_sample_points = _moving_sample_points
-CanvasView._remove_dimensions_for_entities = _remove_dimensions_for_entities
-CanvasView._update_cursor = _update_cursor
 CanvasView.add_polylines_state = add_polylines_state
 CanvasView.eventFilter = eventFilter
 CanvasView.get_command_guidance = get_command_guidance

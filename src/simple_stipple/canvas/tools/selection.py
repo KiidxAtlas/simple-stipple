@@ -2,23 +2,25 @@
 
 from __future__ import annotations
 
+import math
+from copy import deepcopy
+from typing import cast
+
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QMouseEvent
+from shapely.errors import GEOSException
+from shapely.geometry import LineString, Point, Polygon
+
+from simple_stipple.canvas.constants import DRAG_THRESH
+from simple_stipple.canvas.tools.base import CanvasTool
 from simple_stipple.canvas.tools.dragging import (
     _seg_hits_rect,
     apply_bezier_handle_drag,
     apply_edit_drag,
     release_bezier_handle_drag,
-    release_edit_drag,
     start_bezier_handle_drag,
 )
-import math
-from copy import deepcopy
-from typing import TYPE_CHECKING, cast
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QColor, QMouseEvent, QPen
-from shapely.errors import GEOSException
-from shapely.geometry import LineString, Point, Polygon
-from simple_stipple.canvas.constants import DRAG_THRESH
-from simple_stipple.canvas.tools.base import CanvasTool
+from simple_stipple.canvas.view.helpers import connected_entity_ids
 
 
 class EditTool(CanvasTool):
@@ -32,7 +34,7 @@ class EditTool(CanvasTool):
         if handle_hit is not None:
             start_bezier_handle_drag(v, handle_hit)
             return True
-        hit = v._find_nearest_vertex_by_id(pos.x(), pos.y())
+        hit = v._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
 
         if shift and hit is not None:
             if hit in v._edit_selected_verts:
@@ -92,7 +94,7 @@ class EditTool(CanvasTool):
         old_handle = v._hover_bezier_handle
         v._hover_bezier_handle = v._find_bezier_handle(pos.x(), pos.y())
         old_hover = v._hover_vert
-        v._hover_vert = v._find_nearest_vertex_by_id(pos.x(), pos.y())
+        v._hover_vert = v._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
         if v._hover_vert != old_hover or v._hover_bezier_handle != old_handle:
             v._update_cursor()
             v._redraw()
@@ -135,7 +137,7 @@ class EditTool(CanvasTool):
             visible_poly = v._flattened_points_by_id(eid)
             dist, result = cast(
                 tuple[float | None, tuple[int, tuple[float, float]] | None],
-                v._closest_point_on_poly(
+                v._hit_test.closest_point(
                     visible_poly,
                     wx,
                     wy,
@@ -189,7 +191,7 @@ class SelectTool(CanvasTool):
         pos = event.position()
         if (
             event.modifiers() & Qt.KeyboardModifier.AltModifier
-            and len(v._find_polys_at(pos.x(), pos.y())) > 1
+            and len(v._hit_test.entities_at(pos.x(), pos.y())) > 1
         ):
             # Alt-click is reserved for cycling overlapping geometry. Let the
             # selection tool see it instead of an existing selection gizmo.
@@ -260,7 +262,7 @@ class SelectTool(CanvasTool):
             if marker is not None and marker_handler(marker):
                 v._lmb_press = None
                 return True
-        candidates = v._find_polys_at(pos.x(), pos.y())
+        candidates = v._hit_test.entities_at(pos.x(), pos.y())
         target = candidates[0] if candidates else None
         if (
             target is not None
@@ -319,7 +321,7 @@ class SelectTool(CanvasTool):
                 & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
             )
             shift_toggle = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            gid = v._group_of(target)
+            gid = v._grouping_service.group_of(target)
             if gid is not None:
                 members = {e.id for e in v._entities if e.group == gid and not e.hidden}
                 if ctrl or shift_toggle:
@@ -352,7 +354,7 @@ class SelectTool(CanvasTool):
                     refs = refs[-2:]
                 v._constraint_segment_refs = refs
             v._notify()
-            hit = v._find_nearest_vertex_by_id(pos.x(), pos.y())
+            hit = v._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
             target_kind = target_entity.kind
             # Parametric shapes never vertex-drag in select mode: every rim
             # point of a circle/ellipse is a "vertex", which made plain
@@ -423,7 +425,7 @@ class SelectTool(CanvasTool):
 
         if v._sel:
             old_hover = v._hover_vert
-            hit = v._find_nearest_vertex_by_id(pos.x(), pos.y())
+            hit = v._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
             if hit is not None and hit[0] in v._sel:
                 v._hover_vert = hit
             else:
@@ -473,7 +475,7 @@ class SelectTool(CanvasTool):
                     snap_indicators: list[tuple[tuple[float, float], str, tuple[float, float]]] = []
                     allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
                     if allow_snap:
-                        adj = v._object_snap_adjust(raw_dx, raw_dy)
+                        adj = v._snap_engine._object_snap_adjust(raw_dx, raw_dy)
                         if adj is not None:
                             raw_dx += adj[0]
                             raw_dy += adj[1]
@@ -517,7 +519,7 @@ class SelectTool(CanvasTool):
                 v._redraw()
             return True
         # Passive hover: pre-highlight the polyline a click would select.
-        hover = v._find_poly_at(pos.x(), pos.y()) if v._selectable else None
+        hover = v._hit_test.entity_at(pos.x(), pos.y()) if v._selectable else None
         if hover != v._hover_poly:
             v._hover_poly = hover
             v._redraw()
@@ -676,7 +678,7 @@ class SelectTool(CanvasTool):
         pos = event.position()
         if not v._selectable:
             return True
-        hit_id = v._find_poly_at(pos.x(), pos.y())
+        hit_id = v._hit_test.entity_at(pos.x(), pos.y())
         if hit_id is not None:
             entity = v._document.entity_for_id(hit_id)
             if entity is None:
@@ -686,7 +688,7 @@ class SelectTool(CanvasTool):
                 return True
             shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             if shift:
-                connected_ids = v._connected_entities(hit_id)
+                connected_ids = connected_entity_ids(v._entities, v._entities_by_id, hit_id)
                 v._sel = connected_ids
                 v._show_flash(f"Object selected ({len(v._sel)})", 800)
             else:
@@ -694,7 +696,7 @@ class SelectTool(CanvasTool):
             v._redraw()
             v._notify()
         elif v._entities:
-            profile = v._find_profile_at(pos.x(), pos.y())
+            profile = v._hit_test.profile_at(pos.x(), pos.y())
             if profile:
                 v._sel = profile
                 v._show_flash(f"Selected enclosed profile · {len(v._sel)} edge(s)", 1200)

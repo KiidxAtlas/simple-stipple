@@ -5,7 +5,8 @@ from __future__ import annotations
 import math
 
 from shapely.geometry import Polygon
-from simple_stipple.core.cad.shape_base import Point, Shape, _anisotropic_scale_fn, _finite
+
+from simple_stipple.core.cad.shape_base import Shape, _anisotropic_scale_fn, _finite
 
 Point = tuple[float, float]
 
@@ -299,7 +300,6 @@ __all__ = [
 ]
 
 
-Point = tuple[float, float]
 Line = tuple[Point, Point]
 
 

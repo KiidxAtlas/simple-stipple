@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from simple_stipple.canvas.hit_testing import HitTestService
 from simple_stipple.canvas.objects import (
@@ -26,6 +27,7 @@ class _Host:
         self._scale = 1.0
         self._guides: list[tuple[str, float]] = []
         self._active_layer = None
+        self._layer_service = SimpleNamespace(on_active=lambda _entity: False)
         self._ghost_visible = False
         self._ghost_polys: list[list[tuple[float, float]]] = []
 
@@ -45,11 +47,6 @@ class _Host:
 
     def _flattened_points_by_id(self, entity_id: str) -> list[tuple[float, float]]:
         return self._entities_by_id[entity_id].points
-
-    @staticmethod
-    def _on_active_layer(_entity: _Entity) -> bool:
-        return False
-
 
 def test_editor_document_bridge_paths_share_one_model() -> None:
     model = CanvasModel()

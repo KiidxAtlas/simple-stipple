@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from uuid import uuid4
 
 from PySide6.QtCore import QByteArray, Qt, QTimer
@@ -37,8 +37,6 @@ from simple_stipple.platform.settings import (
     user_data_dir,
 )
 from simple_stipple.ui.style import accessibility_palette, apply_dark_theme, load_app_qss
-from typing import TYPE_CHECKING
-from simple_stipple.platform.settings import save_settings, settings_bus
 
 LOGGER = logging.getLogger(__name__)
 

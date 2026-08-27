@@ -29,8 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.inputs import NoWheelSlider
+from simple_stipple.ui.components.layout import CollapsibleSection
 
 
 class TextField(QWidget):

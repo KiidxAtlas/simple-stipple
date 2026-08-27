@@ -16,6 +16,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.ui.components.feedback import (
+    announce_accessible,
+    record_notification,
+    refresh_style,
+)
+from simple_stipple.ui.components.inputs import ActionButton
 from simple_stipple.ui.style import (
     STATUS_ERR,
     STATUS_NEUTRAL,
@@ -23,10 +29,6 @@ from simple_stipple.ui.style import (
     STATUS_WARN,
     icon_path,
 )
-
-from simple_stipple.ui.components.feedback import announce_accessible, refresh_style
-from simple_stipple.ui.components.inputs import ActionButton
-from simple_stipple.ui.components.feedback import record_notification
 
 _KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 

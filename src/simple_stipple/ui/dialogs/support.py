@@ -39,7 +39,7 @@ class SupportMeDialog(QDialog):
         btn = QPushButton("Visit Support Page")
         btn.setMinimumHeight(38)
         btn.clicked.connect(self._on_click)
-        layout.addWidget(btn, alignment=Qt.AlignCenter)
+        layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
     def _on_click(self) -> None:
         webbrowser.open(SUPPORT_URL)

@@ -5,24 +5,28 @@ from typing import Any, cast
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
-from simple_stipple.core.document.model import OperationResult
-from simple_stipple.canvas.objects import CanvasModel, CanvasModelPort, CanvasService
+from simple_stipple.canvas.hit_testing import HitTestService
+from simple_stipple.canvas.objects import (
+    CanvasModel,
+    CanvasModelPort,
+    CanvasService,
+)
 from simple_stipple.canvas.operations.clipboard import ClipboardService
 from simple_stipple.canvas.operations.construction import ConstructionService
 from simple_stipple.canvas.operations.draw_ops import DrawOpsService
 from simple_stipple.canvas.operations.editing import EditingService
 from simple_stipple.canvas.operations.gizmo import GizmoService
-from simple_stipple.canvas.objects import GroupingService, LayerService
-from simple_stipple.canvas.hit_testing import HitTestService
 from simple_stipple.canvas.operations.hud_text import HudTextService
-from simple_stipple.canvas.operations.text import TextService
 from simple_stipple.canvas.operations.select import SelectionService
 from simple_stipple.canvas.operations.smoothing import SmoothingService
-from simple_stipple.canvas.operations.snap_service import SnapService
+from simple_stipple.canvas.operations.text import TextService
 from simple_stipple.canvas.renderer import CanvasRenderer
 from simple_stipple.canvas.snap import SnapEngine
 from simple_stipple.canvas.tools import tools as canvas_tools
 from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
+from simple_stipple.canvas.tools.selection import EditTool, SelectTool
+from simple_stipple.core.document.model import OperationResult
+from simple_stipple.core.document.organization import GroupingService, LayerService
 from simple_stipple.platform.settings import (
     DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS,
     DEFAULT_CONTEXT_MENU_SECTIONS,
@@ -203,7 +207,6 @@ def _initialize_view(
     self._layer_service = LayerService(self)
     self._clipboard_service = ClipboardService(self)
     self._hit_test = HitTestService(self)
-    self._snap_service = SnapService(self)
     self._gizmo_service = GizmoService(self)
     self._hud_service = HudTextService(self)
     self._text_service = TextService(self)
@@ -259,9 +262,9 @@ def _initialize_view(
     # state stays on the view; tools are stateless.
     trim_tool = canvas_tools.TrimExtendTool(self)
     self._tools = {
-        "select": canvas_tools.SelectTool(self),
+        "select": SelectTool(self),
         "draw": canvas_tools.DrawTool(self),
-        "edit": canvas_tools.EditTool(self),
+        "edit": EditTool(self),
         "trim": trim_tool,
         "extend": trim_tool,
         "knife": canvas_tools.KnifeTool(self),

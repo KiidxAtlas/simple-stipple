@@ -8,20 +8,20 @@ but validate and coerce those dicts through ``TraceTabState`` internally.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, cast
-
-from simple_stipple.core.document.model import TraceTabState
-from simple_stipple.features.trace.form import trace_default
 import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
+
 from PIL import Image
-from simple_stipple.core.imaging import TraceCancelled, image_to_outlines
 from PySide6.QtWidgets import QMessageBox
+
+from simple_stipple.core.document.model import TraceTabState
 from simple_stipple.core.formats.service import DxfService
+from simple_stipple.core.imaging import TraceCancelled, image_to_outlines
+from simple_stipple.features.trace.form import trace_default
 from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.files import pick_save_file

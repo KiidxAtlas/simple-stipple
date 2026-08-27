@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.canvas.runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
@@ -42,12 +41,14 @@ from simple_stipple.core.cad.detection import (
     convert_to_parametric,
     detected_entities,
 )
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.core.formats.service import DxfService, summarize_dxf_import_report
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.draft.session import build_dxf_export_plan
 from simple_stipple.features.draft.detection_dialog import ShapeDetectionDialog
+from simple_stipple.features.draft.model import DraftModel
 from simple_stipple.features.draft.session import (
     apply_draft_workspace_state,
+    build_dxf_export_plan,
     clear_draft_workspace_state,
     get_draft_workspace_state,
 )
@@ -65,12 +66,15 @@ from simple_stipple.ui.components.layout import (
     content_splitter,
     surface_frame,
 )
-from simple_stipple.ui.components.recent import KIND_VECTOR, record_recent
-from simple_stipple.ui.components.recent import RecentFilesButton
+from simple_stipple.ui.components.recent import KIND_VECTOR, RecentFilesButton, record_recent
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
-from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
+from simple_stipple.ui.dialogs.files import (
+    DxfImportPreviewDialog,
+    VectorImportModeDialog,
+    pick_open_file,
+    pick_save_file,
+)
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
-from simple_stipple.ui.dialogs.files import DxfImportPreviewDialog, VectorImportModeDialog
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,8 +96,30 @@ class DraftPage(BasePage):
     sendSelectedToPatternRequested = Signal(object)
     customTileRequested = Signal(object)
 
+    _MODEL_STATE_FIELDS = {
+        "_last_out_path": "last_output_path",
+        "_last_in_path": "last_input_path",
+        "_import_note": "import_note",
+    }
+
+    def __getattr__(self, name: str) -> Any:
+        field = self._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            return getattr(model, field)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        field = self._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            setattr(model, field, value)
+            return
+        super().__setattr__(name, value)
+
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
+        self._model = DraftModel()
         self._last_out_path: str | None = None
         self._last_in_path: str | None = None
         self._import_note: str = ""

@@ -1,11 +1,12 @@
 """Pointer-drag state transitions shared by the select and edit tools."""
 
 from __future__ import annotations
+
 import math
-from PySide6.QtCore import QPointF, Qt
 from typing import TYPE_CHECKING
 
-from PySide6.QtGui import QColor, QMouseEvent, QPen
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QMouseEvent
 
 if TYPE_CHECKING:
     from simple_stipple.canvas.view.main import CanvasView

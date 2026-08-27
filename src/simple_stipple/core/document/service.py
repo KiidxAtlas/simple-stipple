@@ -6,6 +6,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 
+from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.document.commands import (
     BooleanOpCommand,
     Command,
@@ -26,16 +27,15 @@ from simple_stipple.core.document.commands import (
     UpdateEntitiesCommand,
     freeze_value,
 )
+from simple_stipple.core.document.geometry import (
+    geometry_for_entity,
+    transform_entity_metadata,
+)
 from simple_stipple.core.document.model import (
     CanvasDocument,
     EntityRecord,
     OperationResult,
     new_entity_id,
-)
-from simple_stipple.core.cad.constraints import GeometricConstraint
-from simple_stipple.core.cad.editor_geometry import (
-    geometry_for_entity,
-    transform_entity_metadata,
 )
 from simple_stipple.core.editing.boolean import boolean_polylines
 from simple_stipple.core.editing.smoothing import resample_by_count, resample_by_spacing
@@ -46,7 +46,6 @@ from simple_stipple.core.editing.topology import (
     split_paths,
 )
 from simple_stipple.core.editing.transform import mirror, rotate, translate
-from simple_stipple.core.document.commands import Command
 
 
 @dataclass(frozen=True, slots=True)

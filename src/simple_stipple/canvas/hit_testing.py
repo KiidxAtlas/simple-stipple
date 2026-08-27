@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any, cast
 
-from simple_stipple.core.document.model import EntityId
 from simple_stipple.canvas.constants import EDGE_HIT, SNAP_DIST, VERT_HIT
+from simple_stipple.core.document.model import EntityId
 from simple_stipple.core.geometry import (
     VertexIndex,
     build_vertex_index,
@@ -296,10 +296,9 @@ class HitTestService:
         wx, wy = host._c2w(cx, cy)
         best, best_distance = None, 8.0
         for entity in host._entities:
-            if entity.hidden or host._on_active_layer(entity):
+            if entity.hidden or host._layer_service.on_active(entity):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
             if isinstance(distance, float) and distance < best_distance:
                 best, best_distance = entity.id, distance
         return best
-

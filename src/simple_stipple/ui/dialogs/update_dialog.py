@@ -35,13 +35,13 @@ from simple_stipple.ui.components.layout import (
     sep,
     surface_frame,
 )
+from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.style import (
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,
+    STATUS_ERR,
 )
-from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.style import STATUS_ERR
 
 _LOG = logging.getLogger(__name__)
 _DETACHED_THREADS: set[QThread] = set()

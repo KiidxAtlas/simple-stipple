@@ -31,7 +31,7 @@ def handle_right_click(host: Any, cx: float, cy: float) -> bool:
     def ensure_context_selection() -> bool:
         if host._sel:
             return True
-        poly_hit = host._find_poly_at(cx, cy)
+        poly_hit = host._hit_test.entity_at(cx, cy)
         if poly_hit is None:
             return False
         entity = host._entity_for_id(poly_hit)
@@ -59,7 +59,7 @@ def handle_right_click(host: Any, cx: float, cy: float) -> bool:
     ) -> None:
         host._show_hud_prompt(label, default, callback, minimum=minimum, is_length=is_length)
 
-    poly_hit = host._find_poly_at(cx, cy)
+    poly_hit = host._hit_test.entity_at(cx, cy)
     host._add_context_section(
         menu,
         "create",
@@ -249,11 +249,12 @@ def apply_item_customization(host: Any, menu: QMenu) -> None:  # noqa: C901
         for action, group in entries:
             destination = target
             if group is not None:
-                destination = grouped_menus.get(group)
-                if destination is None:
-                    destination = QMenu(group, target)
-                    grouped_menus[group] = destination
-                    target.addMenu(destination)
+                grouped = grouped_menus.get(group)
+                if grouped is None:
+                    grouped = QMenu(group, target)
+                    grouped_menus[group] = grouped
+                    target.addMenu(grouped)
+                destination = grouped
             owner = action.parent()
             action.setParent(destination)
             if isinstance(owner, QMenu):

@@ -7,15 +7,24 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from simple_stipple.core.editing.boolean import boolean_polylines, offset_polyline
-from simple_stipple.core.editing.boolean import clipper_difference, clipper_union
-from simple_stipple.core.geometry import tessellate_arc
-from simple_stipple.core.geometry import build_snap_tree, find_nearest
-from simple_stipple.core.geometry import delaunay_triangulation, voronoi_diagram
-from simple_stipple.core.imaging import RasterEngravingSpec, prepare_engraving_image
+from simple_stipple.core.editing.boolean import (
+    boolean_polylines,
+    clipper_difference,
+    clipper_union,
+    offset_polyline,
+)
+from simple_stipple.core.geometry import (
+    build_snap_tree,
+    delaunay_triangulation,
+    find_nearest,
+    tessellate_arc,
+    voronoi_diagram,
+)
 from simple_stipple.core.imaging import (
+    RasterEngravingSpec,
     TraceCancelled,
     image_to_outlines,
+    prepare_engraving_image,
     scale_to_mm,
     simplify_contours,
 )

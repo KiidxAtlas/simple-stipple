@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import math
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
-from scipy.spatial import KDTree  # type: ignore[import-untyped]
-from scipy.spatial import Delaunay, QhullError, Voronoi  # type: ignore[import-untyped]
-import math
-import sys
 from numba import njit, prange  # type: ignore[import-untyped]
+from scipy.spatial import (  # type: ignore[import-untyped]
+    Delaunay,
+    KDTree,  # type: ignore[import-untyped]
+    QhullError,
+    Voronoi,
+)
 
 Point = tuple[float, float]
 
@@ -99,7 +103,6 @@ __all__ = [
 ]
 
 
-Point = tuple[float, float]
 Polygon = list[Point]
 
 

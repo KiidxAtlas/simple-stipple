@@ -1,7 +1,13 @@
 """Assemble manual sections and provide searchable TOC metadata."""
 
 from __future__ import annotations
+
 from html import escape as _html_escape
+
+
+def _toc_entry(section_id: str, label: str) -> tuple[str, str]:
+    """Create a TOC entry."""
+    return section_id, label
 
 
 def build_help_html() -> str:
@@ -789,11 +795,6 @@ def _build_repo_page() -> str:
 def _esc(text: str) -> str:
     """HTML-escape a string."""
     return _html_escape(str(text))
-
-
-def _toc_entry(section_id: str, label: str) -> tuple[str, str]:
-    """Create a TOC entry."""
-    return (section_id, label)
 
 
 # ── Content generators ────────────────────────────────────────────────────

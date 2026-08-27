@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator, QValidator
@@ -46,12 +47,12 @@ from simple_stipple.ui.components.layout import (
     sep,
     surface_frame,
 )
+from simple_stipple.ui.components.units import DEFAULT_UNIT_SYSTEM
 from simple_stipple.ui.style import (
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,
 )
-from simple_stipple.ui.components.units import DEFAULT_UNIT_SYSTEM
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -151,12 +152,12 @@ class SettingsDialog(QDialog):
         parent: QWidget | None = None,
         settings: dict | None = None,
         *,
-        trace_default_fields: list[tuple[str, str, str]] = (),
+        trace_default_fields: Sequence[tuple[str, str, str]] = (),
         trace_default_fn: Callable[[dict, str], str] | None = None,
-        keybindings_dialog_cls: type[QDialog] | None = None,
-        radial_menu_dialog_cls: type[QDialog] | None = None,
-        draw_sidebar_customize_dialog_cls: type[QDialog] | None = None,
-        context_menu_customize_dialog_cls: type[QDialog] | None = None,
+        keybindings_dialog_cls: type[Any] | None = None,
+        radial_menu_dialog_cls: type[Any] | None = None,
+        draw_sidebar_customize_dialog_cls: type[Any] | None = None,
+        context_menu_customize_dialog_cls: type[Any] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Settings")

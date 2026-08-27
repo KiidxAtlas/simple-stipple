@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
-
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
-from shapely.ops import polygonize, unary_union
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.ops import polygonize, unary_union
 
 Point = tuple[float, float]
 Polyline = list[Point]
@@ -89,7 +87,6 @@ __all__ = [
 ]
 
 
-Point = tuple[float, float]
 Path = list[Point]
 _SCALE = 100_000.0
 

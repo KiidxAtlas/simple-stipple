@@ -9,6 +9,9 @@ but validate and coerce those dicts through ``PatternTabState`` internally.
 from __future__ import annotations
 
 import logging
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,10 +21,6 @@ from simple_stipple.core.document.model import PatternTabState
 from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
 from simple_stipple.features.pattern.outline_state import smallest_containing_outline
 from simple_stipple.features.pattern.regions.treatments import migrate_workspace_zones
-import threading
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 

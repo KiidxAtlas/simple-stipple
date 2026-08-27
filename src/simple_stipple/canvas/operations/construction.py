@@ -1,16 +1,18 @@
 """Construction geometry: guides, references, and derived helpers."""
 
 from __future__ import annotations
+
 import math
 from copy import deepcopy
 from typing import Any, cast
-from simple_stipple.core.document.model import EntityRecord
+
 from simple_stipple.core.cad.constraints import (
     ConstraintKind,
     GeometricConstraint,
     solve_constraints,
 )
 from simple_stipple.core.cad.shape_factory import ShapeFactory
+from simple_stipple.core.document.model import EntityRecord
 
 
 class ConstructionService:

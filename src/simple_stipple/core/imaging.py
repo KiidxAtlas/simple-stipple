@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
-import cv2
-import numpy as np
-from PIL import Image
 import base64
 import json
 import math
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+import cv2
+import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
 
 # Trace imaging is intentionally co-located with raster preparation: both are

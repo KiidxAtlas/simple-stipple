@@ -4,19 +4,15 @@ state, metadata, and tessellation."""
 from __future__ import annotations
 
 import math
-from abc import ABC, abstractmethod
-from copy import deepcopy
-from dataclasses import dataclass, field
-from typing import Any, Literal
 
 from simple_stipple.core.cad.shape_base import (
     Point,
     Shape,
-    _CenterBasedShapeMixin,
-    _ParametricRotateMixin,
     _anisotropic_scale_fn,
+    _CenterBasedShapeMixin,
     _finite,
     _mirror_pt,
+    _ParametricRotateMixin,
     _rotate_pt,
     _scale_pt,
 )

@@ -17,10 +17,11 @@ the user "outline + fill" with no pattern overlay.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Literal
 import math
 import random
+from dataclasses import dataclass
+from typing import Any, Literal
+
 import numpy as np
 import shapely  # type: ignore[import-untyped]
 from shapely import prepared  # type: ignore[import-untyped]
@@ -28,13 +29,13 @@ from shapely.geometry import (
     MultiPolygon,
     Polygon,
 )
-from simple_stipple.core.geometry import poisson_disk_points, tessellate_circles
-from simple_stipple.core.geometry import voronoi_diagram
-from simple_stipple.core.patterns._shared import (
+
+from simple_stipple.core.geometry import poisson_disk_points, tessellate_circles, voronoi_diagram
+from simple_stipple.core.patterns.cancellation import cancellation_checkpoint
+from simple_stipple.core.patterns.geometry import (
     _coords_to_polyline,
     _extract_polys,
 )
-from simple_stipple.core.patterns.cancellation import cancellation_checkpoint
 
 # The pattern combo entry that means "no pattern" — outline only.
 # Reuses the existing UI label so we don't have to migrate state.
@@ -146,12 +147,12 @@ def build_fill_region(polylines: list[list[tuple[float, float]]]) -> Any:
 
     Returns ``None`` if there are no usable closed rings.
 
-    Delegates to ``simple_stipple.core.patterns._shared.nested_polygon_region`` —
+    Delegates to ``simple_stipple.core.patterns.geometry.nested_polygon_region`` —
     the SAME even-odd nesting logic is also needed by the custom-tile
     generator, so it lives in the shared backend module; this wrapper is
     kept as the public fill-region entry point.
     """
-    from simple_stipple.core.patterns._shared import (
+    from simple_stipple.core.patterns.geometry import (
         nested_polygon_region as _nested_polygon_region_shared,
     )
 

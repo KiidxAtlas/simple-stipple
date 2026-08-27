@@ -12,7 +12,8 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.constants import DRAG_THRESH
-from simple_stipple.canvas.tools import tools as canvas_tools
+from simple_stipple.canvas.tools.dragging import release_edit_drag
+from simple_stipple.canvas.tools.selection import SelectTool
 from simple_stipple.ui.components.focus import blur_focused_line_edit
 
 
@@ -348,7 +349,7 @@ def mousePressEvent(self, event: QMouseEvent):
             self.select_background_image(False)
         elif (
             self._background_contains(pos.x(), pos.y())
-            and self._find_poly_at(pos.x(), pos.y()) is None
+            and self._hit_test.entity_at(pos.x(), pos.y()) is None
         ):
             self.select_background_image(True)
             self._sel.clear()
@@ -419,9 +420,9 @@ def mousePressEvent(self, event: QMouseEvent):
         self._selectable
         and self._mode == "select"
         and self._guides
-        and self._find_poly_at(pos.x(), pos.y()) is None
+        and self._hit_test.entity_at(pos.x(), pos.y()) is None
     ):
-        gi = self._find_guide_at(pos.x(), pos.y())
+        gi = self._hit_test.guide_at(pos.x(), pos.y())
         if gi is not None:
             self._guide_preview = self._canvas_service.begin_preview()
             self._guide_drag = gi
@@ -459,7 +460,7 @@ def mousePressEvent(self, event: QMouseEvent):
         self._redraw()
 
     # Selection badges / transform gizmo take priority over tools.
-    select_tool = cast(canvas_tools.SelectTool, self._tools["select"])
+    select_tool = cast(SelectTool, self._tools["select"])
     if self._mode == "select" and self._sel and select_tool.press_overlays(event):
         return
 
@@ -635,7 +636,7 @@ def mouseReleaseEvent(self, event: QMouseEvent):
         return
 
     if self._mode in ("edit", "select") and self._edit_dragging:
-        canvas_tools.release_edit_drag(self)
+        release_edit_drag(self)
         return
 
     tool = self._tools.get(self._mode)

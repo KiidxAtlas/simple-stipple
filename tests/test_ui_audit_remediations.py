@@ -14,7 +14,6 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QPushButton, QWidg
 from shapely.geometry import Point, Polygon
 
 import simple_stipple.canvas.dialogs.customize_dialogs as customize_dialogs
-from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.canvas.dialogs.customize_dialogs import (
     _CONTEXT_ACTION_LABELS,
     ContextMenuActionCustomizeDialog,
@@ -30,9 +29,9 @@ from simple_stipple.canvas.widget import _CONTEXT_STATIC_ACTION_IDS, DxfCanvas
 from simple_stipple.canvas.widgets.draw_sidebar import DrawSidebar, _ResizeHandle
 from simple_stipple.canvas.widgets.precision_bar import CanvasPrecisionBar
 from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
-from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
-from simple_stipple.canvas.widgets.toolbar import canvas_toolbar
+from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip, canvas_toolbar
 from simple_stipple.core.cad.constraints import GeometricConstraint, solve_constraints
+from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.core.editing.topology import split_paths
 from simple_stipple.core.formats.dxf import polylines_to_outline
 from simple_stipple.core.patterns.fill import FillSpec, apply_fill
@@ -52,9 +51,9 @@ from simple_stipple.platform.settings import (
 )
 from simple_stipple.platform.updates import UpdateInfo
 from simple_stipple.ui.components.cycle_button import CycleIconButton
+from simple_stipple.ui.components.feedback import notification_history
 from simple_stipple.ui.components.focus import CanvasEscapeRouter
 from simple_stipple.ui.components.inputs import NoWheelSlider
-from simple_stipple.ui.components.feedback import notification_history
 from simple_stipple.ui.components.workflow import (
     OperationProgress,
     set_status_label,
@@ -635,7 +634,7 @@ def test_draw_sidebar_uses_a_compact_resize_gutter(app: QApplication) -> None:
     )
 
     handle = next(handle for handle in sidebar.findChildren(_ResizeHandle))
-    assert handle.width() == 12
+    assert handle.width() >= 24
     sidebar.close()
 
 

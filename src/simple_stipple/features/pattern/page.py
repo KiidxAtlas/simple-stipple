@@ -53,10 +53,8 @@ from simple_stipple.features.pattern.export import (
 )
 from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.feedback import (
-    clear_line_edit_error,
     parse_float_field_with_feedback,
     refresh_style,
-    set_line_edit_error,
 )
 from simple_stipple.ui.components.focus import EscapeBlurFilter
 from simple_stipple.ui.components.layout import (
@@ -82,8 +80,6 @@ from simple_stipple.features.pattern.defaults import (
     DEFAULT_FILL_ANGLE,
     DEFAULT_FILL_INSET,
     DEFAULT_FILL_SPACING,
-    DEFAULT_MIN_ISLAND_AREA,
-    DEFAULT_MIN_SEGMENT,
     DEFAULT_PREVIEW_QUALITY,
     FILL_SPACING_FLOOR_MM,
     PREVIEW_DEBOUNCE_MS,
@@ -94,6 +90,7 @@ from simple_stipple.features.pattern.layout import (
     build_right,
     refresh_pattern_properties_panel,
 )
+from simple_stipple.features.pattern.model import PatternModel
 from simple_stipple.features.pattern.outline_state import read_outline_vector
 from simple_stipple.features.pattern.outline_state import (
     canvas_records,
@@ -136,7 +133,6 @@ from simple_stipple.features.pattern.custom_tiles import (
     apply_custom_tile,
     delete_tile_motif,
     load_custom_tiles_from_disk,
-    load_tile_motif,
     locate_tile_asset,
     open_custom_tiles_folder,
     repair_tile_asset,
@@ -175,8 +171,45 @@ class PatternPage(BasePage):
     openPageRequested = Signal(str)
     repairTileRequested = Signal(str)
 
+    _MODEL_STATE_FIELDS = {
+        "_orig_polys": "original_polys", "_edit_polys": "editable_polys",
+        "_orig_w": "original_width", "_orig_h": "original_height",
+        "_updating_dims": "updating_dimensions", "_preview_task": "preview_task",
+        "_generate_task": "generate_task", "_preview_thread": "preview_thread",
+        "_generate_thread": "generate_thread", "_shutting_down": "shutting_down",
+        "_last_out_path": "last_output_path", "_export_is_current": "export_is_current",
+        "_preview_is_stale": "preview_is_stale", "_output_order": "output_order",
+        "_output_disabled": "output_disabled", "_force_export_quality": "force_export_quality",
+        "_pending_export_after_preview": "pending_export_after_preview", "_presets": "presets",
+        "_base_patterns": "base_patterns", "_preview_polys_cache": "preview_polys_cache",
+        "_preview_categories": "preview_categories", "_preview_zone_owners": "preview_zone_owners",
+        "_outline_ids": "outline_ids", "_outline_layers": "outline_layers",
+        "_pattern_cell_cutouts": "pattern_cell_cutouts",
+        "_pattern_cell_instance_cutouts": "pattern_cell_instance_cutouts",
+        "_preview_revision": "preview_revision", "_generation_revision": "generation_revision",
+        "_pattern_service": "pattern_service", "_treatments": "treatments",
+        "_treatment_undo": "treatment_undo", "_treatment_redo": "treatment_redo",
+        "_loading_zone": "loading_zone", "_engraving_image_path": "engraving_image_path",
+    }
+
+    def __getattr__(self, name: str):
+        field = self._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            return getattr(model, field)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value) -> None:
+        field = self._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            setattr(model, field, value)
+            return
+        super().__setattr__(name, value)
+
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)  # BasePage sets _settings and _suspend_state
+        self._model = PatternModel()
 
         # Runtime state
         self._orig_polys: list[list[tuple[float, float]]] = []
