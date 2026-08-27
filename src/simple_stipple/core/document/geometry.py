@@ -160,7 +160,10 @@ def entity_center(entity: Any) -> Point | None:
         if isinstance(center, (tuple, list)) and len(center) == 2:
             return float(center[0]), float(center[1])
     points = geometry_for_entity(entity).tessellate()
-    if len(points) < 3 or math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1]) >= 0.01:
+    if (
+        len(points) < 3
+        or math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1]) >= 0.01
+    ):
         return None
     return polygon_centroid(points)
 

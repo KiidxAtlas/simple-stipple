@@ -44,7 +44,9 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
     def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
         if isinstance(shape_key, (tuple, list)) and shape_key:
             first = shape_key[0]
-            group_id = self._canvas._grouping_service.group_of(first) if isinstance(first, str) else None
+            group_id = (
+                self._canvas._grouping_service.group_of(first) if isinstance(first, str) else None
+            )
             if group_id is not None:
                 self._canvas.set_group_label(group_id, new_label)
             return

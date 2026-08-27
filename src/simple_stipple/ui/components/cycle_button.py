@@ -81,12 +81,6 @@ class CycleIconButton(QPushButton):
 
     # -- public API --------------------------------------------------------
 
-    @property
-    def current_state_id(self) -> str:
-        if self._states:
-            return self._states[self._current_index][0]
-        return ""
-
     def set_current_state(self, state_id: str) -> None:
         """Programmatically set the current state by id (no callback fired —
         for syncing the button's display to already-applied view state)."""
@@ -95,7 +89,6 @@ class CycleIconButton(QPushButton):
                 self._current_index = i
                 self._update_visuals()
                 return
-
 
     # -- event handlers ----------------------------------------------------
 

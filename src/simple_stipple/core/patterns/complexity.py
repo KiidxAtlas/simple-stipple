@@ -36,7 +36,9 @@ def estimate_pattern_elements(outline: Any, pattern: str, params: dict) -> int:
         step = positive("r", positive("r_min", 1.0)) + max(float(params.get("gap", 0) or 0), 0.0)
         return int(area / max(step * step * 2.0, 1e-9)) + 1
     if pattern == "Brick":
-        cell = (positive("brick_w") + max(float(params.get("gap", 0) or 0), 0.0)) * (positive("brick_h") + max(float(params.get("gap", 0) or 0), 0.0))
+        cell = (positive("brick_w") + max(float(params.get("gap", 0) or 0), 0.0)) * (
+            positive("brick_h") + max(float(params.get("gap", 0) or 0), 0.0)
+        )
         return int(area / max(cell, 1e-9) * 1.5) + 1
     if pattern == "Basketweave":
         return int(area / max(positive("strip_w") * positive("strip_l"), 1e-9) * 2.0) + 1

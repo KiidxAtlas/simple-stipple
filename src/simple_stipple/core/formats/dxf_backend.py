@@ -100,7 +100,6 @@ class DxfService:
         """Load polylines grouped by layer with an import report."""
         return load_dxf_polylines_by_layer_with_report(filepath)
 
-
     @staticmethod
     def parse_fvi(data: str) -> FviDocument:
         """Parse FVI data from a string."""

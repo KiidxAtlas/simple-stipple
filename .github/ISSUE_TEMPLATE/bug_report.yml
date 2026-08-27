@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible problem in Simple Stipple
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Do not attach private designs, credentials, or secrets.
+  - type: input
+    id: version
+    attributes:
+      label: Simple Stipple version
+      description: Find this in Help → About Simple Stipple or the release filename.
+      placeholder: "0.3.6"
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux (source install)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow
+      options:
+        - Draft
+        - Pattern
+        - Trace
+        - Convert
+        - Import or export
+        - Workspaces or recovery
+        - Updates or installation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use the smallest safe input and list the exact actions.
+      placeholder: |
+        1. Open ...
+        2. Import ...
+        3. Choose ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or files
+      description: Remove paths, usernames, credentials, and private geometry before sharing. Paste short log excerpts in a code block.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Report checks
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed private data and secrets from this report.
+          required: true

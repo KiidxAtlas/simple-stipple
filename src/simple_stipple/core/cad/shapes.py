@@ -984,5 +984,3 @@ class SlotShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):
 # ════════════════════════════════════════════════════════════════════════════
 # Factory — construct/deserialize Shape instances
 # ════════════════════════════════════════════════════════════════════════════
-
-

@@ -319,5 +319,3 @@ class PageRuntime:
         """Push the draw sidebar's height to every page's canvas(es), so
         resizing it on one tab keeps every tab's sidebar consistent."""
         self._apply_to_canvases("set_draw_sidebar_height", height)
-
-

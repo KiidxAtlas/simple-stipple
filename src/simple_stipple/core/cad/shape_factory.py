@@ -658,5 +658,3 @@ def transform_meta(
     if new_meta is None:
         return None
     return new_kind, ({**meta, **new_meta} if new_kind == kind else new_meta)
-
-

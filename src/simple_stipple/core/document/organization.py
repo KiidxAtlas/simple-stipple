@@ -163,7 +163,9 @@ class LayerService:
             for entity in document.entities:
                 if entity.layer in source_set:
                     entity.layer = target
-            document.layer_order = [name for name in document.layer_order if name not in source_set] or [target]
+            document.layer_order = [
+                name for name in document.layer_order if name not in source_set
+            ] or [target]
             if document.active_layer in source_set:
                 document.active_layer = target
             for name in source_set:
@@ -252,7 +254,11 @@ class GroupingService:
         return entity.group if entity is not None else None
 
     def group_map(self) -> dict[str, int | None]:
-        return {entity.id: entity.group for entity in self._host._entities_by_id.values() if entity.group is not None}
+        return {
+            entity.id: entity.group
+            for entity in self._host._entities_by_id.values()
+            if entity.group is not None
+        }
 
     def group_selected(self) -> None:
         if len(self._host._sel) < 2:
@@ -300,7 +306,8 @@ class GroupingService:
         groups = {
             entity.group
             for eid in valid
-            if (entity := host._document.entity_for_id(eid)) is not None and entity.group is not None
+            if (entity := host._document.entity_for_id(eid)) is not None
+            and entity.group is not None
         }
         if not groups:
             host._show_flash("Shapes are not grouped", 700)

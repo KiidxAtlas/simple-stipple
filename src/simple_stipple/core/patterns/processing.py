@@ -655,7 +655,6 @@ class PatternProcessor:
                 kept.append(poly)
         return kept
 
-
     @staticmethod
     def _merge_and_classify_outlines(
         outline_polys: list[list[tuple[float, float]]],
@@ -948,7 +947,6 @@ class PatternProcessor:
                 base = polys if spec.keep_pattern else []
                 polys = base + fill_strokes
         return polys
-
 
     @staticmethod
     def _zone_nested_exclusions(

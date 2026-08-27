@@ -1766,15 +1766,25 @@ class CanvasView(
             vi = 0
         if not 0 <= vi < len(points) or (not closed and vi in {0, len(points) - 1}):
             return False
-        previous, current, following = points[(vi - 1) % len(points)], points[vi], points[(vi + 1) % len(points)]
+        previous, current, following = (
+            points[(vi - 1) % len(points)],
+            points[vi],
+            points[(vi + 1) % len(points)],
+        )
         incoming = (previous[0] - current[0], previous[1] - current[1])
         outgoing = (following[0] - current[0], following[1] - current[1])
         incoming_length, outgoing_length = math.hypot(*incoming), math.hypot(*outgoing)
         if incoming_length < 1e-9 or outgoing_length < 1e-9:
             return False
         length = min(dist, incoming_length * 0.45, outgoing_length * 0.45)
-        first = (current[0] + incoming[0] / incoming_length * length, current[1] + incoming[1] / incoming_length * length)
-        second = (current[0] + outgoing[0] / outgoing_length * length, current[1] + outgoing[1] / outgoing_length * length)
+        first = (
+            current[0] + incoming[0] / incoming_length * length,
+            current[1] + incoming[1] / incoming_length * length,
+        )
+        second = (
+            current[0] + outgoing[0] / outgoing_length * length,
+            current[1] + outgoing[1] / outgoing_length * length,
+        )
         updated = points[:vi] + [first, second] + points[vi + 1 :]
         entity = deepcopy(self._entities_by_id[entity_id])
         entity.points = updated + [updated[0]] if closed else updated
@@ -1806,10 +1816,22 @@ class CanvasView(
     def _update_cursor(self) -> None:
         """Reflect the active interaction state in the pointer cursor."""
         if self._space_pan_active:
-            self.setCursor(Qt.CursorShape.ClosedHandCursor if self._space_pan_dragging else Qt.CursorShape.OpenHandCursor)
+            self.setCursor(
+                Qt.CursorShape.ClosedHandCursor
+                if self._space_pan_dragging
+                else Qt.CursorShape.OpenHandCursor
+            )
         elif self._mode == "pan":
-            self.setCursor(Qt.CursorShape.ClosedHandCursor if self._lmb_prev is not None else Qt.CursorShape.OpenHandCursor)
-        elif self._measure_mode or self._dimension_mode or self._mode in {"draw", "edit", "trim", "extend", "knife"}:
+            self.setCursor(
+                Qt.CursorShape.ClosedHandCursor
+                if self._lmb_prev is not None
+                else Qt.CursorShape.OpenHandCursor
+            )
+        elif (
+            self._measure_mode
+            or self._dimension_mode
+            or self._mode in {"draw", "edit", "trim", "extend", "knife"}
+        ):
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif self._mode == "select" and self._hover_vert is not None and self._sel:
             self.setCursor(Qt.CursorShape.OpenHandCursor)

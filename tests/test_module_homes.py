@@ -140,7 +140,11 @@ def test_workflow_canvas_runtimes_live_with_their_features() -> None:
 
 def test_large_workflow_pages_delegate_non_widget_state_to_qt_free_models() -> None:
     """R1 keeps workflow state testable without constructing a QWidget."""
-    for workflow, model in (("trace", "TraceModel"), ("pattern", "PatternModel"), ("draft", "DraftModel")):
+    for workflow, model in (
+        ("trace", "TraceModel"),
+        ("pattern", "PatternModel"),
+        ("draft", "DraftModel"),
+    ):
         model_source = (PACKAGE / "features" / workflow / "model.py").read_text(encoding="utf-8")
         page_source = (PACKAGE / "features" / workflow / "page.py").read_text(encoding="utf-8")
         assert f"class {model}" in model_source

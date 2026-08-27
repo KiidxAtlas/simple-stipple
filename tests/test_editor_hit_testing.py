@@ -48,6 +48,7 @@ class _Host:
     def _flattened_points_by_id(self, entity_id: str) -> list[tuple[float, float]]:
         return self._entities_by_id[entity_id].points
 
+
 def test_editor_document_bridge_paths_share_one_model() -> None:
     model = CanvasModel()
     service = CanvasService(model)

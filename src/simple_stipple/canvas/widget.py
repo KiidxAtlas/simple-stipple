@@ -422,7 +422,6 @@ class DxfCanvas(CanvasView):
     def _apply_context_menu_overflow(self, menu: QMenu) -> None:
         context_menu.apply_overflow(self, menu)
 
-
     # ── Context menu builders ──────────────────────────────────────────────
 
     @staticmethod
@@ -573,7 +572,8 @@ class DxfCanvas(CanvasView):
         if len(self._sel) >= 2:
             menu.addAction(canvas_commands.menu_text("group.create"), self._group_selected)
         if any(
-            self._entity_for_id(eid) is not None and self._grouping_service.group_of(eid) is not None
+            self._entity_for_id(eid) is not None
+            and self._grouping_service.group_of(eid) is not None
             for eid in self._sel
         ):
             menu.addAction(canvas_commands.menu_text("group.dissolve"), self._ungroup_selected)
@@ -968,7 +968,6 @@ class DxfCanvas(CanvasView):
         ey: float,
     ) -> list[list[tuple[float, float]]]:
         return quick_shapes.build_shapes(self, mode, sx, sy, ex, ey)
-
 
     @staticmethod
     def _build_drag_procedural_shapes(

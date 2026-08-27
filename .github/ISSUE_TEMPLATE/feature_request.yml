@@ -1,0 +1,57 @@
+name: Feature request
+description: Suggest a workflow improvement or new capability
+title: "[Idea]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user outcome first. Requests grounded in a real vector or laser workflow are easiest to evaluate.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What is difficult, slow, or impossible today? Who encounters it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed workflow
+      description: Explain what you would do in the app and what result you expect.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Draft
+        - Pattern
+        - Trace
+        - Convert
+        - Import or export
+        - Workspaces or recovery
+        - Updates or installation
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Current workaround
+      description: What do you use today, if anything? Include relevant file formats or machine software.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add a sanitized example, sketch, or link. Do not attach private designs or credentials.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Request checks
+      options:
+        - label: I searched existing issues and discussions and this is not a duplicate.
+          required: true
+        - label: I understand this is a request for discussion, not a commitment to implement.
+          required: true

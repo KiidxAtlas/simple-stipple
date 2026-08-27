@@ -646,5 +646,3 @@ def save_settings(d: dict) -> None:
         write_json_file_atomic(_SETTINGS_FILE, d)
     except (OSError, TypeError, ValueError) as exc:
         _LOG.warning("Failed to save settings to %s: %s", _SETTINGS_FILE, exc)
-
-

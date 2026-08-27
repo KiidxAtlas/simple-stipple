@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: User support and workflow questions
+    url: https://github.com/KiidxAtlas/simple-stipple/discussions
+    about: Ask questions and share workflows in Discussions.
+  - name: Security vulnerability report
+    url: https://github.com/KiidxAtlas/simple-stipple/security/advisories/new
+    about: Report vulnerabilities privately; do not open a public issue.
+  - name: Latest desktop downloads
+    url: https://github.com/KiidxAtlas/simple-stipple/releases/latest
+    about: Download Windows and macOS releases and verify their checksums.

@@ -30,11 +30,7 @@ _REACH_IN = re.compile(r"\b_(?:host|view)\._[A-Za-z_]")
 def _python_files() -> list[Path]:
     # This ratchet measures CanvasView coupling.  Document services have an
     # explicit host protocol and are intentionally outside that UI boundary.
-    return [
-        path
-        for path in (PACKAGE / "canvas").rglob("*.py")
-        if "__pycache__" not in path.parts
-    ]
+    return [path for path in (PACKAGE / "canvas").rglob("*.py") if "__pycache__" not in path.parts]
 
 
 def _reach_ins() -> dict[str, int]:

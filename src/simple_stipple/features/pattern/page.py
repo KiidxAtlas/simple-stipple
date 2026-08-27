@@ -172,24 +172,40 @@ class PatternPage(BasePage):
     repairTileRequested = Signal(str)
 
     _MODEL_STATE_FIELDS = {
-        "_orig_polys": "original_polys", "_edit_polys": "editable_polys",
-        "_orig_w": "original_width", "_orig_h": "original_height",
-        "_updating_dims": "updating_dimensions", "_preview_task": "preview_task",
-        "_generate_task": "generate_task", "_preview_thread": "preview_thread",
-        "_generate_thread": "generate_thread", "_shutting_down": "shutting_down",
-        "_last_out_path": "last_output_path", "_export_is_current": "export_is_current",
-        "_preview_is_stale": "preview_is_stale", "_output_order": "output_order",
-        "_output_disabled": "output_disabled", "_force_export_quality": "force_export_quality",
-        "_pending_export_after_preview": "pending_export_after_preview", "_presets": "presets",
-        "_base_patterns": "base_patterns", "_preview_polys_cache": "preview_polys_cache",
-        "_preview_categories": "preview_categories", "_preview_zone_owners": "preview_zone_owners",
-        "_outline_ids": "outline_ids", "_outline_layers": "outline_layers",
+        "_orig_polys": "original_polys",
+        "_edit_polys": "editable_polys",
+        "_orig_w": "original_width",
+        "_orig_h": "original_height",
+        "_updating_dims": "updating_dimensions",
+        "_preview_task": "preview_task",
+        "_generate_task": "generate_task",
+        "_preview_thread": "preview_thread",
+        "_generate_thread": "generate_thread",
+        "_shutting_down": "shutting_down",
+        "_last_out_path": "last_output_path",
+        "_export_is_current": "export_is_current",
+        "_preview_is_stale": "preview_is_stale",
+        "_output_order": "output_order",
+        "_output_disabled": "output_disabled",
+        "_force_export_quality": "force_export_quality",
+        "_pending_export_after_preview": "pending_export_after_preview",
+        "_presets": "presets",
+        "_base_patterns": "base_patterns",
+        "_preview_polys_cache": "preview_polys_cache",
+        "_preview_categories": "preview_categories",
+        "_preview_zone_owners": "preview_zone_owners",
+        "_outline_ids": "outline_ids",
+        "_outline_layers": "outline_layers",
         "_pattern_cell_cutouts": "pattern_cell_cutouts",
         "_pattern_cell_instance_cutouts": "pattern_cell_instance_cutouts",
-        "_preview_revision": "preview_revision", "_generation_revision": "generation_revision",
-        "_pattern_service": "pattern_service", "_treatments": "treatments",
-        "_treatment_undo": "treatment_undo", "_treatment_redo": "treatment_redo",
-        "_loading_zone": "loading_zone", "_engraving_image_path": "engraving_image_path",
+        "_preview_revision": "preview_revision",
+        "_generation_revision": "generation_revision",
+        "_pattern_service": "pattern_service",
+        "_treatments": "treatments",
+        "_treatment_undo": "treatment_undo",
+        "_treatment_redo": "treatment_redo",
+        "_loading_zone": "loading_zone",
+        "_engraving_image_path": "engraving_image_path",
     }
 
     def __getattr__(self, name: str):
@@ -1837,7 +1853,6 @@ class PatternPage(BasePage):
             },
         ]
         return commands
-
 
     # ── Preview ───────────────────────────────────────────────────────────────
 

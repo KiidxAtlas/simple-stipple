@@ -146,16 +146,6 @@ class DxfImportReport(NamedTuple):
     def has_issues(self) -> bool:
         return self.ignored_entities > 0
 
-    @property
-    def skipped_by_reason(self) -> dict[str, int]:
-        """Machine-readable diagnostics suitable for UI and telemetry."""
-        reasons = {
-            f"unsupported:{kind}": count for kind, count in self.unsupported_entities.items()
-        }
-        if self.invalid_polylines:
-            reasons["invalid:geometry"] = self.invalid_polylines
-        return reasons
-
 
 class _DxfEntity(Protocol):
     """Narrow adapter boundary for the dynamically typed ezdxf entities."""
@@ -799,4 +789,3 @@ def polylines_to_outline(polylines: list[list[tuple[float, float]]]) -> BaseGeom
         if not result.is_empty
         else max(analysis.usable_polygons, key=lambda p: p.area).convex_hull
     )
-

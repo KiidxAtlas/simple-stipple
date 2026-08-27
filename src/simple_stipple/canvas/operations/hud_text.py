@@ -697,5 +697,3 @@ class HudTextService:
 
 
 # ── Text document operations ─────────────────────────────────────────────────
-
-

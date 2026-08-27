@@ -162,7 +162,9 @@ class GizmoService:
         # center of other shapes (any layer) plus grid/guides — mirrors
         # move-drag snapping so resize feels consistent. Alt disables it.
         allow_snap = not bool(mods & Qt.KeyboardModifier.AltModifier)
-        snap_result = self._host._snap_engine._resize_handle_snap_adjust(wx, wy) if allow_snap else None
+        snap_result = (
+            self._host._snap_engine._resize_handle_snap_adjust(wx, wy) if allow_snap else None
+        )
         if snap_result is not None:
             wx, wy, snap_type = snap_result
             self._host._hover_snap = (wx, wy)

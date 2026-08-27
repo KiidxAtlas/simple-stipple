@@ -49,6 +49,9 @@ vectors/
 .github/*
 !.github/workflows/
 !.github/workflows/*.yml
+!.github/ISSUE_TEMPLATE/
+!.github/ISSUE_TEMPLATE/*.yml
+!.github/pull_request_template.md
 .git/
 
 # Byte-compiled / optimized / DLL files

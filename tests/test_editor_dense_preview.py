@@ -21,11 +21,11 @@ def test_dense_preview_retains_world_paths_and_clears_every_cache_layer() -> Non
         _sel=set(),
         _layer_colors={},
         _accent_polys={},
-            _scale=1.0,
-            _ox=0.0,
-            _oy=0.0,
-            _layer_service=SimpleNamespace(on_active=lambda _entity: True),
-            _flattened_points_by_id=lambda _entity_id: entity.points,
+        _scale=1.0,
+        _ox=0.0,
+        _oy=0.0,
+        _layer_service=SimpleNamespace(on_active=lambda _entity: True),
+        _flattened_points_by_id=lambda _entity_id: entity.points,
     )
     cache = DensePreviewRenderer(host)
 

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "simple-stipple"
 version = "0.3.6"
 description = "Desktop app for drafting, tracing, and generating pattern fills for laser and vector workflows."
+keywords = ["laser engraving", "vector graphics", "DXF", "SVG", "stipple", "maker tools"]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,6 +21,13 @@ dependencies = [
     "pydantic>=2.0",
     "svgelements>=1.9.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/KiidxAtlas/simple-stipple"
+Repository = "https://github.com/KiidxAtlas/simple-stipple"
+Issues = "https://github.com/KiidxAtlas/simple-stipple/issues"
+Releases = "https://github.com/KiidxAtlas/simple-stipple/releases"
+Support = "https://buymeacoffee.com/kiidxatlas"
 
 [project.optional-dependencies]
 dev = [

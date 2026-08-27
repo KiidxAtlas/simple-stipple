@@ -5,8 +5,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QSize
-from PySide6.QtGui import QAction, QKeySequence, QPalette
+from PySide6.QtCore import QSize, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -160,13 +160,24 @@ class MenuController:
         add(help_menu, "About Simple Stipple", self._show_about)
 
     def _show_about(self) -> None:
-        from simple_stipple.platform.updates import get_current_version
+        from simple_stipple.platform.updates import get_current_version, get_releases_page_url
 
-        QMessageBox.about(
-            self._app,
-            "About Simple Stipple",
-            f"<b>Simple Stipple</b><br>Version {get_current_version()}",
+        dialog = QMessageBox(self._app)
+        dialog.setWindowTitle("About Simple Stipple")
+        dialog.setText(
+            f"<h3>Simple Stipple</h3>"
+            f"<p>Draft, trace, pattern, and export vector geometry for laser workflows.</p>"
+            f"<p><b>Version {get_current_version()}</b></p>"
         )
+        dialog.setInformativeText(
+            "Simple Stipple prepares files; it does not control laser hardware. "
+            "Verify every export in your machine software before running a job."
+        )
+        releases_button = dialog.addButton("Release notes", QMessageBox.ButtonRole.ActionRole)
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+        if dialog.clickedButton() is releases_button:
+            QDesktopServices.openUrl(QUrl(get_releases_page_url()))
 
     def _show_notification_history(self) -> None:
         from simple_stipple.ui.components.feedback import notification_history

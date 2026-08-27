@@ -179,17 +179,6 @@ def save_tile_motif(page: Any) -> None:
     page._set_status(f"Saved custom tile: {tile_path.name} · Custom Tiles", STATUS_OK)
 
 
-def load_tile_motif(page: Any) -> None:
-    name = page._custom_pattern_name(page._pattern_combo.currentText()) or ""
-    motif = page._tile_motifs.get(name)
-    if not motif:
-        return
-    page._custom_tile_polys = [list(poly) for poly in motif]
-    page._pattern_combo.setCurrentText("Custom Tile")
-    page._schedule_preview()
-    page._set_status(f"Loaded Custom Tile motif: {name}", STATUS_OK)
-
-
 def delete_tile_motif(page: Any) -> None:
     name = page._custom_pattern_name(page._pattern_combo.currentText()) or ""
     if not name or name not in page._tile_motifs:

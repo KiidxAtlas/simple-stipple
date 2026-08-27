@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -81,25 +80,21 @@ def test_recent_files_preserve_patchable_persistence_behavior(
     assert saved
 
 
-def test_component_facade_is_explicit_and_implementation_free() -> None:
-    import simple_stipple.ui.components as components
+def test_component_facade_is_intentionally_empty() -> None:
+    """The facade re-exports were dead code (zero callers) — removed.
 
-    assert component_exports
-    assert set(component_exports) == {
-        name
-        for name, value in vars(components).items()
-        if not name.startswith("_") and not isinstance(value, ModuleType)
-    }
-    assert all(
-        getattr(components, name).__module__ != "simple_stipple.ui.components"
-        for name in component_exports
-        if hasattr(getattr(components, name), "__module__")
-    )
+    Production code imports directly from the concern-specific submodules
+    (e.g. ``from simple_stipple.ui.components.layout import CollapsibleSection``).
+    """
+    assert not component_exports
 
 
 def test_runtime_consumers_use_concrete_shared_modules() -> None:
     violations: list[str] = []
     for path in PACKAGE.rglob("*.py"):
+        # The facade __init__.py is allowed — its job IS to re-export submodules
+        if path.name == "__init__.py" and str(path).endswith("/ui/components/__init__.py"):
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module in {

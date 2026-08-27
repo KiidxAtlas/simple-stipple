@@ -49,4 +49,8 @@ def resolve_outline_ids(
 ) -> list[Polyline]:
     """Resolve persisted outline IDs to the current editable geometry."""
     by_id = {outline_id: poly for outline_id, poly in zip(outline_ids, edit_polys)}
-    return [[(float(x), float(y)) for x, y in by_id[outline_id]] for outline_id in ids if outline_id in by_id]
+    return [
+        [(float(x), float(y)) for x, y in by_id[outline_id]]
+        for outline_id in ids
+        if outline_id in by_id
+    ]

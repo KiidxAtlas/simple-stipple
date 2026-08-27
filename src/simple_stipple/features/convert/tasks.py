@@ -39,6 +39,7 @@ __all__ = [
 
 LOGGER = logging.getLogger(__name__)
 
+
 def _append_ignored_entities_note(msg: str, stats: dict) -> str:
     ignored = int(stats.get("ignored_entities", 0) or 0)
     if not ignored:
@@ -552,11 +553,8 @@ class FviSubTab(_ConversionSubTab):
             self.preview_path.emit(last_dxf)
 
 
-
-
 class FixerSubTab(_ConversionSubTab):
     log_line = Signal(str)
-
 
     preview_path = Signal(str)
     _btn_state = Signal(bool)
@@ -867,8 +865,6 @@ class FixerSubTab(_ConversionSubTab):
             self._running = False
             self._refresh_readiness()
             self._status_sig.emit(f"Error: {exc}", STATUS_ERR)
-
-
 
 
 # ════════════════════════════════════════════════════════════════════════════
