@@ -17,7 +17,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QComboBox
+from PySide6.QtWidgets import QApplication
 
 from simple_stipple.app.window import App
 from simple_stipple.platform.error_reporting import init_sentry_full, install_toast
@@ -25,14 +25,25 @@ from simple_stipple.platform.launcher import SingleInstanceGuard
 
 _LOG = logging.getLogger(__name__)
 
+# ════════════════════════════════════════════════════════════════════════════
+# Combo-wheel guard (prevents accidental selection changes while scrolling)
+# ════════════════════════════════════════════════════════════════════════════
+
 
 class _ComboWheelGuard(QObject):
     """Prevent accidental selection changes while scrolling a form."""
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        from PySide6.QtWidgets import QComboBox
+
         if event.type() == QEvent.Type.Wheel and isinstance(watched, QComboBox):
             return True
         return super().eventFilter(watched, event)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Icon resolution
+# ════════════════════════════════════════════════════════════════════════════
 
 
 def _resolve_icon_path() -> Path | None:
@@ -52,6 +63,11 @@ def _resolve_icon_path() -> Path | None:
     return None
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Application entry
+# ════════════════════════════════════════════════════════════════════════════
+
+
 def run_app(args: argparse.Namespace) -> int:
     """Build the QApplication, main window, and run the event loop."""
     app = QApplication(sys.argv)
@@ -68,9 +84,6 @@ def run_app(args: argparse.Namespace) -> int:
         guard = SingleInstanceGuard("simple-stipple")
         if not guard.acquire():
             _LOG.info("Another instance is running — signalling activation.")
-            # Try to signal the running instance; if that fails (stale lock or
-            # socket issues), continue startup rather than aborting so the user
-            # can still run the app.
             if guard.signal_existing():
                 return 0
             _LOG.warning("Failed to contact existing instance; continuing startup")

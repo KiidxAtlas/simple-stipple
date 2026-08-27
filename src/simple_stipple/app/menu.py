@@ -388,6 +388,13 @@ class MenuController:
         self._app._shortcut_tooltip_specs.append((save_btn, "Save workspace", "workspace.save"))
         layout.addWidget(save_btn)
 
+        support_btn = QPushButton("Support")
+        support_btn.setProperty("role", "secondary")
+        support_btn.setAccessibleName("Support Simple Stipple")
+        support_btn.setToolTip("Support Simple Stipple on Buy Me a Coffee")
+        support_btn.clicked.connect(self._show_support_dialog)
+        layout.addWidget(support_btn)
+
         action_sep = QLabel("│")
         action_sep.setProperty("role", "toolbar-sep")
         action_sep.setToolTip("Application actions")

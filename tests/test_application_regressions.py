@@ -116,6 +116,21 @@ def test_every_top_level_page_fits_and_visible_buttons_meet_minimum_target(
     window.close()
 
 
+def test_shell_exposes_visible_support_action(app: QApplication) -> None:
+    window = App()
+    window.show()
+    app.processEvents()
+    support = [
+        button
+        for button in window._shell_header.findChildren(QAbstractButton)
+        if button.text() == "Support"
+    ]
+    assert len(support) == 1
+    assert support[0].accessibleName() == "Support Simple Stipple"
+    assert "Buy Me a Coffee" in support[0].toolTip()
+    window.close()
+
+
 def test_reduced_motion_uses_direct_final_states(app: QApplication) -> None:
     previous = app.property("reducedMotion")
     app.setProperty("reducedMotion", True)

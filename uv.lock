@@ -836,6 +836,89 @@ wheels = [
 ]
 
 [[package]]
+name = "pyarmor"
+version = "9.2.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarmor-cli-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bd/ed/09703f1799fd10eebf76b465ed13d08506404e328b33e1b97718c57b7702/pyarmor-9.2.6.tar.gz", hash = "sha256:98db8a0bda19ff69153bde06a85e544e297f7479be1159caef42d0cee888a7ee", size = 3012876, upload-time = "2026-07-23T13:18:13.616Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c2/43/bb9f3de34a25a91c531c7b0a73f96d8f279a434cd96f1c1edbfa7eb72127/pyarmor-9.2.6-2-py3-none-any.whl", hash = "sha256:2beb77c1655642f525ec751df4bd8d2d0ca1c9711361f4db47174344625e139c", size = 3074055, upload-time = "2026-07-27T03:40:47.862Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/fb/6d8ad502bc29a0cb515d2a2be7553a82284f994838eb5bfb32a650572e5e/pyarmor-9.2.6-3-py3-none-any.whl", hash = "sha256:a4476a977d7518772a62a68eb24e4cdcd02a2b08dc8069f4449c07756315a511", size = 3074183, upload-time = "2026-07-30T07:34:57.873Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/cf/98883d2a3e1fb49cd785ae82416eff63131427ec32676c4b76d5af605fcb/pyarmor-9.2.6-4-py3-none-any.whl", hash = "sha256:ee4b941e65cb8d30510c22c1a6709972babfd59e1f63fa435a36fc97e02791b8", size = 3074347, upload-time = "2026-08-05T02:57:13.178Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/2d/0f0611e872cc92cba7c17a7aa3fb5575088bb1411aa9278d885f569d254e/pyarmor-9.2.6-py3-none-any.whl", hash = "sha256:2efb4ba95ab5c5b08bf70698fb4dcbc1e33cde7b71b040ff1ba7f85bfc11af11", size = 3073678, upload-time = "2026-07-23T13:18:20.322Z" },
+]
+
+[[package]]
+name = "pyarmor-cli-core"
+version = "8.1.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/32/899852afcfb2f520bc784ef55f49bd380ce8781e4c517e347eeb2b9f213b/pyarmor_cli_core-8.1.2-cp310-cp310-macosx_10_14_x86_64.whl", hash = "sha256:8a97de083597e2b425066376f56ff351c9de9172360cb517a93821d969b4eee7", size = 510412, upload-time = "2026-08-26T04:40:44.23Z" },
+    { url = "https://files.pythonhosted.org/packages/26/14/e65e849f11a891ef0543225c2a76bde4bcd8a447d37d2d5bd84685a08acf/pyarmor_cli_core-8.1.2-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:bcb9a1b5b6ff39aa11181ec49ddeff83565d9ea2a5b3ec64b80f70e91ffc0809", size = 402425, upload-time = "2026-08-26T04:40:49.053Z" },
+    { url = "https://files.pythonhosted.org/packages/53/af/7a081f160a017c112111aa626a383931de75e8519577012a5c05b39defa2/pyarmor_cli_core-8.1.2-cp310-cp310-manylinux1_i686.whl", hash = "sha256:a15145116399b7fe49d41f853e772994ab3000a590458a4deacbe42fc99dbc0f", size = 481586, upload-time = "2026-08-26T04:40:54.196Z" },
+    { url = "https://files.pythonhosted.org/packages/24/8e/74e14efca8ea8c29a1c1c821d8224c81d343e2ae2f00e6d791e5fe16ab72/pyarmor_cli_core-8.1.2-cp310-cp310-manylinux1_x86_64.whl", hash = "sha256:4e443538421b751796ae325b985e52a242e6b80bd6546bb29f4a90c761dc450c", size = 452540, upload-time = "2026-08-26T04:40:59.213Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/98/c657485fb0f0a23ef3cf5697be1f736bfaac7c17a67b32261f8e210eb274/pyarmor_cli_core-8.1.2-cp310-cp310-manylinux2014_aarch64.whl", hash = "sha256:01508189fa9f7067c3ee1f682db862a6e3e35614c5db65000ae027465f73b081", size = 598865, upload-time = "2026-08-26T04:41:04.637Z" },
+    { url = "https://files.pythonhosted.org/packages/6c/88/6e8ad7d885f016a227153ae7b329d63f8a170aa330e1880645bf5f034dc7/pyarmor_cli_core-8.1.2-cp310-cp310-manylinux2014_armv7l.whl", hash = "sha256:a98df839f50d3a219029dd237c44d8624a02f618bedc387d91c37fc163cb2237", size = 994978, upload-time = "2026-08-26T04:41:09.941Z" },
+    { url = "https://files.pythonhosted.org/packages/6b/c0/3211b5629f6b1acd6d929c14194dc061af2d12753950530a399ed1981aff/pyarmor_cli_core-8.1.2-cp310-cp310-musllinux_1_1_aarch64.whl", hash = "sha256:c6645667885a76e607acf19ed5296d4bd5a075a48d0da1aec6c7b9428c27f1d1", size = 643979, upload-time = "2026-08-26T04:41:15.33Z" },
+    { url = "https://files.pythonhosted.org/packages/57/cd/6635530492bd4c0d0132464b2897313f47997057e4c1cd1f678de4602100/pyarmor_cli_core-8.1.2-cp310-cp310-musllinux_1_1_x86_64.whl", hash = "sha256:43b53efc5f7fcc15a7f97de31b7bbd5ab2ff547fb4a8c27683f54211a6d3faa9", size = 439781, upload-time = "2026-08-26T04:41:20.291Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/65/0e956ca9d496c029152815e1a5af96435f578af6f4528ee1570173915f4f/pyarmor_cli_core-8.1.2-cp310-cp310-win32.whl", hash = "sha256:f925979a0ff416614302254280dd77091ff46e13c31e5811c11ef17be4f50825", size = 454725, upload-time = "2026-08-26T04:41:26.113Z" },
+    { url = "https://files.pythonhosted.org/packages/23/da/d1072582cf4b264dc777384e768c1a0d0a139c04d1172ccfb2d834953b70/pyarmor_cli_core-8.1.2-cp310-cp310-win_amd64.whl", hash = "sha256:302c7390566193e0dafc690406b55ac083f5bd26ef5d1a16196e43c1b0c6536e", size = 414485, upload-time = "2026-08-26T04:41:31.425Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/a9/3d4c59c43efbfde6a197b11c489c82f83052dcfb3ad0f17b89f14523ae88/pyarmor_cli_core-8.1.2-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:0c697fd88cf7b5d556159bb68e5ac8568aead69bbc113aa8ffe7c539d34245b3", size = 511691, upload-time = "2026-08-26T04:41:47.198Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/37/f2777646cacd6eef89d54712d79adafa9455ff2bca8127a5700a4e958178/pyarmor_cli_core-8.1.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:51fcb1c4713dde29acfd18404967365241720d7a3ccef044c643f7d3b3bfb85c", size = 403711, upload-time = "2026-08-26T04:41:52.132Z" },
+    { url = "https://files.pythonhosted.org/packages/50/c8/882f077406942798efe109f6d637a81d9cbec1d1eaed1cabc36cb5a361a4/pyarmor_cli_core-8.1.2-cp311-cp311-manylinux1_i686.whl", hash = "sha256:a7b1118a90b2b9c93b6a4e94ada6362ed943e9a9f1090eb399e7828fab108c61", size = 484046, upload-time = "2026-08-26T04:41:57.025Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/3d/0ba40c463739c8775c453754f1d5430c2beb8e040a5ec38092a5a008e48f/pyarmor_cli_core-8.1.2-cp311-cp311-manylinux1_x86_64.whl", hash = "sha256:72b3aa570bfb8237314afa6fdeb263b636c747665bde6870c721f786cc9515cc", size = 451888, upload-time = "2026-08-26T04:42:01.962Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/c5/a73071878e47ed4742214bd29e218ffb4488c3e985fbfa98aac654e462e9/pyarmor_cli_core-8.1.2-cp311-cp311-manylinux2014_aarch64.whl", hash = "sha256:1f88c81f78634f343ce8238cc950363cc63a87aa588b847538102fb26772c837", size = 599086, upload-time = "2026-08-26T04:42:09.227Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/fd/331f5b07e8bdf24fd31ab1f4e207fbf12959619dfb997fd80f83a77c75d7/pyarmor_cli_core-8.1.2-cp311-cp311-manylinux2014_armv7l.whl", hash = "sha256:ced47b5a154942ca55122d807e1f8ba081b524363b5ebfdeef4364f7edb5a44d", size = 995532, upload-time = "2026-08-26T04:42:14.915Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/54/dd2534fcb8002b083b59fc3c4d4001b0b5e57a39b1c17cf7dee61ee11927/pyarmor_cli_core-8.1.2-cp311-cp311-musllinux_1_1_aarch64.whl", hash = "sha256:0507261ce7871223a3c0ae9c8d51a3419cdf90a0ab1bfb6c246c99da08417ee9", size = 644519, upload-time = "2026-08-26T04:42:20.288Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/3f/53d6f5fabbac040a6b2f7ff8b20f7a94fee7de761c4478cc6bf0ac76274f/pyarmor_cli_core-8.1.2-cp311-cp311-musllinux_1_1_x86_64.whl", hash = "sha256:86350fea35a923826725867250de447a37f63194dbb2c3e6a345961c3be19124", size = 441398, upload-time = "2026-08-26T04:42:25.21Z" },
+    { url = "https://files.pythonhosted.org/packages/89/8f/ce7d1b62ae29919ddc229766c0971bed7c9d917d9c3bb623db1517c1eb1f/pyarmor_cli_core-8.1.2-cp311-cp311-win32.whl", hash = "sha256:9014186dacba8cc3fe8d869e01a3e4d8121f05dbc4bfce3fceeb1cda2b1cb779", size = 455042, upload-time = "2026-08-26T04:42:30.33Z" },
+    { url = "https://files.pythonhosted.org/packages/e2/75/c5d0e8070538093c1570a8417b53166d965b7efda77340b999855a374d73/pyarmor_cli_core-8.1.2-cp311-cp311-win_amd64.whl", hash = "sha256:fc6c6798631d4369bdff8249b264755b21dc05b94725d5b1351c03855d69fe12", size = 414901, upload-time = "2026-08-26T04:42:35.231Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/f2/3dbe618b9a2a21e7eb731b238c297cfd4da8301d2d8cf79ab4ed89537c73/pyarmor_cli_core-8.1.2-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:0bfabe4d8db7510a09419a8cbf38d1952759ae48044854666b2a9e7d1e0bfc16", size = 515507, upload-time = "2026-08-26T04:42:40.407Z" },
+    { url = "https://files.pythonhosted.org/packages/45/47/de7e83d98d15882810bd865ca782101cf7c29b69ea0db42ed5e3b3f2a0a5/pyarmor_cli_core-8.1.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:9ce0275112a7e502b18db4a67d292ee7a764dc48cd422334c02377b797a2ce91", size = 407727, upload-time = "2026-08-26T04:42:45.129Z" },
+    { url = "https://files.pythonhosted.org/packages/8a/ce/326cb3f7ed988c6bfd8c7365837d2bc99f1105d8a5f029ca591201a962ac/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux1_i686.whl", hash = "sha256:d68e86e01b47f91c1f7b97ed7ff4079159d813624873e4e5d5c660a089f32432", size = 489298, upload-time = "2026-08-26T04:42:51.84Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/71/ce177e470033c27d58d519d5f2547edd09b3415ffaa3ac9fa60fa5c7b846/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux1_x86_64.whl", hash = "sha256:05212ececa5195d1c72113528b9379f691d5f7671ef3c0b5e1c72908c7a46ae8", size = 457692, upload-time = "2026-08-26T04:42:56.947Z" },
+    { url = "https://files.pythonhosted.org/packages/97/8b/3f68f677ddadf7e3730a91c98de10f048146a359e76542207eac7744b621/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:2cf87045cc73fe096721d0e7fd972849bca84da8dde3ba478de75b4abc85e3fe", size = 604351, upload-time = "2026-08-26T04:43:07.276Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/f3/1f26f562840586fdcccde66c602f44f3695bcda9b23efaa39227f39e6614/pyarmor_cli_core-8.1.2-cp312-cp312-manylinux2014_armv7l.whl", hash = "sha256:18adeee02d6d829741d28a2ac7a4229020583c491eea475d4164b1d311cc540e", size = 1001047, upload-time = "2026-08-26T04:43:12.975Z" },
+    { url = "https://files.pythonhosted.org/packages/73/4b/50a847ef3a0b8fa12d1891cae2383b6efe04cfafef5bd2137ab4468cb29a/pyarmor_cli_core-8.1.2-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:f5f4c573a435619273442f1b9f8938d31c7d0f26100a80453e6d0ae054d1e0a2", size = 649548, upload-time = "2026-08-26T04:43:20.541Z" },
+    { url = "https://files.pythonhosted.org/packages/64/2d/0ca6b9036195971200975c69c0a65a2049304458ebfa73caeeb860a94414/pyarmor_cli_core-8.1.2-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:35ac4f6ba07b20391ab9624c70bbc133537560e227579de6db51fe45535ab93c", size = 446449, upload-time = "2026-08-26T04:43:25.667Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/de/6969ae804814dc1842f363847484dfb05664c4ae2ecb60ac9a2ef69a1e3c/pyarmor_cli_core-8.1.2-cp312-cp312-win32.whl", hash = "sha256:609f5a63d0135d3723203f859e89f7a28c45e09474250705e995d59845d8c307", size = 459858, upload-time = "2026-08-26T04:43:30.669Z" },
+    { url = "https://files.pythonhosted.org/packages/cb/b7/2f3de91992fd22f7d62d7f8c59cc47898e6a260e195c1131da1e7b6a9c25/pyarmor_cli_core-8.1.2-cp312-cp312-win_amd64.whl", hash = "sha256:952558497cbe06bc12beaf014e2c53b20203e4ddef3c8b6028744abf72e14505", size = 420611, upload-time = "2026-08-26T04:43:35.533Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/7e/3d79d27c130736326503abc0ef358e4fb1b102c4a21f2e9affbfbdbd25f2/pyarmor_cli_core-8.1.2-cp313-cp313-macosx_10_14_x86_64.whl", hash = "sha256:5dc5cbf1089a503544cadd63baf4a65953983459718d4e1aeb2954a80e8f73dd", size = 517370, upload-time = "2026-08-26T04:43:40.387Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/64/bd3419284798569f60ad9db0766cb7c0e3a9ea882489bad0fa8c5a754daa/pyarmor_cli_core-8.1.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:2b068b77395b3f74d4384e3c18d4684c56a4360c8fde848692444d5e6dac8d1e", size = 409769, upload-time = "2026-08-26T04:43:45.45Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/af/77fa373c09063b91b13579c7321c6e1a5f6f6be1851b3c72ec3c2a4cad32/pyarmor_cli_core-8.1.2-cp313-cp313-manylinux1_i686.whl", hash = "sha256:405405e44855307ee26264ea253358009dc73ad08440ba89935efa4fde87bae4", size = 489760, upload-time = "2026-08-26T04:43:51.707Z" },
+    { url = "https://files.pythonhosted.org/packages/45/8e/b411da54be4bc2143dd35dd6b3423376c052906eb7d0cb63c58dc01a31f6/pyarmor_cli_core-8.1.2-cp313-cp313-manylinux1_x86_64.whl", hash = "sha256:66d6d9c15aabb52f87ff98d4819a5ecdc32b13100348be2872c373354470d8d5", size = 458108, upload-time = "2026-08-26T04:43:56.449Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/69/82cd83355e1470eb5f7fb505bc8ff85a8f8caf67c0da02de86beb31505be/pyarmor_cli_core-8.1.2-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:e77c780dce6c0a50824927a03e0f9c39c642e1ca8fa1671c70c03b01c2e90cef", size = 604916, upload-time = "2026-08-26T04:44:01.603Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/ff/8be81c5d943cc14b8bae44780249b657565690bea65ff52ee692548e8bc0/pyarmor_cli_core-8.1.2-cp313-cp313-manylinux2014_armv7l.whl", hash = "sha256:49ecb1d3f76bedee50be3047d18ce50609db16bff8702a7f096531503d737785", size = 1001331, upload-time = "2026-08-26T04:44:06.741Z" },
+    { url = "https://files.pythonhosted.org/packages/12/6e/cc65256fa20d49dc704231530c693122e31c8c18783b2f7985624d3c2c1b/pyarmor_cli_core-8.1.2-cp313-cp313-musllinux_1_1_aarch64.whl", hash = "sha256:9b1f648743a32f417bf908acc5800711175edf411fa24bf729a6d2aeb24a2617", size = 651236, upload-time = "2026-08-26T04:44:12.025Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/69/5c6bf32fed77aed5b50aac0b97b7df0f1f72b3343e9bef4a014392e85cdd/pyarmor_cli_core-8.1.2-cp313-cp313-musllinux_1_1_x86_64.whl", hash = "sha256:d890021c640fb01dda0b7a4c8580b12e103bd349817bc86f01c04f3c9358cae1", size = 447212, upload-time = "2026-08-26T04:44:17.021Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/b6/58410290dae04ebcf85aa3084d31ba07930121a44ccc7714c738fdfe6810/pyarmor_cli_core-8.1.2-cp313-cp313-win32.whl", hash = "sha256:b3f2d55db32e6453a3e070fadeef827c147f21106e801a7f0688158f665c0726", size = 460848, upload-time = "2026-08-26T04:44:25.4Z" },
+    { url = "https://files.pythonhosted.org/packages/29/e8/d748641756c7a3353ce161b3316eae46fa5f7355a4208b7a3488e18764b1/pyarmor_cli_core-8.1.2-cp313-cp313-win_amd64.whl", hash = "sha256:c61a86ab3f3a85550e148dd874e1ad2f2295870ad3204b1d92287c3fded3d087", size = 421322, upload-time = "2026-08-26T04:44:30.229Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/ce/bbfe583c3e7ee7b76b51173c0ba9a073b222cd3a3e7d28b13e6a5373d5d9/pyarmor_cli_core-8.1.2-cp314-cp314-macosx_10_14_x86_64.whl", hash = "sha256:3416df1e56f10a12f42c124ed4c29a849fca1fe33bbc70e725fd0bb395d2301b", size = 522725, upload-time = "2026-08-26T04:44:43.116Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/16/9bbc4f0591bf28b481e079c1c38deae5fa78d23b4eade36f4fa6bcdf1956/pyarmor_cli_core-8.1.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:c5c06fee0a63cc8c3326f6f7e44a3c39d88dfdcc64465c50e584e4fdda6c4da6", size = 414438, upload-time = "2026-08-26T04:44:47.886Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/26/e24b62ad18e4c8f18abdae1b12915dbdd9a7e08118082a7f427a7922a93f/pyarmor_cli_core-8.1.2-cp314-cp314-manylinux1_i686.whl", hash = "sha256:0b2a1d47555d750f6c9cc9a7883c12c4f6b81966a85815ba309ae887a0866209", size = 495370, upload-time = "2026-08-26T04:44:52.993Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/43/5d9dd141e4bd463092fa2c1b2da524f23e7f78d1a5180664ea9810ac7a85/pyarmor_cli_core-8.1.2-cp314-cp314-manylinux1_x86_64.whl", hash = "sha256:27b5246ec4ef12cf9190da8d0caf4c69ea09c3082ca3b9317b8b27eadb665044", size = 462068, upload-time = "2026-08-26T04:44:58.693Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/91/84110437e6cef14eccc4555ddeed0964e36a4d33cde2c6827dbd059d743a/pyarmor_cli_core-8.1.2-cp314-cp314-manylinux2014_aarch64.whl", hash = "sha256:f83c6a2062aaba0a905c9274e53eb89a3054cf5c6d53ec25873dc8e8991408a5", size = 609512, upload-time = "2026-08-26T04:45:04.128Z" },
+    { url = "https://files.pythonhosted.org/packages/47/bf/bef14c1746e0a1ada92e066c899cbb8fc20878d8eeeff9c2893eade22333/pyarmor_cli_core-8.1.2-cp314-cp314-manylinux2014_armv7l.whl", hash = "sha256:ed08a46cc52e9c1d22f1472452f7d0b02eb1cc3d8bd3494f20ecbb20179c8696", size = 1004951, upload-time = "2026-08-26T04:45:11.196Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/14/677a5246b700a30b541c4d3c83b654641946a5dc11ba8bb9efc3f647e973/pyarmor_cli_core-8.1.2-cp314-cp314-musllinux_1_1_aarch64.whl", hash = "sha256:6ee50a3307ad6c69cdd4873a32591fea6791cbcc040f9271678b6597d9214dc2", size = 655375, upload-time = "2026-08-26T04:45:17.309Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/26/8b33b3f3808f792fd35847346814709a722bb981096a785aa0c8dac35deb/pyarmor_cli_core-8.1.2-cp314-cp314-musllinux_1_1_x86_64.whl", hash = "sha256:b18735b1f3d26a6b8f3776d82a4457596972f7a2f986d729740b6443812b0f62", size = 451004, upload-time = "2026-08-26T04:45:23.568Z" },
+    { url = "https://files.pythonhosted.org/packages/30/ee/2b8260c1fafd042282eac62dad02285b2088049e6e1a8a1771e87891f707/pyarmor_cli_core-8.1.2-cp314-cp314-win32.whl", hash = "sha256:1baf50f8efde7817899313092de743129da063db2265c66c7ac06003a7b7e8bb", size = 465410, upload-time = "2026-08-26T04:45:28.365Z" },
+    { url = "https://files.pythonhosted.org/packages/73/d5/357b7850aa061eddf14b5fff3b0230eff65d62e3005e008b28f4807aeeed/pyarmor_cli_core-8.1.2-cp314-cp314-win_amd64.whl", hash = "sha256:84a398bc0873890010f812b3190d4518bb393d3c0c17d7b2cdf2f547e65ce119", size = 424558, upload-time = "2026-08-26T04:45:32.967Z" },
+    { url = "https://files.pythonhosted.org/packages/8d/8a/873ffc711607601460fffbf91895c04b754ab934bd29e8cb4de6c8cfb785/pyarmor_cli_core-8.1.2-cp315-cp315-macosx_10_14_x86_64.whl", hash = "sha256:794bf98430e6ac28ff2ab61a9771a9c30736182c098eb930d2b31d8cec8782c0", size = 522825, upload-time = "2026-08-26T04:45:39.577Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/3c/8f5b61f254324d308ba6164ee11c3970974356d0928bfaaed76d0c2a6cab/pyarmor_cli_core-8.1.2-cp315-cp315-macosx_11_0_arm64.whl", hash = "sha256:d1bf8f4d9e66af72dcbd14dba919e64e3f415227d159b97813efd728728e8ca8", size = 414438, upload-time = "2026-08-26T04:45:44.23Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/33/f8a746bf9dfb634ee7b189668acd58eb730c09305be86fb70149c1c2c442/pyarmor_cli_core-8.1.2-cp315-cp315-manylinux1_i686.whl", hash = "sha256:ed12d37d5be2d8f03248541285bfed0a5545495d7e6d8352652e40f3ff320725", size = 495326, upload-time = "2026-08-26T04:45:50.413Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/92/5a1e5fa2fecd0819844678bfa1b3ee3a1358922d47d4925b4f3d4d1f3f5d/pyarmor_cli_core-8.1.2-cp315-cp315-manylinux1_x86_64.whl", hash = "sha256:3ba57f26a78a5ef82fc8b1a79176de9c0c32082e2874b3e71c32178cc3028d75", size = 461872, upload-time = "2026-08-26T04:45:55.631Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/45/770ab7dbf55e6af6b38511f14c691a26bfe60940a2e1138ab66f986fe44e/pyarmor_cli_core-8.1.2-cp315-cp315-manylinux2014_aarch64.whl", hash = "sha256:2f0b11a99e348567dc2f7d7ff32fa4c4aec5656db5369eaa8417422c654b9d00", size = 609345, upload-time = "2026-08-26T04:46:01.045Z" },
+    { url = "https://files.pythonhosted.org/packages/71/c7/e4ef2d2c43dff6ead90fb212605725646234b3d440fc38e49cf8d349b1d3/pyarmor_cli_core-8.1.2-cp315-cp315-manylinux2014_armv7l.whl", hash = "sha256:135388b7b20054be4111f78c21fb171f7718bc763edd2395bbf00760d3b059ad", size = 1004824, upload-time = "2026-08-26T04:46:07.942Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/11/77da23b337acb01a6a2dcb372eea995bb8bcba4cdd7772cefccb5daf4eb9/pyarmor_cli_core-8.1.2-cp315-cp315-musllinux_1_1_aarch64.whl", hash = "sha256:748c2906e29ef4de3bc83e7d39014d4416fa6a76ab1d07770067982fefcc1246", size = 655255, upload-time = "2026-08-26T04:46:13.011Z" },
+    { url = "https://files.pythonhosted.org/packages/7a/45/c24cd03929ef50bb34407e58393121179b628c2561fecd7acda062408df7/pyarmor_cli_core-8.1.2-cp315-cp315-musllinux_1_1_x86_64.whl", hash = "sha256:9ae31de935d673420cf3b5592a00ff2546d040c65923431f799966ff6e2976e5", size = 450939, upload-time = "2026-08-26T04:46:17.739Z" },
+    { url = "https://files.pythonhosted.org/packages/51/7a/31ea2e2983da14c6d41f4b350d2e127942c504e082b2c46aee0a836ba254/pyarmor_cli_core-8.1.2-cp315-cp315-win32.whl", hash = "sha256:816b34c1565c26d1a302ceae71e1791b4447606bfe8f6548ed4b0ed49ab4b372", size = 465364, upload-time = "2026-08-26T04:46:22.582Z" },
+    { url = "https://files.pythonhosted.org/packages/5e/88/18309ad305f0ae6f462d62128d7cb882222ff0a29e8aa3461c60cad14c25/pyarmor_cli_core-8.1.2-cp315-cp315-win_amd64.whl", hash = "sha256:1a288d24fb3ca77f5060976eff3de70fc0a916074fdbe2485649a3cf9c383864", size = 424465, upload-time = "2026-08-26T04:46:27.282Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/58/7758001a43902bf162a41d6950cae17bf46432250c37800092b0aea7d815/pyarmor_cli_core-8.1.2-py3-none-any.whl", hash = "sha256:1f07c1cabe45511a4a91a615ded15adabeb8b5b93c4732dd633c4913299185bd", size = 5178, upload-time = "2026-08-26T04:49:14.149Z" },
+]
+
+[[package]]
 name = "pyclipper"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1489,6 +1572,10 @@ dev = [
     { name = "pytest-qt" },
     { name = "ruff" },
 ]
+dist = [
+    { name = "pyarmor" },
+    { name = "pyinstaller" },
+]
 telemetry = [
     { name = "sentry-sdk" },
 ]
@@ -1501,9 +1588,11 @@ requires-dist = [
     { name = "numba", specifier = ">=0.64" },
     { name = "opencv-python-headless", specifier = ">=4.8" },
     { name = "pillow", specifier = ">=10.0.0" },
+    { name = "pyarmor", marker = "extra == 'dist'", specifier = ">=8.7" },
     { name = "pyclipper", specifier = ">=1.4.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyinstaller", marker = "extra == 'build'", specifier = ">=6.0" },
+    { name = "pyinstaller", marker = "extra == 'dist'", specifier = ">=6.0" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.403" },
     { name = "pyside6", specifier = ">=6.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0" },
@@ -1516,7 +1605,7 @@ requires-dist = [
     { name = "shapely", specifier = ">=2.1.2" },
     { name = "svgelements", specifier = ">=1.9.6" },
 ]
-provides-extras = ["dev", "build", "telemetry", "cad"]
+provides-extras = ["dev", "build", "telemetry", "cad", "dist"]
 
 [[package]]
 name = "sortedcontainers"
