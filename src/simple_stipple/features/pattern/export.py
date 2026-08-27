@@ -383,12 +383,16 @@ def density_issues(
         if spacing <= 0 or spacing >= minimum_spacing_mm:
             continue
         polys = job.get("polys") or []
-        point = next((poly[0] for poly in polys if poly), (0.0, 0.0))
+        raw_point = next((poly[0] for poly in polys if poly), None)
+        if raw_point is None or len(raw_point) < 2:
+            point = (0.0, 0.0)
+        else:
+            point = (float(raw_point[0]), float(raw_point[1]))
         issues.append(
             GeometryIssue(
                 "density",
                 index,
-                tuple(point),
+                point,
                 f"Fill spacing {spacing:g} mm is below the {minimum_spacing_mm:g} mm "
                 "machine minimum",
                 "warning",

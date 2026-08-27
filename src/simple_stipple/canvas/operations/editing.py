@@ -863,7 +863,12 @@ class EditingService:
             return display_kind, display_meta
         display_kind = detected.kind
         display_meta = dict(detected.metadata)
-        if display_kind == "polygon" and int(display_meta.get("sides", 0) or 0) == 3:
+        sides = display_meta.get("sides", 0)
+        if (
+            display_kind == "polygon"
+            and isinstance(sides, (str, int, float))
+            and int(sides or 0) == 3
+        ):
             display_kind = "triangle"
         return display_kind, display_meta
 

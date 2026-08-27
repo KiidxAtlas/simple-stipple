@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false
+
 """Tools that select and edit existing geometry."""
 
 from __future__ import annotations

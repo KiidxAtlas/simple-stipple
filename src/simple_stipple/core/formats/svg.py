@@ -350,7 +350,7 @@ def _matrix_multiply(left: Matrix, right: Matrix) -> Matrix:
 
 def _apply_matrix(matrix: Matrix, point: tuple[float, float]) -> tuple[float, float]:
     result = matrix.point_in_matrix_space(point)
-    return result.x, result.y
+    return float(cast(float, result.x)), float(cast(float, result.y))
 
 
 def _parse_transform(value: str) -> Matrix:
@@ -390,20 +390,24 @@ def _parse_path_d(d: str) -> list[list[tuple[float, float]]]:
     for seg in se.Path(d):
         if isinstance(seg, se.Move):
             push_current()
-            current = [(seg.end.x, seg.end.y)] if seg.end is not None else []
+            current = (
+                [(float(cast(float, seg.end.x)), float(cast(float, seg.end.y)))]
+                if seg.end is not None
+                else []
+            )
         elif isinstance(seg, se.Close):
             if seg.end is not None:
-                point = (seg.end.x, seg.end.y)
+                point = (float(cast(float, seg.end.x)), float(cast(float, seg.end.y)))
                 if not current or current[-1] != point:
                     current.append(point)
             push_current()
         elif isinstance(seg, se.Line):
             if seg.end is not None:
-                current.append((seg.end.x, seg.end.y))
+                current.append((float(cast(float, seg.end.x)), float(cast(float, seg.end.y))))
         elif isinstance(seg, se.Curve):
             for step in range(1, _CURVE_SEGMENTS + 1):
                 point = seg.point(step / _CURVE_SEGMENTS)
-                current.append((point.x, point.y))
+                current.append((float(cast(float, point.x)), float(cast(float, point.y))))
 
     push_current()
     return out

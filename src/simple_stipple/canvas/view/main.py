@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 import time
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
@@ -843,7 +843,7 @@ class CanvasView(
     def issue_marker_at(self, cx: float, cy: float):
         """The finding under the cursor, so clicking one can select its path."""
         best, best_distance = None, 12.0
-        for marker in self._issue_markers:
+        for marker in cast(tuple[Any, ...], self._issue_markers):
             mx, my = self._w2c(*marker.point)
             distance = math.hypot(mx - cx, my - cy)
             if distance < best_distance:

@@ -477,7 +477,7 @@ def _as_polygon(poly: list[tuple[float, float]]) -> Polygon | None:
     if isinstance(repaired, Polygon):
         parts = [repaired]
     elif isinstance(repaired, (MultiPolygon, GeometryCollection)):
-        parts = [part for part in repaired.geoms if isinstance(part, Polygon)]
+        parts = [part for part in getattr(repaired, "geoms", ()) if isinstance(part, Polygon)]
     else:
         parts = []
     usable = [part for part in parts if not part.is_empty and part.area > 0]

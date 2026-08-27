@@ -97,14 +97,14 @@ def _initialize_view(
 
     # construction/hidden/locked/group flags live on EntityRecord.
     self._accent_polys = {}  # entity_id → color hex for role overlays
-    self._region_tint: dict = {}  # entity_id → color hex, filled translucently
+    self._region_tint = cast(dict[str, str], {})  # entity_id → color hex, filled translucently
     self._region_picking = False  # click inside a closed shape selects it
     # Solved pattern/fill, rendered beneath the editable outlines. This is a
     # render channel, not an entity set — the canvas never stops holding the
     # real outlines, so editing is always editing the document.
     # Preflight findings, drawn where they are rather than summarised in a
     # collapsed panel. Set via ``set_issue_markers``.
-    self._issue_markers = ()
+    self._issue_markers = cast(tuple[Any, ...], ())
     self._result_polys = []
     self._result_visible = True
     self._result_pattern_span = (0, 0)  # slice of _result_polys that is cells

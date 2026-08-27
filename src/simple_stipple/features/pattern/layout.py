@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false
+
 """Widget construction for the Pattern page — left/right panel layout and
 each collapsible section. Extracted from ``PatternPage`` (see plan.md
 Section 9.1); follows the same ``page: Any``-first free-function
