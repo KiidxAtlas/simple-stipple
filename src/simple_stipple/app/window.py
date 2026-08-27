@@ -396,6 +396,11 @@ class App(QMainWindow):
             slot=self._switch_to_page,
         )
         self._page_runtime.connect_signal_if_present(
+            page_id="draft",
+            signal_name="openPageRequested",
+            slot=self._switch_to_page,
+        )
+        self._page_runtime.connect_signal_if_present(
             page_id="convert",
             signal_name="openInDraftRequested",
             slot=self._send_pattern_selection_to_draft,

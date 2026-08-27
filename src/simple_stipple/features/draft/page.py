@@ -94,6 +94,7 @@ class DraftPage(BasePage):
     DEFAULT_LAYER = "Layer 1"
 
     sendSelectedToPatternRequested = Signal(object)
+    openPageRequested = Signal(str)
     customTileRequested = Signal(object)
 
     _MODEL_STATE_FIELDS = {
@@ -244,9 +245,13 @@ class DraftPage(BasePage):
         self._canvas.set_context_menu_profile("draft")
         self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
         self._canvas.set_selection_follows_geometry(True)
-        self._canvas.set_empty_message(
-            "Start a drawing\n1  Import or drop a vector\n"
-            "2  Press D to draw\n3  Select geometry to see relevant actions"
+        self._canvas.set_empty_message("Start a drawing\nImport a vector, draw, or trace an image")
+        self._canvas.set_empty_actions(
+            [
+                ("Import vector…", self._browse_vector),
+                ("Draw one", lambda: self._canvas.set_mode("draw")),
+                ("Trace an image", lambda: self.openPageRequested.emit("trace")),
+            ]
         )
         self._canvas.quickShapeChanged.connect(self._on_quick_shape_changed)
         self._canvas.quickShapeEnabledChanged.connect(self._on_quick_shape_enabled_changed)

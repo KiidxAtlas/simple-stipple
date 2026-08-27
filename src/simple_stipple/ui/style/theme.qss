@@ -984,6 +984,20 @@ QFrame[role="preview-surface"] QLabel[role="empty-hint"] {
     font-size: $font_sm;
 }
 
+QWidget[role="empty-actions"] {
+    background: transparent;
+}
+QWidget[role="empty-actions"] QPushButton[role="secondary"] {
+    background: transparent;
+    border-color: $border_strong;
+    color: $ink_text;
+}
+QWidget[role="empty-actions"] QPushButton[role="secondary"]:hover {
+    background: $accent_soft;
+    border-color: $accent_border;
+    color: $accent_text;
+}
+
 /* ══ Named dialogs ═══════════════════════════════════════════════════════ */
 
 QDialog#command-palette, QDialog#keybindings-dialog, QDialog#radial-menu-dialog,

@@ -37,6 +37,7 @@ from simple_stipple.core.formats.dxf import polylines_to_outline
 from simple_stipple.core.patterns.fill import FillSpec, apply_fill
 from simple_stipple.core.patterns.processing import PatternProcessor
 from simple_stipple.features.convert import ConvertPage
+from simple_stipple.features.draft import DraftPage
 from simple_stipple.features.help import HelpDialog
 from simple_stipple.features.pattern.page import PatternPage
 from simple_stipple.features.pattern.regions.treatments import treatment_kind
@@ -94,6 +95,25 @@ def test_responsive_pages_preserve_primary_content(
     if width < pattern._canvas_splitter.COMPACT_WIDTH:
         assert pattern._canvas_splitter._drawer_toggle.isVisible()
     pattern.close()
+
+
+def test_draft_empty_canvas_offers_direct_actions(app: QApplication) -> None:
+    draft = DraftPage(settings={})
+    bar = draft._canvas._empty_actions_bar
+    assert bar is not None
+    buttons = {button.text(): button for button in bar.findChildren(QPushButton)}
+    assert set(buttons) == {"Import vector…", "Draw one", "Trace an image"}
+    assert buttons["Import vector…"].property("role") == "primary"
+    assert buttons["Draw one"].property("role") == "secondary"
+    assert buttons["Trace an image"].property("role") == "secondary"
+    assert bar.isVisibleTo(draft._canvas)
+    requested: list[str] = []
+    draft.openPageRequested.connect(requested.append)
+    buttons["Draw one"].click()
+    assert draft._canvas.get_mode() == "draw"
+    buttons["Trace an image"].click()
+    assert requested == ["trace"]
+    draft.close()
 
 
 def test_convert_status_labels_are_owned_by_their_subtabs(app: QApplication) -> None:

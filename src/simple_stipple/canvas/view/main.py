@@ -1385,12 +1385,16 @@ class CanvasView(
         if not actions:
             return
         bar = QWidget(self)
+        bar.setProperty("role", "empty-actions")
         row = QHBoxLayout(bar)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
-        for label, callback in actions:
+        for index, (label, callback) in enumerate(actions):
             button = QPushButton(label, bar)
-            button.setMinimumHeight(30)
+            button.setProperty("role", "primary" if index == 0 else "secondary")
+            button.setAccessibleName(label)
+            button.setToolTip(label)
+            button.setMinimumHeight(38)
             button.clicked.connect(callback)
             row.addWidget(button)
         self._empty_actions_bar = bar
