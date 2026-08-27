@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.6 — 2026-08-27
 
 ### Release readiness
 
@@ -13,8 +13,10 @@
 - Added a release-notes action to the About dialog.
 - Resolved the repository's Pyright errors across dynamic Qt mixins and geometry typing boundaries.
 - Added a visible Buy Me a Coffee link to the app's Support dialog and repository metadata.
-
-## 0.3.6 — 2026-08-12
+- Added a visible Support action to the application shell and direct empty-state actions for
+  importing vectors, drawing, or tracing an image.
+- Removed the unfinished startup licensing gate so the application launches directly.
+- Added downloadable SVG sample projects and a focused launch kit for early adopters.
 
 ### Added
 
