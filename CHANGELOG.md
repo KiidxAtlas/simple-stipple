@@ -433,9 +433,7 @@ Help, Settings, layout, precision, and updater improvements described below.
     interpreter.
 - Executable architecture contracts covering dependency direction, Qt isolation,
   feature-to-feature boundaries, canonical module homes, and removed compatibility paths.
-- A retrieval-oriented project map at `.opencode/knowledge/PROJECT_MAP.md` with entry
-  points, module ownership, core flows, state, integrations, tests, risks, and onboarding
-  guidance.
+
 - Focused regression coverage for Help search, Settings navigation, sidebar scrollbar
   clearance, two-decimal dimension displays, update-dialog state transitions, staging-path
   safety, and Windows updater handoff behavior.
