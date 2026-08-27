@@ -113,7 +113,7 @@ The canonical release checklist is [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHEC
 - [Open a bug report](https://github.com/KiidxAtlas/simple-stipple/issues/new?template=bug_report.yml)
 - [Request an idea or workflow](https://github.com/KiidxAtlas/simple-stipple/issues/new?template=feature_request.yml)
 - [Browse existing discussions](https://github.com/KiidxAtlas/simple-stipple/discussions)
-- [Support development](https://buymeacoffee.com/kiidxatlas)
+- [Support development](https://buymeacoffee.com/KiidxAtlas)
 
 Useful reports include the Simple Stipple version, operating system, source file type, exact steps, expected result, actual result, and a sanitized log excerpt. Do not attach private designs or credentials.
 

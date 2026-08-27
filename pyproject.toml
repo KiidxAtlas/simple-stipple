@@ -12,7 +12,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: X11 Applications :: Qt",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
@@ -38,7 +38,7 @@ Homepage = "https://github.com/KiidxAtlas/simple-stipple"
 Repository = "https://github.com/KiidxAtlas/simple-stipple"
 Issues = "https://github.com/KiidxAtlas/simple-stipple/issues"
 Releases = "https://github.com/KiidxAtlas/simple-stipple/releases"
-Support = "https://buymeacoffee.com/kiidxatlas"
+Support = "https://buymeacoffee.com/KiidxAtlas"
 
 [project.optional-dependencies]
 dev = [

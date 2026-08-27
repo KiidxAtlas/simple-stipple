@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QIcon, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
-from PySide6.QtWidgets import QApplication, QLineEdit, QMenu, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMenu, QPushButton, QWidget
 from shapely.geometry import Point, Polygon
 
 import simple_stipple.canvas.dialogs.customize_dialogs as customize_dialogs
@@ -62,6 +62,7 @@ from simple_stipple.ui.components.workflow import (
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.files import VectorImportModeDialog
 from simple_stipple.ui.dialogs.settings_dialog import SettingsDialog
+from simple_stipple.ui.dialogs.support import SUPPORT_URL, SupportMeDialog
 from simple_stipple.ui.dialogs.update_dialog import UpdateDialog
 from simple_stipple.ui.style import STATUS_OK, accessibility_palette, load_app_qss
 
@@ -114,6 +115,13 @@ def test_draft_empty_canvas_offers_direct_actions(app: QApplication) -> None:
     buttons["Trace an image"].click()
     assert requested == ["trace"]
     draft.close()
+
+
+def test_support_dialog_exposes_buy_me_a_coffee_link(app: QApplication) -> None:
+    dialog = SupportMeDialog()
+    labels = [label.text() for label in dialog.findChildren(QLabel)]
+    assert any(SUPPORT_URL in text for text in labels)
+    dialog.close()
 
 
 def test_convert_status_labels_are_owned_by_their_subtabs(app: QApplication) -> None:

@@ -13,6 +13,7 @@
 - Added a release-notes action to the About dialog.
 - Added the MIT license and package classifiers/URLs for clearer redistribution and discovery.
 - Resolved the repository's Pyright errors across dynamic Qt mixins and geometry typing boundaries.
+- Added a visible Buy Me a Coffee link to the app's Support dialog and repository metadata.
 
 ## 0.3.6 — 2026-08-12
 

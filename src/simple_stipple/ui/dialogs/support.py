@@ -7,7 +7,7 @@ import webbrowser
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QWidget
 
-SUPPORT_URL = "https://buymeacoffee.com/kiidxatlas"
+SUPPORT_URL = "https://buymeacoffee.com/KiidxAtlas"
 SUPPORT_DESCRIPTION = "Simple Stipple is built open-source and maintained by volunteers. Your support keeps the project alive."
 
 
@@ -32,8 +32,15 @@ class SupportMeDialog(QDialog):
         # Description
         desc = QLabel(SUPPORT_DESCRIPTION)
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: qss:text; font-size: 12px;")
+        desc.setProperty("role", "dialog-message")
+
         layout.addWidget(desc)
+        link = QLabel(f'<a href="{SUPPORT_URL}">{SUPPORT_URL}</a>')
+        link.setOpenExternalLinks(True)
+        link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        link.setAccessibleName("Buy Me a Coffee support link")
+        link.setToolTip("Open Buy Me a Coffee")
+        layout.addWidget(link, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Button
         btn = QPushButton("Visit Support Page")
