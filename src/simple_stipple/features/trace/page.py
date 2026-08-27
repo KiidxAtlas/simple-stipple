@@ -713,8 +713,13 @@ class TracePage(BasePage):
         self._canvas.set_context_menu_profile("trace")
         self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
         self._canvas.set_empty_message(
-            "Start a trace\n1  Open or drop an image\n"
-            "2  Adjust threshold and cleanup\n3  Export or send the result"
+            "Start a trace\nOpen an image, adjust cleanup, then export or send the result"
+        )
+        self._canvas.set_empty_actions(
+            [
+                ("Open image…", self._browse_image),
+                ("Recent images", self._recent_btn.click),
+            ]
         )
         self._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
         self._canvas.set_grid_snap(False)

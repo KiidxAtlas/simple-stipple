@@ -46,6 +46,7 @@ from simple_stipple.features.pattern.regions.zones import (
     select_zone_for_canvas_selection,
 )
 from simple_stipple.features.pattern.workers import compute_preview
+from simple_stipple.features.trace.page import TracePage
 from simple_stipple.platform.settings import (
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
     MIN_DRAW_SIDEBAR_WIDTH,
@@ -122,6 +123,18 @@ def test_support_dialog_exposes_buy_me_a_coffee_link(app: QApplication) -> None:
     labels = [label.text() for label in dialog.findChildren(QLabel)]
     assert any(SUPPORT_URL in text for text in labels)
     dialog.close()
+
+
+def test_trace_empty_canvas_offers_direct_actions(app: QApplication) -> None:
+    trace = TracePage(settings={})
+    bar = trace._canvas._empty_actions_bar
+    assert bar is not None
+    buttons = {button.text(): button for button in bar.findChildren(QPushButton)}
+    assert set(buttons) == {"Open image…", "Recent images"}
+    assert buttons["Open image…"].property("role") == "primary"
+    assert buttons["Recent images"].property("role") == "secondary"
+    assert bar.isVisibleTo(trace._canvas)
+    trace.close()
 
 
 def test_convert_status_labels_are_owned_by_their_subtabs(app: QApplication) -> None:

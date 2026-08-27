@@ -8,9 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QWidget
 
 SUPPORT_URL = "https://buymeacoffee.com/KiidxAtlas"
-SUPPORT_DESCRIPTION = (
-    "Simple Stipple is built in public and maintained by me. Your support means the world and helps keep the project alive."
-)
+SUPPORT_DESCRIPTION = "Simple Stipple is built in public and maintained by me. Your support means the world and helps keep the project alive."
 
 
 class SupportMeDialog(QDialog):
