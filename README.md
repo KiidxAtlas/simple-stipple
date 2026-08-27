@@ -125,3 +125,4 @@ Useful reports include the Simple Stipple version, operating system, source file
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
+- [MIT license](LICENSE)

@@ -11,6 +11,8 @@
   publish both platform artifacts together, include checksums, and use the matching changelog
   section as release notes.
 - Added a release-notes action to the About dialog.
+- Added the MIT license and package classifiers/URLs for clearer redistribution and discovery.
+- Resolved the repository's Pyright errors across dynamic Qt mixins and geometry typing boundaries.
 
 ## 0.3.6 — 2026-08-12
 

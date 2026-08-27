@@ -9,7 +9,7 @@ This checklist separates work that can be automated from decisions that require 
 - [ ] Review the README's download links, supported platforms, safety notes, and known limitations.
 - [ ] Add or refresh at least one real screenshot or short demo recording before announcing the release. Do not use mock UI or placeholder artwork.
 - [ ] Review the repository description, website URL, topics, social preview, and About text in GitHub repository settings.
-- [ ] Choose and publish an explicit software license before accepting outside contributions or redistributing binaries. The repository currently does not select one for you.
+- [x] MIT license is committed in `LICENSE` and referenced by package metadata.
 
 ## 2. Local quality gate
 
