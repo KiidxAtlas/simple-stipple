@@ -250,6 +250,13 @@ def sync_engraving_visibility(page: Any) -> None:
     is_image = region_id is not None and treatment_kind(page, region_id) == "engrave"
     page._engraving_section.setVisible(is_image)
     if is_image:
+        # The engraving controls live inside the Regions section, which is
+        # collapsed by default. Expanding only the inner section leaves it
+        # hidden by its collapsed parent, stranding Remove/placement, so lift
+        # the parent too when a region actually carries an image.
+        zones_section = getattr(page, "_zones_section", None)
+        if zones_section is not None:
+            zones_section.set_expanded(True)
         page._engraving_section.set_expanded(True)
 
 

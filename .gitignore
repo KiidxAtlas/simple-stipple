@@ -48,3 +48,6 @@ htmlcov/
 .env
 .envrc
 
+.opencode/plans/CODE_CLEANUP_PLAN.md
+.gitignore
+FILE_STRUCTURE_REFACTOR_PLAN.md

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.7 — 2026-08-29
+
+### Changed
+
+- Tightened the application shell chrome so the workspace header is compact and stays
+  visually secondary to the active drawing.
+- Unified control sizing across the app through a shared height contract for buttons,
+  inputs, and selectors, removing page-local height exceptions that misaligned the
+  command palette, Save, Support, and Settings actions.
+- Added a compact precision bar mode that folds pan and precision controls into a single
+  contextual menu for canvas-heavy workflows in Draft and Pattern.
+- Reordered the Pattern inspector into a numbered top-down flow — 1. Outline,
+  2. Pattern, 3. Regions (optional) — so the everyday path reads before advanced steps.
+- Hid the Draft editing toolbar until a drawing exists so first-time makers see only
+  Import, Draw, and Trace on the empty canvas.
+
+### Fixed
+
+- Prevented Pattern's numeric side-panel inputs from collapsing into clipped strips when
+  a document subtitle wraps, by enforcing a readable minimum field height.
+
 ## 0.3.6 — 2026-08-27
 
 ### Release readiness
