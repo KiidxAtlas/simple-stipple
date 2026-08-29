@@ -718,14 +718,9 @@ class DraftPage(BasePage):
         if hasattr(self, "_precision_bar"):
             self._precision_bar.refresh()
 
-        # The empty canvas already presents Import, Draw, and Trace as the
-        # meaningful choices. Do not make first-time makers scan a second
-        # toolbar full of editing controls before any drawing exists.
-        canvas_active = n > 0 or mode != "select"
-        if hasattr(self, "_toolbar_module"):
-            self._toolbar_module.setVisible(canvas_active)
-        if hasattr(self, "_precision_bar"):
-            self._precision_bar.setVisible(canvas_active)
+        # The mode toolbar (Select / Edit / Draw) and precision controls stay
+        # visible at all times so the editing surface never appears or vanishes
+        # under the user.
 
         # Keep selection-dependent actions disabled rather than letting a
         # click on an unmet precondition (nothing selected, one shape when

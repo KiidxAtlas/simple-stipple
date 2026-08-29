@@ -115,7 +115,9 @@ def _initialize_view(
     # selectable editor geometry (for example, dense pattern-fill hatch rows).
     self._render_only_entity_ids = set()
     self._draw_construction_mode = False
-    self._draw_split_enabled = True
+    # Drawing creates persistent geometry by default. Users can opt into
+    # carving/splitting from the Draw sidebar's Auto-split control.
+    self._draw_split_enabled = False
 
     # Ghost polylines: a non-interactive secondary set rendered beneath the
     # main polys (faded, dashed). Used for showing context layers — e.g.

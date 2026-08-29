@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.8 — 2026-08-29
+
+### Fixed
+
+- Kept the Draft Select/Edit/Draw toolbar and precision controls visible at all times,
+  including on an empty canvas.
+- Reduced offset arc tessellation to avoid producing excessively dense DXF polylines
+  that downstream laser/CAM software may silently ignore.
+- Made newly drawn shapes ordinary editable geometry by default; Auto-split/carving is
+  now opt-in from the Draw sidebar.
+- Preserved both the original and offset geometry through DXF export and re-import.
+
 ## 0.3.7 — 2026-08-29
 
 ### Changed

@@ -89,6 +89,7 @@ __all__ = [
 
 Path = list[Point]
 _SCALE = 100_000.0
+_OFFSET_ARC_TOLERANCE_MM = 0.01
 
 try:
     import pyclipper as _clipper_module  # type: ignore[import-untyped]
@@ -192,6 +193,11 @@ def clipper_offset(path: Sequence[Point], distance: float, *, closed: bool = Tru
         return []
     if _clipper is not None and closed:
         engine = _clipper.PyclipperOffset()
+        # Coordinates are scaled to 1e5 units before entering pyclipper.
+        # Its default arc tolerance is far too fine at that scale, producing
+        # thousands of near-collinear vertices that some laser/CAM importers
+        # silently discard. Preserve 0.01 mm contour fidelity instead.
+        engine.ArcTolerance = _OFFSET_ARC_TOLERANCE_MM * _SCALE
         engine.AddPath(_scaled(points)[0], _clipper.JT_ROUND, _clipper.ET_CLOSEDPOLYGON)
         return _unscaled(engine.Execute(distance * _SCALE))
     from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon

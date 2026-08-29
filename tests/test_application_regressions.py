@@ -8,8 +8,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import pytest
 from PIL import Image, ImageDraw
 from PySide6.QtCore import QSize
@@ -27,6 +25,7 @@ from simple_stipple.app.window import App
 from simple_stipple.canvas.operations.draw_ops import DrawOpsService
 from simple_stipple.canvas.view.helpers import _animate_view_to
 from simple_stipple.canvas.widget import DxfCanvas
+from simple_stipple.core.editing.boolean import offset_polyline
 from simple_stipple.core.formats.dxf import load_dxf_polylines
 from simple_stipple.core.formats.dxf_write import write_polylines_dxf
 from simple_stipple.core.formats.laserstar import export_laserstar_package
@@ -361,10 +360,15 @@ def test_recent_and_remembered_directory_flows_without_native_modals(
 
 def test_representative_backend_export_and_image_flows(tmp_path: Path) -> None:
     square = [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]]
+    outline = square[0]
+    offset = offset_polyline(outline, 1.0)
+    assert offset is not None
+    assert len(offset) < 500
     dxf_path = tmp_path / "square.dxf"
-    write_polylines_dxf(square, str(dxf_path), close=True)
+    write_polylines_dxf([outline, offset], str(dxf_path), close=False)
     loaded = load_dxf_polylines(str(dxf_path))
-    assert loaded and len(loaded[0]) >= 4
+    assert len(loaded) == 2
+    assert all(len(polyline) >= 4 for polyline in loaded)
 
     region = build_fill_region(square)
     strokes = apply_fill(region, FillSpec(mode="lines", spacing=2.0))
@@ -401,6 +405,21 @@ def test_representative_backend_export_and_image_flows(tmp_path: Path) -> None:
     assert (package / "01_pattern-and-outline.fvi").is_file()
     assert (package / "job-manifest.json").is_file()
     assert (package / "job-preview.png").is_file()
+
+
+def test_draw_shapes_do_not_carve_by_default(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    source = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+    canvas.load([source], fit=False)
+    canvas._draw_primitive = "rectangle"
+    canvas._draw_shape_anchor_w = (2.0, 2.0)
+    canvas._draw_shape_cursor_w = (8.0, 8.0)
+    canvas._draw_shape_preview_active = True
+
+    assert canvas._draw_split_enabled is False
+    assert canvas._commit_shape_preview()
+    assert len(canvas._entities) == 2
+    canvas.close()
 
 
 def test_canvas_edit_history_snapping_and_render_smoke(app: QApplication) -> None:

@@ -71,7 +71,7 @@ def test_startup_and_shutdown_complete(source: str) -> None:
 
 def test_release_metadata_check_is_non_mutating() -> None:
     result = subprocess.run(
-        ["bash", "scripts/release.sh", "--check", "v0.3.7"],
+        ["bash", "scripts/release.sh", "--check", "v0.3.8"],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -79,4 +79,4 @@ def test_release_metadata_check_is_non_mutating() -> None:
         timeout=10,
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "Release metadata is consistent for v0.3.7." in result.stdout
+    assert "Release metadata is consistent for v0.3.8." in result.stdout
