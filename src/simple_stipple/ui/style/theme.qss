@@ -77,7 +77,7 @@ QTabBar::tab {
     background: transparent;
     border: none;
     border-bottom: 3px solid transparent;
-    padding: 11px 18px 10px;
+    padding: 9px 16px 8px;
     margin-right: 4px;
     font-size: $font_sm;
     font-weight: $weight_semibold;
@@ -266,15 +266,21 @@ QLabel[role="shell-meta"] {
    "what do I do next" never needs a second look. */
 
 QPushButton, QToolButton {
-    min-height: 40px;
+    min-height: 34px;
     min-width: 24px;
-    padding: 5px 12px;
+    padding: 4px 10px;
     border: 1px solid $border;
     border-radius: $radius_md;
     background: $bg_surface;
     color: $text;
     font-size: $font_sm;
     font-weight: $weight_medium;
+}
+/* Shared component contract: ordinary controls, inputs, and selectors share
+   one vertical rhythm. Specialized editor controls opt into the compact role
+   below instead of inventing a page-local height. */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    min-height: 34px;
 }
 QPushButton:hover, QToolButton:hover {
     background: $bg_surface_alt;
@@ -294,7 +300,7 @@ QPushButton[role="primary"] {
     border: 1px solid $accent;
     color: $on_accent;
     min-height: 34px;
-    padding: 6px 18px;
+    padding: 5px 14px;
     font-weight: $weight_bold;
 }
 QPushButton[role="primary"]:hover {
@@ -378,7 +384,7 @@ QPushButton[role="browse-btn"] {
    inherit the large general-purpose horizontal padding that caused labels to
    run beneath a menu indicator at compact widths. */
 QPushButton[role="precision-control"], QToolButton[role="precision-control"] {
-    min-height: 36px;
+    min-height: 30px;
     padding: 4px 8px;
 }
 QPushButton[role="cycle-icon"] {
@@ -442,6 +448,13 @@ QListWidget {
     padding: 5px 9px;
     selection-background-color: $selection;
     selection-color: $text_strong;
+}
+/* Side-panel layouts must never compress fields below a readable control
+   height when a document subtitle wraps. Without this floor, Pattern's
+   numeric inputs collapsed to thin, partially clipped strips after loading
+   an outline. */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+    min-height: 34px;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
     border-color: $border_strong;

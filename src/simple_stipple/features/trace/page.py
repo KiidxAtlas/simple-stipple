@@ -365,7 +365,6 @@ class TracePage(BasePage):
         export_layout.setContentsMargins(0, 0, 0, 0)
         export_layout.setSpacing(4)
         self._export_all_btn = QPushButton("Export Traced Outlines DXF…")
-        self._export_all_btn.setMinimumHeight(36)
         self._export_all_btn.setProperty("role", "primary")
         self._export_all_btn.setToolTip("Save all traced outlines as a DXF file")
         self._export_all_btn.setEnabled(False)
@@ -374,7 +373,6 @@ class TracePage(BasePage):
         _export_overflow_btn.setText("Options")
         _export_overflow_btn.setProperty("role", "overflow")
         _export_overflow_btn.setMinimumWidth(72)
-        _export_overflow_btn.setMinimumHeight(36)
         _export_overflow_btn.setToolTip("More export options")
         _export_overflow_btn.setAccessibleName("More export options")
         _export_overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -735,9 +733,10 @@ class TracePage(BasePage):
         self._grid_module = CanvasGridModule(
             canvas=self._canvas,
             on_changed=self._refresh_canvas_panels,
+            compact=True,
         )
-        layout.addWidget(self._grid_module)
         self._precision_bar = self._grid_module
+        self._toolbar_module.add_context_widget(self._grid_module)
 
         # Placed at the bottom of the page (after the splitter) so every
         # canvas page keeps the same anatomy: toolbars up top, canvas in

@@ -83,4 +83,10 @@ class TraceCanvasPageRuntime(CanvasPageRuntimeBase):
             unit=str(getattr(self._canvas, "_unit_system", "mm")),
         )
         self._precision_bar.refresh()
+        # A blank Trace page is an image-import task, not a canvas-editing
+        # task. Keep the first screen calm until the user begins drawing or
+        # has generated editable geometry.
+        canvas_active = bool(self._canvas.poly_count) or str(summary["mode"]) != "select"
+        self._toolbar_module.setVisible(canvas_active)
+        self._precision_bar.setVisible(canvas_active)
         self._layer_sidebar.refresh_tree()

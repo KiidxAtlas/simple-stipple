@@ -157,4 +157,10 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
             unit=str(getattr(self._canvas, "_unit_system", "mm")),
         )
         self._precision_bar.refresh()
+        # Before an outline exists, canvas-editing controls are visual noise:
+        # they compete with the three clear first actions in the empty state.
+        # Bring them in as soon as the maker starts drawing or has geometry.
+        canvas_active = bool(self._canvas.poly_count) or str(summary["mode"]) != "select"
+        self._toolbar_module.setVisible(canvas_active)
+        self._precision_bar.setVisible(canvas_active)
         self._layer_sidebar.refresh_tree()

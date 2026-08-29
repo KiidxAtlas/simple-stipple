@@ -314,8 +314,11 @@ class MenuController:
         shell = surface_frame("panel")
         shell.setProperty("role", "hero")
         layout = QHBoxLayout(shell)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(12)
+        # This is application chrome, not a landing-page hero. A compact
+        # header preserves space for the drawing and keeps the workspace
+        # controls visually secondary to the active tool.
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
 
         # App identity — compact single line
         title = QLabel("Simple Stipple")
@@ -405,7 +408,9 @@ class MenuController:
         palette_btn = QPushButton(
             _native_keys(self._app._shortcut("app.command_palette")) or "Commands"
         )
-        palette_btn.setFixedHeight(30)
+        # Let the shared control contract determine the height. A fixed 30px
+        # exception made the ⌘K affordance visibly misalign with Workspace,
+        # Save, Support, and Settings in the same header.
         palette_btn.setMinimumWidth(44)
         self._app._shortcut_tooltip_specs.append(
             (palette_btn, "Command palette", "app.command_palette")

@@ -205,7 +205,6 @@ class ConvertPage(BasePage):
         footer_layout.setSpacing(8)
 
         self._footer_btn = QPushButton(self._BTN_LABELS[0])
-        self._footer_btn.setMinimumHeight(38)
         self._footer_btn.setProperty("role", "primary")
         self._footer_btn.clicked.connect(self._trigger_active_subtab)
 
@@ -213,7 +212,6 @@ class ConvertPage(BasePage):
         self._footer_overflow.setText("Options")
         self._footer_overflow.setProperty("role", "overflow")
         self._footer_overflow.setMinimumWidth(72)
-        self._footer_overflow.setMinimumHeight(38)
         self._footer_overflow.setToolTip("More actions")
         self._footer_overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._footer_overflow_menu = QMenu(self._footer_overflow)

@@ -440,6 +440,14 @@ class CanvasToolbarModule(QWidget):
         self.guidance_label = guidance_label
         self.sync_from_canvas()
 
+    def add_context_widget(self, widget: QWidget) -> None:
+        """Place a compact contextual control before the current-tool guidance."""
+        toolbar_layout = self.toolbar.layout()
+        if not isinstance(toolbar_layout, QHBoxLayout):
+            return
+        guidance_index = toolbar_layout.indexOf(self.guidance_label)
+        toolbar_layout.insertWidget(max(0, guidance_index), widget)
+
     def bind_canvas(self, canvas: Any | None) -> None:
         self._canvas = canvas
         self.sync_from_canvas()
@@ -501,8 +509,9 @@ class CanvasGridModule(CanvasPrecisionBar):
         *,
         canvas: Any | None = None,
         on_changed: Callable[[], None] | None = None,
+        compact: bool = False,
     ) -> None:
-        super().__init__(canvas, on_changed=on_changed)
+        super().__init__(canvas, on_changed=on_changed, compact=compact)
 
 
 class CanvasLayerTreeModule(QWidget):

@@ -47,7 +47,9 @@ def _num_edit(on_commit) -> QLineEdit:
     edit = QLineEdit()
     edit.setAlignment(Qt.AlignmentFlag.AlignRight)
     edit.setMinimumWidth(72)
-    edit.setMinimumHeight(30)
+    # Keep the programmatic size contract in sync with the shared QSS rule;
+    # tests and non-styled embedding rely on it too.
+    edit.setMinimumHeight(34)
     edit.editingFinished.connect(on_commit)
     return edit
 
@@ -138,7 +140,6 @@ class CanvasPropertiesPanel(QWidget):
         self._aspect_lock_btn = QPushButton("Lock")
         self._aspect_lock_btn.setCheckable(True)
         self._aspect_lock_btn.setMinimumWidth(64)
-        self._aspect_lock_btn.setMinimumHeight(30)
         self._aspect_lock_btn.setAccessibleName("Lock aspect ratio")
         self._aspect_lock_btn.setToolTip(
             "Lock aspect ratio\nKeeps width/height proportional for both "
@@ -167,7 +168,6 @@ class CanvasPropertiesPanel(QWidget):
         ):
             btn = QPushButton(text)
             btn.setToolTip(tip)
-            btn.setMinimumHeight(28)
             btn.clicked.connect(cb)
             transform_actions.addWidget(btn, index // 2, index % 2)
             self._transform_buttons.append(btn)

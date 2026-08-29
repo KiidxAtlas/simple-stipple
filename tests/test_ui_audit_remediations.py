@@ -1438,9 +1438,10 @@ def test_pattern_defaults_to_basic_controls_and_can_reveal_advanced(
     # Zones are always available because they are part of the primary
     # workflow, even when secondary advanced controls are hidden.
     assert page._zone_scroll.isVisibleTo(page)
-    # Regions head the inspector: it names what the Pattern and Fill sections
-    # below it are editing, so it opens with them.
-    assert page._zones_section.is_expanded()
+    # Regions remain available, but the initial page follows the maker's
+    # normal sequence: outline, choose a pattern, then refine regions only
+    # when a multi-region job needs it.
+    assert not page._zones_section.is_expanded()
 
     page._advanced_mode_cb.setChecked(True)
     app.processEvents()

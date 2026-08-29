@@ -28,18 +28,26 @@ from simple_stipple.ui.components.units import parse_numeric_expression
 
 
 class CanvasPrecisionBar(QFrame):
-    """Persistent precision controls for canvas-heavy workflows."""
+    """Precision controls, presented inline or through one contextual menu."""
 
-    def __init__(self, canvas: Any | None, *, on_changed=None) -> None:
+    def __init__(self, canvas: Any | None, *, on_changed=None, compact: bool = False) -> None:
         super().__init__()
         self._canvas = canvas
         self._on_changed = on_changed
+        self._compact = compact
 
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setProperty("surface", "panel")
-        self.setProperty("role", "precision-bar")
+        if compact:
+            self.setProperty("role", "precision-trigger")
+        else:
+            self.setProperty("surface", "panel")
+            self.setProperty("role", "precision-bar")
 
-        layout = QHBoxLayout(self)
+        shell_layout = QHBoxLayout(self)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        self._controls = QWidget()
+        layout = QHBoxLayout(self._controls)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
 
@@ -50,8 +58,9 @@ class CanvasPrecisionBar(QFrame):
         self._pan_btn.setToolTip("Pan the canvas by dragging (Shortcut: P)")
         self._pan_btn.setAccessibleName("Pan tool")
         self._pan_btn.clicked.connect(self._toggle_pan)
-        layout.addWidget(self._pan_btn)
-        layout.addSpacing(8)
+        if not compact:
+            layout.addWidget(self._pan_btn)
+            layout.addSpacing(8)
 
         self._grid_btn = QPushButton("Grid")
         self._grid_btn.setProperty("role", "precision-control")
@@ -197,6 +206,23 @@ class CanvasPrecisionBar(QFrame):
         layout.addWidget(self._constraints_btn)
 
         layout.addStretch()
+        if compact:
+            shell_layout.addWidget(self._pan_btn)
+            shell_layout.addSpacing(4)
+            self._precision_menu = QMenu(self)
+            content_action = QWidgetAction(self._precision_menu)
+            content_action.setDefaultWidget(self._controls)
+            self._precision_menu.addAction(content_action)
+            self._compact_trigger = QToolButton()
+            self._compact_trigger.setText("Precision")
+            self._compact_trigger.setProperty("role", "secondary")
+            self._compact_trigger.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            self._compact_trigger.setToolTip("Grid, snap, construction, and constraint settings")
+            self._compact_trigger.setAccessibleName("Precision settings")
+            self._compact_trigger.setMenu(self._precision_menu)
+            shell_layout.addWidget(self._compact_trigger)
+        else:
+            shell_layout.addWidget(self._controls)
         self.refresh()
 
     def bind_canvas(self, canvas: Any | None) -> None:

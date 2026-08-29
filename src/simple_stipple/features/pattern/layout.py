@@ -164,9 +164,10 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._grid_module = CanvasGridModule(
         canvas=page._canvas,
         on_changed=page._refresh_canvas_panels,
+        compact=True,
     )
-    layout.addWidget(page._grid_module)
     page._precision_bar = page._grid_module
+    page._toolbar_module.add_context_widget(page._grid_module)
 
     # Placed at the bottom of the page (after the splitter) so every
     # canvas page keeps the same anatomy: toolbars up top, canvas in
@@ -266,12 +267,12 @@ def build_left(page: Any, layout: QVBoxLayout) -> None:
     page._advanced_mode_cb.setToolTip("Show image engraving placement and fabrication controls")
     layout.addWidget(page._advanced_mode_cb)
     build_shape_section(page, layout)
-    # One inspector, read top-down: what is selected → what it produces →
-    # the pattern and fill that produce it. There is no second copy of the
-    # Pattern/Fill controls scoped to something else.
-    build_zones_section(page, layout)
+    # Put the everyday flow first: load an outline, choose a pattern, then
+    # refine regions only when needed. Region management before pattern choice
+    # made the page read like a configuration console.
     build_pattern_section(page, layout)
     build_fill_section(page, layout)
+    build_zones_section(page, layout)
     # The engraving controls are not a sidebar section of their own: they
     # belong to whichever region carries an image, so they are built into the
     # region editor and shown only when that region's pattern is Image.
@@ -294,7 +295,6 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     zones_layout.addWidget(scope_hint)
     assign_row = QHBoxLayout()
     page._assign_zone_btn = QPushButton("Apply to Selection")
-    page._assign_zone_btn.setMinimumHeight(30)
     page._assign_zone_btn.setToolTip("Apply these settings to the selected region(s).")
     page._assign_zone_btn.clicked.connect(page._assign_zone)
     assign_row.addWidget(page._assign_zone_btn, stretch=1)
@@ -341,7 +341,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     # sit with the region that carries the image.
     page._zone_editor_layout = zones_layout
     page._zones_section = CollapsibleSection(
-        "Regions", zones_content, expanded=True, subtitle="No regions yet"
+        "3. Regions", zones_content, expanded=False, subtitle="Optional"
     )
     layout.addWidget(page._zones_section)
 
@@ -435,7 +435,7 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     shape_layout.addWidget(page._lattice_snap_btn)
 
     page._shape_section = CollapsibleSection(
-        "Shape", shape_content, expanded=True, subtitle="No file loaded"
+        "1. Outline", shape_content, expanded=True, subtitle="No file loaded"
     )
     layout.addWidget(page._shape_section)
 
@@ -595,7 +595,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._modifiers_label.hide()
     page._modifiers_widget.hide()
     page._pattern_section = CollapsibleSection(
-        "Pattern", pattern_content, expanded=True, subtitle=""
+        "2. Pattern", pattern_content, expanded=True, subtitle="Choose a pattern"
     )
     layout.addWidget(page._pattern_section)
 

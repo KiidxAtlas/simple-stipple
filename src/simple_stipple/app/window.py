@@ -164,8 +164,10 @@ class App(QMainWindow):
 
         central = QWidget()
         central_layout = QVBoxLayout(central)
-        central_layout.setContentsMargins(8, 8, 8, 8)
-        central_layout.setSpacing(8)
+        # The canvas is the product. Keep the shell deliberately compact so
+        # useful workspace is not lost to stacked decorative containers.
+        central_layout.setContentsMargins(6, 6, 6, 6)
+        central_layout.setSpacing(6)
         self.setCentralWidget(central)
 
         # ── Tabs ──────────────────────────────────────────────────────────────

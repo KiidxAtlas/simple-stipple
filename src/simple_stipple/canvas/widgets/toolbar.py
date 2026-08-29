@@ -169,7 +169,6 @@ def canvas_toolbar(
     for mode in modes:
         btn = QPushButton(mode)
         btn.setProperty("role", "mode-button")
-        btn.setMinimumHeight(30)
         btn.setProperty("active", mode == modes[0])
         if mode in mode_hints:
             btn.setToolTip(mode_hints[mode])
@@ -182,7 +181,6 @@ def canvas_toolbar(
 
         fit_btn = QPushButton("Fit")
         fit_btn.setProperty("role", "secondary")
-        fit_btn.setMinimumHeight(30)
         fit_keys = canvas_commands.native_shortcut("view.fit") or "F"
         fit_btn.setToolTip(f"Fit view to content (Shortcut: {fit_keys})")
         fit_btn.clicked.connect(on_fit)
@@ -203,7 +201,6 @@ def canvas_toolbar(
             label, slot, role = spec if len(spec) == 3 else (*spec, None)
             btn = QPushButton(label)
             btn.setProperty("role", role or "secondary")
-            btn.setMinimumHeight(30)
             if label in secondary_hints:
                 btn.setToolTip(secondary_hints[label])
             btn.clicked.connect(slot)

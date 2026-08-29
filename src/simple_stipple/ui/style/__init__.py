@@ -132,9 +132,9 @@ def _density_overrides(density: str) -> str:
     return """
 
 QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {
-    min-height: 36px;
+    min-height: 40px;
 }
-QPushButton[role="primary"] { min-height: 44px; }
+QPushButton[role="primary"] { min-height: 40px; }
 QCheckBox, QRadioButton, QSlider { min-height: 44px; }
 QListView::item, QTreeView::item, QListWidget::item, QTreeWidget::item {
     min-height: 36px;

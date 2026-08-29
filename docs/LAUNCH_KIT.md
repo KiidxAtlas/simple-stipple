@@ -1,14 +1,14 @@
 # Simple Stipple launch kit
 
-Use this kit after a signed desktop release and a real demo are available. Keep the message focused on one outcome: turning artwork into editable laser-engraving geometry.
+Use this kit after a signed desktop release and a real demo are available. Keep the message focused on one outcome: turning artwork into editable laser-engraving geometry. For the first ten hands-on testers, use the more structured [Founding Maker Pilot](FOUNDING_MAKER_PILOT.md).
 
 ## One-line description
 
-Simple Stipple turns drawings, CAD files, and images into editable laser-engraving patterns and production-ready vector exports.
+Simple Stipple turns drawings, CAD files, and images into editable laser-engraving patterns and machine-ready vector exports.
 
 ## Short announcement
 
-> I built Simple Stipple, a desktop tool for creating laser-engraving patterns.
+> I built Simple Stipple, a local desktop tool for turning artwork into controllable laser-engraving patterns.
 >
 > It lets you draw or import DXF, SVG, and FVI geometry, trace raster images into editable outlines, generate patterns such as Honeycomb, Stipple Dots, Voronoi, Mesh, Brick, and custom tiles, then export DXF, SVG, FVI, or a LaserStar package.
 >
@@ -16,7 +16,7 @@ Simple Stipple turns drawings, CAD files, and images into editable laser-engravi
 >
 > Download: https://github.com/KiidxAtlas/simple-stipple/releases/latest
 >
-> I am looking for feedback from people using diode, CO2, or fiber laser workflows.
+> I am recruiting a small group of makers using diode, CO2, fiber, or galvo workflows to test it on one real, non-sensitive job.
 
 Attach one real before/after image or a short screen recording. Do not publish private customer designs.
 

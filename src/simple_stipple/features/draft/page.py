@@ -136,7 +136,7 @@ class DraftPage(BasePage):
         _tp_layout.setContentsMargins(8, 4, 8, 4)
         _tp_layout.setSpacing(4)
         _tp_layout.addWidget(self._build_toolbar())
-        _tp_layout.addWidget(self._build_grid())
+        self._build_grid()
         root.addWidget(_toolbar_panel)
         root.addWidget(canvas_host, stretch=1)
 
@@ -158,7 +158,6 @@ class DraftPage(BasePage):
     def _build_toolbar(self) -> QWidget:
         open_btn = QToolButton()
         open_btn.setText("Import…")
-        open_btn.setMinimumHeight(30)
         open_btn.setToolTip(
             "Choose a DXF, FVI, or SVG file. If the drawing has content, "
             "choose whether to replace it or add the imported geometry."
@@ -174,18 +173,15 @@ class DraftPage(BasePage):
             KIND_VECTOR,
             empty_message="No recent vector files.",
         )
-        self._recent_btn.setMinimumHeight(30)
         self._recent_btn.setToolTip("Pick from recently imported DXF, FVI, or SVG files")
         self._recent_btn.fileSelected.connect(self._load_vector)
 
         self._explode_btn = QPushButton("Explode")
-        self._explode_btn.setMinimumHeight(30)
         self._explode_btn.setToolTip("Explode selected shapes into segments")
         self._explode_btn.setEnabled(False)
         self._explode_btn.clicked.connect(self._explode_selected)
 
         self._merge_btn = QPushButton("Merge")
-        self._merge_btn.setMinimumHeight(30)
         self._merge_btn.setToolTip("Merge selected segments into connected objects (select 2+)")
         self._merge_btn.setEnabled(False)
         self._merge_btn.clicked.connect(self._merge_selected)
@@ -220,8 +216,10 @@ class DraftPage(BasePage):
         self._grid_module = CanvasGridModule(
             canvas=self._canvas,
             on_changed=self._refresh_status,
+            compact=True,
         )
         self._precision_bar = self._grid_module
+        self._toolbar_module.add_context_widget(self._grid_module)
         return self._grid_module
 
     # ── Canvas ────────────────────────────────────────────────────────────
@@ -325,7 +323,6 @@ class DraftPage(BasePage):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
         self._export_btn = QPushButton("Export Drawing DXF…")
-        self._export_btn.setMinimumHeight(38)
         self._export_btn.setProperty("role", "primary")
         self._export_btn.setToolTip(
             "Export as DXF; grouped shapes share a layer so a laser runs each group as one job"
@@ -335,7 +332,7 @@ class DraftPage(BasePage):
         overflow = QToolButton()
         overflow.setText("Format")
         overflow.setProperty("role", "overflow")
-        overflow.setMinimumSize(72, 38)
+        overflow.setMinimumWidth(72)
         overflow.setToolTip("Choose an export format")
         overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(overflow)
@@ -720,6 +717,15 @@ class DraftPage(BasePage):
 
         if hasattr(self, "_precision_bar"):
             self._precision_bar.refresh()
+
+        # The empty canvas already presents Import, Draw, and Trace as the
+        # meaningful choices. Do not make first-time makers scan a second
+        # toolbar full of editing controls before any drawing exists.
+        canvas_active = n > 0 or mode != "select"
+        if hasattr(self, "_toolbar_module"):
+            self._toolbar_module.setVisible(canvas_active)
+        if hasattr(self, "_precision_bar"):
+            self._precision_bar.setVisible(canvas_active)
 
         # Keep selection-dependent actions disabled rather than letting a
         # click on an unmet precondition (nothing selected, one shape when
