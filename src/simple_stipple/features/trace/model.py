@@ -19,6 +19,7 @@ class TraceModel:
     image_path: str | None = None
     running: bool = False
     trace_pending: bool = False
+    active_trace_token: int | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
     trace_thread: threading.Thread | None = None
     shutting_down: bool = False

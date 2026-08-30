@@ -357,6 +357,30 @@ def test_trace_job_emits_success_or_cancellation_without_touching_page_widgets(
     assert cancelled == [32]
 
 
+def test_trace_force_reload_restarts_stalled_worker(
+    app: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = TracePage(settings={})
+    page._img_path = "source.png"
+    page._running = True
+    page._active_trace_token = 7
+    old_event = page._cancel_event
+    starts: list[bool] = []
+    monkeypatch.setattr(page, "_start_trace_thread", lambda: starts.append(True))
+
+    page._force_reload_trace()
+
+    assert old_event.is_set()
+    assert starts == [True]
+    assert page._trace_pending is False
+    page._active_trace_token = 9
+    page._running = True
+    page._handle_trace_cancelled(7)
+    assert page._running is True
+    page.shutdown()
+    page.close()
+
+
 def test_trace_job_classifies_success_cancellation_and_failures() -> None:
     image_result = ("display", [[(0.0, 0.0), (1.0, 1.0)]], 200, 100)
 

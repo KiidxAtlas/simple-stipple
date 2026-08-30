@@ -112,6 +112,7 @@ class TracePage(BasePage):
         "_img_path": "image_path",
         "_running": "running",
         "_trace_pending": "trace_pending",
+        "_active_trace_token": "active_trace_token",
         "_cancel_event": "cancel_event",
         "_trace_thread": "trace_thread",
         "_shutting_down": "shutting_down",
@@ -149,6 +150,7 @@ class TracePage(BasePage):
         self._img_path: str | None = None
         self._running: bool = False
         self._trace_pending: bool = False
+        self._active_trace_token: int | None = None
         self._cancel_event = threading.Event()
         self._trace_thread: threading.Thread | None = None
         self._shutting_down = False
@@ -804,6 +806,7 @@ class TracePage(BasePage):
     def _reset_trace_runtime_state(self) -> None:
         self._running = False
         self._trace_pending = False
+        self._active_trace_token = None
         self._cancel_event.set()
         self._cancel_event = threading.Event()
         self._last_out = None
@@ -989,23 +992,19 @@ class TracePage(BasePage):
         self._emit_state_changed()
 
     def _force_reload_trace(self) -> None:
-        """Manual escape hatch: bypass the live-preview debounce and any
-        stuck in-flight/cancelled state, then start a fresh retrace right
-        away with the current settings."""
-        if self._running:
-            self._trace_revision += 1
-            self._trace_pending = False
-            self._cancel_event.set()
-            self._set_status("Cancelling trace…")
-            return
+        """Start a fresh trace immediately, even if the current worker stalls."""
         if not self._img_path:
             self._set_status("No image loaded.", STATUS_ERR)
             return
         self._trace_revision += 1
-        self._cancel_event.set()
-        self._preview_timer.stop()
-        self._running = False
         self._trace_pending = False
+        self._preview_timer.stop()
+        self._cancel_event.set()
+        # The old worker keeps its own cancellation event reference. Mark this
+        # run inactive and launch a fresh token now; late signals from the old
+        # worker are ignored instead of changing the new run's UI state.
+        self._running = False
+        self._active_trace_token = None
         self._start_trace_thread()
 
     def _smooth_traced_curves(self) -> None:
@@ -1093,11 +1092,12 @@ class TracePage(BasePage):
         self._cancel_event = cancel_event
         old_event.set()
         trace_token = self._trace_revision
+        self._active_trace_token = trace_token
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
         self._set_status("Tracing…")
-        self._reload_btn.setText("Cancel Trace")
-        self._reload_btn.setToolTip("Stop the trace and keep the last completed result")
+        self._reload_btn.setText("Restart Trace")
+        self._reload_btn.setToolTip("Abandon the current trace and start a fresh one")
         self._trace_thread = threading.Thread(
             target=self._run_trace,
             args=(self._img_path, kwargs, trace_token, cancel_event),
@@ -1146,6 +1146,7 @@ class TracePage(BasePage):
         diagnostics = analyze_geometry(polys)
 
         self._running = False
+        self._active_trace_token = None
         self._reload_btn.setText("Refresh Preview")
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
@@ -1203,6 +1204,7 @@ class TracePage(BasePage):
         if trace_token != self._trace_revision:
             return
         self._running = False
+        self._active_trace_token = None
         self._reload_btn.setText("Refresh Preview")
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
@@ -1258,21 +1260,15 @@ class TracePage(BasePage):
         else:
             self.sendSelectedToDraftRequested.emit(polys)
 
-    def _handle_trace_cancelled(self, _trace_token: int) -> None:
+    def _handle_trace_cancelled(self, trace_token: int) -> None:
+        """Reset the UI only for the currently active worker's cancellation."""
         if self._shutting_down:
             return
-        """A stale, superseded trace bailed out early instead of running to
-        completion (see cancel_check in image_to_outlines). This still has
-        to reset _running and drain _trace_pending exactly like the done/
-        error handlers do — without it, _running never clears and every
-        future retrace request just silently sets _trace_pending and
-        returns forever, since _start_trace_thread refuses to start a new
-        thread while _running is (permanently, wrongly) True. That's the
-        actual "stops updating after enough rapid changes" freeze.
-        """
+        if trace_token != self._active_trace_token:
+            return
+        self._active_trace_token = None
         self._running = False
         self._reload_btn.setText("Refresh Preview")
-        self._set_status("Trace cancelled; previous result retained.")
         self._progress.setVisible(False)
         self._progress.setRange(0, 100)
         self._progress.setValue(0)

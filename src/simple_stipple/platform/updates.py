@@ -152,16 +152,21 @@ def update_staging_path(version: str, system: str | None = None) -> Path:
 
 
 def _windows_updater_script() -> str:
-    """PowerShell handoff that atomically swaps the EXE after this process exits."""
+    """PowerShell handoff that replaces the EXE after this process exits."""
     return r"""param(
     [Parameter(Mandatory=$true)][int]$ProcessId,
     [Parameter(Mandatory=$true)][string]$NewFile,
     [Parameter(Mandatory=$true)][string]$Target,
-    [Parameter(Mandatory=$true)][string]$LogFile
+    [Parameter(Mandatory=$true)][string]$LogFile,
+    [switch]$Elevated
 )
 $ErrorActionPreference = "Stop"
 $Backup = "$Target.previous"
+function Write-UpdateLog([string]$Message) {
+    Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format o) $Message"
+}
 try {
+    Write-UpdateLog "Update handoff started."
     $Deadline = [DateTime]::UtcNow.AddMinutes(10)
     while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and
            ([DateTime]::UtcNow -lt $Deadline)) {
@@ -184,9 +189,20 @@ try {
         throw
     }
     Start-Process -FilePath $Target
+    Write-UpdateLog "Update installed and relaunched."
     Remove-Item -LiteralPath $Backup -Force -ErrorAction SilentlyContinue
 } catch {
-    Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format o) $($_.Exception.Message)"
+    $Message = $_.Exception.Message
+    Write-UpdateLog "Update failed: $Message"
+    if (-not $Elevated -and $Message -match "access|denied|permission") {
+        $Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass " +
+            "-File `"$PSCommandPath`" -ProcessId $ProcessId " +
+            "-NewFile `"$NewFile`" -Target `"$Target`" " +
+            "-LogFile `"$LogFile`" -Elevated"
+        Start-Process -FilePath "powershell.exe" -Verb RunAs `
+            -WindowStyle Hidden -ArgumentList $Arguments
+        Write-UpdateLog "Requested elevated retry."
+    }
 }
 """
 

@@ -25,12 +25,14 @@ def test_update_staging_path_is_private_and_sanitized(tmp_path: Path, monkeypatc
     assert path.name == "SimpleStipple-v-1.2.3.exe"
 
 
-def test_windows_handoff_has_wait_rollback_replace_and_restart_steps() -> None:
+def test_windows_handoff_has_wait_rollback_replace_restart_and_elevation_steps() -> None:
     script = updates._windows_updater_script()
     assert "Get-Process -Id $ProcessId" in script
     assert "Move-Item -LiteralPath $Target -Destination $Backup" in script
     assert "Move-Item -LiteralPath $Backup -Destination $Target" in script
     assert "Start-Process -FilePath $Target" in script
+    assert "Start-Process -FilePath \"powershell.exe\" -Verb RunAs" in script
+    assert "Requested elevated retry." in script
 
 
 def test_windows_self_update_launches_detached_helper(tmp_path: Path, monkeypatch) -> None:
