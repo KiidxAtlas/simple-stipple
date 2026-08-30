@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.9 — 2026-08-29
+
+### Fixed
+
+- Added immediate Trace restart recovery for stalled workers, with token checks that
+  prevent late cancellation signals from resetting a newer trace.
+- Made Windows EXE updates retry with UAC elevation when the installed application
+  directory is protected, while recording handoff and failure details in the updater log.
+
 ## 0.3.8 — 2026-08-29
 
 ### Fixed
