@@ -1834,7 +1834,7 @@ class CanvasRenderer:
 
     def _paint_measure_button(self, painter: QPainter, canvas_w: int) -> None:
         pad, bh, bw = 6, 22, 114
-        label = "\u2715 Scale [M]" if self._host._measure_mode else "\u2295 Scale [M]"
+        label = "\u2715 Measure [M]" if self._host._measure_mode else "\u2295 Measure [M]"
         color = _MEASURE_COLOR if self._host._measure_mode else QColor(DIM)
         bg = QColor("#002233") if self._host._measure_mode else QColor("#14141e")
         top = pad + self._chrome_top()
@@ -1859,7 +1859,7 @@ class CanvasRenderer:
         color = QColor("#a371f7") if active else QColor(DIM)
         bg = QColor("#1c1233") if active else QColor("#14141e")
         top = pad + self._chrome_top()
-        # Sits immediately to the left of the Scale button.
+        # Sits immediately to the left of the Measure button.
         mx1, _my1, _mx2, _my2 = self._host._mbtn_rect
         x2 = mx1 - gap
         x1 = x2 - bw
@@ -2371,7 +2371,7 @@ class CanvasRenderer:
                     hint,
                 )
 
-        # Always-visible Scale/Dimension entry points, followed by a prominent
+        # Always-visible Measure/Dimension entry points, followed by a prominent
         # staged workflow card while either tool is active. Paint this as UI
         # chrome after geometry so it cannot disappear behind the drawing.
         self._paint_measure_button(painter, w)

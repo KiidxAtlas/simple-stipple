@@ -77,6 +77,11 @@ class RepoPage(BasePage):
         dir_row.addWidget(browse_btn)
         left.addLayout(dir_row)
 
+        intro = QLabel("Keep a shared pattern or workspace library in sync with its Git remote.")
+        intro.setProperty("role", "hint")
+        intro.setWordWrap(True)
+        left.addWidget(intro)
+
         self._repo_status = QLabel("")
         self._repo_status.setWordWrap(True)
         left.addWidget(self._repo_status)

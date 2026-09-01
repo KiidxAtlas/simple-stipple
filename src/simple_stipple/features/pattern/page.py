@@ -881,6 +881,10 @@ class PatternPage(BasePage):
             item.setData(_Qt.ItemDataRole.UserRole, operation.key)
             self._output_list.addItem(item)
         self._output_list.blockSignals(False)
+        # Reordering needs a row to move; on an empty list an active button
+        # reads as broken rather than as "nothing to reorder yet".
+        self._output_up_btn.setEnabled(bool(operations))
+        self._output_down_btn.setEnabled(bool(operations))
         self._refresh_preflight_markers()
 
     def _on_output_row_toggled(self, item) -> None:
@@ -1422,7 +1426,7 @@ class PatternPage(BasePage):
         """One Export: every enabled operation, in the chosen format."""
         operations = self._enabled_operations()
         if not operations:
-            self._set_status("Nothing to export — give a region a treatment first.", STATUS_WARN)
+            self._set_status("Nothing to export — load or draw an outline first.", STATUS_WARN)
             return
         engraving = any(op.kind == "engrave" for op in operations)
         if engraving and self._engrave_min_power.value() > self._engrave_max_power.value():

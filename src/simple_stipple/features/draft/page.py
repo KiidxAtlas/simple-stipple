@@ -263,6 +263,10 @@ class DraftPage(BasePage):
         side_layout = QVBoxLayout(side_panel)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
+        # Wide enough for the export row ("Export Drawing DXF…" + the "Format"
+        # overflow button) so neither button clips against the window edge,
+        # matching the ~320px rail convention used by the Trace/Pattern pages.
+        side_panel.setMinimumWidth(320)
 
         self._props_panel = CanvasPropertiesPanel(self._canvas)
         props_scroll = QScrollArea()
@@ -311,7 +315,7 @@ class DraftPage(BasePage):
         self._inspector_splitter = inspector_splitter
         side_layout.addWidget(self._build_export_controls())
 
-        splitter = content_splitter(self._canvas, side_panel, sizes=(860, 280))
+        splitter = content_splitter(self._canvas, side_panel, sizes=(860, 320))
         splitter.set_responsive_secondary(1, "Inspector")
         self._content_splitter = splitter
         layout.addWidget(splitter, stretch=1)
@@ -671,27 +675,16 @@ class DraftPage(BasePage):
             return
 
         summary = self._canvas.get_status_summary()
-        topo = self._canvas.get_topology_summary()
         n = self._canvas.poly_count
         mode = str(summary["mode"])
 
-        if hasattr(self._canvas, "get_command_guidance"):
-            readiness, tone = self._canvas.get_command_guidance()
-        elif n:
-            quick_mode = (
-                f"Quick shape: {self._canvas.quick_shape_mode.title()}"
-                if self._canvas.quick_shape_enabled
-                else "Quick shape: Off"
-            )
-            readiness = f"{quick_mode} · {topo['closed']} closed/{topo['open']} open"
-            tone = "accent"
+        # Lifecycle readiness only: the toolbar already carries the active
+        # command's next-step hint, so the status pill states where the
+        # drawing stands instead of repeating that guidance.
+        if n:
+            readiness, tone = "Ready to export", "success"
         else:
-            readiness = (
-                "Drag on canvas to create shape"
-                if self._canvas.quick_shape_enabled
-                else "Quick shape disabled"
-            )
-            tone = "warn"
+            readiness, tone = "No geometry", "warn"
 
         zoom = self._canvas.get_zoom_percent()
         cursor = self._canvas.get_cursor_world_pos()

@@ -264,7 +264,7 @@ def refresh_pattern_properties_panel(page: Any) -> None:
 def build_left(page: Any, layout: QVBoxLayout) -> None:
     page._advanced_mode_cb = QCheckBox("Advanced controls")
     page._advanced_mode_cb.setChecked(bool(page._settings.get("pattern_advanced_mode", False)))
-    page._advanced_mode_cb.setToolTip("Show image engraving placement and fabrication controls")
+    page._advanced_mode_cb.setToolTip("Show laser power, speed, and passes controls")
     layout.addWidget(page._advanced_mode_cb)
     build_shape_section(page, layout)
     # Put the everyday flow first: load an outline, choose a pattern, then
@@ -341,7 +341,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     # sit with the region that carries the image.
     page._zone_editor_layout = zones_layout
     page._zones_section = CollapsibleSection(
-        "3. Regions", zones_content, expanded=False, subtitle="Optional"
+        "Regions", zones_content, expanded=False, subtitle="Optional"
     )
     layout.addWidget(page._zones_section)
 
@@ -353,11 +353,24 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     page._dxf_edit.setCursorPosition(0)
     page._dxf_edit.setToolTip("Path to a DXF, FVI, or SVG outline (drag-and-drop supported)")
     page._dxf_edit.editingFinished.connect(page._reload_dxf)
-    shape_layout.addWidget(page._dxf_edit)
 
-    # Keep the source path readable on a narrow sidebar. The previous single
-    # row forced the path, recent-files control, browse action, and reload
-    # affordance to compete for the same width and clipped their labels.
+    # Keep the source path readable on a narrow sidebar: reload rides beside
+    # the path, and Recent/Browse share the next row. All four on one row
+    # clipped "Recent" to "Recen" at the compact sidebar width — the theme's
+    # button min-width overrides code-side minimums, so only rebalancing the
+    # rows holds.
+    path_row = QHBoxLayout()
+    path_row.setSpacing(6)
+    path_row.addWidget(page._dxf_edit, stretch=1)
+    _reload_btn = QToolButton()
+    _reload_btn.setIcon(QIcon(str(icon_path("reload.svg"))))
+    _reload_btn.setAccessibleName("Reload outline file")
+    _reload_btn.setFixedSize(32, 32)
+    _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
+    _reload_btn.clicked.connect(page._reload_dxf)
+    path_row.addWidget(_reload_btn)
+    shape_layout.addLayout(path_row)
+
     file_actions = QHBoxLayout()
     file_actions.setSpacing(6)
     page._recent_btn = RecentFilesButton(
@@ -373,13 +386,6 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     browse_btn.setToolTip("Browse for a DXF, FVI, or SVG outline")
     browse_btn.clicked.connect(page._browse_dxf)
     file_actions.addWidget(browse_btn)
-    _reload_btn = QToolButton()
-    _reload_btn.setIcon(QIcon(str(icon_path("reload.svg"))))
-    _reload_btn.setAccessibleName("Reload outline file")
-    _reload_btn.setFixedSize(32, 32)
-    _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
-    _reload_btn.clicked.connect(page._reload_dxf)
-    file_actions.addWidget(_reload_btn)
     shape_layout.addLayout(file_actions)
     orig_row = QHBoxLayout()
     orig_row.addWidget(QLabel("Original:"))
@@ -400,40 +406,6 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     page._ar_lock_btn = QToolButton()
     page._ar_lock_btn.setCheckable(True)
     page._ar_lock_btn.setChecked(True)
-    # ── Document pattern grid ─────────────────────────────────────────────
-    # One grid for the whole document is what makes two adjacent regions with
-    # the same settings meet without a seam. It lives here, at document scope,
-    # rather than as a phase offset the user has to retype per region.
-    section_label(shape_layout, "Pattern grid")
-    grid_row = QGridLayout()
-    grid_row.addWidget(QLabel("Origin X (mm)"), 0, 0)
-    page._lattice_origin_x = QLineEdit("0")
-    page._lattice_origin_y = QLineEdit("0")
-    for field in (page._lattice_origin_x, page._lattice_origin_y):
-        field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
-        field.setFixedWidth(80)
-        field.textChanged.connect(page._on_document_lattice_changed)
-    grid_row.addWidget(page._lattice_origin_x, 0, 1)
-    grid_row.addWidget(QLabel("Origin Y (mm)"), 1, 0)
-    grid_row.addWidget(page._lattice_origin_y, 1, 1)
-    grid_row.addWidget(QLabel("Seed"), 2, 0)
-    page._lattice_seed = QLineEdit("1")
-    page._lattice_seed.setValidator(QIntValidator(0, 2_147_483_647, page._lattice_seed))
-    page._lattice_seed.setFixedWidth(80)
-    page._lattice_seed.setToolTip(
-        "Fixes the random generators (Voronoi, Truchet, Stipple) so re-solving "
-        "reproduces the same result instead of reshuffling it"
-    )
-    page._lattice_seed.textChanged.connect(page._on_document_lattice_changed)
-    grid_row.addWidget(page._lattice_seed, 2, 1)
-    shape_layout.addLayout(grid_row)
-    page._lattice_snap_btn = QPushButton("Snap grid to selection")
-    page._lattice_snap_btn.setToolTip(
-        "Move the document grid origin to the corner of the current selection"
-    )
-    page._lattice_snap_btn.clicked.connect(page._snap_lattice_to_selection)
-    shape_layout.addWidget(page._lattice_snap_btn)
-
     page._shape_section = CollapsibleSection(
         "1. Outline", shape_content, expanded=True, subtitle="No file loaded"
     )
@@ -490,6 +462,40 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     preset_actions.addWidget(overflow_btn)
     pattern_layout.addLayout(preset_actions)
     page._refresh_preset_combo()
+    # ── Document pattern grid ─────────────────────────────────────────────
+    # One grid for the whole document is what makes two adjacent regions with
+    # the same settings meet without a seam. It parameterizes pattern
+    # placement, so it lives with the pattern controls, at document scope,
+    # rather than as a phase offset the user has to retype per region.
+    section_label(pattern_layout, "Pattern grid")
+    grid_row = QGridLayout()
+    grid_row.addWidget(QLabel("Origin X (mm)"), 0, 0)
+    page._lattice_origin_x = QLineEdit("0")
+    page._lattice_origin_y = QLineEdit("0")
+    for field in (page._lattice_origin_x, page._lattice_origin_y):
+        field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
+        field.setFixedWidth(80)
+        field.textChanged.connect(page._on_document_lattice_changed)
+    grid_row.addWidget(page._lattice_origin_x, 0, 1)
+    grid_row.addWidget(QLabel("Origin Y (mm)"), 1, 0)
+    grid_row.addWidget(page._lattice_origin_y, 1, 1)
+    grid_row.addWidget(QLabel("Seed"), 2, 0)
+    page._lattice_seed = QLineEdit("1")
+    page._lattice_seed.setValidator(QIntValidator(0, 2_147_483_647, page._lattice_seed))
+    page._lattice_seed.setFixedWidth(80)
+    page._lattice_seed.setToolTip(
+        "Fixes the random generators (Voronoi, Truchet, Stipple) so re-solving "
+        "reproduces the same result instead of reshuffling it"
+    )
+    page._lattice_seed.textChanged.connect(page._on_document_lattice_changed)
+    grid_row.addWidget(page._lattice_seed, 2, 1)
+    pattern_layout.addLayout(grid_row)
+    page._lattice_snap_btn = QPushButton("Snap grid to selection")
+    page._lattice_snap_btn.setToolTip(
+        "Move the document grid origin to the corner of the current selection"
+    )
+    page._lattice_snap_btn.clicked.connect(page._snap_lattice_to_selection)
+    pattern_layout.addWidget(page._lattice_snap_btn)
     _sp = page._on_inspector_edit
     # Derived from the spec table, never hand-listed: a hardcoded list silently
     # skipped building widgets for newly added patterns, and

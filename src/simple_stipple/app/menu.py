@@ -391,13 +391,6 @@ class MenuController:
         self._app._shortcut_tooltip_specs.append((save_btn, "Save workspace", "workspace.save"))
         layout.addWidget(save_btn)
 
-        support_btn = QPushButton("Support")
-        support_btn.setProperty("role", "secondary")
-        support_btn.setAccessibleName("Support Simple Stipple")
-        support_btn.setToolTip("Support Simple Stipple on Buy Me a Coffee")
-        support_btn.clicked.connect(self._show_support_dialog)
-        layout.addWidget(support_btn)
-
         action_sep = QLabel("│")
         action_sep.setProperty("role", "toolbar-sep")
         action_sep.setToolTip("Application actions")
@@ -410,7 +403,7 @@ class MenuController:
         )
         # Let the shared control contract determine the height. A fixed 30px
         # exception made the ⌘K affordance visibly misalign with Workspace,
-        # Save, Support, and Settings in the same header.
+        # Save, and Settings in the same header.
         palette_btn.setMinimumWidth(44)
         self._app._shortcut_tooltip_specs.append(
             (palette_btn, "Command palette", "app.command_palette")
@@ -430,6 +423,7 @@ class MenuController:
         if settings_keys:
             settings_action.setShortcut(QKeySequence(settings_keys))
         app_menu.addAction("User Manual", self._app._show_help)
+        app_menu.addAction("Support Me", self._show_support_dialog)
         app_menu.addSeparator()
         update_action = app_menu.addAction("Check for Updates…", self._app._open_update_check)
         update_action.setIcon(download_icon())
@@ -588,7 +582,7 @@ class CommandController:
             ),
             CommandSpec(
                 "canvas.measure",
-                "Canvas: Toggle Scale",
+                "Canvas: Toggle Measure",
                 "canvas measure",
                 self._invoke_canvas_measure,
             ),

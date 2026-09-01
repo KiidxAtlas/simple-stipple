@@ -130,6 +130,12 @@ class ConvertPage(BasePage):
         self._task_combo.setVisible(False)
         left.addWidget(self._task_combo)
 
+        # FVI is the default task and the first format newcomers meet, but the
+        # acronym is opaque — gloss it once, right under the chooser.
+        fvi_gloss = QLabel("FVI is the FiberStar/StarFX laser format")
+        fvi_gloss.setProperty("role", "hint")
+        left.addWidget(fvi_gloss)
+
         left.addSpacing(4)
 
         self._subtab_desc = QLabel(self._TOOL_DESCS[0])
@@ -387,7 +393,7 @@ class ConvertPage(BasePage):
                 check.toggled.connect(lambda _checked: self._emit_state_changed())
             for combo in subtab.findChildren(QComboBox):
                 combo.currentIndexChanged.connect(lambda _index: self._emit_state_changed())
-            subtab._src_edit.textChanged.connect(self._sync_shared_input_from_task)
+            subtab._source_changed.connect(self._on_subtab_source_changed)
         self.setAcceptDrops(True)
         selected_task = max(0, min(3, int(self._settings.get("convert_selected_task", 0))))
         selected_button = self._tool_group.button(selected_task)
@@ -460,17 +466,25 @@ class ConvertPage(BasePage):
             self._svg_dxf_subtab,
         )[self._tool_stack.currentIndex()]
 
-    def _sync_shared_input_from_task(self, _text: str = "") -> None:
+    def _sync_shared_input_from_task(self) -> None:
         if not hasattr(self, "_shared_input_edit"):
             return
-        source = self._active_conversion_tab()._src_edit.text()
+        source = self._active_conversion_tab()._src_text
         self._shared_input_edit.blockSignals(True)
         self._shared_input_edit.setText(source)
         self._shared_input_edit.blockSignals(False)
 
+    def _on_subtab_source_changed(self) -> None:
+        # The task forms hold the per-task source as plain state; the shared
+        # header is the only visible input, so it mirrors the active task.
+        # Inactive-task changes (e.g. session restore) still dirty the
+        # workspace without touching the header.
+        if self.sender() is self._active_conversion_tab():
+            self._sync_shared_input_from_task()
+        self._emit_state_changed()
+
     def _set_shared_source(self, path: str) -> None:
-        self._active_conversion_tab()._src_edit.setText(path)
-        self._sync_shared_input_from_task()
+        self._active_conversion_tab()._set_src_text(path)
         if Path(path).is_file():
             record_recent(self._settings, KIND_VECTOR, path)
 
@@ -700,18 +714,18 @@ class ConvertPage(BasePage):
     def get_workspace_state(self) -> dict:
         return {
             "active_sub_tab": self._tool_stack.currentIndex(),
-            "fvi_src": self._fvi_subtab._src_edit.text(),
+            "fvi_src": self._fvi_subtab._src_text,
             "fvi_out": self._fvi_subtab._out_edit.text(),
             "fvi_batch": self._fvi_subtab._is_batch(),
             "fvi_include_subfolders": self._fvi_subtab._include_subfolders.isChecked(),
-            "fix_src": self._fix_subtab._src_edit.text(),
+            "fix_src": self._fix_subtab._src_text,
             "fix_out": self._fix_subtab._out_edit.text(),
             "fix_batch": self._fix_subtab._is_batch(),
             "fix_include_subfolders": self._fix_subtab._include_subfolders.isChecked(),
             "fix_mode": str(self._fix_subtab._repair_mode.currentData()),
-            "svg_src": self._svg_subtab._src_edit.text(),
+            "svg_src": self._svg_subtab._src_text,
             "svg_out": self._svg_subtab._out_edit.text(),
-            "svg_dxf_src": self._svg_dxf_subtab._src_edit.text(),
+            "svg_dxf_src": self._svg_dxf_subtab._src_text,
             "svg_dxf_out": self._svg_dxf_subtab._out_edit.text(),
             "preview_polys": self._preview_canvas.get_polylines_state(),
             "preview_view": self._preview_canvas.get_view_state(),
@@ -730,22 +744,22 @@ class ConvertPage(BasePage):
             btn.setChecked(True)
         self._on_tool_changed(index)
         self._fvi_subtab._set_mode("batch" if bool(state.get("fvi_batch")) else "single")
-        self._fvi_subtab._src_edit.setText(str(state.get("fvi_src", "")))
+        self._fvi_subtab._set_src_text(str(state.get("fvi_src", "")))
         self._fvi_subtab._out_edit.setText(str(state.get("fvi_out", "")))
         self._fvi_subtab._include_subfolders.setChecked(
             bool(state.get("fvi_include_subfolders", True))
         )
         self._fix_subtab._set_mode("batch" if bool(state.get("fix_batch")) else "single")
-        self._fix_subtab._src_edit.setText(str(state.get("fix_src", "")))
+        self._fix_subtab._set_src_text(str(state.get("fix_src", "")))
         self._fix_subtab._out_edit.setText(str(state.get("fix_out", "")))
         self._fix_subtab._include_subfolders.setChecked(
             bool(state.get("fix_include_subfolders", True))
         )
         fix_mode_index = self._fix_subtab._repair_mode.findData(str(state.get("fix_mode", "safe")))
         self._fix_subtab._repair_mode.setCurrentIndex(max(0, fix_mode_index))
-        self._svg_subtab._src_edit.setText(str(state.get("svg_src", "")))
+        self._svg_subtab._set_src_text(str(state.get("svg_src", "")))
         self._svg_subtab._out_edit.setText(str(state.get("svg_out", "")))
-        self._svg_dxf_subtab._src_edit.setText(str(state.get("svg_dxf_src", "")))
+        self._svg_dxf_subtab._set_src_text(str(state.get("svg_dxf_src", "")))
         self._svg_dxf_subtab._out_edit.setText(str(state.get("svg_dxf_out", "")))
         preview_polys = [list(poly) for poly in state.get("preview_polys", [])]
         self._preview_canvas.set_polylines_state(preview_polys, fit=bool(preview_polys))

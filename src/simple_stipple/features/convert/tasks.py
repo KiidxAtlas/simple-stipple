@@ -57,6 +57,7 @@ class _ConversionSubTab(QWidget):
     _btn_state = Signal(bool)
     _status_sig = Signal(str, str)
     _readiness_requested = Signal()
+    _source_changed = Signal()
     _status: QLabel
     _thread: threading.Thread | None = None
     _mode_single: QPushButton
@@ -64,6 +65,10 @@ class _ConversionSubTab(QWidget):
     _include_subfolders: QCheckBox
     _btn: QPushButton
     _last_out: str | None = None
+    # Per-task source path. The sidebar has no INPUT field of its own — the
+    # page's shared header is the single visible input — so the path lives
+    # here as plain state, mutated only through _set_src_text.
+    _src_text: str = ""
 
     def _browse_src(self) -> None:
         raise NotImplementedError
@@ -71,35 +76,38 @@ class _ConversionSubTab(QWidget):
     def _run(self) -> None:
         raise NotImplementedError
 
-    def _bind_readiness(self, source_edit: QLineEdit) -> None:
+    def _bind_readiness(self) -> None:
         """Keep the Convert button disabled until a source path is entered.
 
         Without this the primary action sits fully enabled on an empty form,
         and clicking it does nothing but flash a status message — a dead end
         instead of a button that visibly isn't ready yet.
         """
-        self._readiness_edit = source_edit
         if not getattr(self, "_readiness_signal_bound", False):
             self._readiness_requested.connect(
                 self._refresh_readiness_on_gui,
                 Qt.ConnectionType.QueuedConnection,
             )
             self._readiness_signal_bound = True
-        source_edit.textChanged.connect(lambda _text: self._refresh_readiness())
         self._refresh_readiness()
+
+    def _set_src_text(self, text: str) -> None:
+        """Update the source path, then re-evaluate readiness and notify the
+        page so its shared header input and dirty tracking stay in step."""
+        self._src_text = text
+        self._refresh_readiness()
+        self._source_changed.emit()
 
     def is_ready(self) -> bool:
         if getattr(self, "_running", False):
             return False
-        edit = getattr(self, "_readiness_edit", None)
-        return bool(edit.text().strip()) if edit is not None else True
+        return bool(self._src_text.strip())
 
     @Slot()
     def _refresh_readiness(self) -> None:
-        # Worker threads call this on job completion, but ``is_ready()`` reads
-        # a QLineEdit — a GUI-thread-only object. Marshal back to the GUI
-        # thread when invoked from a worker instead of touching the widget
-        # off-thread.
+        # Worker threads call this on job completion; the slots downstream of
+        # ``_btn_state`` touch GUI widgets. Marshal back to the GUI thread when
+        # invoked from a worker instead of running those slots off-thread.
         app = QCoreApplication.instance()
         if app is not None and QThread.currentThread() is not app.thread():
             # PySide6 6.9 no longer accepts this string-based invokeMethod
@@ -207,17 +215,22 @@ class _ConversionSubTab(QWidget):
     def _on_mode_switch(self, mode: str) -> None:
         """Override in subclasses to handle mode-specific UI changes."""
 
-    def _add_picker_row(
+    def _build_output_row(
         self,
         layout: QVBoxLayout,
+        *,
         heading: str,
         placeholder: str,
-        *,
-        tooltip: str = "",
-        btn_tooltip: str = "",
+        btn_tooltip: str,
         on_browse,
+        tooltip: str = "",
     ) -> QLineEdit:
-        """Add a section label + line-edit + Browse button row; return the edit."""
+        """Add the OUTPUT picker row; return its edit.
+
+        There is no sidebar INPUT row: ConvertPage's shared header is the
+        single visible input field; the per-task source path is held in
+        ``_src_text`` instead.
+        """
         return browse_row(
             layout,
             heading=heading,
@@ -251,40 +264,6 @@ class _ConversionSubTab(QWidget):
         self._include_subfolders.setToolTip(tooltip)
         self._include_subfolders.setVisible(False)
         layout.addWidget(self._include_subfolders)
-
-    def _build_input_output_rows(
-        self,
-        layout: QVBoxLayout,
-        *,
-        src_heading: str,
-        src_placeholder: str,
-        src_btn_tooltip: str,
-        out_heading: str,
-        out_placeholder: str,
-        out_btn_tooltip: str,
-        on_browse_src,
-        on_browse_out,
-        src_tooltip: str = "",
-        out_tooltip: str = "",
-    ) -> tuple[QLineEdit, QLineEdit]:
-        """Add INPUT + OUTPUT picker rows; return the two edits."""
-        src_edit = self._add_picker_row(
-            layout,
-            src_heading,
-            src_placeholder,
-            tooltip=src_tooltip,
-            btn_tooltip=src_btn_tooltip,
-            on_browse=on_browse_src,
-        )
-        out_edit = self._add_picker_row(
-            layout,
-            out_heading,
-            out_placeholder,
-            tooltip=out_tooltip,
-            btn_tooltip=out_btn_tooltip,
-            on_browse=on_browse_out,
-        )
-        return src_edit, out_edit
 
     def _build_action_row(self, btn_text: str, tooltip: str = "") -> None:
         """Create the primary action button and status label.
@@ -362,16 +341,12 @@ class FviSubTab(_ConversionSubTab):
             layout,
             "Find FVI files recursively and preserve their folder structure in the output",
         )
-        self._src_edit, self._out_edit = self._build_input_output_rows(
+        self._out_edit = self._build_output_row(
             layout,
-            src_heading="INPUT",
-            src_placeholder="Select a .fvi file or folder…",
-            src_btn_tooltip="Browse for an FVI source file or folder",
-            out_heading="OUTPUT",
-            out_placeholder="Optional (blank = same as source)…",
-            out_btn_tooltip="Choose an output folder for converted files",
-            on_browse_src=self._browse_src,
-            on_browse_out=self._browse_out,
+            heading="OUTPUT",
+            placeholder="Optional (blank = same as source)…",
+            btn_tooltip="Choose an output folder for converted files",
+            on_browse=self._browse_out,
         )
 
         layout.addStretch()
@@ -383,7 +358,7 @@ class FviSubTab(_ConversionSubTab):
         self._out_dir_sig.connect(self._set_output_dir)
         # Note: _status_sig intentionally NOT connected to avoid sidebar popups
         # that appear after conversions complete.
-        self._bind_readiness(self._src_edit)
+        self._bind_readiness()
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -409,7 +384,7 @@ class FviSubTab(_ConversionSubTab):
                 self, "Select folder containing FVI files", idir
             )
         if path:
-            self._src_edit.setText(path)
+            self._set_src_text(path)
 
     def _browse_out(self) -> None:
         idir = self._settings.get("fvi_output_dir", "")
@@ -430,7 +405,7 @@ class FviSubTab(_ConversionSubTab):
             # switching tools re-enables the page's footer CTA even while
             # this subtab's own background thread is still converting.
             return
-        src = self._src_edit.text().strip()
+        src = self._src_text.strip()
         if not src:
             self._status_sig.emit("Choose an FVI source file or folder first.", STATUS_WARN)
             return
@@ -587,16 +562,12 @@ class FixerSubTab(_ConversionSubTab):
         )
         layout.addWidget(self._repair_mode)
 
-        self._src_edit, self._out_edit = self._build_input_output_rows(
+        self._out_edit = self._build_output_row(
             layout,
-            src_heading="INPUT",
-            src_placeholder="Select a .dxf file or folder…",
-            src_btn_tooltip="Browse for a DXF file or folder to repair",
-            out_heading="OUTPUT",
-            out_placeholder="Optional — defaults to a non-destructive fixed copy…",
-            out_btn_tooltip="Choose an output file or folder",
-            on_browse_src=self._browse_src,
-            on_browse_out=self._browse_out,
+            heading="OUTPUT",
+            placeholder="Optional — defaults to a non-destructive fixed copy…",
+            btn_tooltip="Choose an output file or folder",
+            on_browse=self._browse_out,
         )
 
         layout.addStretch()
@@ -610,7 +581,7 @@ class FixerSubTab(_ConversionSubTab):
         self._btn_state.connect(self._btn.setEnabled)
         # Note: _status_sig intentionally NOT connected to avoid sidebar popups
         # that appear after repairs complete.
-        self._bind_readiness(self._src_edit)
+        self._bind_readiness()
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -618,11 +589,8 @@ class FixerSubTab(_ConversionSubTab):
 
     def _on_mode_switch(self, mode: str) -> None:
         batch = mode == "batch"
-        self._src_edit.clear()
+        self._set_src_text("")
         self._out_edit.clear()
-        self._src_edit.setPlaceholderText(
-            "Select a folder containing DXF files…" if batch else "Select a .dxf file…"
-        )
         self._out_edit.setPlaceholderText(
             "Optional output folder (blank = sibling fixed folder)…"
             if batch
@@ -643,7 +611,7 @@ class FixerSubTab(_ConversionSubTab):
                 "DXF files (*.dxf *.DXF);;All files (*)",
             )
         if path:
-            self._src_edit.setText(path)
+            self._set_src_text(path)
 
     def _browse_out(self) -> None:
         if self._is_batch():
@@ -661,7 +629,7 @@ class FixerSubTab(_ConversionSubTab):
     def _run(self) -> None:
         if self._running:
             return
-        src = self._src_edit.text().strip()
+        src = self._src_text.strip()
         if not src:
             self._status_sig.emit("Choose an input DXF file first.", STATUS_WARN)
             return
@@ -895,18 +863,13 @@ class SvgSubTab(_ConversionSubTab):
             layout,
             "Find DXF files recursively and preserve their folder structure in the output",
         )
-        self._src_edit, self._out_edit = self._build_input_output_rows(
+        self._out_edit = self._build_output_row(
             layout,
-            src_heading="INPUT",
-            src_placeholder="Select a .dxf file…",
-            src_btn_tooltip="Browse for a DXF file to convert",
-            src_tooltip="Path to the DXF file to convert to SVG",
-            out_heading="OUTPUT",
-            out_placeholder="Leave blank to auto-name…",
-            out_btn_tooltip="Choose where to save the SVG file",
-            out_tooltip="Destination SVG path (blank = same name as input with .svg extension)",
-            on_browse_src=self._browse_src,
-            on_browse_out=self._browse_out,
+            heading="OUTPUT",
+            placeholder="Leave blank to auto-name…",
+            btn_tooltip="Choose where to save the SVG file",
+            tooltip="Destination SVG path (blank = same name as input with .svg extension)",
+            on_browse=self._browse_out,
         )
 
         layout.addStretch()
@@ -918,7 +881,7 @@ class SvgSubTab(_ConversionSubTab):
         self._btn_state.connect(self._btn.setEnabled)
         # Note: _status_sig intentionally NOT connected to avoid sidebar popups
         # that appear after conversions complete.
-        self._bind_readiness(self._src_edit)
+        self._bind_readiness()
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -926,11 +889,8 @@ class SvgSubTab(_ConversionSubTab):
 
     def _on_mode_switch(self, mode: str) -> None:
         batch = mode == "batch"
-        self._src_edit.clear()
+        self._set_src_text("")
         self._out_edit.clear()
-        self._src_edit.setPlaceholderText(
-            "Select a folder containing DXF files…" if batch else "Select a .dxf file…"
-        )
         self._out_edit.setPlaceholderText(
             "Optional output folder (blank = sibling SVG folder)…"
             if batch
@@ -951,7 +911,7 @@ class SvgSubTab(_ConversionSubTab):
                 "DXF files (*.dxf *.DXF);;All files (*)",
             )
         if path:
-            self._src_edit.setText(path)
+            self._set_src_text(path)
             if not self._is_batch() and not self._out_edit.text().strip():
                 self._out_edit.setText(str(Path(path).with_suffix(".svg")))
 
@@ -971,7 +931,7 @@ class SvgSubTab(_ConversionSubTab):
     def _run(self) -> None:
         if self._running:
             return
-        src = self._src_edit.text().strip()
+        src = self._src_text.strip()
         if not src:
             self._status_sig.emit("Choose an input DXF file or folder first.", STATUS_WARN)
             return
@@ -1125,18 +1085,13 @@ class SvgToDxfSubTab(_ConversionSubTab):
             layout,
             "Find SVG files recursively and preserve their folder structure in the output",
         )
-        self._src_edit, self._out_edit = self._build_input_output_rows(
+        self._out_edit = self._build_output_row(
             layout,
-            src_heading="INPUT",
-            src_placeholder="Select a .svg file…",
-            src_btn_tooltip="Browse for an SVG file to convert",
-            src_tooltip="Path to the SVG file to convert",
-            out_heading="OUTPUT",
-            out_placeholder="Leave blank to auto-name…",
-            out_btn_tooltip="Choose where to save the DXF file",
-            out_tooltip="Destination DXF path (blank = same name as input with .dxf)",
-            on_browse_src=self._browse_src,
-            on_browse_out=self._browse_out,
+            heading="OUTPUT",
+            placeholder="Leave blank to auto-name…",
+            btn_tooltip="Choose where to save the DXF file",
+            tooltip="Destination DXF path (blank = same name as input with .dxf)",
+            on_browse=self._browse_out,
         )
 
         layout.addStretch()
@@ -1146,7 +1101,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
         self._btn_state.connect(self._btn.setEnabled)
         # Note: _status_sig intentionally NOT connected to avoid sidebar popups
         # that appear after conversions complete.
-        self._bind_readiness(self._src_edit)
+        self._bind_readiness()
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -1154,11 +1109,8 @@ class SvgToDxfSubTab(_ConversionSubTab):
 
     def _on_mode_switch(self, mode: str) -> None:
         batch = mode == "batch"
-        self._src_edit.clear()
+        self._set_src_text("")
         self._out_edit.clear()
-        self._src_edit.setPlaceholderText(
-            "Select a folder containing SVG files…" if batch else "Select a .svg file…"
-        )
         self._out_edit.setPlaceholderText(
             "Optional output folder (blank = sibling DXF folder)…"
             if batch
@@ -1179,7 +1131,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 "SVG files (*.svg *.SVG);;All files (*)",
             )
         if path:
-            self._src_edit.setText(path)
+            self._set_src_text(path)
             if not self._is_batch() and not self._out_edit.text().strip():
                 self._out_edit.setText(str(Path(path).with_suffix(".dxf")))
 
@@ -1199,7 +1151,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
     def _run(self) -> None:
         if self._running:
             return
-        src = self._src_edit.text().strip()
+        src = self._src_text.strip()
         if not src:
             self._status_sig.emit("Choose an input SVG file or folder first.", STATUS_WARN)
             return

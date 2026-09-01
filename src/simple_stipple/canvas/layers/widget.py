@@ -65,6 +65,10 @@ def _swatch_icon(color: str | None, *, size: int = 12) -> QIcon:
     return QIcon(pm)
 
 
+def _layer_count_label(count: int) -> str:
+    return f"{count} layer{'s' if count != 1 else ''}"
+
+
 class DxfLayersTree(QFrame):
     """Hierarchical layer and shape tree for canvas sidebars."""
 
@@ -286,7 +290,7 @@ class DxfLayersTree(QFrame):
         title_label = QLabel(title)
         title_label.setProperty("role", "callout-title")
         header.addWidget(title_label)
-        self._summary = QLabel("0 layers")
+        self._summary = QLabel(_layer_count_label(0))
         self._summary.setProperty("role", "callout-body")
         header.addWidget(self._summary)
         header.addStretch()
@@ -491,7 +495,7 @@ class DxfLayersTree(QFrame):
             empty = QTreeWidgetItem(["No layers to show yet."])
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
             self._tree.addTopLevelItem(empty)
-            self._summary.setText("0 layers")
+            self._summary.setText(_layer_count_label(0))
             self._syncing = False
             return
 
@@ -592,7 +596,7 @@ class DxfLayersTree(QFrame):
 
             self._tree.addTopLevelItem(layer_item)
 
-        self._summary.setText(f"{len(self._layer_order)} layers")
+        self._summary.setText(_layer_count_label(len(self._layer_order)))
         if active_item is not None:
             self._tree.setCurrentItem(active_item)
         # Restore each layer's previous expand state instead of blanket

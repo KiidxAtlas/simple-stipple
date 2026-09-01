@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QStyle,
     QStyleOption,
+    QToolButton,
     QWidget,
 )
 
@@ -114,18 +115,26 @@ def test_every_top_level_page_fits_and_visible_buttons_meet_minimum_target(
     window.close()
 
 
-def test_shell_exposes_visible_support_action(app: QApplication) -> None:
+def test_shell_exposes_support_action_in_app_menu(app: QApplication) -> None:
     window = App()
     window.show()
     app.processEvents()
+    # Prime header position is reserved for workspace actions; Support lives in
+    # the application (gear) menu alongside the other help entries.
     support = [
         button
         for button in window._shell_header.findChildren(QAbstractButton)
         if button.text() == "Support"
     ]
-    assert len(support) == 1
-    assert support[0].accessibleName() == "Support Simple Stipple"
-    assert "Buy Me a Coffee" in support[0].toolTip()
+    assert support == []
+    gear = [
+        button
+        for button in window._shell_header.findChildren(QToolButton)
+        if button.accessibleName() == "Application menu"
+    ]
+    assert len(gear) == 1
+    menu_texts = [action.text() for action in gear[0].menu().actions()]
+    assert "Support Me" in menu_texts
     window.close()
 
 

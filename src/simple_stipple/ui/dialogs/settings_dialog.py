@@ -404,7 +404,7 @@ class SettingsDialog(QDialog):
 
         btn_row = QHBoxLayout()
         reset_btn = QPushButton("Reset")
-        reset_btn.setToolTip("Reset all settings fields to application defaults")
+        reset_btn.setToolTip("Reset every setting on every page to application defaults")
         reset_btn.setAutoDefault(False)
         reset_btn.clicked.connect(self._confirm_reset_fields)
         btn_row.addWidget(reset_btn)
@@ -412,13 +412,16 @@ class SettingsDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setMinimumWidth(90)
         cancel_btn.setAutoDefault(False)
+        cancel_btn.setToolTip("Discard unsaved changes and close")
         cancel_btn.clicked.connect(self.reject)
         apply_btn = QPushButton("Apply")
         apply_btn.setMinimumWidth(90)
+        apply_btn.setToolTip("Save changes and keep editing")
         apply_btn.clicked.connect(lambda: self._save(close=False))
         save_btn = QPushButton("Save")
         save_btn.setMinimumWidth(110)
         save_btn.setProperty("role", "primary")
+        save_btn.setToolTip("Save changes and close")
         save_btn.setDefault(True)
         save_btn.setAutoDefault(True)
         save_btn.clicked.connect(self._save)
@@ -733,7 +736,7 @@ class SettingsDialog(QDialog):
         answer = QMessageBox.question(
             self,
             "Reset Settings",
-            "Reset every setting on this page to its default value? This cannot be undone.",
+            "Reset every setting on every page to its default value? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )

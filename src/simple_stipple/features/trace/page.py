@@ -366,40 +366,46 @@ class TracePage(BasePage):
         export_layout = QVBoxLayout(export_content)
         export_layout.setContentsMargins(0, 0, 0, 0)
         export_layout.setSpacing(4)
-        self._export_all_btn = QPushButton("Export Traced Outlines DXF…")
+        self._export_all_btn = QPushButton("Export DXF…")
         self._export_all_btn.setProperty("role", "primary")
         self._export_all_btn.setToolTip("Save all traced outlines as a DXF file")
         self._export_all_btn.setEnabled(False)
         self._export_all_btn.clicked.connect(self._export_all)
-        _export_overflow_btn = QToolButton()
-        _export_overflow_btn.setText("Options")
-        _export_overflow_btn.setProperty("role", "overflow")
-        _export_overflow_btn.setMinimumWidth(72)
-        _export_overflow_btn.setToolTip("More export options")
-        _export_overflow_btn.setAccessibleName("More export options")
-        _export_overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        _overflow_menu = QMenu(_export_overflow_btn)
+        self._export_overflow_btn = QToolButton()
+        self._export_overflow_btn.setText("Format")
+        self._export_overflow_btn.setProperty("role", "overflow")
+        self._export_overflow_btn.setMinimumWidth(72)
+        self._export_overflow_btn.setToolTip("Choose an export format")
+        self._export_overflow_btn.setAccessibleName("Choose an export format")
+        self._export_overflow_btn.setEnabled(False)
+        self._export_overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        _overflow_menu = QMenu(self._export_overflow_btn)
         self._export_sel_action = _overflow_menu.addAction(
             "Export Selected as DXF…", self._export_selected
         )
         self._export_sel_action.setEnabled(False)
-        _overflow_menu.addAction("Export Raster Engraving…", self._export_raster_engraving)
+        self._export_raster_action = _overflow_menu.addAction(
+            "Export Raster Engraving…", self._export_raster_engraving
+        )
+        self._export_raster_action.setEnabled(False)
         _overflow_menu.addSeparator()
         self._reveal_action = _overflow_menu.addAction(reveal_label(), self._reveal_in_finder)
         self._reveal_action.setEnabled(False)
-        _export_overflow_btn.setMenu(_overflow_menu)
+        self._export_overflow_btn.setMenu(_overflow_menu)
         export_row = QHBoxLayout()
         export_row.setContentsMargins(0, 0, 0, 0)
         export_row.setSpacing(4)
         export_row.addWidget(self._export_all_btn, stretch=1)
-        export_row.addWidget(_export_overflow_btn)
+        export_row.addWidget(self._export_overflow_btn)
         export_layout.addLayout(export_row)
         self._next_btn = QPushButton("Next — Edit in Draft")
         self._next_btn.setProperty("role", "primary")
         self._next_btn.setEnabled(False)
         self._next_btn.clicked.connect(self._run_remembered_next)
         self._next_more = QToolButton()
-        self._next_more.setText("Options")
+        self._next_more.setText("Next step")
+        self._next_more.setProperty("role", "overflow")
+        self._next_more.setToolTip("Choose what to do next with the traced outlines")
         self._next_more.setAccessibleName("Choose trace next action")
         self._next_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         next_menu = QMenu(self._next_more)
@@ -501,7 +507,7 @@ class TracePage(BasePage):
         )
         self._auto_thresh_cb.stateChanged.connect(self._on_auto_thresh_changed)
 
-        self._invert_cb = QCheckBox("Invert  (dark background → light foreground)")
+        self._invert_cb = QCheckBox("Invert (dark → light)")
         self._invert_cb.setToolTip("Swap foreground/background before tracing")
         self._invert_cb.stateChanged.connect(self._schedule_trace)
 
@@ -754,6 +760,9 @@ class TracePage(BasePage):
         canvas_layout.addWidget(self._canvas, stretch=1)
 
         side_panel = QWidget()
+        # Keep the rail wide enough that the export footer never clips; the
+        # layer tree scrolls itself, so no extra scroll wrapper is needed.
+        side_panel.setMinimumWidth(320)
         side_layout = QVBoxLayout(side_panel)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
@@ -783,7 +792,7 @@ class TracePage(BasePage):
             has_image=lambda: bool(self._img_path),
         )
 
-        splitter = content_splitter(canvas_shell, side_panel, sizes=(860, 260))
+        splitter = content_splitter(canvas_shell, side_panel, sizes=(780, 340))
         splitter.set_responsive_secondary(1, "Layers")
         self._canvas_splitter = splitter
         layout.addWidget(splitter, stretch=1)
@@ -833,6 +842,10 @@ class TracePage(BasePage):
         has_selection = bool(self._canvas.sel_count) if hasattr(self, "_canvas") else False
         self._bg_visible_cb.setEnabled(has_image)
         self._export_all_btn.setEnabled(has_polys)
+        self._export_raster_action.setEnabled(has_image)
+        # The overflow holds the raster export, which needs only a loaded
+        # image, so it stays available whenever any action inside it can run.
+        self._export_overflow_btn.setEnabled(has_image or has_polys)
         self._export_sel_action.setEnabled(has_selection)
         self._reveal_action.setEnabled(bool(self._last_out))
         self._reload_btn.setEnabled(has_image)
