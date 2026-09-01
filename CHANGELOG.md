@@ -4,7 +4,15 @@
 
 ### Changed
 
-## 0.3.11 — 2026-09-01
+- **Test release** — same code as 0.3.11, bumped to test the update flow end-to-end.
+
+## 0.3.13 — 2026-09-01
+
+### Fixed
+
+- **PyInstaller build includes scipy** — added hidden imports for scipy, scipy.spatial,
+  scipy.spatial.distance, and scipy.special so the frozen app no longer crashes with
+  `ModuleNotFoundError: No module named 'scipy'`.
 
 ### Fixed
 
