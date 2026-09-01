@@ -15,7 +15,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/KiidxAtlas/simple-stipple/actions/workflows/quality.yml"><img src="https://github.com/KiidxAtlas/simple-stipple/actions/workflows/quality.yml/badge.svg" alt="Quality checks"></a>
   <a href="https://github.com/KiidxAtlas/simple-stipple/releases"><img src="https://img.shields.io/github/v/release/KiidxAtlas/simple-stipple?display_name=tag" alt="Latest release"></a>
   <a href="https://github.com/KiidxAtlas/simple-stipple/blob/main/SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue" alt="Security policy"></a>
 </p>
