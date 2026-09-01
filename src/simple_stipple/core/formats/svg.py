@@ -27,8 +27,8 @@ from simple_stipple.core.cad.shape_factory import shape_from_meta
 from simple_stipple.core.formats.dxf import (
     load_dxf_polylines_with_report,
     summarize_dxf_import_report,
+    write_polylines_dxf,
 )
-from simple_stipple.core.formats.dxf_write import write_polylines_dxf
 
 MAX_SVG_FILE_BYTES = 32 * 1024 * 1024
 MAX_SVG_ELEMENTS = 250_000

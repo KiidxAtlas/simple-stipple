@@ -50,7 +50,7 @@ def export_laserstar_package(
     folder = Path(destination) / safe_name
     folder.mkdir(parents=True, exist_ok=False)
     if str(vector_format).lower() == "dxf":
-        from simple_stipple.core.formats.dxf_write import write_polylines_dxf
+        from simple_stipple.core.formats.dxf import write_polylines_dxf
 
         vector_path = folder / "01_pattern-and-outline.dxf"
         write_polylines_dxf(vector_polys, str(vector_path))

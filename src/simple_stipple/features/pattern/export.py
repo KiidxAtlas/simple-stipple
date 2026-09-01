@@ -163,7 +163,7 @@ def export_document_file(
     and FVI have nowhere to put a raster, so it lands beside them as the
     positioned PNG + placement JSON the machine setup already expects.
     """
-    from simple_stipple.core.formats.dxf_write import write_polylines_dxf
+    from simple_stipple.core.formats.dxf import write_polylines_dxf
     from simple_stipple.core.formats.fvi import FviExportOptions, write_fvi
     from simple_stipple.core.formats.svg import SvgImagePlacement, write_document_svg
 
