@@ -24,7 +24,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - run: sudo apt-get update && sudo apt-get install -y libegl1
+      - name: Install libegl1
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libegl1
+        timeout-minutes: 5
       - run: uv run ruff check .
       - name: Circular import check
         run: uv run python scripts/check_circular_imports.py
