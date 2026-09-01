@@ -36,7 +36,10 @@ def build_command(system: str | None = None) -> list[str]:
         APP_NAME,
         "--clean",
         "--noconfirm",
-        "--windowed",
+        "--hidden-import=scipy",
+        "--hidden-import=scipy.spatial",
+        "--hidden-import=scipy.spatial.distance",
+        "--hidden-import=scipy.special",
     ]
 
     for source, destination in DATA_FILES:
