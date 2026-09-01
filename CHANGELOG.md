@@ -14,12 +14,11 @@
   scipy.spatial.distance, and scipy.special so the frozen app no longer crashes with
   `ModuleNotFoundError: No module named 'scipy'`.
 
-### Fixed
+## 0.3.14 — 2026-09-01
 
-- **Windows staged updates now apply automatically** — the "Ready to Restart?"
-  confirmation dialog after downloading an update has been removed; the installer
-  launches immediately. A startup check also detects any staged EXE left over
-  from a dismissed prompt and applies it silently on the next launch.
+### Changed
+
+- **Test release** — CI fixes: switched to `uvx` for ruff/pytest/mypy/pyright, added libegl1 install, removed format check. Bumped to test update flow.
 
 ## 0.3.10 — 2026-09-01
 
