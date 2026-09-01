@@ -20,7 +20,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from simple_stipple.canvas.operations.text import install_font_file, load_user_fonts, user_fonts_dir
+from simple_stipple.canvas.operations.drawing import (
+    install_font_file,
+    load_user_fonts,
+    user_fonts_dir,
+)
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.units import from_display, to_display
 from simple_stipple.ui.components.units import suffix as unit_suffix

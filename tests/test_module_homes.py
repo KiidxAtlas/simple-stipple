@@ -134,8 +134,11 @@ def test_workflow_canvas_runtimes_live_with_their_features() -> None:
     canvas_runtime = (PACKAGE / "canvas" / "runtime.py").read_text(encoding="utf-8")
     assert "TraceCanvasPageRuntime" not in canvas_runtime
     assert "PatternCanvasPageRuntime" not in canvas_runtime
-    assert (PACKAGE / "features" / "trace" / "canvas_runtime.py").is_file()
-    assert (PACKAGE / "features" / "pattern" / "canvas_runtime.py").is_file()
+    feature_runtime = PACKAGE / "features" / "canvas_runtime.py"
+    assert feature_runtime.is_file()
+    feature_runtime_source = feature_runtime.read_text(encoding="utf-8")
+    assert "class TraceCanvasPageRuntime" in feature_runtime_source
+    assert "class PatternCanvasPageRuntime" in feature_runtime_source
 
 
 def test_large_workflow_pages_delegate_non_widget_state_to_qt_free_models() -> None:

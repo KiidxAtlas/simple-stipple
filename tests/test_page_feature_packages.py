@@ -75,10 +75,11 @@ def test_pattern_layout_sections_have_one_canonical_layout_home() -> None:
         assert builder.__module__ == "simple_stipple.features.pattern.layout"
 
 
-def test_help_package_separates_content_assembly_and_dialog_without_god_modules() -> None:
+def test_help_package_keeps_manual_and_dialog_in_one_module() -> None:
     help_package = FEATURES / "help"
-    assert {path.name for path in help_package.iterdir()} >= {"__init__.py", "dialog.py", "content"}
-    # The manual is intentionally one searchable data/HTML module. Its size is
-    # content volume, not executable coordination; the dialog stays separate.
-    assert (help_package / "content.py").is_file()
-    assert (help_package / "dialog.py").is_file()
+    assert {path.name for path in help_package.iterdir()} >= {"__init__.py", "dialog.py"}
+    # The content builders exist only to feed HelpDialog, so the manual and its
+    # dialog share one module instead of a two-file split.
+    dialog_source = (help_package / "dialog.py").read_text(encoding="utf-8")
+    assert "def build_help_html" in dialog_source
+    assert "class HelpDialog" in dialog_source

@@ -128,7 +128,7 @@ def test_features_do_not_import_other_feature_internals() -> None:
                 if not module.startswith(prefix):
                     continue
                 target = module.removeprefix(prefix).split(".", 1)[0]
-                if target not in {source.name, "base"}:
+                if target not in {source.name, "base", "canvas_runtime"}:
                     violations.append(f"{path.relative_to(PACKAGE)} imports {module}")
     assert not violations, "\n".join(violations)
 

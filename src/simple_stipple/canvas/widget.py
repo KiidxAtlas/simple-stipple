@@ -14,7 +14,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QLineEdit, QMenu
 
 from simple_stipple.canvas import commands as canvas_commands
-from simple_stipple.canvas.operations import context_menu, quick_shapes
+from simple_stipple.canvas.operations import drawing, interactions
 from simple_stipple.canvas.tools.radial_menu import RadialMenuService
 from simple_stipple.canvas.tools.selection import SelectTool
 from simple_stipple.canvas.view.main import CanvasView
@@ -416,17 +416,17 @@ class DxfCanvas(CanvasView):
         super().keyPressEvent(event)
 
     def _rightclick_cb(self, cx: float, cy: float) -> None:
-        if not context_menu.handle_right_click(self, cx, cy):
+        if not interactions.handle_right_click(self, cx, cy):
             super()._rightclick_cb(cx, cy)
 
     def _apply_context_menu_overflow(self, menu: QMenu) -> None:
-        context_menu.apply_overflow(self, menu)
+        interactions.apply_overflow(self, menu)
 
     # ── Context menu builders ──────────────────────────────────────────────
 
     @staticmethod
     def _add_context_section(menu, section, section_enabled, build) -> None:
-        context_menu.add_context_section(menu, section, section_enabled, build)
+        interactions.add_context_section(menu, section, section_enabled, build)
 
     def _build_create_shape_menu(self, menu, section_enabled, poly_hit_early) -> None:
         if not self._sel and poly_hit_early is None and section_enabled("create"):
@@ -946,10 +946,10 @@ class DxfCanvas(CanvasView):
             self._size_h_edit.setText(f"{new_h:.2f}")
 
     def _shape_mode_from_modifiers(self, mods) -> str:
-        return quick_shapes.mode_from_modifiers(self, mods)
+        return drawing.mode_from_modifiers(self, mods)
 
     def _start_shape_drag(self, mode: str, pos_f) -> None:
-        quick_shapes.start_drag(self, mode, pos_f)
+        drawing.start_drag(self, mode, pos_f)
 
     @staticmethod
     def _translate(
@@ -957,7 +957,7 @@ class DxfCanvas(CanvasView):
         cx: float,
         cy: float,
     ) -> list[tuple[float, float]]:
-        return quick_shapes.translate(coords, cx, cy)
+        return drawing.translate(coords, cx, cy)
 
     def _build_drag_shapes(
         self,
@@ -967,13 +967,13 @@ class DxfCanvas(CanvasView):
         ex: float,
         ey: float,
     ) -> list[list[tuple[float, float]]]:
-        return quick_shapes.build_shapes(self, mode, sx, sy, ex, ey)
+        return drawing.build_shapes(self, mode, sx, sy, ex, ey)
 
     @staticmethod
     def _build_drag_procedural_shapes(
         mode: str, width: float, height: float, cx: float, cy: float
     ) -> list[list[tuple[float, float]]]:
-        return quick_shapes.build_procedural_shapes(mode, width, height, cx, cy)
+        return drawing.build_procedural_shapes(mode, width, height, cx, cy)
 
     def _finish_shape_drag(self, end_c: QPoint, *, allow_click_placement: bool = False) -> None:
         if (

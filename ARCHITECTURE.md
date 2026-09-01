@@ -156,7 +156,7 @@ interaction while `engine.imaging` owns image processing.
   documented interaction targets; cover unavoidable fixed sizes with a
   narrow-width test.
 - Preserve public patch points when extracting a seam. For example, CanvasView
-  retains its public methods while `editor.view.preferences` owns preferences.
+  retains its public methods while `canvas.view.config` owns construction and preferences.
 - Keep behavior with its tests. `test_dependency_boundaries.py` and
   `test_module_homes.py` protect the top-level architecture.
 
@@ -164,7 +164,8 @@ interaction while `engine.imaging` owns image processing.
 
 - `features.pattern.outline_state` — non-Qt Pattern outline state.
 - `editor.rendering.dense_preview` — retained preview batching and raster cache.
-- `editor.view.preferences` — grid, snap, context-menu, and status settings.
+- `canvas.view.config` — CanvasView construction plus grid, snap, context-menu,
+  and status settings.
 - `engine.cad.curves` — spline and Bezier control-point behavior.
 - `features.trace.dxf_export` — outlined-DXF export workflow.
 - `features.draft.svg_backdrop` — imported SVG reference-artwork lifecycle.

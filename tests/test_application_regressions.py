@@ -22,12 +22,11 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.app.tasks import AutosaveController
 from simple_stipple.app.window import App
-from simple_stipple.canvas.operations.draw_ops import DrawOpsService
+from simple_stipple.canvas.operations.drawing import DrawOpsService
 from simple_stipple.canvas.view.helpers import _animate_view_to
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.core.editing.boolean import offset_polyline
-from simple_stipple.core.formats.dxf import load_dxf_polylines
-from simple_stipple.core.formats.dxf_write import write_polylines_dxf
+from simple_stipple.core.formats.dxf import load_dxf_polylines, write_polylines_dxf
 from simple_stipple.core.formats.laserstar import export_laserstar_package
 from simple_stipple.core.imaging import (
     RasterEngravingSpec,

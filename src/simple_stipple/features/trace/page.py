@@ -40,7 +40,7 @@ from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.core.cad.preflight import analyze_geometry
 from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job, image_to_outlines
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.trace.canvas_runtime import TraceCanvasPageRuntime
+from simple_stipple.features.canvas_runtime import TraceCanvasPageRuntime
 from simple_stipple.features.trace.form import (
     PathField,
     SliderField,

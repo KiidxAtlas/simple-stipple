@@ -22,8 +22,7 @@ from simple_stipple.canvas.dialogs.customize_dialogs import (
     _ordered_keys,
 )
 from simple_stipple.canvas.layers.logic import describe_polyline
-from simple_stipple.canvas.operations.hud_text import HudTextService
-from simple_stipple.canvas.operations.text import text_to_polylines
+from simple_stipple.canvas.operations.drawing import HudTextService, text_to_polylines
 from simple_stipple.canvas.snap import SnapEngine
 from simple_stipple.canvas.widget import _CONTEXT_STATIC_ACTION_IDS, DxfCanvas
 from simple_stipple.canvas.widgets.draw_sidebar import DrawSidebar, _ResizeHandle

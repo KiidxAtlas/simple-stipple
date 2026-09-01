@@ -38,7 +38,7 @@ from simple_stipple.canvas.runtime import (
 )
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
-from simple_stipple.features.pattern.canvas_runtime import PatternCanvasPageRuntime
+from simple_stipple.features.canvas_runtime import PatternCanvasPageRuntime
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
     DEFAULT_DENSITY_ANGLE,

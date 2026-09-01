@@ -22,7 +22,7 @@ from PySide6.QtWidgets import QWidget
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.canvas.objects import CanvasModel
-from simple_stipple.canvas.operations.select import SelectionService
+from simple_stipple.canvas.operations.editing import SelectionService
 from simple_stipple.canvas.view.commands import (
     _cancel_active_drag,
     _cancel_draw_in_progress,
@@ -35,7 +35,40 @@ from simple_stipple.canvas.view.commands import (
     get_export_dxf_state,
     set_view_state,
 )
-from simple_stipple.canvas.view.config import _initialize_view
+from simple_stipple.canvas.view.config import (
+    _context_menu_section_enabled,
+    _emit_cursor_position_update,
+    _initialize_view,
+    _queue_cursor_position_update,
+    get_cursor_world_pos,
+    get_zoom_percent,
+    set_aspect_ratio_locked,
+    set_construction_mode,
+    set_context_menu_overflow_sections,
+    set_context_menu_profile,
+    set_context_menu_profiles,
+    set_context_menu_sections,
+    set_grid_snap,
+    set_grid_spacing,
+    set_grid_visible,
+    set_property_highlight,
+    set_rotation_snap_increment,
+    set_snap_align_x,
+    set_snap_align_y,
+    set_snap_angle,
+    set_snap_axis_alignment,
+    set_snap_edge,
+    set_snap_equal_length,
+    set_snap_extension,
+    set_snap_intersection,
+    set_snap_master,
+    set_snap_midpoint,
+    set_snap_parallel,
+    set_snap_perpendicular,
+    set_snap_strength,
+    set_snap_tangent,
+    set_snap_vertex,
+)
 from simple_stipple.canvas.view.helpers import (
     _animate_view_to,
     _background_edit_hit,
@@ -71,39 +104,6 @@ from simple_stipple.canvas.view.interactions import (
     mouseMoveEvent,
     mousePressEvent,
     mouseReleaseEvent,
-)
-from simple_stipple.canvas.view.preferences import (
-    _context_menu_section_enabled,
-    _emit_cursor_position_update,
-    _queue_cursor_position_update,
-    get_cursor_world_pos,
-    get_zoom_percent,
-    set_aspect_ratio_locked,
-    set_construction_mode,
-    set_context_menu_overflow_sections,
-    set_context_menu_profile,
-    set_context_menu_profiles,
-    set_context_menu_sections,
-    set_grid_snap,
-    set_grid_spacing,
-    set_grid_visible,
-    set_property_highlight,
-    set_rotation_snap_increment,
-    set_snap_align_x,
-    set_snap_align_y,
-    set_snap_angle,
-    set_snap_axis_alignment,
-    set_snap_edge,
-    set_snap_equal_length,
-    set_snap_extension,
-    set_snap_intersection,
-    set_snap_master,
-    set_snap_midpoint,
-    set_snap_parallel,
-    set_snap_perpendicular,
-    set_snap_strength,
-    set_snap_tangent,
-    set_snap_vertex,
 )
 from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.cad.shape_factory import ShapeFactory

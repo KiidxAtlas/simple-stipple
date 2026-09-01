@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from simple_stipple.canvas.view.main import CanvasView
-from simple_stipple.canvas.view.preferences import (
+from simple_stipple.canvas.view.config import (
     set_grid_snap,
     set_snap_master,
     set_snap_strength,
     set_snap_vertex,
 )
+from simple_stipple.canvas.view.main import CanvasView
 
 
 class _PreferenceHost(SimpleNamespace):
