@@ -1,5 +1,115 @@
 # Changelog
 
+## 0.3.10 — 2026-09-01
+
+### Added
+
+- **Round and chamfer corners from Select mode** — press R or C and click a corner
+  to round/chamfer; live preview updates as you type the value. Corner geometry
+  extracted into testable pure functions in `core.editing.corners`.
+- **Two-step constraint pick workflow** — for parallel, perpendicular, and
+  equal-length constraints, pick the first edge then click a second; the canvas
+  stays usable while waiting for the partner edge.
+- **Merge touching/open paths with welded junctions** — intersecting open paths
+  are noded at mutual intersections so junction points stay coincident and
+  vertex-drag moves linked copies together.
+- **Arrange: center on selection (both axes)** — positions every selected object
+  so its center aligns with the full-selection bounding-box center.
+- **Arrange: distribute evenly over distance** — places selected objects at equal
+  spacing across a user-specified total span (horizontal and vertical variants).
+- **Rotate-to-flat / rotate-to-upright** — one-click rotate that finds the
+  longest straight edge in the selection and rotates it onto the X axis (lie
+  flat) or Y axis (stand upright); works intuitively on rotated ellipses too.
+- **Auto-commit & push toggle** — File menu and Settings dialog checkbox that
+  watches the repository folder, polls for uncommitted changes, and after a
+  quiet period runs `git add -A && git commit && git push` on a daemon thread.
+  A content-hash prevents the autosave timer from re-creating identical state.
+- **DXF export retains custom object names** — labels set in the layer tree are
+  written as DXF object names and restored on re-import.
+- **Labeled HUD inputs for shape W/H during draw** — W and H fields now carry
+  unit-suffix labels (e.g. "W (mm)") and reposition at the amber badge anchors
+  (bottom-center, right-center) so Tab reads as "edit the number on the shape."
+- **Live resize as you type** — shape dimension inputs and selected-extent fields
+  apply a transient preview on every keystroke without creating undo records;
+  Enter commits through the real path.
+
+### Changed
+
+- **Measure button renamed to Scale** in the toolbar and command palette.
+- **Smooth default iterations lowered** from 2 to 1 for faster, less aggressive
+  smoothing.
+- **Draw sidebar builds only configured sections** — previously all section frames
+  were created unconditionally, leaving off-sidebar sections (editing, constraint)
+  as floating empty widgets; they are now built lazily.
+- **Draw sidebar tool labels refined** — arc modes, line-angle constraints,
+  smoothing methods, and polyline actions use more descriptive, less terse labels.
+- **Draw sidebar padding tightened** — outer right margin reduced from 4 px to
+  2 px and section spacing reduced for a tighter layout.
+- **Layer tree: double-click to rename** — no longer collapses on single click.
+- **Vertex editing blocked in Select mode** — point editing lives in Edit mode;
+  the gizmo remains the Select-mode interaction for vertices.
+- **Snap toggles moved out of Draw sidebar** — grid, snap, construction, and
+  constraints toggles now live exclusively in the Precision bar.
+- **Default Draw sidebar sections narrowed** to Path, Shapes, Text, and Mode
+  (split); Snapping, Sketch, Smoothing, and Editing are off by default.
+- **Pattern fill re-solve routed through inspector edit** — selecting a new fill
+  type now records the treatment on the active region before re-solving, so the
+  fill appears immediately without a second edit.
+
+### Fixed
+
+- **"Start a drawing" hint no longer overlays shape previews** — the empty-state
+  overlay now hides during arc, pen, quick-shape, and shape-preview gestures that
+  never populate ``_draw_pts``.
+- **Shape-preview "Commit shape / Cancel" popup removed** — Enter and a second
+  click commit the preview; Esc cancels. Keyboard focus is guaranteed on canvas
+  click so Enter reliably reaches the canvas.
+- **Stray top-level windows during drawing eliminated** — unparented sidebar
+  buttons (Finish, Close, Undo, Arc, Constraint) no longer pop up as separate
+  windows when their visibility is toggled while their section is off the sidebar.
+- **Snapshot deletion now sticks** — the autosave timer records a content hash
+  after the user deletes recovery snapshots and refuses to re-create an identical
+  document; real edits change the hash and re-arm crash protection.
+- **DXF group restoration fixed** — the legacy view-state groups map was written
+  with entity IDs but read with indices, silently wiping every group on workspace
+  load; groups now restore through the per-entity ``group`` key.
+- **Pattern ghost overlay when last outline deleted** — the solved preview now
+  clears when the final outline is removed.
+- **Pattern outline file import routing** — DXF, FVI, and SVG outline files
+  now route through dedicated import paths instead of the generic canvas loader.
+- **Escape clears armed pickers** — Round/Chamfer and constraint partner pickers
+  are cancelled when Escape is pressed.
+- **Custom shape labels removed** — the session-persistent shape-label system was
+  removed as it was not wired through export/import and caused stale state.
+- **Vertex hover cursor removed** — the open-hand cursor during vertex hover in
+  Select mode was misleading since vertex editing is Edit-only.
+- **Make test parametrized node IDs** — the pytest collection recipe was splitting
+  node IDs on whitespace, truncating 17 parametrized IDs containing spaces (e.g.
+  ``[Half drop-Honeycomb]``) into nonexistent selectors; nodes are now quoted.
+- **Numeric-control size test order-independence** — widget min-heights come from
+  the QSS theme; the test now applies the theme itself so it passes regardless
+  of test execution order.
+- **Orphaned ResampleCommand chain removed** — ``ResampleCommand``, its two
+  ``DocumentService`` branches, ``resample_by_count``/``resample_by_spacing``,
+  and ``geometry.resample_path`` were unreachable (zero construction sites) and
+  have been deleted.
+- **Canvas operations consolidated** — ``canvas/operations/`` merged from 12
+  modules into ``editing.py``, ``drawing.py``, and ``interactions.py``.
+- **View preferences consolidated** — ``canvas/view/preferences.py`` absorbed
+  into ``canvas/view/config.py``.
+- **Pattern/Trace canvas runtimes co-located** — ``features/pattern/canvas_runtime.py``
+  and ``features/trace/canvas_runtime.py`` merged into ``features/canvas_runtime.py``.
+- **Help content consolidated** — ``features/help/content.py`` absorbed into
+  ``features/help/dialog.py``.
+- **DXF formats consolidated** — ``dxf_write.py`` absorbed into ``dxf.py``;
+  ``dxf_backend.py`` service/repair logic moved into ``formats/service.py``.
+
+### Verification
+
+- Full offscreen suite: 406 tests pass. ``ruff check src tests`` and ``mypy``
+  clean. Circular-import check clean. Module-home and dependency-boundary
+  suites pass.
+
 ## 0.3.9 — 2026-08-29
 
 ### Fixed

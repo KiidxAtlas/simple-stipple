@@ -22,7 +22,7 @@ _LOG = logging.getLogger(__name__)
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 _SHA256_PATTERN = re.compile(r"\A([0-9a-fA-F]{64})(?:\s+[*]?(\S+))?\s*\Z")
-_PACKAGED_FALLBACK_VERSION = "0.3.9"
+_PACKAGED_FALLBACK_VERSION = "0.3.10"
 
 
 def _read_version_from_pyproject() -> str:
