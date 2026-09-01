@@ -150,8 +150,24 @@ class WorkspaceController(_WorkspaceStateController):
         self._app._repo_dialog_action.setShortcut(QKeySequence(self._app._shortcut("tab.repo")))
         self._app._repo_dialog_action.triggered.connect(self._app._open_repo_dialog)
         self._app._workspace_menu.addAction(self._app._repo_dialog_action)
+        self._app._auto_commit_action = QAction("Auto Commit && Push Changes", self._app)
+        self._app._auto_commit_action.setCheckable(True)
+        self._app._auto_commit_action.setToolTip(
+            "Watch the repository folder and automatically commit && push "
+            "whenever files change"
+        )
+        self._app._auto_commit_action.setChecked(
+            bool(self._app._settings.get("auto_commit_push", False))
+        )
+        self._app._auto_commit_action.triggered.connect(self._on_auto_commit_toggled)
+        self._app._workspace_menu.addAction(self._app._auto_commit_action)
 
         self._app._workspace_menu.addSeparator()
+
+    def _on_auto_commit_toggled(self, checked: bool) -> None:
+        self._app._settings["auto_commit_push"] = checked
+        save_settings(self._app._settings)
+        self._app._task_controller.auto_commit.configure()
 
     def _collect_workspace_document(self) -> dict:
         self._app._workspace_controller.path = self._app._workspace_path
@@ -306,6 +322,11 @@ class WorkspaceController(_WorkspaceStateController):
             initial_source=initial_source,
         )
         accepted = dialog.exec()
+        # Deleting recovery snapshots must stick: without this, the 90 s
+        # autosave timer would rewrite the identical state at the next tick.
+        recovery_dir = user_data_dir() / "recovery"
+        if any(Path(p).is_relative_to(recovery_dir) for p in dialog.deleted_paths):
+            self._app._autosave_controller.dismiss_recovery_for_current_state()
         if active_path in dialog.renamed_paths:
             self._app._workspace_path = dialog.renamed_paths[active_path]
             self._remember_workspace_path(self._app._workspace_path)

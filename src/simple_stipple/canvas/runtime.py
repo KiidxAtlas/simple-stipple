@@ -404,7 +404,7 @@ class CanvasToolbarModule(QWidget):
         self.state_buttons: dict[str, QPushButton] = {}
         if isinstance(toolbar_layout, QHBoxLayout) and canvas is not None:
             for text, shortcut, method_name, state_name in (
-                ("Measure", "M", "toggle_measure", "_measure_mode"),
+                ("Scale", "M", "toggle_measure", "_measure_mode"),
                 ("Dimension", "Shift+M", "toggle_dimension_mode", "_dimension_mode"),
             ):
                 if not hasattr(canvas, method_name):
@@ -492,7 +492,7 @@ class CanvasToolbarModule(QWidget):
             if bool(getattr(self._canvas, "_dimension_mode", False)):
                 active_tool = "Dimension"
             elif bool(getattr(self._canvas, "_measure_mode", False)):
-                active_tool = "Measure"
+                active_tool = "Scale"
             elif hasattr(self._canvas, "get_mode"):
                 active_tool = str(self._canvas.get_mode()).replace("_", " ").title()
             self.guidance_label.setText(f"{active_tool} · {guidance}")

@@ -467,6 +467,8 @@ class DraftTabState(TabStateBase):
     quick_shape_mode: str = ""
     quick_shape_enabled: bool = False
     last_input_dxf: str = ""
+    # Custom object names from the layer tree: layer name → entity id → label.
+    shape_labels: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 # ── Tab registry (maps tab name -> model class) ──────────────────────────────

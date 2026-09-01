@@ -35,12 +35,12 @@ Simple Stipple is a local-first desktop tool for makers, laser operators, and ve
 
 ## The workflow
 
-| Goal | Start here | Result |
-| --- | --- | --- |
-| Draw or clean a part | **Draft** | Editable 2D geometry with layers, snapping, constraints, curves, dimensions, and DXF/SVG import/export |
-| Create an engraving texture | **Pattern** | Vector patterns clipped to closed outlines, with presets, zones, exclusions, and custom tiles |
-| Turn a photo or logo into paths | **Trace** | Editable vector outlines from PNG, JPG/JPEG, BMP, TIFF, GIF, or WebP images |
-| Repair or translate files | **Convert** | FVI → DXF, SVG ↔ DXF utilities, and DXF cleanup |
+| Goal                            | Start here  | Result                                                                                                 |
+| ------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------ |
+| Draw or clean a part            | **Draft**   | Editable 2D geometry with layers, snapping, constraints, curves, dimensions, and DXF/SVG import/export |
+| Create an engraving texture     | **Pattern** | Vector patterns clipped to closed outlines, with presets, zones, exclusions, and custom tiles          |
+| Turn a photo or logo into paths | **Trace**   | Editable vector outlines from PNG, JPG/JPEG, BMP, TIFF, GIF, or WebP images                            |
+| Repair or translate files       | **Convert** | FVI → DXF, SVG ↔ DXF utilities, and DXF cleanup                                                        |
 
 Included pattern generators cover Honeycomb, Basketweave, Brick, Knurling, Mesh, Seigaiha, Stipple Dots, Truchet, Voronoi, and custom tiles.
 
@@ -127,4 +127,6 @@ Useful reports include the Simple Stipple version, operating system, source file
 - [Architecture guide](ARCHITECTURE.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
+- [Security policy
+
+  ](SECURITY.md)

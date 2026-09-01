@@ -198,9 +198,8 @@ class SelectTool(CanvasTool):
             # Alt-click is reserved for cycling overlapping geometry. Let the
             # selection tool see it instead of an existing selection gizmo.
             return False
-        handle_hit = v._find_bezier_handle(pos.x(), pos.y())
-        if handle_hit is not None and start_bezier_handle_drag(v, handle_hit):
-            return True
+        # Vertex and bezier-handle editing live in Edit mode only; Select mode
+        # transforms whole shapes (gizmo, move, badge editors).
         pt = QPointF(pos.x(), pos.y())
         for axis, rect in v._sel_badge_axes():
             if rect.contains(pt):
@@ -281,7 +280,6 @@ class SelectTool(CanvasTool):
                 f"Selected overlapping object {candidates.index(target) + 1}/{len(candidates)}",
                 900,
             )
-        was_selected_before = target in v._sel if target is not None else False
         v._lmb_target = target
 
         if v._selectable and target is None and v._region_picking:
@@ -356,36 +354,8 @@ class SelectTool(CanvasTool):
                     refs = refs[-2:]
                 v._constraint_segment_refs = refs
             v._notify()
-            hit = v._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
-            target_kind = target_entity.kind
-            # Parametric shapes never vertex-drag in select mode: every rim
-            # point of a circle/ellipse is a "vertex", which made plain
-            # drag-to-move nearly impossible. Resize via the frame handles
-            # or the properties panel; vertex editing lives in Edit mode.
-            skip_vertex_drag = not v._selection_drag_edits or (
-                hit is not None
-                and hit[0] == target
-                and was_selected_before
-                and target_kind in {"arc", "circle", "ellipse", "rectangle", "polygon", "slot"}
-            )
-            if hit is not None and not skip_vertex_drag:
-                eid, vi = hit
-                entity = v._document.entity_for_id(eid)
-                if entity is None:
-                    return True
-                if vi < 0 or vi >= len(entity.points):
-                    return True
-                v._edit_poly = eid
-                v._edit_vert = vi
-                v._edit_dragging = True
-                v._edit_drag_moved = False
-                v._edit_undo_pushed = False
-                v._edit_drag_anchor = entity.points[vi]
-                v._edit_selected_verts = {hit}
-                v._edit_drag_targets = v._linked_vertices_by_id(eid, vi)
-                v._edit_linked_verts = set(v._edit_drag_targets)
-                v._redraw()
-                return True
+            # Vertex dragging used to live here; Select mode now transforms whole
+            # shapes only (gizmo/move), point editing belongs to Edit mode.
         # Prepare for move if clicking on an already-selected poly
         if target is not None and v._selection_drag_edits:
             target_entity = v._document.entity_for_id(target)
@@ -425,21 +395,7 @@ class SelectTool(CanvasTool):
                 v._redraw()
             return True
 
-        if v._sel:
-            old_hover = v._hover_vert
-            hit = v._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
-            if hit is not None and hit[0] in v._sel:
-                v._hover_vert = hit
-            else:
-                v._hover_vert = None
-            if v._hover_vert != old_hover:
-                v._update_cursor()
-                v._redraw()
-                return True
-        elif v._hover_vert is not None:
-            v._hover_vert = None
-            v._update_cursor()
-
+        # No per-vertex hover tracking in Select mode — point editing is Edit-only.
         if event.buttons() & Qt.MouseButton.LeftButton:
             if v._lasso_active:
                 last = v._lasso_points[-1]

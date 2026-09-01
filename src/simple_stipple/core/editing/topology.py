@@ -80,8 +80,111 @@ def _normalize_chain(chain: list[PointTuple]) -> list[PointTuple]:
     return normalized
 
 
-def merge_paths(paths: list[PathInput], tolerance: float = 0.01) -> list[PathInput]:
-    """Merge all connected segments in paths into maximal chains."""
+def _node_open_paths_at_intersections(paths: list[PathInput]) -> list[PathInput]:
+    """Split open paths at mutual intersections so junctions become shared
+    endpoints (shapely noding produces exactly coincident junction floats).
+
+    Returns the input unchanged when fewer than two open paths are involved —
+    or when any path is closed, since opening a ring just to node it would
+    silently destroy closure.
+    """
+    def _is_closed(points: list[PointTuple]) -> bool:
+        return len(points) >= 3 and math.dist(points[0], points[-1]) < PATH_CLOSURE_TOLERANCE
+
+    if len(paths) < 2 or any(_is_closed(path.points) for path in paths):
+        return paths
+    lines = [LineString(path.points) for path in paths if len(path.points) >= 2]
+    if len(lines) < 2:
+        return paths
+    merged = linemerge(unary_union(lines))
+    geoms = getattr(merged, "geoms", None)
+    branches = list(geoms) if geoms is not None else [merged]
+    construction = any(path.construction for path in paths)
+    out: list[PathInput] = []
+    for branch in branches:
+        pts = [(float(x), float(y)) for x, y in branch.coords]
+        deduped = [pts[0]]
+        deduped.extend(
+            p for p in pts[1:] if math.dist(deduped[-1], p) >= PATH_DEGENERACY_TOLERANCE
+        )
+        if len(deduped) >= 2:
+            out.append(PathInput(deduped, construction))
+    return out or paths
+
+
+def _walk_branches_into_chains(
+    branches: list[PathInput], tolerance: float
+) -> list[PathInput]:
+    """Chain junction-sharing branches into one polyline per connected
+    component, backtracking through junctions of degree 3+.
+
+    A T/X junction cannot be one polyline without revisiting the junction
+    point; the walk deliberately revisits it, so every copy stays exactly
+    coincident and the edit tool's linked-vertex drag moves them together.
+    """
+    edges = [list(branch.points) for branch in branches if len(branch.points) >= 2]
+    if len(edges) <= 1:
+        return branches
+
+    def _key(point: PointTuple) -> tuple[int, int]:
+        return (round(point[0] / tolerance), round(point[1] / tolerance))
+
+    # Adjacency: junction node -> edge indices touching it.
+    adjacency: dict[tuple[int, int], list[int]] = {}
+    for index, edge in enumerate(edges):
+        adjacency.setdefault(_key(edge[0]), []).append(index)
+        adjacency.setdefault(_key(edge[-1]), []).append(index)
+
+    used = [False] * len(edges)
+    output: list[PathInput] = []
+
+    def visit(
+        node_key: tuple[int, int], node_pt: PointTuple, chain: list[PointTuple]
+    ) -> None:
+        for edge_index in adjacency.get(node_key, []):
+            if used[edge_index]:
+                continue
+            used[edge_index] = True
+            edge = edges[edge_index]
+            oriented = (
+                edge
+                if _points_equal_within(edge[0], node_pt, tolerance)
+                else list(reversed(edge))
+            )
+            # oriented[0] == node_pt; append the far side, recurse, then
+            # backtrack to this junction while arms remain unvisited.
+            chain.extend(oriented[1:])
+            far_pt = oriented[-1]
+            visit(_key(far_pt), far_pt, chain)
+            if any(not used[other] for other in adjacency.get(node_key, [])):
+                chain.append(node_pt)
+
+    for start in range(len(edges)):
+        if used[start]:
+            continue
+        construction = branches[start].construction
+        chain: list[PointTuple] = []
+        first_edge = edges[start]
+        chain.append(first_edge[0])
+        visit(_key(first_edge[0]), first_edge[0], chain)
+        if len(chain) >= 2:
+            output.append(PathInput(_normalize_chain(chain), construction))
+    return output
+
+
+def merge_paths(
+    paths: list[PathInput], tolerance: float = 0.01, *, node_intersections: bool = False
+) -> list[PathInput]:
+    """Merge all connected segments in paths into maximal chains.
+
+    With ``node_intersections=True``, open paths are first split at mutual
+    intersections, and junction-sharing branches are walked into a single
+    polyline per connected component (revisiting junction points as needed).
+    """
+    if node_intersections:
+        noded = _node_open_paths_at_intersections(paths)
+        if noded is not paths:
+            return _walk_branches_into_chains(noded, tolerance)
     segments = [
         (segment[0], segment[1], path.construction)
         for path in paths

@@ -467,6 +467,14 @@ class PatternPage(BasePage):
         there is no mode to leave and every edit is an edit of the document.
         """
         self._canvas.set_result_visible(visible)
+        btn = getattr(self, "_pattern_visible_btn", None)
+        if btn is not None and btn.isChecked() != visible:
+            btn.blockSignals(True)
+            btn.setChecked(visible)
+            btn.blockSignals(False)
+        if visible and getattr(self, "_preview_deferred", False):
+            self._preview_deferred = False
+            self._preview_timer.start(0)
         if not self._preview_polys_cache:
             self._set_preview_status("Choose a treatment to solve a pattern")
         elif visible:
@@ -2275,6 +2283,18 @@ class PatternPage(BasePage):
             return
         if not self._zones and not self._edit_polys:
             self._preview_task.finish_run()
+            return
+        # Hidden pattern + no pending export: skip the solve entirely so
+        # editing heavy patterns doesn't tax the machine for invisible output.
+        if (
+            not self._canvas.result_visible()
+            and not self._force_export_quality
+            and getattr(self, "_pending_export_after_preview", None) is None
+        ):
+            self._preview_task.finish_run()
+            self._preview_deferred = True
+            self._set_preview_status("Pattern hidden — outlines only")
+            self._update_preview_controls()
             return
         self._update_preview_controls()
         preview_token = self._preview_revision

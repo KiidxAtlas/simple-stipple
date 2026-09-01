@@ -284,6 +284,7 @@ class DocumentService:
                     for entity in sources
                 ],
                 tolerance=0.01,
+                node_intersections=True,
             )
             snapshots = tuple(
                 _snapshot(

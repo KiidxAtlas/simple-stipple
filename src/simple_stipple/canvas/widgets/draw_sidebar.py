@@ -212,7 +212,7 @@ class DrawSidebar(QFrame):
         self._apply_width(width if width is not None else MIN_DRAW_SIDEBAR_WIDTH + 12)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setContentsMargins(4, 4, 2, 4)
         outer.setSpacing(4)
 
         scroll = QScrollArea(self)
@@ -231,7 +231,7 @@ class DrawSidebar(QFrame):
         # keeps controls visually separate without pretending padding can
         # compensate for an undersized viewport (the minimum-width contract
         # below guarantees both 44 px tool columns actually fit).
-        col.setContentsMargins(2, 2, 4, 2)
+        col.setContentsMargins(2, 2, 2, 2)
         col.setSpacing(10)
 
         title = QLabel("Draw")
@@ -266,8 +266,8 @@ class DrawSidebar(QFrame):
         }
         self._arc_mode_button = CycleIconButton(
             [
-                _state("arc", "3point", "Arc: 3-Point"),
-                _state("arc", "center-start-end", "Arc: Center→Start→End"),
+                _state("arc", "3point", "Arc: pick 3 points"),
+                _state("arc", "center-start-end", "Arc: center first, then start + end"),
             ],
             on_arc_mode,
         )
@@ -291,10 +291,10 @@ class DrawSidebar(QFrame):
         )
         self._constraint_button = CycleIconButton(
             [
-                _state("constraint", "Free", "Constraint: Free"),
-                _state("constraint", "H", "Constraint: Horizontal"),
-                _state("constraint", "V", "Constraint: Vertical"),
-                _state("constraint", "45", "Constraint: 45°"),
+                _state("constraint", "Free", "Line angles: free"),
+                _state("constraint", "H", "Line angles: horizontal only"),
+                _state("constraint", "V", "Line angles: vertical only"),
+                _state("constraint", "45", "Line angles: 45° steps"),
             ],
             on_constraint,
         )
@@ -302,31 +302,32 @@ class DrawSidebar(QFrame):
             _toggle_states("split", "Auto-split"), self._bool_cb(on_split)
         )
         self._dimension_button = CycleIconButton(
-            [_state("dimension", "dimension", "Sketch Dimension (Shift+M)")],
+            [_state("dimension", "dimension", "Add a measured dimension (Shift+M)")],
             lambda _sid: on_dimension(),
         )
         self._smoothing_button = CycleIconButton(
             [
-                _state("smooth_chaikin", "chaikin", "Smoothing: Chaikin"),
-                _state("smooth_gaussian", "gaussian", "Smoothing: Gaussian"),
-                _state("smooth_catmull", "catmull_rom", "Smoothing: Catmull-Rom"),
+                _state("smooth_chaikin", "chaikin", "Smooth corners: Chaikin (keeps shape)"),
+                _state("smooth_gaussian", "gaussian", "Smooth corners: Gaussian (softest)"),
+                _state("smooth_catmull", "catmull_rom", "Smooth curve: Catmull-Rom (through points)"),
             ],
             on_smoothing_method,
         )
         self._finish_button = CycleIconButton(
-            [_state("finish", "finish", "Finish open polyline")],
+            [_state("finish", "finish", "Finish the polyline (Enter)")],
             lambda _sid: on_finish_open(),
         )
         self._close_button = CycleIconButton(
-            [_state("close_path", "close", "Close into a shape")],
+            [_state("close_path", "close", "Close the path into a shape")],
             lambda _sid: on_close_edit(),
         )
         self._undo_button = CycleIconButton(
-            [_state("undo_point", "undo", "Undo last point")],
+            [_state("undo_point", "undo", "Undo the last point")],
             lambda _sid: on_undo_point(),
         )
         self._cancel_button = CycleIconButton(
-            [_state("cancel", "cancel", "Cancel draw")], lambda _sid: on_cancel_draw()
+            [_state("cancel", "cancel", "Cancel drawing (Esc)")],
+            lambda _sid: on_cancel_draw()
         )
         self._select_button = CycleIconButton(
             [_state("select_arrow", "select", "Back to Select")],
@@ -366,6 +367,12 @@ class DrawSidebar(QFrame):
             frame = section_frames.get(key)
             if frame is not None:
                 col.addWidget(frame)
+        # Start with contextual controls hidden — the first
+        # _refresh_draw_sidebar_state reveals what the active tool can use.
+        self._constraint_section = section_frames["snapping"]
+        self.set_polyline_actions_enabled(can_finish=False, can_close=False, can_undo=False)
+        self.set_arc_mode_enabled(False)
+        self.set_constraint_mode_enabled(False)
 
         col.addStretch()
         scroll.setWidget(content)
@@ -411,7 +418,7 @@ class DrawSidebar(QFrame):
         section = QWidget(self)
         section.setProperty("role", "draw-section")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setContentsMargins(2, 0, 0, 0)
         layout.setSpacing(6)
 
         # Qt QSS doesn't support text-transform, so the uppercase small-caps
@@ -450,9 +457,12 @@ class DrawSidebar(QFrame):
     def set_polyline_actions_enabled(
         self, *, can_finish: bool, can_close: bool, can_undo: bool
     ) -> None:
-        self._finish_button.setEnabled(can_finish)
-        self._close_button.setEnabled(can_close)
-        self._undo_button.setEnabled(can_undo)
+        # Hide instead of greying out: a wall of disabled buttons reads as
+        # clutter, and these three are meaningless unless a point-by-point
+        # draw is actually in progress.
+        self._finish_button.setVisible(can_finish)
+        self._close_button.setVisible(can_close)
+        self._undo_button.setVisible(can_undo)
 
     @staticmethod
     def _sync_toggle(button: CycleIconButton, enabled: bool) -> None:
@@ -468,13 +478,16 @@ class DrawSidebar(QFrame):
         self._arc_mode_button.set_current_state(mode)
 
     def set_arc_mode_enabled(self, enabled: bool) -> None:
-        self._arc_mode_button.setEnabled(enabled)
+        self._arc_mode_button.setVisible(enabled)
 
     def set_constraint_mode(self, mode: str | None) -> None:
         self._constraint_button.set_current_state(mode or "Free")
 
     def set_constraint_mode_enabled(self, enabled: bool) -> None:
-        self._constraint_button.setEnabled(enabled)
+        # Constraint is a single-button section — hide the caption with it.
+        if hasattr(self, "_constraint_section"):
+            self._constraint_section.setVisible(enabled)
+        self._constraint_button.setVisible(enabled)
 
     def set_smoothing_method(self, method: str) -> None:
         self._smoothing_button.set_current_state(method)

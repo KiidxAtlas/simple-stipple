@@ -80,12 +80,6 @@ from simple_stipple.canvas.constants import (
     RUBBER_W as _RUBBER_W,
 )
 from simple_stipple.canvas.constants import (
-    SELECT_PT as _SELECT_PT,
-)
-from simple_stipple.canvas.constants import (
-    SELECT_PT_ACTIVE as _SELECT_PT_ACTIVE,
-)
-from simple_stipple.canvas.constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
 from simple_stipple.canvas.rendering import DensePreviewRenderer
@@ -743,41 +737,6 @@ class CanvasRenderer:
                 painter.drawEllipse(QPointF(cx, cy), r, r)
         self._paint_bezier_handles(painter, [e.id for e in self._host._entities])
 
-    def _paint_select_handles(self, painter: QPainter) -> None:
-        """Show selected poly vertices in select mode for direct manipulation."""
-        if not self._host._sel:
-            return
-        sel_indices = []
-        for entity_id in self._host._sel:
-            entity = self._host._entity_for_id(entity_id)
-            if entity is None:
-                continue
-            sel_indices.append(entity_id)
-            if not self._host._entity_shows_point_handles_by_id(entity_id):
-                continue
-            eid = entity.id
-            for vi, pt in enumerate(entity.points):
-                cx, cy = self._host._w2c(*pt)
-                is_hover = self._host._hover_vert == (eid, vi)
-                is_active = (
-                    self._host._edit_dragging
-                    and self._host._edit_poly == eid
-                    and self._host._edit_vert == vi
-                )
-                if is_active:
-                    color = _SELECT_PT_ACTIVE
-                    r = _HANDLE_R + 2
-                elif is_hover:
-                    color = _SNAP_CLOSE
-                    r = _HANDLE_R + 1
-                else:
-                    color = _SELECT_PT
-                    r = _HANDLE_R
-                painter.setPen(QPen(color, 1.5))
-                painter.setBrush(QBrush(color))
-                painter.drawEllipse(QPointF(cx, cy), r, r)
-        self._paint_bezier_handles(painter, sel_indices)
-
     def _paint_bezier_handles(self, painter: QPainter, entity_ids) -> None:
         """Draw independent Bézier handles without adding permanent canvas noise."""
         for entity_id in entity_ids:
@@ -902,6 +861,9 @@ class CanvasRenderer:
             and self._host._draw_pts
             and not near_close
             and not spline_mode
+            # While the Tab-summoned editor sits on the badge spot, the field
+            # IS the badge — painting both doubles the readout.
+            and self._host._dim_distance_edit is None
         ):
             last_w = self._host._draw_pts[-1]
             eff_wx2 = self._host._draw_snap[0] if self._host._draw_snap else self._host._cursor_wx
@@ -935,7 +897,10 @@ class CanvasRenderer:
                 )
             vw = max(self._host.width(), 100)
             summary_text = f"Total: {_fmt_len(total_len, self._host._unit_system)}  |  {len(self._host._draw_pts)} pts"
-            self._draw_badge(painter, vw - 100, 50, summary_text, 10)
+            # Below the Scale pill (top band is chrome_top..+28), not beside it.
+            self._draw_badge(
+                painter, vw - 100, self._chrome_top() + 36, summary_text, 10
+            )
 
     def _paint_draw_shape_preview(self, painter: QPainter) -> None:
         if not self._host._draw_shape_preview_active or self._host._draw_shape_anchor_w is None:
@@ -1017,7 +982,7 @@ class CanvasRenderer:
 
         # Dimension annotations — circle gets radius line + R badge;
         # other shapes get W/H badges at bounding box edges.
-        has_hud = getattr(self._host, "_shape_w_edit", None) is not None
+        has_hud = getattr(self._host, "_draw_shape_w_edit", None) is not None
         if self._host._draw_primitive == "circle":
             # Draw a dashed radius line from center to cursor
             radius = math.hypot(ex - sx, ey - sy)
@@ -1358,6 +1323,7 @@ class CanvasRenderer:
         by0: float,
         bx1: float,
         by1: float,
+        local_points: dict[str, tuple[float, float]] | None = None,
     ) -> None:
         """Paint lightweight rotate/scale gizmo handles around selection bounds.
 
@@ -1374,14 +1340,25 @@ class CanvasRenderer:
 
         left = min(bx0, bx1)
         mid_y = (by0 + by1) / 2.0
-        # Keep the controls screen-aligned. Rotating a shape must not make
-        # its resize and rotate controls orbit around it; the geometry itself
-        # supplies the orientation feedback.
-        local_points: dict[str, tuple[float, float]] | None = None
+        # A single rotated parametric entity (ellipse, rectangle, …) gets handles
+        # on its ROTATED frame: the drag math in GizmoService measures along
+        # the shape's own axes, so screen-aligned handles would fight the drag.
+        # Everything else keeps the screen-aligned bbox frame.
+        if local_points is not None:
+            mid_x, mid_y = local_points["c"]
         # Keep controls reachable when a selection sits flush with the top
         # edge.  The old fixed offset could draw the rotate handle entirely
         # outside the viewport even though its hit target still existed.
-        rotate_center = QPointF(mid_x, max(18.0, top - 42.0))
+        if local_points is not None:
+            n_c = local_points["n"]
+            nx, ny = n_c[0] - mid_x, n_c[1] - mid_y
+            n_len = math.hypot(nx, ny) or 1.0
+            rotate_center = QPointF(
+                mid_x + nx / n_len * (n_len + 42.0),
+                mid_y + ny / n_len * (n_len + 42.0),
+            )
+        else:
+            rotate_center = QPointF(mid_x, max(18.0, top - 42.0))
 
         self._host._gizmo_scale_rect = None
         rotate_visual_rect = QRectF(
@@ -1489,6 +1466,59 @@ class CanvasRenderer:
                 ),
             )
 
+    def _rotated_gizmo_frame(
+        self, sel_pts: list[tuple[float, float]]
+    ) -> dict[str, tuple[float, float]] | None:
+        """Canvas-space handle positions on a single rotated parametric
+        entity's own frame — matching the drag math in
+        ``GizmoService._start_gizmo_drag`` so the handle you grab is the axis
+        the resize follows. Returns None for anything else (screen-aligned)."""
+        if len(self._host._sel) != 1:
+            return None
+        entity = self._host._entity_for_id(next(iter(self._host._sel)))
+        meta = entity.meta if entity is not None and isinstance(entity.meta, dict) else None
+        if entity is None or meta is None:
+            return None
+        dims: tuple[float, float] | None = None
+        if entity.kind in {"rectangle", "rounded_rectangle"}:
+            dims = (float(meta.get("width", 0)), float(meta.get("height", 0)))
+        elif entity.kind == "ellipse":
+            dims = (2 * float(meta.get("rx", 0)), 2 * float(meta.get("ry", 0)))
+        elif entity.kind == "circle":
+            diameter = 2 * float(meta.get("radius", 0))
+            dims = (diameter, diameter)
+        elif entity.kind == "slot":
+            dims = (float(meta.get("length", 0)), float(meta.get("width", 0)))
+        if dims is None or min(dims) <= 1e-9:
+            return None
+        rotation = float(meta.get("rotation", 0.0))
+        if abs(rotation) <= 1e-9:
+            return None
+        xs, ys = zip(*sel_pts)
+        cx, cy = (float(v) for v in meta.get("center", ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)))
+        angle = math.radians(rotation)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        fracs = {
+            "nw": (0.0, 1.0),
+            "n": (0.5, 1.0),
+            "ne": (1.0, 1.0),
+            "e": (1.0, 0.5),
+            "se": (1.0, 0.0),
+            "s": (0.5, 0.0),
+            "sw": (0.0, 0.0),
+            "w": (0.0, 0.5),
+        }
+        points: dict[str, tuple[float, float]] = {}
+        for name, (fx, fy) in fracs.items():
+            lx = (fx - 0.5) * dims[0]
+            ly = (fy - 0.5) * dims[1]
+            points[name] = self._host._w2c(
+                cx + lx * cos_a - ly * sin_a,
+                cy + lx * sin_a + ly * cos_a,
+            )
+        points["c"] = self._host._w2c(cx, cy)
+        return points
+
     def _paint_selection_bbox(self, painter: QPainter, visible: QRectF) -> None:
         if not self._host._sel or self._host._mode != "select":
             self._host._gizmo_scale_rect = None
@@ -1525,17 +1555,23 @@ class CanvasRenderer:
                     by1 - by0 + 2 * pad,
                 )
             )
-        self._paint_transform_gizmo(painter, bx0, by0, bx1, by1)
+        local_points = self._rotated_gizmo_frame(sel_pts)
+        self._paint_transform_gizmo(painter, bx0, by0, bx1, by1, local_points=local_points)
         # A two-point line already exposes its editable length and angle in
         # the selection readout. Repeating an axis-aligned W/H badge here
         # creates three overlapping measurements for one object.
-        if self._host._selected_single_line() is None:
+        # The interactive white W/H badges above/beside the bbox already carry
+        # these numbers (and open editors) — show this blue readout only
+        # mid-scale-drag, where its Shift/Alt modifier hint earns its place.
+        in_scale_drag = bool(self._host._gizmo_drag_mode) and str(
+            self._host._gizmo_drag_mode
+        ).startswith("scale-")
+        if self._host._selected_single_line() is None and in_scale_drag:
             width = _to_display(max(xs) - min(xs), self._host._unit_system)
             height = _to_display(max(ys) - min(ys), self._host._unit_system)
             suffix = _unit_suffix(self._host._unit_system)
             size_text = f"W {width:.2f}  H {height:.2f} {suffix}"
-            if self._host._gizmo_drag_mode and self._host._gizmo_drag_mode.startswith("scale-"):
-                size_text += "  ·  Shift lock  ·  Alt center"
+            size_text += "  ·  Shift lock  ·  Alt center"
             painter.setFont(_FONT_HEL_9)
             metrics = painter.fontMetrics()
             badge_w = metrics.horizontalAdvance(size_text) + 16
@@ -1834,7 +1870,7 @@ class CanvasRenderer:
 
     def _paint_measure_button(self, painter: QPainter, canvas_w: int) -> None:
         pad, bh, bw = 6, 22, 114
-        label = "\u2715 Measure [M]" if self._host._measure_mode else "\u2295 Measure [M]"
+        label = "\u2715 Scale [M]" if self._host._measure_mode else "\u2295 Scale [M]"
         color = _MEASURE_COLOR if self._host._measure_mode else QColor(DIM)
         bg = QColor("#002233") if self._host._measure_mode else QColor("#14141e")
         top = pad + self._chrome_top()
@@ -1847,45 +1883,6 @@ class CanvasRenderer:
         painter.setPen(color)
         painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
         self._host._mbtn_rect = (x1, y1, x2, y2)
-
-    def _paint_dimension_button(self, painter: QPainter, canvas_w: int) -> None:
-        pad, bh, bw, gap = 6, 22, 114, 6
-        label = (
-            "\u2715 Linear [\u21e7M]"
-            if self._host._dimension_mode and self._host._dimension_kind == "linear"
-            else "\u2295 Linear [\u21e7M]"
-        )
-        active = self._host._dimension_mode and self._host._dimension_kind == "linear"
-        color = QColor("#a371f7") if active else QColor(DIM)
-        bg = QColor("#1c1233") if active else QColor("#14141e")
-        top = pad + self._chrome_top()
-        # Sits immediately to the left of the Measure button.
-        mx1, _my1, _mx2, _my2 = self._host._mbtn_rect
-        x2 = mx1 - gap
-        x1 = x2 - bw
-        y1, y2 = top, top + bh
-        painter.setPen(QPen(color, 1))
-        painter.setBrush(QBrush(bg))
-        painter.drawRect(QRectF(x1, y1, bw, bh))
-        painter.setFont(_FONT_HEL_10)
-        painter.setPen(color)
-        painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
-        self._host._dbtn_rect = (x1, y1, x2, y2)
-
-        angle_bw = 88
-        angle_x2 = x1 - gap
-        angle_x1 = angle_x2 - angle_bw
-        angle_active = self._host._dimension_mode and self._host._dimension_kind == "angle"
-        painter.setPen(QPen(QColor("#a371f7") if angle_active else QColor(DIM), 1))
-        painter.setBrush(QBrush(QColor("#1c1233") if angle_active else QColor("#14141e")))
-        painter.drawRect(QRectF(angle_x1, y1, angle_bw, bh))
-        painter.setPen(QColor("#a371f7") if angle_active else QColor(DIM))
-        painter.drawText(
-            QRectF(angle_x1, y1, angle_bw, bh),
-            Qt.AlignmentFlag.AlignCenter,
-            "\u2715 Angular" if angle_active else "\u2295 Angular",
-        )
-        self._host._adbtn_rect = (angle_x1, y1, angle_x2, y2)
 
     def _paint_active_precision_tool_panel(self, painter: QPainter, canvas_w: int) -> None:
         if not (self._host._measure_mode or self._host._dimension_mode):
@@ -2348,7 +2345,7 @@ class CanvasRenderer:
             info_x = sidebar.x() + sidebar.width() + 12
         painter.drawText(info_x, self._chrome_top() + 18, info)
 
-        if not self._host._entities and not self._host._draw_pts:
+        if not self._host._has_geometry_or_gesture():
             message = getattr(self._host, "_empty_message", "No polylines loaded")
             title, _, hint = message.partition("\n")
             # Empty canvases are an important onboarding moment. The former
@@ -2375,7 +2372,6 @@ class CanvasRenderer:
         # staged workflow card while either tool is active. Paint this as UI
         # chrome after geometry so it cannot disappear behind the drawing.
         self._paint_measure_button(painter, w)
-        self._paint_dimension_button(painter, w)
         self._paint_active_precision_tool_panel(painter, w)
 
         # Flash indicator
@@ -2390,7 +2386,6 @@ class CanvasRenderer:
                 anchor = (w / 2.0, 40.0 + self._chrome_top())
             badge_w = ftw + 2 * fpad
             badge_h = fth + fpad
-            frx = max(8.0, min(anchor[0] - badge_w / 2.0, w - badge_w - 8.0))
             preferred_y = anchor[1] - badge_h - 22.0
             fallback_y = anchor[1] + 22.0
             fry = preferred_y if preferred_y >= self._chrome_top() + 8 else fallback_y
@@ -2398,6 +2393,15 @@ class CanvasRenderer:
                 self._chrome_top() + 8.0,
                 min(fry, h - badge_h - 28.0),
             )
+            # Left floor: clear the ruler strip, and when the draw sidebar's
+            # vertical band overlaps the badge's, start right of the sidebar —
+            # it composites over painted canvas text.
+            left = float(self._chrome_left() + 8)
+            sidebar = getattr(self._host, "_draw_sidebar", None)
+            if getattr(self._host, "_draw_sidebar_visible", False) and sidebar is not None:
+                if sidebar.y() <= fry + badge_h and fry <= sidebar.y() + sidebar.height():
+                    left = max(left, float(sidebar.x() + sidebar.width() + 12))
+            frx = max(left, min(anchor[0] - badge_w / 2.0, w - badge_w - 8.0))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(QColor(20, 24, 36, 220)))
             painter.drawRoundedRect(QRectF(frx, fry, badge_w, badge_h), 4, 4)
@@ -2435,5 +2439,3 @@ class CanvasRenderer:
         self._paint_selection_readout(painter)
         if self._host._mode == "edit":
             self._paint_edit_handles(painter)
-        elif self._host._mode == "select" and self._host._sel:
-            self._paint_select_handles(painter)

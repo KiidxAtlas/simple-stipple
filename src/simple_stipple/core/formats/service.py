@@ -131,6 +131,9 @@ class DxfService:
         entity_names: Sequence[str] | None = None,
         extra_layers: Mapping[str, Sequence[Sequence[tuple[float, float]]]] | None = None,
         extra_layer_records: Mapping[str, Sequence[dict[str, Any]]] | None = None,
+        entity_groups: Sequence[int | None] | None = None,
+        group_labels: Mapping[int, str] | None = None,
+        object_names: Sequence[str | None] | None = None,
     ) -> None:
         """Write polylines to a DXF file. Returns None."""
         write_polylines_dxf(
@@ -150,6 +153,9 @@ class DxfService:
             extra_layer_records={k: list(v) for k, v in extra_layer_records.items()}
             if extra_layer_records
             else None,
+            entity_groups=list(entity_groups) if entity_groups is not None else None,
+            group_labels=dict(group_labels) if group_labels else None,
+            object_names=list(object_names) if object_names is not None else None,
         )
 
     @staticmethod

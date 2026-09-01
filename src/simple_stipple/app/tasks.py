@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import subprocess
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from simple_stipple.platform.settings import user_data_dir
+from simple_stipple.platform.settings import project_root, user_data_dir
 from simple_stipple.platform.storage import (
     MAX_WORKSPACE_FILE_BYTES,
     read_json_file,
@@ -25,6 +29,12 @@ LOGGER = logging.getLogger(__name__)
 # blocking request. Keep detached startup checks alive until Qt reports that
 # they finished instead of letting window destruction delete a running thread.
 _DETACHED_UPDATE_THREADS: set[Any] = set()
+
+def _document_hash(document: object) -> str:
+    """Stable content hash used to recognise a state the user dismissed."""
+    return hashlib.sha256(
+        json.dumps(document, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 class AutosaveController(QObject):
@@ -49,6 +59,11 @@ class AutosaveController(QObject):
         self._recovery_saved.connect(self._on_recovery_saved)
         self._recovery_failed.connect(self._on_recovery_failed)
         self._last_failure_message = ""
+        # Set when the user deletes recovery snapshots via the workspace
+        # library: the 90 s timer must not immediately rewrite the identical
+        # document (that made deletions look like they "didn't stick"). Any
+        # real edit changes the hash and re-arms crash protection.
+        self._dismissed_hash: str | None = None
 
         # Crash recovery: periodically snapshot unsaved work to the app data
         # dir; a clean exit or successful save removes the snapshot.
@@ -72,6 +87,10 @@ class AutosaveController(QObject):
             return
         path = self._app._autosave_path()
         document = self._app._collect_workspace_document()
+        document_hash = _document_hash(document)
+        if document_hash == self._dismissed_hash:
+            return
+        self._dismissed_hash = None
         workspace_path = str(self._app._workspace_path or "")
         recovery_id = self._app._recovery_id
 
@@ -200,6 +219,17 @@ class AutosaveController(QObject):
                 f"{kind} failed: {message}. Manage storage or choose another location."
             )
         refresh_style(self._app._workspace_state_chip)
+
+    def dismiss_recovery_for_current_state(self) -> None:
+        """Don't re-snapshot the exact document the user just deleted.
+
+        Called after recovery files are removed from the workspace library so
+        the periodic timer doesn't resurrect them before the next edit.
+        """
+        try:
+            self._dismissed_hash = _document_hash(self._app._collect_workspace_document())
+        except Exception:  # noqa: BLE001 — defensive; dismissal is best-effort
+            self._dismissed_hash = None
 
     def _discard_autosave(self) -> None:
         try:
@@ -333,12 +363,168 @@ class UpdateChecker:
         self._startup_update_thread = None
 
 
+class AutoCommitController(QObject):
+    """Watch the repository folder; commit and push once the tree goes quiet.
+
+    Enabled by the ``auto_commit_push`` setting (File menu / Settings). A short
+    poll notices uncommitted changes; a quiet-period timer waits until edits
+    stop before running ``git add -A && git commit && git push`` on a daemon
+    thread, so an active editing session produces one commit, not dozens.
+    """
+
+    _POLL_INTERVAL_MS = 5_000
+    _QUIET_PERIOD_MS = 4_000
+
+    _git_done = Signal(object)
+
+    def __init__(self, app: App) -> None:
+        super().__init__(app)
+        self._app = app
+        self._shutting_down = False
+        self._running = False
+        self._proc: subprocess.Popen[str] | None = None
+        self._git_done.connect(self._on_git_done)
+
+        self._poll_timer = QTimer(self._app)
+        self._poll_timer.setInterval(self._POLL_INTERVAL_MS)
+        self._poll_timer.timeout.connect(self._poll)
+
+        self._quiet_timer = QTimer(self._app)
+        self._quiet_timer.setSingleShot(True)
+        self._quiet_timer.setInterval(self._QUIET_PERIOD_MS)
+        self._quiet_timer.timeout.connect(self._commit_and_push)
+
+    def configure(self) -> None:
+        """Start/stop watching from the current setting (menu, Settings dialog)."""
+        enabled = bool(self._app._settings.get("auto_commit_push", False))
+        if enabled and self._repo() is not None:
+            if not self._poll_timer.isActive():
+                self._poll_timer.start()
+        else:
+            self._poll_timer.stop()
+            self._quiet_timer.stop()
+
+    def _repo(self) -> Path | None:
+        """Configured repository folder, falling back to the app's own checkout."""
+        raw = str(self._app._settings.get("repo_dir", "") or "").strip()
+        candidates = [Path(raw)] if raw else []
+        candidates.append(project_root())
+        for candidate in candidates:
+            try:
+                if candidate.is_dir() and (candidate / ".git").exists():
+                    return candidate
+            except OSError:
+                continue
+        return None
+
+    def _launch(self, tag: str, commands: list[list[str]]) -> bool:
+        """Run git steps sequentially on a daemon thread; False when busy."""
+        if self._running or self._shutting_down:
+            return False
+        repo = self._repo()
+        if repo is None:
+            return False
+        self._running = True
+
+        def work() -> None:
+            results: list[tuple[list[str], bool, str]] = []
+            try:
+                for args in commands:
+                    if self._shutting_down:
+                        break
+                    try:
+                        proc = subprocess.Popen(
+                            ["git", *args],
+                            cwd=str(repo),
+                            text=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                        )
+                        self._proc = proc
+                        stdout, stderr = proc.communicate(timeout=30)
+                        out = (stdout or "") + ("\n" + stderr if stderr else "")
+                        ok = proc.returncode == 0 and not self._shutting_down
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        stdout, stderr = proc.communicate()
+                        out = (stdout or "") + ("\n" + stderr if stderr else "") + "\nTimed out"
+                        ok = False
+                    except OSError as exc:
+                        out, ok = str(exc), False
+                    finally:
+                        self._proc = None
+                    results.append((args, ok, out.strip()))
+                    if not ok:
+                        break
+            finally:
+                if self._shutting_down:
+                    self._running = False
+                else:
+                    self._git_done.emit((tag, results))
+
+        threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def _poll(self) -> None:
+        if self._shutting_down:
+            return
+        # Busy (or a missing git binary/repo) just retries on the next tick.
+        self._launch("status", [["status", "--porcelain"]])
+
+    def _on_git_done(self, payload: object) -> None:
+        self._running = False
+        if self._shutting_down:
+            return
+        tag, results = cast("tuple[str, list[tuple[list[str], bool, str]]]", payload)
+        if tag == "status":
+            dirty = any(ok and out for _args, ok, out in results)
+            if dirty:
+                # (Re)start the quiet period: only commit once edits pause.
+                self._quiet_timer.start()
+        elif tag == "verify":
+            dirty = any(ok and out for _args, ok, out in results)
+            if dirty:
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self._launch(
+                    "commit",
+                    [["add", "-A"], ["commit", "-m", f"Auto-commit {stamp}"], ["push"]],
+                )
+        elif tag == "commit":
+            if results and all(ok for _args, ok, _out in results):
+                LOGGER.info("Auto-commit && push finished")
+            else:
+                detail = next((out for _args, ok, out in results if not ok), "unknown error")
+                LOGGER.warning("Auto-commit failed: %s", detail)
+                from simple_stipple.ui.components.feedback import record_notification
+
+                record_notification(f"Auto-commit && push failed: {detail.splitlines()[0]}")
+
+    def _commit_and_push(self) -> None:
+        if self._shutting_down:
+            return
+        # Re-check before writing: the user may have committed by hand while the
+        # quiet period ran, and an empty "git commit" would error noisily.
+        self._launch("verify", [["status", "--porcelain"]])
+
+    def shutdown(self) -> None:
+        self._shutting_down = True
+        self._poll_timer.stop()
+        self._quiet_timer.stop()
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+
 class TaskController:
     """Single lifecycle surface for background application tasks."""
 
     def __init__(self, app: App) -> None:
         self.autosave = AutosaveController(app)
         self.updates = UpdateChecker(app)
+        self.auto_commit = AutoCommitController(app)
         self._recovery_start_timer = QTimer(app)
         self._recovery_start_timer.setSingleShot(True)
         self._recovery_start_timer.timeout.connect(self.autosave.offer_startup_autosave_recovery)
@@ -351,9 +537,11 @@ class TaskController:
         if check_updates:
             self._update_start_timer.start(1000)
         self.updates._configure_auto_fetch_timer()
+        self.auto_commit.configure()
 
     def shutdown(self) -> None:
         self._recovery_start_timer.stop()
         self._update_start_timer.stop()
         self.autosave.shutdown()
         self.updates.shutdown()
+        self.auto_commit.shutdown()

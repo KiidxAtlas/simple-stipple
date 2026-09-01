@@ -7,10 +7,12 @@ from copy import deepcopy
 from typing import Any
 
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QLabel, QMenu
 
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.core.cad.constraints import GeometricConstraint
+from simple_stipple.core.editing.corners import chamfered_corner_points, rounded_corner_points
+from simple_stipple.ui.components.units import suffix as _unit_suffix
 
 
 def set_view_state(self, state: dict[str, Any]) -> None:
@@ -100,18 +102,9 @@ def set_view_state(self, state: dict[str, Any]) -> None:
         self._layer_colors = {str(k): str(v) for k, v in raw_colors.items() if v}
     self._set_flagged("hidden", hidden_state)
     self._set_flagged("locked", locked_state)
-    raw_groups = state.get("groups", {})
-    if isinstance(raw_groups, dict):
-        parsed_groups = {
-            int(k): int(v)
-            for k, v in raw_groups.items()
-            if str(k).lstrip("-").isdigit()
-            and str(v).lstrip("-").isdigit()
-            and 0 <= int(k) < len(self._entities)
-        }
-        for i, e in enumerate(self._entities):
-            e.group = parsed_groups.get(i)
-        self._next_group_id = max(parsed_groups.values(), default=0) + 1
+    # Groups restore through set_entity_records (per-entity "group" key); the
+    # legacy view-state "groups" map was written id-keyed but read here as
+    # index-keyed, which silently WIPED every group on workspace load.
     raw_symbols = state.get("symbols", {})
     if isinstance(raw_symbols, dict):
         self._symbol_library = {
@@ -196,19 +189,35 @@ def _rightclick_cb(self, cx: float, cy: float) -> None:
             menu = QMenu()
 
             def _prompt_round_corner() -> None:
+                poly = self._entities_by_id[entity_id].points
+                closed = self._is_poly_closed(poly)
+
+                def _preview(r: float) -> None:
+                    new_poly = rounded_corner_points(poly, vi, r, closed=closed)
+                    self._set_operation_preview([new_poly] if new_poly is not None else [])
+
                 self._show_hud_prompt(
                     "Round radius (mm)",
                     1.0,
                     lambda r: self._round_vertex(entity_id, vi, r),
                     minimum=0.01,
+                    preview=_preview,
                 )
 
             def _prompt_chamfer_corner() -> None:
+                poly = self._entities_by_id[entity_id].points
+                closed = self._is_poly_closed(poly)
+
+                def _preview(d: float) -> None:
+                    new_poly = chamfered_corner_points(poly, vi, d, closed=closed)
+                    self._set_operation_preview([new_poly] if new_poly is not None else [])
+
                 self._show_hud_prompt(
                     "Chamfer distance (mm)",
                     1.0,
                     lambda d: self._chamfer_vertex(entity_id, vi, d),
                     minimum=0.01,
+                    preview=_preview,
                 )
 
             poly = self._entities_by_id[entity_id].points
@@ -231,76 +240,9 @@ def _round_vertex(self, entity_id: str, vi: int, radius: float) -> bool:
     if entity_id not in self._entities_by_id or radius <= 0:
         return False
     poly = self._entities_by_id[entity_id].points
-    closed = self._is_poly_closed(poly)
-    pts = poly[:-1] if closed else list(poly)
-    n = len(pts)
-    if n < 3:
+    new_poly = rounded_corner_points(poly, vi, radius, closed=self._is_poly_closed(poly))
+    if new_poly is None:
         return False
-    if closed and vi == n:
-        vi = 0
-    if not (0 <= vi < n):
-        return False
-    if not closed and (vi == 0 or vi == n - 1):
-        return False
-
-    prev_i = (vi - 1) % n
-    next_i = (vi + 1) % n
-    ax, ay = pts[prev_i]
-    bx, by = pts[vi]
-    cx, cy = pts[next_i]
-    u1 = (ax - bx, ay - by)
-    u2 = (cx - bx, cy - by)
-    l1 = math.hypot(*u1)
-    l2 = math.hypot(*u2)
-    if l1 < 1e-9 or l2 < 1e-9:
-        return False
-    u1 = (u1[0] / l1, u1[1] / l1)
-    u2 = (u2[0] / l2, u2[1] / l2)
-    dot = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
-    phi = math.acos(dot)
-    if phi < 1e-3 or abs(math.pi - phi) < 1e-3:
-        return False
-
-    offset = radius / math.tan(phi / 2.0)
-    offset = min(offset, l1 * 0.45, l2 * 0.45)
-    if offset <= 1e-6:
-        return False
-    r = offset * math.tan(phi / 2.0)
-
-    t1 = (bx + u1[0] * offset, by + u1[1] * offset)
-    t2 = (bx + u2[0] * offset, by + u2[1] * offset)
-
-    bis = (u1[0] + u2[0], u1[1] + u2[1])
-    bl = math.hypot(*bis)
-    if bl < 1e-9:
-        return False
-    bis = (bis[0] / bl, bis[1] / bl)
-    center_dist = r / math.sin(phi / 2.0)
-    center = (bx + bis[0] * center_dist, by + bis[1] * center_dist)
-
-    a1 = math.atan2(t1[1] - center[1], t1[0] - center[0])
-    a2 = math.atan2(t2[1] - center[1], t2[0] - center[0])
-    # Use the minor arc between tangent points; choosing the major arc
-    # produces loop-like rounding artifacts.
-    span = a2 - a1
-    while span <= -math.pi:
-        span += 2 * math.pi
-    while span > math.pi:
-        span -= 2 * math.pi
-    steps = max(4, min(24, int(abs(span) / (math.pi / 18.0))))
-    arc_pts = [
-        (
-            center[0] + r * math.cos(a1 + span * (i / steps)),
-            center[1] + r * math.sin(a1 + span * (i / steps)),
-        )
-        for i in range(steps + 1)
-    ]
-
-    new_pts = pts[:vi] + arc_pts + pts[vi + 1 :]
-    if closed:
-        new_poly = new_pts + [new_pts[0]]
-    else:
-        new_poly = new_pts
     entity = deepcopy(self._entities_by_id[entity_id])
     entity.points = new_poly
     entity.kind = "polyline"
@@ -417,31 +359,35 @@ def _show_shape_dim_inputs(self) -> None:
     ex, ey = self._draw_shape_cursor_w
     w = abs(ex - sx)
     h = abs(ey - sy)
-    cx, cy = self._w2c((sx + ex) / 2.0, (sy + ey) / 2.0)
-    field_x, field_y = self._hud_position_near(
-        cx,
-        cy,
-        86,
-        80 if self._draw_primitive in {"polygon", "star"} else 52,
-        offset_x=16,
-        offset_y=12,
-    )
-
     w_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
     w_edit.setText(f"{w:.2f}")
     w_edit.setAccessibleName("Shape width")
     w_edit.setToolTip("Width · enter a value or expression")
     w_edit.setProperty("shape_hud_temp", True)
-    w_edit.move(field_x, field_y)
     w_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
+    # Resize live as the user types; Enter still commits. The preview is
+    # transient (moves the rubber cursor), so partial input is harmless.
+    w_edit.textEdited.connect(lambda _t: self._apply_shape_size_inputs())
+    w_label = QLabel(f"W ({_unit_suffix(self._unit_system)})", self)
+    w_label.setProperty("role", "canvas-hud-label")
+    w_label.setProperty("shape_hud_temp", True)
+    w_label.setFixedSize(86, 16)
+    w_label.show()
+    self._draw_shape_w_label = w_label
 
     h_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
     h_edit.setText(f"{h:.2f}")
     h_edit.setAccessibleName("Shape height")
     h_edit.setToolTip("Height · enter a value or expression")
     h_edit.setProperty("shape_hud_temp", True)
-    h_edit.move(field_x, field_y + 28)
     h_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
+    h_edit.textEdited.connect(lambda _t: self._apply_shape_size_inputs())
+    h_label = QLabel(f"H ({_unit_suffix(self._unit_system)})", self)
+    h_label.setProperty("role", "canvas-hud-label")
+    h_label.setProperty("shape_hud_temp", True)
+    h_label.setFixedSize(86, 16)
+    h_label.show()
+    self._draw_shape_h_label = h_label
 
     self._draw_shape_w_edit = w_edit
     self._draw_shape_h_edit = h_edit
@@ -461,12 +407,13 @@ def _show_shape_dim_inputs(self) -> None:
         )
         sides_spin.setPrefix("Points: " if self._draw_primitive == "star" else "Sides: ")
         sides_spin.setFixedWidth(112)
-        sides_spin.move(
-            max(8, min(field_x, self.width() - sides_spin.width() - 8)),
-            field_y + 56,
-        )
         sides_spin.valueChanged.connect(self._on_polygon_sides_spin_changed)
         self._draw_shape_sides_spin = sides_spin
+
+    # Anchor the fields exactly where the amber badges painted a moment ago
+    # (they hide while the fields exist), so Tab reads as "edit the number on
+    # the shape", not "open a floating panel".
+    self._reposition_shape_dim_inputs()
 
 
 def _find_dimension_at(self, cx: float, cy: float) -> int | None:
@@ -584,6 +531,7 @@ def get_export_dxf_state(self, *, include_hidden: bool = False) -> list[dict[str
                 "kind": kind,
                 "meta": export_meta,
                 "layer": entity.layer,
+                "group": entity.group,
             }
         )
     return result
@@ -679,6 +627,8 @@ def _escape_cb(self) -> None:
     self._dimension_mode = False
     self._dim_pending_p1 = None
     self._dim_pending_p2 = None
+    self._corner_pick_armed = None
+    self._constraint_pick_armed = None
 
     self._end_gizmo_drag()
     self._gizmo_scale_rect = None

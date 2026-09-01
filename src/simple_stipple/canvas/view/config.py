@@ -309,6 +309,8 @@ def _initialize_view(
     self._edit_undo_pushed = False
     self._edit_command_snapshot = None
     self._hover_vert = None
+    self._corner_pick_armed = None  # "round"|"chamfer" — next click picks the corner
+    self._constraint_pick_armed = None  # constraint kind — next click picks the partner edge
     self._hover_bezier_handle = None
     self._bezier_handle_drag = None
     self._bezier_handle_drag_moved = False
@@ -355,11 +357,8 @@ def _initialize_view(
     self._bg_key_callback = None
     self._bg_drag = None
 
-    # Scale / Dimension button rects
+    # Measure button rect (the Dimension tool lives in the toolbar/⇧M instead)
     self._mbtn_rect = (0, 0, 0, 0)
-    self._dbtn_rect = (0, 0, 0, 0)
-    self._adbtn_rect = (0, 0, 0, 0)
-
     # Draw mode snap (world-space snap point under cursor)
     self._draw_snap = None
     self._draw_snap_type = None
@@ -431,6 +430,7 @@ def _initialize_view(
     # Inline single-dimension editor
     self._sel_dim_edit = None
     self._sel_dim_axis = None  # "w" or "h"
+    self._sel_dim_snapshot = None  # live-typing preview transaction
 
     # Transform gizmo (select mode)
     self._gizmo_scale_rect = None
@@ -483,6 +483,8 @@ def _initialize_view(
     self._draw_shape_w_edit = None
     self._draw_shape_h_edit = None
     self._draw_shape_sides_spin = None
+    self._draw_shape_w_label = None
+    self._draw_shape_h_label = None
     self._draw_sidebar_width = DEFAULT_DRAW_SIDEBAR_WIDTH
     self._draw_sidebar_height = None  # None => auto-fit available space
     self._draw_sidebar_sections = list(DEFAULT_DRAW_SIDEBAR_SECTIONS)

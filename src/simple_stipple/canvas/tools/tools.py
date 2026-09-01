@@ -254,9 +254,9 @@ class DrawTool(CanvasTool):
         # starts a fresh acquisition instead of inheriting a stale source/type
         # lock from the segment that just finished.
         v._snap_engine.clear_relationship_reference()
-        # B. Show dim inputs after first point is placed
-        if len(v._draw_pts) == 1:
-            v._show_dim_inputs()
+        # The live length already rides the rubber band as a painted badge; the
+        # boxed Length/Angle fields only appear when the user asks (Tab), so
+        # mouse drawing stays uncluttered.
         # Reset dirty flags for the new segment
         v._dim_distance_dirty = False
         v._dim_angle_dirty = False

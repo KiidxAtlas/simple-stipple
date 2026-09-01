@@ -47,6 +47,18 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         self._get_preview_categories = get_preview_categories
         self._shape_labels: dict[str, dict[str, str]] = {}
 
+    @property
+    def shape_labels(self) -> dict[str, dict[str, str]]:
+        """Custom per-shape labels by layer then entity id (session + export)."""
+        return {layer: dict(labels) for layer, labels in self._shape_labels.items()}
+
+    def set_shape_labels(self, labels: dict[str, dict[str, str]]) -> None:
+        self._shape_labels = {
+            str(layer): {str(eid): str(name) for eid, name in per_layer.items()}
+            for layer, per_layer in labels.items()
+            if isinstance(per_layer, dict)
+        }
+
     def rename_shape(self, layer_name: str, shape_key: object, new_label: str) -> None:
         if isinstance(shape_key, (tuple, list)) and shape_key:
             first = shape_key[0]

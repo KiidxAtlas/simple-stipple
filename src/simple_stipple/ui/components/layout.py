@@ -232,6 +232,12 @@ class ResponsiveContentSplitter(QSplitter):
         self._drawer_toggle.setAccessibleName("Toggle secondary inspector")
         self._drawer_toggle.clicked.connect(self._toggle_drawer)
         self._drawer_toggle.hide()
+        # Handle drags change pane sizes without ever calling
+        # _set_drawer_open, leaving the toggle mislabeled ("Hide Layers" on an
+        # already-hidden drawer) and stranded at its stale x position —
+        # clipped beneath the drawer it was supposed to control. Keep label,
+        # remembered width, and position in lock-step with the real sizes.
+        self.splitterMoved.connect(self._sync_drawer_from_sizes)
 
     def set_responsive_secondary(self, index: int, label: str = "Inspector") -> None:
         self._responsive_secondary = index
@@ -277,6 +283,25 @@ class ResponsiveContentSplitter(QSplitter):
             self._set_drawer_open(opened)
             if self._compact:
                 self._compact_drawer_open = opened
+
+    def _sync_drawer_from_sizes(self, *_args) -> None:
+        """Reflect handle drags (and programmatic resizes) in the toggle."""
+        index = self._responsive_secondary
+        if index is None or self.count() < 2:
+            return
+        sizes = self.sizes()
+        if index >= len(sizes):
+            return
+        opened = sizes[index] > 0
+        if opened:
+            self._drawer_size = sizes[index]
+        if self._compact:
+            self._compact_drawer_open = opened
+        self._drawer_toggle.setText(
+            f"Hide {self._drawer_label}" if opened else f"Show {self._drawer_label}"
+        )
+        self._drawer_toggle.setAccessibleDescription(self._drawer_toggle.text())
+        self._position_drawer_toggle()
 
     def _update_responsive_state(self) -> None:
         if self._responsive_secondary is None:
@@ -371,8 +396,8 @@ class CollapsibleSection(QFrame):
         self.setProperty("role", "collapsible")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
 
         self._toggle: QToolButton | QLabel
         if collapsible:

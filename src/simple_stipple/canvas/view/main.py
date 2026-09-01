@@ -115,6 +115,7 @@ from simple_stipple.core.document.geometry import (
     shape_for_entity,
 )
 from simple_stipple.core.document.model import CanvasDocument, EntityRecord
+from simple_stipple.core.editing.corners import chamfered_corner_points
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 
@@ -639,7 +640,7 @@ class CanvasView(
     def _on_simplify_tolerance_changed(self, tolerance: float) -> None:
         self._smoothing_service.tolerance_changed(tolerance)
 
-    def smooth_selected(self, iterations: int = 2) -> int:
+    def smooth_selected(self, iterations: int = 1) -> int:
         return self._smoothing_service.smooth_selected(iterations)
 
     def simplify_selected(self, tolerance: float = 0.2) -> int:
@@ -1057,6 +1058,12 @@ class CanvasView(
     def _set_selected_width(self, *args, **kwargs):
         return self._editing._set_selected_width(*args, **kwargs)
 
+    def _preview_selected_extent(self, *args, **kwargs):
+        return self._editing._preview_selected_extent(*args, **kwargs)
+
+    def align_selected_to_axis(self, *args, **kwargs):
+        return self._editing.align_selected_to_axis(*args, **kwargs)
+
     def _other_linework(self, *args, **kwargs):
         return self._editing._other_linework(*args, **kwargs)
 
@@ -1400,12 +1407,69 @@ class CanvasView(
         self._empty_actions_bar = bar
         self.sync_empty_actions()
 
+    def _has_geometry_or_gesture(self) -> bool:
+        """True when the canvas has content or any draw gesture is mid-flight.
+
+        The empty-state overlay (hint text + action buttons) must vanish as
+        soon as a shape preview, arc, pen stroke, or quick-shape drag starts —
+        those channels never populate ``_draw_pts``, so checking only
+        entities/points leaves "Start a drawing" painted over the preview.
+        """
+        return bool(
+            self._entities
+            or self._draw_pts
+            or self._draw_arc_pts
+            or self._pen_pts
+            or self._draw_shape_preview_active
+            or self._draw_shape_anchor_w is not None
+            or getattr(self, "_shape_drag_active", False)
+        )
+
+    def _reposition_shape_dim_inputs(self) -> None:
+        """Pin the shape W/H fields to the badge anchors on the preview's bbox.
+
+        W centers below the bounding box, H centers right of it — the same
+        spots ``renderer._paint_draw_shape_preview`` paints the amber badges,
+        which are suppressed while these fields exist. Re-run on every preview
+        mouse-move so the fields track the growing shape.
+        """
+        if self._draw_shape_w_edit is None or self._draw_shape_h_edit is None:
+            return
+        if self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
+            return
+        sx, sy = self._draw_shape_anchor_w
+        ex, ey = self._draw_shape_cursor_w
+        bx0, by0 = self._w2c(min(sx, ex), max(sy, ey))
+        bx1, by1 = self._w2c(max(sx, ex), min(sy, ey))
+        bottom = max(by0, by1)
+        right = max(bx0, bx1)
+        mid_btm_x = (bx0 + bx1) / 2.0
+        mid_rgt_y = (by0 + by1) / 2.0
+        vw = max(self.width(), 100)
+        vh = max(self.height(), 100)
+        top = self._chrome_top() + 8
+        w_edit = self._draw_shape_w_edit
+        h_edit = self._draw_shape_h_edit
+        w_x = max(8, min(int(mid_btm_x - w_edit.width() / 2), vw - w_edit.width() - 8))
+        w_y = max(top, min(int(bottom + 6), vh - w_edit.height() - 8))
+        h_x = max(8, min(int(right + 6), vw - h_edit.width() - 8))
+        h_y = max(top, min(int(mid_rgt_y - h_edit.height() / 2), vh - h_edit.height() - 8))
+        w_edit.move(w_x, w_y)
+        h_edit.move(h_x, h_y)
+        if self._draw_shape_w_label is not None:
+            self._draw_shape_w_label.move(w_x, w_y - 16)
+        if self._draw_shape_h_label is not None:
+            self._draw_shape_h_label.move(h_x, h_y - 16)
+        if self._draw_shape_sides_spin is not None:
+            spin = self._draw_shape_sides_spin
+            spin.move(max(8, min(w_x, vw - spin.width() - 8)), w_y + 34)
+
     def sync_empty_actions(self) -> None:
         """Centre the empty-state buttons under the hint, or hide them."""
         bar = getattr(self, "_empty_actions_bar", None)
         if bar is None:
             return
-        show = not self._entities and not self._draw_pts
+        show = not self._has_geometry_or_gesture()
         bar.setVisible(show)
         if not show:
             return
@@ -1645,6 +1709,12 @@ class CanvasView(
             if edit is not None and bool(edit.property("shape_hud_temp")):
                 edit.hide()
                 edit.deleteLater()
+        for label in (self._draw_shape_w_label, self._draw_shape_h_label):
+            if label is not None:
+                label.hide()
+                label.deleteLater()
+        self._draw_shape_w_label = None
+        self._draw_shape_h_label = None
         if self._draw_shape_w_edit is not None and bool(
             self._draw_shape_w_edit.property("shape_hud_temp")
         ):
@@ -1660,14 +1730,6 @@ class CanvasView(
 
     def _hit_measure_button(self, cx: float, cy: float) -> bool:
         x1, y1, x2, y2 = self._mbtn_rect
-        return x1 <= cx <= x2 and y1 <= cy <= y2
-
-    def _hit_dimension_button(self, cx: float, cy: float) -> bool:
-        x1, y1, x2, y2 = self._dbtn_rect
-        return x1 <= cx <= x2 and y1 <= cy <= y2
-
-    def _hit_angle_dimension_button(self, cx: float, cy: float) -> bool:
-        x1, y1, x2, y2 = self._adbtn_rect
         return x1 <= cx <= x2 and y1 <= cy <= y2
 
     # ── Events ────────────────────────────────────────────────────────────────
@@ -1762,36 +1824,11 @@ class CanvasView(
         if entity_id not in self._entities_by_id or dist <= 0:
             return False
         poly = self._entities_by_id[entity_id].points
-        closed = self._is_poly_closed(poly)
-        points = poly[:-1] if closed else list(poly)
-        if len(points) < 3:
+        updated = chamfered_corner_points(poly, vi, dist, closed=self._is_poly_closed(poly))
+        if updated is None:
             return False
-        if closed and vi == len(points):
-            vi = 0
-        if not 0 <= vi < len(points) or (not closed and vi in {0, len(points) - 1}):
-            return False
-        previous, current, following = (
-            points[(vi - 1) % len(points)],
-            points[vi],
-            points[(vi + 1) % len(points)],
-        )
-        incoming = (previous[0] - current[0], previous[1] - current[1])
-        outgoing = (following[0] - current[0], following[1] - current[1])
-        incoming_length, outgoing_length = math.hypot(*incoming), math.hypot(*outgoing)
-        if incoming_length < 1e-9 or outgoing_length < 1e-9:
-            return False
-        length = min(dist, incoming_length * 0.45, outgoing_length * 0.45)
-        first = (
-            current[0] + incoming[0] / incoming_length * length,
-            current[1] + incoming[1] / incoming_length * length,
-        )
-        second = (
-            current[0] + outgoing[0] / outgoing_length * length,
-            current[1] + outgoing[1] / outgoing_length * length,
-        )
-        updated = points[:vi] + [first, second] + points[vi + 1 :]
         entity = deepcopy(self._entities_by_id[entity_id])
-        entity.points = updated + [updated[0]] if closed else updated
+        entity.points = updated
         entity.kind = "polyline"
         entity.meta = None
         self._canvas_service.update_entities([entity])
@@ -1819,7 +1856,9 @@ class CanvasView(
 
     def _update_cursor(self) -> None:
         """Reflect the active interaction state in the pointer cursor."""
-        if self._space_pan_active:
+        if self._corner_pick_armed is not None or self._constraint_pick_armed is not None:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif self._space_pan_active:
             self.setCursor(
                 Qt.CursorShape.ClosedHandCursor
                 if self._space_pan_dragging
@@ -1837,8 +1876,6 @@ class CanvasView(
             or self._mode in {"draw", "edit", "trim", "extend", "knife"}
         ):
             self.setCursor(Qt.CursorShape.CrossCursor)
-        elif self._mode == "select" and self._hover_vert is not None and self._sel:
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
         else:
             self.unsetCursor()
 

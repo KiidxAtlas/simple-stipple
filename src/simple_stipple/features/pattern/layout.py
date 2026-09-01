@@ -105,6 +105,18 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._reset_preview_btn = QPushButton("Reset")
     page._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
     page._reset_preview_btn.clicked.connect(page._reset_preview)
+    # Heavy patterns slow outline editing to a crawl; this hides the solved
+    # result (and defers re-solves) until toggled back on. Mirrors the eye on
+    # the layer tree's "pattern_result" row.
+    page._pattern_visible_btn = QPushButton("Pattern")
+    page._pattern_visible_btn.setCheckable(True)
+    page._pattern_visible_btn.setChecked(True)
+    page._pattern_visible_btn.setToolTip(
+        "Show or hide the solved pattern — outline editing stays fast while "
+        "hidden; showing it again re-solves if anything changed"
+    )
+    page._pattern_visible_btn.setAccessibleName("Toggle pattern visibility")
+    page._pattern_visible_btn.toggled.connect(page._set_result_visible)
 
     page._preview_status = QLabel("No preview available")
     page._set_preview_status("No preview available")
@@ -157,7 +169,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         canvas=page._canvas,
         on_mode=page._on_toolbar_mode,
         on_fit=page._canvas.fit,
-        extra_widgets=[page._reset_preview_btn],
+        extra_widgets=[page._pattern_visible_btn, page._reset_preview_btn],
     )
     layout.addWidget(page._toolbar_module)
 

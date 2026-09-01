@@ -342,6 +342,9 @@ class DxfLayersTree(QFrame):
         self._tree.itemChanged.connect(self._handle_item_changed)
         self._tree.itemSelectionChanged.connect(self._emit_selection_request)
         self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        # Rows collapse only via the chevron — a plain click selects, and a
+        # double-click renames; neither should toggle expansion.
+        self._tree.setExpandsOnDoubleClick(True)
         if self._editable:
             self._tree.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -694,12 +697,18 @@ class DxfLayersTree(QFrame):
             self.layerActivated.emit(self._item_internal_name(current))
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, _col: int = 0) -> None:
-        """Double-click: rename shape items inline; fit view for layer items."""
+        """Double-click: rename layers and shapes inline; fit view otherwise."""
         if item is None:
             return
         kind = self._item_kind(item)
-        if kind == "shape" and self._editable and bool(item.data(0, self._ROLE_EDITABLE)):
+        if kind in {"layer", "shape"} and self._editable and bool(
+            item.data(0, self._ROLE_EDITABLE)
+        ):
+            was_expanded = item.isExpanded()
             self._tree.editItem(item, 0)
+            # The double-click also toggles expansion — undo that; the chevron
+            # owns collapse/expand.
+            item.setExpanded(was_expanded)
         else:
             self.fitRequested.emit()
 

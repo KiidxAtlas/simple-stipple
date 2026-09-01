@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -141,6 +142,14 @@ class DxfImportReport(NamedTuple):
     invalid_polylines: int
     layer_counts: dict[str, int]
     units: str = "Unitless"
+    # Simple Stipple document structure recovered from "SSTP" XDATA (empty
+    # for foreign files): dimension metadata dicts, group memberships as
+    # {"layer", "index", "group"} entries, and group id → label.
+    dimensions: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    group_labels: dict[int, str] = {}
+    # {"layer", "index", "name"} — object (shape) names from "SSTPN" XDATA.
+    object_names: list[dict[str, Any]] = []
 
     @property
     def ignored_entities(self) -> int:
@@ -169,6 +178,115 @@ class _DxfEntity(Protocol):
 def _dxf_entity(value: object) -> _DxfEntity:
     """Contain ezdxf's missing static types at one audited boundary."""
     return cast(_DxfEntity, value)
+
+
+# ── App-private XDATA ("SSTP") ───────────────────────────────────────────
+# DXF has no group entity, and DIMENSION geometry alone cannot recover our
+# measurement metadata, so both ride as XDATA under our own appid. Foreign
+# tools ignore XDATA, and we ignore files that do not carry it — such files
+# import exactly as before (DIMENSIONs land in unsupported_entities).
+_SSTP_APPID = "SSTP"
+# Object (shape) names ride under a second appid so they can never be
+# mistaken for the group's label chunk or the dimension's JSON payload.
+_SSTP_NAME_APPID = "SSTPN"
+# XDATA string (group code 1000) payloads are capped at 255 bytes by the DXF
+# format. json.dumps emits ASCII-only, so 250 characters always fit.
+_XDATA_TEXT_CHUNK = 250
+
+
+def _register_sstp_appid(doc: Any) -> None:
+    if _SSTP_APPID not in doc.appids:
+        doc.appids.add(_SSTP_APPID)
+
+
+def _attach_group_xdata(entity: Any, group_id: int, label: str | None) -> None:
+    """Record group membership (and the group's label) on a DXF entity."""
+    _register_sstp_appid(entity.doc)
+    tags: list[tuple[int, Any]] = [(1071, int(group_id))]
+    if label:
+        tags.append((1000, str(label)))
+    entity.set_xdata(_SSTP_APPID, tags)
+
+
+def _attach_dimension_xdata(entity: Any, meta: dict[str, Any]) -> None:
+    """Record the full dimension metadata dict as chunked JSON XDATA."""
+    try:
+        payload = json.dumps(meta, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return
+    _register_sstp_appid(entity.doc)
+    chunks = [
+        payload[offset : offset + _XDATA_TEXT_CHUNK]
+        for offset in range(0, len(payload), _XDATA_TEXT_CHUNK)
+    ]
+    entity.set_xdata(_SSTP_APPID, [(1000, chunk) for chunk in chunks])
+
+
+def _attach_name_xdata(entity: Any, name: str) -> None:
+    """Record a shape's object name (layer-tree label) on a DXF entity."""
+    if not name:
+        return
+    doc = entity.doc
+    if _SSTP_NAME_APPID not in doc.appids:
+        doc.appids.add(_SSTP_NAME_APPID)
+    payload = json.dumps(str(name), separators=(",", ":"))
+    chunks = [
+        payload[offset : offset + _XDATA_TEXT_CHUNK]
+        for offset in range(0, len(payload), _XDATA_TEXT_CHUNK)
+    ]
+    entity.set_xdata(_SSTP_NAME_APPID, [(1000, chunk) for chunk in chunks])
+
+
+def _name_from_xdata(entity: Any) -> str | None:
+    try:
+        if not entity.has_xdata(_SSTP_NAME_APPID):
+            return None
+        text = "".join(
+            str(tag.value) for tag in entity.get_xdata(_SSTP_NAME_APPID) if tag.code == 1000
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not text:
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _read_sstp_xdata(entity: Any) -> list[Any]:
+    try:
+        if not entity.has_xdata(_SSTP_APPID):
+            return []
+        return list(entity.get_xdata(_SSTP_APPID))
+    except (AttributeError, TypeError, ValueError):
+        return []
+
+
+def _group_from_xdata(tags: list[Any]) -> tuple[int | None, str | None]:
+    group_id: int | None = None
+    label: str | None = None
+    for tag in tags:
+        if tag.code == 1071:
+            try:
+                group_id = int(tag.value)
+            except (TypeError, ValueError):
+                group_id = None
+        elif tag.code == 1000 and label is None:
+            label = str(tag.value)
+    return group_id, label
+
+
+def _dimension_from_xdata(tags: list[Any]) -> dict[str, Any] | None:
+    text = "".join(str(tag.value) for tag in tags if tag.code == 1000)
+    if not text:
+        return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _ezdxf_readfile(path: str):
@@ -476,8 +594,14 @@ def _load_dxf_polylines_by_layer_with_report(
     invalid_polylines = 0
     total_supported = 0
     unit_range_violation: str | None = None
+    dimensions: list[dict[str, Any]] = []
+    groups: list[dict[str, Any]] = []
+    group_labels: dict[int, str] = {}
+    object_names: list[dict[str, Any]] = []
 
-    def _append(layer: str, pts: list[tuple[float, float]], closed: bool) -> None:
+    def _append(
+        layer: str, pts: list[tuple[float, float]], closed: bool, source: Any = None
+    ) -> None:
         nonlocal total_supported, unit_range_violation
         if len(pts) < 2:
             return
@@ -491,6 +615,17 @@ def _load_dxf_polylines_by_layer_with_report(
         bucket = by_layer.setdefault(layer, [])
         bucket.append(_polyline_points_closed(scaled, closed=closed))
         total_supported += 1
+        if source is not None:
+            group_id, group_label = _group_from_xdata(_read_sstp_xdata(source))
+            if group_id is not None:
+                groups.append({"layer": layer, "index": len(bucket) - 1, "group": group_id})
+                if group_label:
+                    group_labels.setdefault(group_id, group_label)
+            object_name = _name_from_xdata(source)
+            if object_name:
+                object_names.append(
+                    {"layer": layer, "index": len(bucket) - 1, "name": object_name}
+                )
 
     import_entities = _expand_insert_entities(msp, flattened_entities, invalid_polylines, path)
 
@@ -514,7 +649,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 pts, closed, had_bulges = result
                 if had_bulges:
                     flattened_entities["LWPOLYLINE (bulge arcs)"] += 1
-                _append(layer_name, pts, closed)
+                _append(layer_name, pts, closed, ent)
         elif dxftype == "POLYLINE":
             result = _process_polyline(entity, flattening_distance)
             if result is None:
@@ -530,14 +665,14 @@ def _load_dxf_polylines_by_layer_with_report(
             pts, closed, had_bulges = result
             if had_bulges:
                 flattened_entities["POLYLINE (bulge arcs)"] += 1
-            _append(layer_name, pts, closed)
+            _append(layer_name, pts, closed, ent)
         elif dxftype == "LINE":
             line_result = _process_line(entity)
             if line_result is None:
                 invalid_polylines += 1
             else:
                 pts, closed = line_result
-                _append(layer_name, pts, closed)
+                _append(layer_name, pts, closed, ent)
                 flattened_entities[dxftype] += 1
         elif dxftype == "ARC":
             arc_result = _process_arc(entity, flattening_distance)
@@ -545,7 +680,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
             else:
                 pts, closed = arc_result
-                _append(layer_name, pts, closed)
+                _append(layer_name, pts, closed, ent)
                 flattened_entities[dxftype] += 1
         elif dxftype == "CIRCLE":
             circle_result = _process_circle(entity, flattening_distance)
@@ -553,7 +688,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
             else:
                 pts, closed = circle_result
-                _append(layer_name, pts, closed)
+                _append(layer_name, pts, closed, ent)
                 flattened_entities[dxftype] += 1
         elif dxftype == "ELLIPSE":
             ellipse_result = _process_ellipse(entity, flattening_distance)
@@ -561,7 +696,7 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
             else:
                 pts, closed = ellipse_result
-                _append(layer_name, pts, closed)
+                _append(layer_name, pts, closed, ent)
                 flattened_entities[dxftype] += 1
         elif dxftype == "SPLINE":
             spline_result = _process_spline(entity, flattening_distance)
@@ -569,8 +704,16 @@ def _load_dxf_polylines_by_layer_with_report(
                 invalid_polylines += 1
             else:
                 pts, closed = spline_result
-                _append(layer_name, pts, closed)
+                _append(layer_name, pts, closed, ent)
                 flattened_entities[dxftype] += 1
+        elif dxftype == "DIMENSION":
+            dimension_meta = _dimension_from_xdata(_read_sstp_xdata(ent))
+            if dimension_meta is None:
+                # Foreign dimension — recoverable geometry is not guessed
+                # from defpoints; report it as unsupported, as before.
+                unsupported_entities[dxftype] += 1
+            else:
+                dimensions.append(dimension_meta)
         else:
             unsupported_entities[dxftype] += 1
 
@@ -586,6 +729,10 @@ def _load_dxf_polylines_by_layer_with_report(
             invalid_polylines=invalid_polylines,
             layer_counts=dict(sorted(layer_counts.items())),
             units=unit_name,
+            dimensions=dimensions,
+            groups=groups,
+            group_labels=dict(sorted(group_labels.items())),
+            object_names=object_names,
         ),
     )
 
@@ -888,7 +1035,8 @@ def _write_dimension(
     points: list[tuple[float, float]],
     meta: dict[str, Any],
     attrs: dict[str, str],
-) -> bool:
+) -> Any | None:
+    """Emit a DIMENSION entity and return it (None → caller draws a fallback)."""
     try:
         p1 = tuple(meta.get("p1", points[0]))
         p2 = tuple(meta.get("p2", points[1]))
@@ -917,7 +1065,7 @@ def _write_dimension(
             dx, dy = p2[0] - p1[0], p2[1] - p1[1]
             length = math.hypot(dx, dy)
             if length <= 1e-12:
-                return False
+                return None
             base = (p1[0] - dy * offset / length, p1[1] + dx * offset / length)
             override = msp.add_linear_dim(
                 base=base,
@@ -928,10 +1076,11 @@ def _write_dimension(
                 dxfattribs=attrs or None,
             )
         override.render()
-        return True
+        _attach_dimension_xdata(override.dimension, meta)
+        return override.dimension
     except (TypeError, ValueError, IndexError):
         _LOG.warning("Invalid dimension metadata; exporting fallback line")
-        return False
+        return None
 
 
 def _write_native_shape(
@@ -939,13 +1088,19 @@ def _write_native_shape(
     kind: str,
     meta: dict[str, Any] | None,
     attrs: dict[str, str],
-) -> bool:
+) -> Any | None:
+    """Emit a native DXF entity for ``kind`` and return it (None → fallback)."""
     if kind == "polyline" or not isinstance(meta, dict):
-        return False
+        return None
     if kind == "ellipse" and "rotation" not in meta and "angle" in meta:
         meta = {**meta, "rotation": meta["angle"]}
     shape = shape_from_meta(kind, meta)
-    return shape is not None and shape.to_dxf(msp, attrs or None)
+    if shape is None:
+        return None
+    count_before = len(msp)
+    if not shape.to_dxf(msp, attrs or None) or len(msp) <= count_before:
+        return None
+    return msp[count_before]
 
 
 def _write_polyline(
@@ -955,14 +1110,14 @@ def _write_polyline(
     *,
     close: bool,
     open_paths: bool,
-) -> None:
+) -> Any | None:
     coords, is_closed = _normalize_polyline_for_dxf(
         points,
         force_close=close and not open_paths,
     )
     if len(coords) < 2:
-        return
-    msp.add_lwpolyline(
+        return None
+    return msp.add_lwpolyline(
         coords,
         close=False if open_paths else is_closed,
         dxfattribs=attrs or None,
@@ -982,6 +1137,9 @@ def write_polylines_dxf(
     entity_names: list[str] | None = None,
     extra_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
     extra_layer_records: dict[str, list[dict[str, Any]]] | None = None,
+    entity_groups: list[int | None] | None = None,
+    group_labels: dict[int, str] | None = None,
+    object_names: list[str | None] | None = None,
 ) -> None:
     doc = _ezdxf_new("R2010")
     doc.header["$INSUNITS"] = 4
@@ -1006,17 +1164,34 @@ def write_polylines_dxf(
         kinds += ["polyline"] * (len(polylines) - len(kinds))
     if len(metas) < len(polylines):
         metas += [None] * (len(polylines) - len(metas))
+    # Optional group membership per main-list entity, written as XDATA so the
+    # drawing's grouping survives a save/open round trip through plain DXF.
+    groups_list: list[int | None] = list(entity_groups) if entity_groups is not None else []
+    if len(groups_list) < len(polylines):
+        groups_list += [None] * (len(polylines) - len(groups_list))
+    names_list: list[str | None] = list(object_names) if object_names is not None else []
+    if len(names_list) < len(polylines):
+        names_list += [None] * (len(polylines) - len(names_list))
 
     for i, (c, kind, meta) in enumerate(zip(polylines, kinds, metas)):
         if len(c) < 2:
             continue
         entity_attrs = _entity_attributes(doc, dxfattrs, meta, entity_names, i)
         if kind == "dimension" and isinstance(meta, dict):
-            if _write_dimension(msp, c, meta, entity_attrs):
+            if _write_dimension(msp, c, meta, entity_attrs) is not None:
                 continue
-        if _write_native_shape(msp, kind, meta, entity_attrs):
-            continue
-        _write_polyline(msp, c, entity_attrs, close=close, open_paths=open_paths)
+        created = _write_native_shape(msp, kind, meta, entity_attrs)
+        if created is None:
+            created = _write_polyline(msp, c, entity_attrs, close=close, open_paths=open_paths)
+        group_id = groups_list[i]
+        if created is not None and group_id is not None:
+            _attach_group_xdata(
+                created,
+                group_id,
+                group_labels.get(group_id) if group_labels else None,
+            )
+        if created is not None and names_list[i]:
+            _attach_name_xdata(created, str(names_list[i]))
 
     if border_polys:
         # Every outline is its own entity, but they all share one layer —
@@ -1061,18 +1236,32 @@ def write_polylines_dxf(
             for record_index, c in enumerate(layer_polys):
                 if len(c) < 2:
                     continue
-                if record_index < len(records):
-                    record = records[record_index]
+                record = records[record_index] if record_index < len(records) else None
+                created = None
+                if record is not None:
                     kind = str(record.get("kind", "polyline"))
                     meta = record.get("meta")
                     if kind != "polyline" and isinstance(meta, dict):
                         shape = shape_from_meta(kind, meta)
-                        if shape is not None and shape.to_dxf(msp, attrs):
-                            continue
-                coords, is_closed = _normalize_polyline_for_dxf(c, force_close=False)
-                if len(coords) < 2:
-                    continue
-                msp.add_lwpolyline(coords, close=is_closed, dxfattribs=attrs)
+                        if shape is not None:
+                            count_before = len(msp)
+                            if shape.to_dxf(msp, attrs) and len(msp) > count_before:
+                                created = msp[count_before]
+                if created is None:
+                    coords, is_closed = _normalize_polyline_for_dxf(c, force_close=False)
+                    if len(coords) < 2:
+                        continue
+                    created = msp.add_lwpolyline(coords, close=is_closed, dxfattribs=attrs)
+                group_id = record.get("group") if record is not None else None
+                if group_id is not None:
+                    _attach_group_xdata(
+                        created,
+                        int(group_id),
+                        group_labels.get(int(group_id)) if group_labels else None,
+                    )
+                object_name = record.get("object_name") if record is not None else None
+                if object_name:
+                    _attach_name_xdata(created, str(object_name))
 
     # Audit the document before persisting. Never write a malformed DXF —
     # a file that crashes or silently misbehaves in downstream CAD/CAM tools

@@ -65,10 +65,13 @@ _CONTEXT_STATIC_ACTION_IDS = {
     "Align top": "context.arrange.top",
     "Align center Y": "context.arrange.center_y",
     "Align bottom": "context.arrange.bottom",
+    "Center on selection (both axes)": "context.arrange.center",
     "Distribute horizontal — gap…": "context.arrange.distribute_horizontal_gap",
     "Distribute vertical — gap…": "context.arrange.distribute_vertical_gap",
     "Distribute horizontal — center-to-center…": "context.arrange.distribute_horizontal_centers",
     "Distribute vertical — center-to-center…": "context.arrange.distribute_vertical_centers",
+    "Distribute horizontal — evenly over…": "context.arrange.distribute_horizontal_even",
+    "Distribute vertical — evenly over…": "context.arrange.distribute_vertical_even",
     "Use as outline": "context.share.outline",
     "Use as Custom Tile": "context.share.custom_tile",
     "Send to Draft": "context.share.draft",
@@ -657,6 +660,7 @@ class DxfCanvas(CanvasView):
             ("Align top", "top"),
             ("Align center Y", "center-y"),
             ("Align bottom", "bottom"),
+            ("Center on selection (both axes)", "center"),
         ):
             arrange_menu.addAction(
                 label, lambda _m=mode: _run_transform(lambda: self.align_selected(_m))
@@ -695,6 +699,22 @@ class DxfCanvas(CanvasView):
                 "vertical",
                 "center",
             ),
+            (
+                "Distribute horizontal — evenly over…",
+                "Distribute Horizontal Evenly",
+                "Total distance (mm):",
+                50.0,
+                "horizontal",
+                "even",
+            ),
+            (
+                "Distribute vertical — evenly over…",
+                "Distribute Vertical Evenly",
+                "Total distance (mm):",
+                50.0,
+                "vertical",
+                "even",
+            ),
         ):
             arrange_menu.addAction(
                 label,
@@ -725,6 +745,16 @@ class DxfCanvas(CanvasView):
             "mirror_horizontal",
             "Mirror horizontal",
             lambda: _run_transform(lambda: self.mirror_selected("horizontal")),
+        )
+        add(
+            "align_horizontal",
+            "Rotate to lie flat (X axis)",
+            lambda: _run_transform(lambda: self.align_selected_to_axis("horizontal")),
+        )
+        add(
+            "align_vertical",
+            "Rotate to stand upright (Y axis)",
+            lambda: _run_transform(lambda: self.align_selected_to_axis("vertical")),
         )
         add(
             "mirror_vertical",

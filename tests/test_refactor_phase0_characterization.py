@@ -170,7 +170,6 @@ def test_renderer_scene_and_selection_passes_keep_internal_layer_order() -> None
         "_paint_issue_markers",
         "_paint_selection_bbox",
         "_paint_selection_readout",
-        "_paint_select_handles",
         "_paint_rulers",
     ]
 

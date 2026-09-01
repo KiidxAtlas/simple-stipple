@@ -1,7 +1,9 @@
 """Behavioral coverage for the continuous pattern result layer.
 
-There is no preview toggle to leave: the result renders continuously and its
-visibility is a row in the layer tree like every other layer.
+The result renders continuously; its visibility is a row in the layer tree
+like every other layer, mirrored by the toolbar's "Pattern" toggle (which
+also defers re-solves while hidden so heavy patterns stay cheap to edit
+behind).
 """
 
 from __future__ import annotations

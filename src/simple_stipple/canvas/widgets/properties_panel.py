@@ -105,7 +105,7 @@ class CanvasPropertiesPanel(QWidget):
         self._dimension_delete.clicked.connect(canvas._delete_selected_dimension)
         dimension_layout.addWidget(self._dimension_delete, 1, 0, 1, 2)
         self._constraints_dimension_section = CollapsibleSection(
-            "Constraints / Dimensions", self._dimension_container, expanded=True
+            "Dimension", self._dimension_container, expanded=True
         )
         body_root.addWidget(self._constraints_dimension_section)
 
@@ -127,15 +127,22 @@ class CanvasPropertiesPanel(QWidget):
             edit.installEventFilter(self)
             edit.setToolTip("Accepts arithmetic and units, e.g. 25/2 or 1in + 3mm")
         self._axis_labels: dict[str, QLabel] = {}
-        for row, (axis, edit) in enumerate(
-            (("X", self._x), ("Y", self._y), ("W", self._w), ("H", self._h))
+        # Two compact rows instead of four: X/Y share row 0, W/H + the aspect
+        # lock share row 1. Bare axis letters keep the rows narrow; the unit
+        # lives once in the section subtitle (see refresh()).
+        for axis, edit, row, col in (
+            ("X", self._x, 0, 0),
+            ("Y", self._y, 0, 2),
+            ("W", self._w, 1, 0),
+            ("H", self._h, 1, 2),
         ):
             lbl = QLabel(axis)
             lbl.setProperty("role", "field-label")
             self._axis_labels[axis] = lbl
-            grid.addWidget(lbl, row, 0)
-            grid.addWidget(edit, row, 1)
+            grid.addWidget(lbl, row, col)
+            grid.addWidget(edit, row, col + 1)
         grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
 
         self._aspect_lock_btn = QPushButton("Lock")
         self._aspect_lock_btn.setCheckable(True)
@@ -147,7 +154,7 @@ class CanvasPropertiesPanel(QWidget):
         )
         self._aspect_lock_btn.setProperty("role", "secondary")
         self._aspect_lock_btn.toggled.connect(self._on_aspect_lock_toggled)
-        grid.addWidget(self._aspect_lock_btn, 2, 2, 2, 1)
+        grid.addWidget(self._aspect_lock_btn, 1, 4)
         geometry_layout.addLayout(grid)
         self._geometry_section = CollapsibleSection("Geometry", geometry_content, expanded=True)
         fields_root.addWidget(self._geometry_section)
@@ -305,7 +312,7 @@ class CanvasPropertiesPanel(QWidget):
         self._shape_section = CollapsibleSection("Shape Parameters", shape_content, expanded=True)
         fields_root.addWidget(self._shape_section)
         self._selection_constraints_section = CollapsibleSection(
-            "Constraints / Dimensions", constraints_content, expanded=False
+            "Constraints", constraints_content, expanded=False
         )
         fields_root.addWidget(self._selection_constraints_section)
         self._actions_section = CollapsibleSection("Actions", actions_content, expanded=False)
@@ -328,8 +335,7 @@ class CanvasPropertiesPanel(QWidget):
         self._updating = True
         try:
             unit = self._unit()
-            for axis, lbl in self._axis_labels.items():
-                lbl.setText(f"{axis} ({unit_suffix(unit)})")
+            self._geometry_section.set_subtitle(f"Values in {unit_suffix(unit)}")
             self._aspect_lock_btn.setChecked(getattr(self._canvas, "_aspect_ratio_locked", False))
             dimension_index = getattr(self._canvas, "_selected_dimension", None)
             dimension = (

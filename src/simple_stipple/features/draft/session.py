@@ -56,6 +56,7 @@ def get_draft_workspace_state(page: Any) -> dict:
         "quick_shape_mode": canvas.quick_shape_mode,
         "quick_shape_enabled": canvas.quick_shape_enabled,
         "last_input_dxf": str(page._last_in_path or ""),
+        "shape_labels": page._rt().shape_labels,
     }
     return state_dict
 
@@ -85,6 +86,7 @@ def apply_draft_workspace_state(page: Any, state: dict | None) -> None:
 
     quick_shape_enabled = bool(draft_state.quick_shape_enabled)
     canvas.set_quick_shape_enabled(quick_shape_enabled)
+    rt.set_shape_labels(draft_state.shape_labels)
     if quick_shape_enabled and draft_state.quick_shape_mode:
         canvas.set_quick_shape_mode(str(draft_state.quick_shape_mode), flash=False)
     page._last_in_path = str(draft_state.last_input_dxf or "") or None
@@ -112,6 +114,9 @@ class DraftDxfExportPlan:
     first_layer_name: str
     first_layer_records: list[dict[str, Any]]
     extra_layer_records: dict[str, list[dict[str, Any]]] | None
+    # Document group labels; entity records carry their group id under
+    # "group", and the writer matches the two up when emitting XDATA.
+    group_labels: dict[int, str] | None = None
 
 
 def build_dxf_export_plan(
@@ -120,6 +125,7 @@ def build_dxf_export_plan(
     *,
     active_layer_name: str,
     layer_names: Iterable[str],
+    group_labels: Mapping[int, str] | None = None,
 ) -> DraftDxfExportPlan:
     """Add dimension entities and preserve document-layer ordering for export."""
     export_records = [dict(record) for record in records]
@@ -150,6 +156,11 @@ def build_dxf_export_plan(
         first_layer_name=first_layer_name,
         first_layer_records=first_layer_records,
         extra_layer_records=extra_layer_records,
+        group_labels=(
+            {int(group_id): str(label) for group_id, label in group_labels.items()}
+            if group_labels
+            else None
+        ),
     )
 
 

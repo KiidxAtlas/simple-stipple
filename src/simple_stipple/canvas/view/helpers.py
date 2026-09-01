@@ -31,9 +31,18 @@ def _rehydrate_meta(meta: dict) -> dict:
 
 
 def eventFilter(self, obj, event) -> bool:
-    """Intercept Tab/Backtab on the draw-mode dimension inputs."""
+    """Tab/Backtab cycling on HUD inputs; Escape cancels the badge editor."""
     if event.type() == QEvent.Type.KeyPress:
         key = event.key()
+        # Escape on the selection badge editor cancels the live-typing preview
+        # instead of committing whatever partial value is visible.
+        if key == Qt.Key.Key_Escape and obj is self._sel_dim_edit:
+            snapshot = self._sel_dim_snapshot
+            self._hud_service._dismiss_sel_dim_editor()
+            if snapshot is not None:
+                self._canvas_service.cancel_preview(snapshot)
+            self._redraw()
+            return True
         if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             reverse = key == Qt.Key.Key_Backtab
             if (
@@ -572,7 +581,6 @@ def get_view_state(self) -> dict[str, Any]:
         "layer_colors": dict(self._layer_colors),
         "hidden_indices": sorted(self._flagged("hidden")),
         "locked_indices": sorted(self._flagged("locked")),
-        "groups": {str(i): g for i, g in self._grouping_service.group_map().items()},
         "group_labels": {str(k): v for k, v in self._group_labels.items()},
         "symbols": copy.deepcopy(self._symbol_library),
     }

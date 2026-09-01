@@ -85,6 +85,7 @@ class SettingsDialog(QDialog):
         ("check_updates_on_startup", "Check for app updates on startup", False),
         ("auto_fetch_on_startup", "Fetch repository updates on startup", False),
         ("auto_fetch_periodic", "Periodically fetch repository updates", False),
+        ("auto_commit_push", "Auto commit and push repository changes", False),
     ]
 
     _ACCESSIBILITY_TOGGLES = [

@@ -18,7 +18,15 @@ class DetectedShape:
 
 
 def _closed_vertices(points: list[Point]) -> list[Point]:
-    if len(points) >= 2 and math.dist(points[0], points[-1]) <= 1e-6:
+    if len(points) >= 2:
+        # Hand-drawn and freehand paths almost never close to 1e-6 — measure
+        # the gap against the path's own extent and snap-close it.
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        extent = max(max(xs) - min(xs), max(ys) - min(ys), 1e-9)
+        if math.dist(points[0], points[-1]) > max(1e-6, extent * 0.02):
+            return []
+        # The closing point merges into the first vertex.
         vertices = [
             point
             for index, point in enumerate(points[:-1])
@@ -154,13 +162,15 @@ def convert_to_parametric(entity: Any, detected: DetectedShape | None = None) ->
     return converted
 
 
-def detected_entities(entities: list[Any]) -> list[tuple[int, DetectedShape]]:
+def detected_entities(
+    entities: list[Any], *, tolerance: float = 0.015
+) -> list[tuple[int, DetectedShape]]:
     """Find convertible closed polylines while preserving document indices."""
     found = []
     for index, entity in enumerate(entities):
-        if getattr(entity, "kind", "polyline") not in {"polyline", "line"}:
+        if getattr(entity, "construction", False) or getattr(entity, "locked", False):
             continue
-        if shape := detect_primitive(list(entity.points)):
+        if shape := detect_primitive(list(entity.points), tolerance=tolerance):
             found.append((index, shape))
     return found
 

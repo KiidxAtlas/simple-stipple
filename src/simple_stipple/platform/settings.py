@@ -278,6 +278,8 @@ CONTEXT_MENU_SECTION_LABELS: tuple[tuple[str, str], ...] = (
 CONTEXT_MENU_TRANSFORM_ITEMS: tuple[tuple[str, str], ...] = (
     ("rotate_cw", "Rotate +90°"),
     ("rotate_ccw", "Rotate −90°"),
+    ("align_horizontal", "Rotate to lie flat (X axis)"),
+    ("align_vertical", "Rotate to stand upright (Y axis)"),
     ("mirror_horizontal", "Mirror horizontal"),
     ("mirror_vertical", "Mirror vertical"),
     ("size", "Edit width + height…"),
@@ -373,7 +375,7 @@ SMOOTHING_METHODS: tuple[tuple[str, str], ...] = (
 # Defaults seeded into the Smooth/Simplify HUD prompts (path.smooth /
 # path.simplify commands), so the user doesn't have to retype the same
 # value every time. Whatever they last typed is remembered here too.
-DEFAULT_SMOOTH_ITERATIONS = 2
+DEFAULT_SMOOTH_ITERATIONS = 1
 DEFAULT_SIMPLIFY_TOLERANCE = 0.2
 
 
@@ -383,26 +385,25 @@ DEFAULT_SIMPLIFY_TOLERANCE = 0.2
 # and simple_stipple.canvas.view.
 # =============================================================================
 
-# Two 44 px tool targets, their 6 px gap, section/content gutters, the
+# Two 44 px tool targets, their 4 px gap, section/content gutters, the
 # always-available 24 px resize target, and the 8 px vertical scrollbar need
-# 172 px before borders/style rounding. Keep a small safety gutter so the
+# 144 px before borders/style rounding. Keep a small safety gutter so the
 # second column can never render beneath the scrollbar.
-DEFAULT_DRAW_SIDEBAR_WIDTH = 176
-MIN_DRAW_SIDEBAR_WIDTH = 176
+DEFAULT_DRAW_SIDEBAR_WIDTH = 148
+MIN_DRAW_SIDEBAR_WIDTH = 148
 MAX_DRAW_SIDEBAR_WIDTH = 220
 MIN_DRAW_SIDEBAR_HEIGHT = 200
 MAX_DRAW_SIDEBAR_HEIGHT = 900
 DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE = False
 
+# Default sidebar contents are deliberately minimal: line tools, shape
+# tools, text, and the split toggle. Everything else (constraint, dimension,
+# smoothing, contextual editing) stays one check away in the customize dialog.
 DEFAULT_DRAW_SIDEBAR_SECTIONS: tuple[str, ...] = (
     "path",
     "shapes",
     "text",
-    "snapping",
     "mode",
-    "sketch",
-    "smoothing",
-    "editing",
 )
 
 # (section key, display label) — used by the sidebar customize dialog.
@@ -516,6 +517,7 @@ class SettingsSchema(BaseModel):
     auto_fetch_on_startup: bool = False
     auto_fetch_periodic: bool = False
     auto_fetch_interval_minutes: Annotated[int, Field(ge=1, le=1440)] = 10
+    auto_commit_push: bool = False
     ui_scale: Annotated[float, Field(ge=0.5, le=3.0)] = 1.0
     interface_density: Literal["compact", "comfortable"] = "compact"
     rotation_snap_increment: Annotated[float, Field(ge=0.1, le=180.0)] = 15.0

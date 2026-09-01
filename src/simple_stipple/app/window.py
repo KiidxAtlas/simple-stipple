@@ -87,6 +87,7 @@ class App(QMainWindow):
     _save_workspace_as_action: QAction
     _recover_workspace_action: QAction
     _repo_dialog_action: QAction
+    _auto_commit_action: QAction
     _workspace_title_label: QPushButton
     _workspace_state_chip: QLabel
     _shortcut_tooltip_specs: list[tuple[QWidget, str, str]]

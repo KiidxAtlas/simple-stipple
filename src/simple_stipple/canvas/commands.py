@@ -20,6 +20,12 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 
+from simple_stipple.core.editing.corners import (
+    chamfered_corner_points as _chamfered_corner_points,
+)
+from simple_stipple.core.editing.corners import (
+    rounded_corner_points as _rounded_corner_points,
+)
 from simple_stipple.ui.components.units import format_length as _format_length
 
 
@@ -105,6 +111,34 @@ def _toggle_trim(v: Any) -> None:
         v.set_mode("select")
 
 
+def _corner_prompt(v: Any, entity_id: str, vi: int, kind: str) -> None:
+    """Round/chamfer one corner through the HUD prompt with a live overlay."""
+    poly = v._entities_by_id[entity_id].points
+    closed = v._is_poly_closed(poly)
+    kernel = _rounded_corner_points if kind == "round" else _chamfered_corner_points
+
+    def _preview(value: float) -> None:
+        new_poly = kernel(poly, vi, value, closed=closed)
+        v._set_operation_preview([new_poly] if new_poly is not None else [])
+
+    if kind == "round":
+        v._show_hud_prompt(
+            "Round radius (mm)",
+            1.0,
+            lambda r: v._round_vertex(entity_id, vi, r),
+            minimum=0.01,
+            preview=_preview,
+        )
+    else:
+        v._show_hud_prompt(
+            "Chamfer distance (mm)",
+            1.0,
+            lambda d: v._chamfer_vertex(entity_id, vi, d),
+            minimum=0.01,
+            preview=_preview,
+        )
+
+
 def _toggle_extend(v: Any) -> None:
     if v.get_mode() != "extend":
         v.set_mode("extend")
@@ -127,29 +161,33 @@ def _toggle_knife(v: Any) -> None:
 def _round_corner(v: Any) -> None:
     hv = v._hover_vert
     if hv is None:
+        # Select mode: arm a corner picker so the flow is press R → click the
+        # corner → type the value with a live preview.
+        if v.get_mode() == "select" and v._sel:
+            v._corner_pick_armed = "round"
+            v._update_cursor()
+            v._show_flash("Click the corner to round", 1500)
+            return
         v._show_flash("Hover a corner first, then press R to round it", 1400)
         return
+    v._corner_pick_armed = None
     pi, vi = hv
-    v._show_hud_prompt(
-        "Round radius (mm)",
-        1.0,
-        lambda r: v._round_vertex(pi, vi, r),
-        minimum=0.01,
-    )
+    _corner_prompt(v, pi, vi, "round")
 
 
 def _chamfer_corner(v: Any) -> None:
     hv = v._hover_vert
     if hv is None:
+        if v.get_mode() == "select" and v._sel:
+            v._corner_pick_armed = "chamfer"
+            v._update_cursor()
+            v._show_flash("Click the corner to chamfer", 1500)
+            return
         v._show_flash("Hover a corner first, then chamfer it", 1400)
         return
+    v._corner_pick_armed = None
     pi, vi = hv
-    v._show_hud_prompt(
-        "Chamfer distance (mm)",
-        1.0,
-        lambda d: v._chamfer_vertex(pi, vi, d),
-        minimum=0.01,
-    )
+    _corner_prompt(v, pi, vi, "chamfer")
 
 
 def _simplify_selected(v: Any) -> None:
@@ -498,14 +536,14 @@ COMMANDS: tuple[Command, ...] = (
         _round_corner,
         "R",
         category="Path",
-        when=lambda v: v.get_mode() == "edit",
+        when=_sel_or_edit,
     ),
     Command(
         "vertex.chamfer",
         "Chamfer Corner…",
         _chamfer_corner,
         category="Path",
-        when=lambda v: v.get_mode() == "edit",
+        when=_sel_or_edit,
     ),
     Command(
         "path.simplify",
@@ -630,7 +668,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         "measure.toggle",
-        "Measure",
+        "Scale",
         lambda v: v.toggle_measure(),
         "M",
         category="Modes",

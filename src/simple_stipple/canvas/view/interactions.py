@@ -385,13 +385,6 @@ def mousePressEvent(self, event: QMouseEvent):
     if self._hit_measure_button(pos.x(), pos.y()):
         self.toggle_measure()
         return
-    if self._hit_dimension_button(pos.x(), pos.y()):
-        self.toggle_dimension_mode("linear")
-        return
-    if self._hit_angle_dimension_button(pos.x(), pos.y()):
-        self.toggle_dimension_mode("angle")
-        return
-
     # Rulers: press inside a ruler strip drags out a new guide.
     if self._rulers_visible and self._selectable:
         r = self.RULER_PX
@@ -434,6 +427,41 @@ def mousePressEvent(self, event: QMouseEvent):
     if self._selected_guide is not None:
         self._selected_guide = None
         self._redraw()
+    # Armed pickers (Round/Chamfer corner, constraint partner) are modal: the
+    # next click picks the target, pre-empting badges, the gizmo, and tools.
+    if btn == Qt.MouseButton.LeftButton and self._constraint_pick_armed is not None:
+        kind = self._constraint_pick_armed
+        self._constraint_pick_armed = None
+        self._update_cursor()
+        edge_hit = self._hit_test.nearest_edge(pos.x(), pos.y())
+        if edge_hit is None:
+            self._constraint_segment_refs = []
+            self._show_flash("No edge there — constraint cancelled", 1100)
+            return
+        refs = list(getattr(self, "_constraint_segment_refs", []))
+        ref = {"entity_id": edge_hit[0], "segment_index": int(edge_hit[1])}
+        if ref not in refs:
+            refs.append(ref)
+        self._constraint_segment_refs = refs[-2:]
+        added = self._construction_service.add_geometric_constraint(kind)
+        if not added:
+            self._show_flash("Constraint not added — pick a different edge", 1400)
+        return
+
+    if btn == Qt.MouseButton.LeftButton and self._corner_pick_armed is not None:
+        command_id = (
+            "vertex.round" if self._corner_pick_armed == "round" else "vertex.chamfer"
+        )
+        self._corner_pick_armed = None
+        self._update_cursor()
+        hit = self._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
+        if hit is None:
+            self._show_flash("No corner there — cancelled", 1100)
+            return
+        self._hover_vert = hit
+        canvas_commands.run(self, command_id)
+        self._hover_vert = None
+        return
 
     # Existing dimensions take priority even while the Dimension tool is
     # armed, so clicking a value edits/selects it instead of starting a

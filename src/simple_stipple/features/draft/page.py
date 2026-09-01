@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QToolButton,
     QVBoxLayout,
@@ -269,10 +268,8 @@ class DraftPage(BasePage):
         side_panel.setMinimumWidth(320)
 
         self._props_panel = CanvasPropertiesPanel(self._canvas)
-        props_scroll = QScrollArea()
-        props_scroll.setWidgetResizable(True)
-        props_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        props_scroll.setWidget(self._props_panel)
+        # The panel already scrolls internally — a second QScrollArea wrapper
+        # only added a nested-scroll trap for the wheel and a dead frame.
 
         self._layer_module = CanvasLayerTreeModule(
             canvas=self._canvas,
@@ -303,14 +300,14 @@ class DraftPage(BasePage):
         self._layers_tree.layerColorChangeRequested.connect(self._on_layer_color_change_requested)
         inspector_splitter = QSplitter(Qt.Orientation.Vertical)
         inspector_splitter.setChildrenCollapsible(False)
-        inspector_splitter.addWidget(props_scroll)
+        inspector_splitter.addWidget(self._props_panel)
         inspector_splitter.addWidget(self._layer_module)
         # Layers are the durable document navigator; start with enough room
         # to manage them instead of letting a mostly-empty Properties panel
         # monopolize the inspector.
         inspector_splitter.setStretchFactor(0, 1)
         inspector_splitter.setStretchFactor(1, 2)
-        inspector_splitter.setSizes([220, 440])
+        inspector_splitter.setSizes([280, 380])
         side_layout.addWidget(inspector_splitter, stretch=1)
         self._inspector_splitter = inspector_splitter
         side_layout.addWidget(self._build_export_controls())
@@ -406,7 +403,10 @@ class DraftPage(BasePage):
         self._emit_state_changed()
 
     def _offer_shape_detection(self) -> None:
-        candidates = detected_entities(self._canvas._entities)
+        # The dialog is opt-in (the user confirms every conversion), so it can
+        # afford looser tolerances than the automatic properties-panel label:
+        # hand-drawn shapes are never machine-perfect.
+        candidates = detected_entities(self._canvas._entities, tolerance=0.05)
         if not candidates:
             return
         dialog = ShapeDetectionDialog([shape for _, shape in candidates], self)
@@ -615,6 +615,7 @@ class DraftPage(BasePage):
             self._canvas._dimensions,
             active_layer_name=active_name,
             layer_names=self._canvas.layer_names(),
+            group_labels=self._canvas._group_labels,
         )
         if not export_plan.records:
             QMessageBox.information(
@@ -662,6 +663,10 @@ class DraftPage(BasePage):
                 ],
                 entity_meta=[record.get("meta") for record in export_plan.first_layer_records],
                 extra_layer_records=export_plan.extra_layer_records,
+                entity_groups=[
+                    record.get("group") for record in export_plan.first_layer_records
+                ],
+                group_labels=export_plan.group_labels,
             )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
@@ -842,7 +847,7 @@ class DraftPage(BasePage):
             decision = self._review_dxf_import(path, by_layer, report, default_append=True)
             if decision is not None:
                 selected, append = decision
-                self._apply_dxf_import(path, selected, append=append)
+                self._apply_dxf_import(path, selected, append=append, report=report)
                 self._set_import_note(summarize_dxf_import_report(report) or "")
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import DXF Failed", exc)
@@ -927,7 +932,7 @@ class DraftPage(BasePage):
             decision = self._review_dxf_import(path, by_layer, report, default_append=False)
             if decision is not None:
                 selected, append = decision
-                self._apply_dxf_import(path, selected, append=append)
+                self._apply_dxf_import(path, selected, append=append, report=report)
                 self._set_import_note(summarize_dxf_import_report(report) or "")
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Open DXF Failed", exc)
@@ -966,7 +971,7 @@ class DraftPage(BasePage):
             with tempfile.TemporaryDirectory(prefix="simple-stipple-svg-") as directory:
                 converted = Path(directory) / "import.dxf"
                 stats = DxfService.svg_to_dxf(path, converted)
-                by_layer, _report = DxfService.load_dxf_polylines_by_layer_with_report(
+                by_layer, report = DxfService.load_dxf_polylines_by_layer_with_report(
                     str(converted)
                 )
             if not by_layer:
@@ -976,7 +981,7 @@ class DraftPage(BasePage):
                     "No supported vector geometry was found in that SVG.",
                 )
                 return
-            self._apply_dxf_import(path, by_layer, append=append, source_kind="SVG")
+            self._apply_dxf_import(path, by_layer, append=append, source_kind="SVG", report=report)
             unsupported = int(stats.get("unsupported_paths", 0))
             unsupported_features = tuple(stats.get("unsupported_features", ()))
             # Draft is linework only. An SVG carrying an engraving image is
@@ -1036,6 +1041,7 @@ class DraftPage(BasePage):
         *,
         append: bool,
         source_kind: str = "DXF",
+        report=None,
     ) -> None:
         flat = [poly for polys in by_layer.values() for poly in polys]
         if append and self._canvas._entities:
@@ -1058,15 +1064,62 @@ class DraftPage(BasePage):
             canvas._notify()
             canvas._fire_poly_change()
             canvas._show_flash(f"Added {len(created_ids)} shapes from {Path(path).name}", 1200)
+            ordered_ids = created_ids
         else:
             self._rt().load_polys_by_layer(by_layer, fit=bool(flat))
             self._canvas._show_flash(f"Loaded {source_kind}: {Path(path).name}", 1200)
+            ordered_ids = [entity.id for entity in self._canvas._entities]
+        self._apply_dxf_import_annotations(report, by_layer, ordered_ids)
         self._last_in_path = path
         record_recent(self._settings, KIND_VECTOR, path)
         self._refresh_status()
         self._emit_state_changed()
         if source_kind == "DXF":
             self._offer_shape_detection()
+
+    def _apply_dxf_import_annotations(self, report, by_layer, ordered_ids: list[str]) -> None:
+        """Re-attach groups, group labels, and dimensions recovered from XDATA.
+
+        Group entries reference entities by (layer, index within that layer's
+        bucket) — the exact order both import branches create them in, so
+        ``ordered_ids`` lines up positionally with ``by_layer`` iteration.
+        """
+        if report is None:
+            return
+        dimensions = getattr(report, "dimensions", None) or []
+        groups = getattr(report, "groups", None) or []
+        group_labels = getattr(report, "group_labels", None) or {}
+        if not dimensions and not groups:
+            return
+        canvas = self._canvas
+        id_by_layer_index: dict[tuple[str, int], str] = {}
+        cursor = 0
+        for layer, polys in by_layer.items():
+            for index in range(len(polys)):
+                if cursor < len(ordered_ids):
+                    id_by_layer_index[(layer, index)] = ordered_ids[cursor]
+                cursor += 1
+        members_by_group: dict[int, list[str]] = {}
+        for entry in groups:
+            entity_id = id_by_layer_index.get((str(entry.get("layer")), entry.get("index")))
+            group_id = entry.get("group")
+            if entity_id is not None and group_id is not None:
+                members_by_group.setdefault(int(group_id), []).append(entity_id)
+        assigned_group_ids: dict[int, int] = {}
+        for file_group_id, entity_ids in members_by_group.items():
+            if len(entity_ids) < 2:
+                continue
+            canvas._grouping_service.group_entities(entity_ids, select=False)
+            assigned = canvas._grouping_service.group_of(entity_ids[0])
+            if assigned is not None:
+                assigned_group_ids[file_group_id] = assigned
+        for file_group_id, label in group_labels.items():
+            assigned = assigned_group_ids.get(int(file_group_id))
+            if assigned is not None:
+                canvas.set_group_label(assigned, str(label))
+        for dimension in dimensions:
+            if isinstance(dimension, dict):
+                canvas._append_dimension(dict(dimension))
 
     def load_outline_polys(
         self,

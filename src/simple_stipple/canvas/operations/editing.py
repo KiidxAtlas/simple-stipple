@@ -369,7 +369,7 @@ class EditingService:
         The shape lowest along the axis stays anchored.
         """
         indices = self._host._mutable_selected_ids()
-        if len(indices) < 2 or spacing < 0 or mode not in ("gap", "center"):
+        if len(indices) < 2 or spacing < 0 or mode not in ("gap", "center", "even"):
             return False
         if axis == "horizontal":
             lo, hi = 0, 2
@@ -382,6 +382,13 @@ class EditingService:
             (eid, self._host._poly_bounds(self._host._entity_for_id(eid).points)) for eid in indices
         ]
         keyed.sort(key=lambda x: x[1][lo])
+
+        if mode == "even":
+            # The prompted value is the TOTAL span: compute the equal gap
+            # that places the shapes edge-to-edge across exactly that length.
+            extents = sum(max(0.0, b[hi] - b[lo]) for _eid, b in keyed)
+            spacing = (spacing - extents) / max(1, len(keyed) - 1)
+            mode = "gap"
 
         candidates = {eid: deepcopy(self._host._entity_for_id(eid)) for eid in indices}
         first_b = keyed[0][1]
@@ -487,6 +494,62 @@ class EditingService:
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
+        return True
+
+    def _preview_selected_extent(self, axis: str, target: float) -> bool:
+        """Transiently resize the selection for live HUD typing feedback.
+
+        Mutates live entity points in place and redraws — NO command-boundary
+        call, so no per-keystroke undo records. Callers must wrap a typing
+        session in ``begin_preview``/``cancel_preview`` and finish through the
+        real commit path (``_set_selected_width`` etc.), mirroring how gizmo
+        drags fold a gesture into one undo step. The math mirrors those commit
+        paths so the preview and the committed result agree.
+        """
+        ids = self._host._mutable_selected_ids()
+        if not ids or target <= 0:
+            return False
+        if len(ids) == 1:
+            live = self._host._entities_by_id.get(ids[0])
+            if live is not None and len(live.points) == 2:
+                (ax, ay), (bx, by) = live.points
+                if axis == "a":
+                    # _set_selected_line_angle rotates about the start point.
+                    cur_len = math.hypot(bx - ax, by - ay)
+                    if cur_len <= 1e-9:
+                        return False
+                    ar = math.radians(target)
+                    live.points[1] = (ax + cur_len * math.cos(ar), ay + cur_len * math.sin(ar))
+                    self._host._redraw()
+                    return True
+                # _scale_single_line_extent / _set_selected_line_length:
+                # uniform scale about the start point.
+                if axis == "l":
+                    extent = math.hypot(bx - ax, by - ay)
+                else:
+                    extent = abs(bx - ax) if axis == "w" else abs(by - ay)
+                if extent <= 1e-6:
+                    return False
+                f = max(1e-4, min(1e4, target / extent))
+                live.points[1] = (ax + (bx - ax) * f, ay + (by - ay) * f)
+                self._host._redraw()
+                return True
+        bounds = self._host._selection_bounds(ids)
+        if bounds is None:
+            return False
+        x0, y0, x1, y1 = bounds
+        cur = (x1 - x0) if axis == "w" else (y1 - y0)
+        if cur <= 1e-6 or axis not in ("w", "h"):
+            return False
+        f = max(1e-4, min(1e4, target / cur))
+        fx = f if (axis == "w" or self._host._aspect_ratio_locked) else 1.0
+        fy = f if (axis == "h" or self._host._aspect_ratio_locked) else 1.0
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        for eid in ids:
+            live = self._host._entities_by_id.get(eid)
+            if live is not None:
+                live.points = [(cx + (px - cx) * fx, cy + (py - cy) * fy) for px, py in live.points]
+        self._host._redraw()
         return True
 
     def _set_selected_width(self, width: float) -> bool:
@@ -942,7 +1005,7 @@ class EditingService:
         units = self._alignment_units(indices)
         if len(units) < 2:
             return False  # a single shape (or single group) has nothing to align to
-        if mode not in ("left", "center-x", "right", "top", "center-y", "bottom"):
+        if mode not in ("left", "center-x", "right", "top", "center-y", "bottom", "center"):
             return False
 
         candidates = {
@@ -995,6 +1058,8 @@ class EditingService:
         """Calculate one unit's translation against the full selection."""
         bx0, by0, bx1, by1 = selection_bounds
         px0, py0, px1, py1 = unit_bounds
+        if mode == "center":
+            return (bx0 + bx1 - px0 - px1) / 2.0, (by0 + by1 - py0 - py1) / 2.0
         if mode == "left":
             return bx0 - px0, 0.0
         if mode == "center-x":
@@ -1031,6 +1096,55 @@ class EditingService:
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
+        return True
+
+    def align_selected_to_axis(self, axis: str) -> bool:
+        """Rotate the selection so its dominant straight edge lies flat on the
+        X axis ("horizontal") or parallel to the Y axis ("vertical").
+
+        The dominant edge is the longest segment across the selection — for a
+        rotated ellipse that is (approximately) its major-axis chord, so
+        "lie flat" does the intuitive thing there too.
+        """
+        indices = self._host._mutable_selected_ids()
+        bounds = self._host._selection_bounds(indices)
+        if not indices or bounds is None:
+            self._warn_if_locked_selection(indices)
+            return False
+        theta: float | None = None
+        best_len = 0.0
+        for eid in indices:
+            entity = self._host._entity_for_id(eid)
+            if entity is None:
+                continue
+            pts = entity.points
+            for i in range(len(pts) - 1):
+                dx = pts[i + 1][0] - pts[i][0]
+                dy = pts[i + 1][1] - pts[i][1]
+                seg = math.hypot(dx, dy)
+                if seg > best_len:
+                    best_len = seg
+                    theta = math.degrees(math.atan2(dy, dx))
+        if theta is None or best_len <= 1e-9:
+            self._host._show_flash("No straight edge to align to", 1200)
+            return False
+        # A segment has no direction: fold into [-90, 90) and rotate the
+        # short way onto the target axis.
+        folded = ((theta + 90.0) % 180.0) - 90.0
+        target = 0.0 if axis == "horizontal" else 90.0
+        delta = target - folded
+        if delta > 90.0:
+            delta -= 180.0
+        elif delta < -90.0:
+            delta += 180.0
+        if abs(delta) <= 1e-9:
+            return True  # already flat — don't push an empty undo entry
+        if not self.rotate_selected(delta):
+            return False
+        self._host._show_flash(
+            "Rotated to lie flat" if axis == "horizontal" else "Rotated to stand upright",
+            900,
+        )
         return True
 
     def rotate_selected(self, angle_deg: float) -> bool:
@@ -1166,6 +1280,9 @@ class EditingService:
         ex, ey = self._host._draw_shape_cursor_w
         self._host._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
         self._host._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
+        # The fields sit on the badge anchors (bbox edges), which move as the
+        # preview grows — track them.
+        self._host._reposition_shape_dim_inputs()
 
     def offset_selected(self, distance: float) -> int:
         """Public command/API wrapper for the canonical offset operation."""
@@ -1524,6 +1641,11 @@ class SelectionService:
                 if is_closed and (vert_idx == 0 or vert_idx == len(other.points) - 1):
                     linked.add((eid, 0))
                     linked.add((eid, len(other.points) - 1))
+                # Intersection-merged paths revisit junction points; drag
+                # every coincident copy together so the junction stays welded.
+                for j, pt in enumerate(other.points):
+                    if j != vert_idx and _eq(target_pt, pt):
+                        linked.add((eid, j))
             else:
                 for j, pt in enumerate(other.points):
                     if _eq(target_pt, pt):
@@ -2105,6 +2227,7 @@ class SelectionService:
     def _delete_edit_vertices(self, verts: set[tuple[str, int]]) -> int:
         if not verts:
             return 0
+        whole_entities: list[str] = []
         requested: dict[str, set[int]] = {}
         for eid, vi in verts:
             entity = self._host._entity_for_id(eid)
@@ -2125,6 +2248,11 @@ class SelectionService:
             poly = entity.points
             closed = self._host._is_poly_closed(poly)
             available = (len(poly) - 1) if closed else len(poly)
+            # Selecting every vertex means the shape itself: deleting down to a
+            # degenerate triangle stump is never the intent.
+            if len({vi for vi in vis if not (closed and vi == len(poly) - 1)}) >= available:
+                whole_entities.append(eid)
+                continue
             max_removable = max(0, available - 3)
             if max_removable <= 0:
                 continue
@@ -2133,7 +2261,7 @@ class SelectionService:
             if keep:
                 grouped[eid] = keep
 
-        if not grouped:
+        if not grouped and not whole_entities:
             return 0
         deleted = 0
         updated = []
@@ -2152,6 +2280,9 @@ class SelectionService:
                 poly[-1] = poly[0]
             updated.append(entity)
         self._host._canvas_service.update_entities(updated)
+        if whole_entities:
+            self._host._canvas_service.delete_entities(tuple(whole_entities))
+            self._host._sel -= set(whole_entities)
         self._host._edit_selected_verts.clear()
         self._host._edit_drag_targets = set()
         self._host._edit_linked_verts = set()
@@ -2514,6 +2645,28 @@ class ConstructionService:
                         {"first_endpoint": choice[1], "second_endpoint": choice[2]}
                     )
             elif kind in binary and len(line_indices) != 2:
+                first_edge_ref: dict[str, Any] | None = None
+                if segment_refs:
+                    first_edge_ref = segment_refs[0]
+                elif len(line_indices) == 1:
+                    first_edge_ref = {
+                        "entity_id": self._host._entities_by_id[line_indices[0]].id,
+                        "segment_index": 0,
+                    }
+                if (
+                    kind in {"parallel", "perpendicular", "equal_length"}
+                    and first_edge_ref is not None
+                ):
+                    # Two-step workflow: keep the first edge and let the next
+                    # click choose what it constrains to. Selecting both edges
+                    # up front still works (the len==2 branch above).
+                    self._host._constraint_segment_refs = [first_edge_ref]
+                    self._host._constraint_pick_armed = kind
+                    self._host._update_cursor()
+                    self._host._show_flash(
+                        "Click the edge to constrain it to · Esc cancels", 2000
+                    )
+                    return 0
                 self._host._show_flash("Select two edges (Shift-click to add the second)", 1600)
                 return 0
         if kind in {"midpoint", "symmetric", "intersection"} and not additions:
@@ -3150,7 +3303,7 @@ class SmoothingService:
         self.set_tolerance(tolerance)
         self._host.simplifyToleranceChanged.emit(self._host._simplify_tolerance)
 
-    def smooth_selected(self, iterations: int = 2) -> int:
+    def smooth_selected(self, iterations: int = 1) -> int:
         host = self._host
         indices = [
             index

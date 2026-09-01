@@ -74,6 +74,7 @@ def write_polylines_svg(
     stroke: str = "#000000",
     stroke_width: float = 0.5,
     padding: float = 2.0,
+    entity_groups: list[int | None] | None = None,
 ) -> dict:
     """Write polylines to a single-group SVG (one consolidated layer).
 
@@ -125,8 +126,12 @@ def write_polylines_svg(
             "stroke-width": f"{stroke_width:.4f}",
         },
     )
-    for pts in polys:
-        ET.SubElement(g, "path", d=_poly_to_svg_d(pts, y_total))
+    for index, pts in enumerate(polys):
+        ET.SubElement(
+            g,
+            "path",
+            {"d": _poly_to_svg_d(pts, y_total), **_group_attribute(entity_groups, index)},
+        )
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -154,6 +159,26 @@ def write_polylines_svg(
 # viewBox normalisation entirely; without it nothing changes.
 STIPPLE_NS = "https://simple-stipple.app/svg"
 _WORLD_ATTR = f"{{{STIPPLE_NS}}}world"
+_GROUP_ATTR = f"{{{STIPPLE_NS}}}group"
+
+
+def _group_attribute(entity_groups: list[int | None] | None, index: int) -> dict[str, str]:
+    """``stipple:group`` attribute for the path at ``index``, when grouped."""
+    if entity_groups is None or index >= len(entity_groups):
+        return {}
+    group_id = entity_groups[index]
+    return {} if group_id is None else {"stipple:group": str(int(group_id))}
+
+
+def _group_meta_from_element(elem: ET.Element) -> dict | None:
+    """Group membership recorded by our writer, as entity meta."""
+    raw = elem.attrib.get(_GROUP_ATTR)
+    if raw is None:
+        return None
+    try:
+        return {"group": int(str(raw).strip())}
+    except ValueError:
+        return None
 
 
 def _stipple_world(root: ET.Element) -> tuple[float, float] | None:
@@ -204,6 +229,7 @@ def write_document_svg(
     stroke: str = "#000000",
     stroke_width: float = 0.5,
     padding: float = 2.0,
+    entity_groups: list[int | None] | None = None,
 ) -> dict:
     """Write outlines *and* placed images into one SVG, in one mm space.
 
@@ -276,9 +302,13 @@ def write_document_svg(
         "g",
         {"fill": "none", "stroke": stroke, "stroke-width": f"{stroke_width:.4f}"},
     )
-    for points in polys:
+    for index, points in enumerate(polys):
         if points:
-            ET.SubElement(group, "path", d=_poly_to_svg_d(points, y_total))
+            ET.SubElement(
+                group,
+                "path",
+                {"d": _poly_to_svg_d(points, y_total), **_group_attribute(entity_groups, index)},
+            )
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -797,8 +827,9 @@ def _handle_svg_path(
     if not polylines:
         unsupported_paths[0] += 1
         return
+    meta = _group_meta_from_element(elem)
     for p in polylines:
-        records.append(([tp(point) for point in p], "polyline", None))
+        records.append(([tp(point) for point in p], "polyline", meta))
 
 
 def _add_meta_entity(
@@ -885,11 +916,18 @@ def svg_to_dxf(
 
         _handle_svg_element(elem, coord, tp, records, native_entities, unsupported_paths)
 
+    record_groups: list[int | None] = [
+        int(meta["group"])
+        if isinstance(meta, dict) and isinstance(meta.get("group"), int)
+        else None
+        for _poly, _kind, meta in records
+    ]
     write_polylines_dxf(
         [poly for poly, _k, _m in records],
         str(output_path),
         entity_kinds=[k for _p, k, _m in records],
         entity_meta=[m for _p, _k, m in records],
+        entity_groups=record_groups if any(group is not None for group in record_groups) else None,
     )
 
     plain = [poly for poly, kind, _m in records if kind == "polyline"]

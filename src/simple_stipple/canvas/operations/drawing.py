@@ -958,12 +958,36 @@ class HudTextService:
         edit.editingFinished.connect(lambda: self._apply_sel_dim_editor())
         self._host._sel_dim_edit = edit
         self._host._sel_dim_axis = axis
+        # Live-typing: preview every keystroke against a transaction snapshot;
+        # Enter/focus-out folds it into ONE undoable commit, Escape rolls back.
+        self._host._sel_dim_snapshot = self._host._canvas_service.begin_preview()
+        edit.textEdited.connect(lambda _t: self._live_sel_dim_preview())
+
+    def _live_sel_dim_preview(self) -> None:
+        """Resize the selection transiently as the badge editor text changes."""
+        edit = self._host._sel_dim_edit
+        axis = self._host._sel_dim_axis
+        snapshot = self._host._sel_dim_snapshot
+        if edit is None or axis is None or snapshot is None:
+            return
+        self._host._canvas_service.cancel_preview(snapshot)
+        text = edit.text().strip()
+        if text:
+            try:
+                val = _parse_expression(text, self._host._unit_system, is_length=axis != "a")
+            except ValueError:
+                val = None
+            if val is not None and (axis == "a" or val > 0):
+                self._host._preview_selected_extent(axis, val)
+                return
+        self._host._redraw()
 
     def _apply_sel_dim_editor(self) -> None:
         if self._host._sel_dim_edit is None or self._host._sel_dim_axis is None:
             return
         text = self._host._sel_dim_edit.text().strip()
         axis = self._host._sel_dim_axis
+        snapshot = self._host._sel_dim_snapshot
         # Disconnect editingFinished before dismissing to avoid double-trigger
         try:
             self._host._sel_dim_edit.editingFinished.disconnect()
@@ -972,6 +996,11 @@ class HudTextService:
             # teardown; dismissal is still safe and must continue.
             LOGGER.debug("Selection editor was already disconnected: %s", exc)
         self._dismiss_sel_dim_editor()
+        if snapshot is not None:
+            # Wipe the transient live preview; the real commit below re-applies
+            # the final value as one undoable command.
+            self._host._canvas_service.cancel_preview(snapshot)
+            self._host._redraw()
         if not text:
             return
         try:
@@ -1001,26 +1030,28 @@ class HudTextService:
             self._host._sel_dim_edit.deleteLater()
             self._host._sel_dim_edit = None
         self._host._sel_dim_axis = None
+        self._host._sel_dim_snapshot = None
 
     def _update_dim_positions(self, cx: float, cy: float) -> None:
-        """Move the dim input widgets near cursor, avoiding snap label overlap.
+        """Move the dim input widgets onto the painted badge they replace.
 
-        Positions the fields below-right of cursor with enough clearance so
-        snap indicator icons and labels (drawn at +18, +4 from snap point)
-        never get covered.
+        (cx, cy) is the effective cursor in canvas coords. The live length
+        badge paints at the rubber-band segment's midpoint, so the Tab-summoned
+        fields anchor there too — editing the value "on the line" instead of a
+        second readout trailing the cursor.
         """
         vw = max(self._host.width(), 100)
         vh = max(self._host.height(), 100)
-        # Default: below-right of cursor
-        dx, dy = 28, 22
-        # If near right edge, flip to left side
-        if cx + dx + 92 > vw:
-            dx = -112
-        # If near bottom edge, flip above
-        if cy + dy + 76 > vh:
-            dy = -76
-        x = int(cx + dx)
-        y = int(cy + dy)
+        mx, my = cx, cy
+        if self._host._draw_pts:
+            last_c = self._host._w2c(*self._host._draw_pts[-1])
+            mx, my = (last_c[0] + cx) / 2.0, (last_c[1] + cy) / 2.0
+        # Centre the 92 px-wide field column on the segment midpoint, ending
+        # just above the line itself; clamp inside the viewport.
+        x = int(mx - 46)
+        x = max(8, min(x, vw - 100))
+        y = int(my - 84)
+        y = max(self._host._chrome_top() + 8, min(y, vh - 92))
         if self._host._dim_distance_label is not None:
             self._host._dim_distance_label.move(x, y)
         if self._host._dim_distance_edit is not None:
@@ -1158,7 +1189,7 @@ class HudTextService:
             "Enter the real target distance. The first picked point remains fixed.\n"
             "Expressions such as 25.4/2 are accepted."
         )
-        le.setAccessibleName("Measure target distance")
+        le.setAccessibleName("Scale target distance")
         le.move(
             *self._hud_position_near(
                 mx,
