@@ -45,8 +45,8 @@ lint: venv
 
 test: venv
 	$(PYTHON) -m pip install --quiet pytest
-	@$(PYTHON) -m pytest --collect-only -q | awk '/^tests\// {print $$1}' | while IFS= read -r test_node; do \
-		QT_QPA_PLATFORM=offscreen $(PYTHON) -m pytest -q $$test_node || exit $$?; \
+	@$(PYTHON) -m pytest --collect-only -q | awk '/^tests\// {print $$0}' | while IFS= read -r test_node; do \
+		QT_QPA_PLATFORM=offscreen $(PYTHON) -m pytest -q "$$test_node" || exit $$?; \
 	done
 
 sdist: venv
