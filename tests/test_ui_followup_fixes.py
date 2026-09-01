@@ -565,6 +565,80 @@ def test_pattern_page_has_visibility_toggle(app: QApplication) -> None:
     page.close()
 
 
+def test_dxf_export_import_retains_object_names(app: QApplication, tmp_path) -> None:
+    from simple_stipple.core.formats.dxf import (
+        load_dxf_polylines_by_layer_with_report,
+        write_polylines_dxf,
+    )
+
+    out = tmp_path / "named.dxf"
+    write_polylines_dxf(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]],
+        str(out),
+        pattern_layer="Outline",
+        object_names=["Bracket tab"],
+    )
+    text = out.read_text()
+    assert "SSTPN" in text
+    _by_layer, report = load_dxf_polylines_by_layer_with_report(str(out))
+    assert any(e.get("name") == "Bracket tab" for e in report.object_names)
+
+
+def test_pattern_fill_mode_updates_selected_region(app: QApplication) -> None:
+    from simple_stipple.features.pattern.page import PatternPage
+
+    page = PatternPage(settings={})
+    scheduled: list[int] = []
+    page._live_update_selected_zone = lambda *a: scheduled.append(1) or True
+    page._on_fill_mode_changed()
+    # Fill-mode change must flow through the inspector edit (region update),
+    # not schedule a bare re-solve that ignores the selection.
+    assert scheduled, "fill-mode change must route through the region update"
+    page.close()
+
+
+def test_shape_preview_has_no_commit_popup_and_enter_commits(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    canvas.resize(600, 400)
+    canvas.show()
+    canvas.set_mode("draw")
+    canvas._draw_primitive = "rectangle"
+    QTest.mouseClick(
+        canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(150, 120)
+    )
+    from PySide6.QtGui import QMouseEvent
+
+    mv = QMouseEvent(
+        QMouseEvent.Type.MouseMove,
+        QPoint(350, 300).toPointF(),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    QApplication.sendEvent(canvas, mv)
+    app.processEvents()
+    assert canvas._draw_shape_preview_active
+    # No "Commit shape / Cancel" status-strip popup during shape preview.
+    assert canvas.get_context_actions() == ()
+    # The click focused the canvas, so Enter commits.
+    QTest.keyClick(canvas, Qt.Key.Key_Return)
+    app.processEvents()
+    assert len(canvas._entities) == 1
+    assert not canvas._draw_shape_preview_active
+    canvas.close()
+
+
+def test_merge_touching_open_paths(app: QApplication) -> None:
+    # Endpoint-to-endpoint touch → one continuous polyline.
+    canvas = DxfCanvas()
+    canvas.add_polylines_state([[(0.0, 0.0), (10.0, 0.0)], [(10.0, 0.0), (10.0, 10.0)]])
+    canvas.set_selection([e.id for e in canvas._entities])
+    assert canvas.merge_selected_segments_to_objects() == 1
+    assert len(canvas._entities) == 1
+    assert canvas._entities[0].points == [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]
+    canvas.close()
+
+
 class _StubApp(QObject):
     """QObject parent with the one attribute AutoCommitController reads."""
 

@@ -1884,7 +1884,11 @@ class PatternPage(BasePage):
         self._fill_target_outline_cb.setEnabled(bool(active))
         self._fill_target_pattern_cb.setEnabled(bool(active))
         self._refresh_section_subtitles()
-        self._schedule_preview()
+        # Route through the inspector edit so a selected region records the new
+        # fill BEFORE the re-solve — calling _schedule_preview() directly left
+        # the region's treatment stale, so the fill only appeared after another
+        # edit (e.g. toggling a checkbox) finally wrote it through.
+        self._on_inspector_edit()
 
     def _collect_fill_options(self) -> dict | None:
         mode = self._fill_mode_combo.currentData()

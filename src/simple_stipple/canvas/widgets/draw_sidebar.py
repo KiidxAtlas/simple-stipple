@@ -339,19 +339,22 @@ class DrawSidebar(QFrame):
             path_buttons.append(self._arc_mode_button)
         shape_buttons = [self._shapes_buttons[t] for t in self._shape_tools]
 
-        section_frames: dict[str, QWidget] = {
-            "path": self._section("Path", path_buttons, columns=2),
-            "shapes": self._section("Shapes", shape_buttons, columns=2),
-            "text": self._section("Text", [self._text_button]),
-            # Snap master/grid/vertex/edge/angle toggles live only in the
-            # Precision bar now (docked in every mode, not just Draw) — this
-            # section keeps its settings key for backward-compatible saved
-            # section lists, but only Constraint (unique to Draw) remains.
-            "snapping": self._section("Constraint", [self._constraint_button]),
-            "mode": self._section("Mode", [self._split_button]),
-            "sketch": self._section("Sketch", [self._dimension_button]),
-            "smoothing": self._section("Smoothing", [self._smoothing_button]),
-            "editing": self._section(
+        # Build ONLY the configured sections. Section frames are QWidget(self)
+        # children, so a frame that is created but never added to the layout
+        # floats at (0, 0) over the content — build them lazily to avoid that.
+        # The buttons above are created unconditionally (unparented until used)
+        # so state-sync methods never crash on a hidden section.
+        section_builders: dict[str, Callable[[], QWidget]] = {
+            "path": lambda: self._section("Path", path_buttons, columns=2),
+            "shapes": lambda: self._section("Shapes", shape_buttons, columns=2),
+            "text": lambda: self._section("Text", [self._text_button]),
+            # Snap toggles live in the Precision bar now; only Constraint (unique
+            # to Draw) remains under this legacy "snapping" key.
+            "snapping": lambda: self._section("Constraint", [self._constraint_button]),
+            "mode": lambda: self._section("Mode", [self._split_button]),
+            "sketch": lambda: self._section("Sketch", [self._dimension_button]),
+            "smoothing": lambda: self._section("Smoothing", [self._smoothing_button]),
+            "editing": lambda: self._section(
                 "Editing",
                 [
                     self._finish_button,
@@ -363,13 +366,17 @@ class DrawSidebar(QFrame):
                 columns=2,
             ),
         }
+        self._constraint_section: QWidget | None = None
         for key in self._sections:
-            frame = section_frames.get(key)
-            if frame is not None:
-                col.addWidget(frame)
+            builder = section_builders.get(key)
+            if builder is None:
+                continue
+            frame = builder()
+            if key == "snapping":
+                self._constraint_section = frame
+            col.addWidget(frame)
         # Start with contextual controls hidden — the first
         # _refresh_draw_sidebar_state reveals what the active tool can use.
-        self._constraint_section = section_frames["snapping"]
         self.set_polyline_actions_enabled(can_finish=False, can_close=False, can_undo=False)
         self.set_arc_mode_enabled(False)
         self.set_constraint_mode_enabled(False)
@@ -454,15 +461,23 @@ class DrawSidebar(QFrame):
         for tool_id, btn in self._shapes_buttons.items():
             btn.setChecked(tool_id == tool)
 
+    @staticmethod
+    def _set_button_visible(button: CycleIconButton, visible: bool) -> None:
+        # A button whose section was never built (off the configured sidebar)
+        # has no parent; calling setVisible(True) on it would pop it up as a
+        # stray top-level window. Only toggle buttons that are actually placed.
+        if button.parentWidget() is not None:
+            button.setVisible(visible)
+
     def set_polyline_actions_enabled(
         self, *, can_finish: bool, can_close: bool, can_undo: bool
     ) -> None:
         # Hide instead of greying out: a wall of disabled buttons reads as
         # clutter, and these three are meaningless unless a point-by-point
         # draw is actually in progress.
-        self._finish_button.setVisible(can_finish)
-        self._close_button.setVisible(can_close)
-        self._undo_button.setVisible(can_undo)
+        self._set_button_visible(self._finish_button, can_finish)
+        self._set_button_visible(self._close_button, can_close)
+        self._set_button_visible(self._undo_button, can_undo)
 
     @staticmethod
     def _sync_toggle(button: CycleIconButton, enabled: bool) -> None:
@@ -478,16 +493,17 @@ class DrawSidebar(QFrame):
         self._arc_mode_button.set_current_state(mode)
 
     def set_arc_mode_enabled(self, enabled: bool) -> None:
-        self._arc_mode_button.setVisible(enabled)
+        self._set_button_visible(self._arc_mode_button, enabled)
 
     def set_constraint_mode(self, mode: str | None) -> None:
         self._constraint_button.set_current_state(mode or "Free")
 
     def set_constraint_mode_enabled(self, enabled: bool) -> None:
-        # Constraint is a single-button section — hide the caption with it.
-        if hasattr(self, "_constraint_section"):
+        # Constraint is a single-button section — hide the caption with it when
+        # that section is actually shown (it's off the default sidebar).
+        if self._constraint_section is not None:
             self._constraint_section.setVisible(enabled)
-        self._constraint_button.setVisible(enabled)
+        self._set_button_visible(self._constraint_button, enabled)
 
     def set_smoothing_method(self, method: str) -> None:
         self._smoothing_button.set_current_state(method)

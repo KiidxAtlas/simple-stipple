@@ -56,7 +56,6 @@ def get_draft_workspace_state(page: Any) -> dict:
         "quick_shape_mode": canvas.quick_shape_mode,
         "quick_shape_enabled": canvas.quick_shape_enabled,
         "last_input_dxf": str(page._last_in_path or ""),
-        "shape_labels": page._rt().shape_labels,
     }
     return state_dict
 
@@ -86,7 +85,6 @@ def apply_draft_workspace_state(page: Any, state: dict | None) -> None:
 
     quick_shape_enabled = bool(draft_state.quick_shape_enabled)
     canvas.set_quick_shape_enabled(quick_shape_enabled)
-    rt.set_shape_labels(draft_state.shape_labels)
     if quick_shape_enabled and draft_state.quick_shape_mode:
         canvas.set_quick_shape_mode(str(draft_state.quick_shape_mode), flash=False)
     page._last_in_path = str(draft_state.last_input_dxf or "") or None

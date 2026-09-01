@@ -331,6 +331,10 @@ def mousePressEvent(self, event: QMouseEvent):
     btn = event.button()
 
     if btn == Qt.MouseButton.LeftButton:
+        # Guarantee the canvas holds keyboard focus after a click so Enter
+        # commits the shape preview and Esc cancels — otherwise focus left on
+        # a sidebar tool button or HUD field swallowed those keys.
+        self.setFocus()
         bg_hit = self._background_edit_hit(pos.x(), pos.y())
         if bg_hit is not None:
             wx, wy = self._c2w(pos.x(), pos.y())

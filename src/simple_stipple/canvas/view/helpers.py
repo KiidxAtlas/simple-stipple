@@ -336,10 +336,10 @@ def get_context_actions(self) -> tuple[tuple[str, str, str], ...]:
         return ()
     point_count = len(self._draw_pts)
     if self._draw_shape_preview_active:
-        return (
-            ("commit-shape", "Commit shape", "Accept the current shape preview"),
-            ("cancel-draw", "Cancel", "Discard the current shape preview"),
-        )
+        # Shape preview commits with Enter or a second click and cancels with
+        # Esc — a two-button "Commit shape / Cancel" strip just flickered in as
+        # a distracting popup, so leave the strip clean here.
+        return ()
     if point_count == 0:
         return ()
     draw_actions: list[tuple[str, str, str]] = [

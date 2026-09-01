@@ -652,6 +652,13 @@ class DraftPage(BasePage):
             # layers are emitted as additional DXF layers. Emit onto a named
             # layer (instead of the AutoCAD default "0") so downstream CAM
             # tools assign it a real color and can fill it.
+            for record in [
+                *export_plan.first_layer_records,
+                *(r for recs in (export_plan.extra_layer_records or {}).values() for r in recs),
+            ]:
+                name = (record.get("meta") or {}).get("name")
+                if name:
+                    record["object_name"] = str(name)
             DxfService.write_polylines_dxf(
                 [list(record["polyline"]) for record in export_plan.first_layer_records],
                 out_path,
@@ -667,6 +674,9 @@ class DraftPage(BasePage):
                     record.get("group") for record in export_plan.first_layer_records
                 ],
                 group_labels=export_plan.group_labels,
+                object_names=[
+                    record.get("object_name") for record in export_plan.first_layer_records
+                ],
             )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
@@ -1077,7 +1087,9 @@ class DraftPage(BasePage):
         if source_kind == "DXF":
             self._offer_shape_detection()
 
-    def _apply_dxf_import_annotations(self, report, by_layer, ordered_ids: list[str]) -> None:
+    def _apply_dxf_import_annotations(  # noqa: C901
+        self, report, by_layer, ordered_ids: list[str]
+    ) -> None:
         """Re-attach groups, group labels, and dimensions recovered from XDATA.
 
         Group entries reference entities by (layer, index within that layer's
@@ -1089,7 +1101,8 @@ class DraftPage(BasePage):
         dimensions = getattr(report, "dimensions", None) or []
         groups = getattr(report, "groups", None) or []
         group_labels = getattr(report, "group_labels", None) or {}
-        if not dimensions and not groups:
+        object_names = getattr(report, "object_names", None) or []
+        if not dimensions and not groups and not object_names:
             return
         canvas = self._canvas
         id_by_layer_index: dict[tuple[str, int], str] = {}
@@ -1120,6 +1133,15 @@ class DraftPage(BasePage):
         for dimension in dimensions:
             if isinstance(dimension, dict):
                 canvas._append_dimension(dict(dimension))
+        if object_names:
+            runtime = self._rt()
+            for entry in object_names:
+                entity_id = id_by_layer_index.get(
+                    (str(entry.get("layer")), entry.get("index"))
+                )
+                name = entry.get("name")
+                if entity_id is not None and name:
+                    runtime.rename_shape(str(entry.get("layer")), entity_id, str(name))
 
     def load_outline_polys(
         self,
