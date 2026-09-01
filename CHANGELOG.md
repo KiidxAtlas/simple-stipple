@@ -20,6 +20,12 @@
 
 - **Test release** — CI fixes: switched to `uvx` for ruff/pytest/mypy/pyright, added libegl1 install, removed format check. Bumped to test update flow.
 
+## 0.3.15 — 2026-09-01
+
+### Fixed
+
+- **No terminal window on Windows startup** — added `--windowed` flag to PyInstaller build
+  so the EXE launches as a proper GUI app without a console window.
 ## 0.3.10 — 2026-09-01
 
 ### Added
