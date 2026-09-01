@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.11 — 2026-09-01
+
+### Fixed
+
+- **Windows staged updates now apply automatically** — the "Ready to Restart?"
+  confirmation dialog after downloading an update has been removed; the installer
+  launches immediately. A startup check also detects any staged EXE left over
+  from a dismissed prompt and applies it silently on the next launch.
+
 ## 0.3.10 — 2026-09-01
 
 ### Added
