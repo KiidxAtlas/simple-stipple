@@ -1,4 +1,12 @@
 # Changelog
+## 0.3.16 — 2026-09-01
+
+### Fixed
+
+- **Windows update relaunch** — startup now uses the detached PowerShell updater
+  instead of trying to execute a Python helper through the frozen EXE. This
+  prevents the updated app from exiting before its window appears.
+
 
 ## 0.3.12 — 2026-09-01
 

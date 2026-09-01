@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from types import ModuleType
 
+import pytest
+
 from simple_stipple.platform import updates
 
 
@@ -58,6 +60,34 @@ def test_windows_self_update_launches_detached_helper(tmp_path: Path, monkeypatc
     assert str(staged) in args
     assert str(current.resolve()) in args
     assert kwargs["close_fds"] is True
+
+
+def test_staged_update_startup_uses_windows_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from simple_stipple.app import tasks
+
+    staging_dir = tmp_path / "simple-stipple-updates"
+    staging_dir.mkdir()
+    staged = staging_dir / "SimpleStipple-0.3.15.exe"
+    staged.write_bytes(b"new")
+    calls: list[Path] = []
+
+    monkeypatch.setattr(tasks.sys, "platform", "win32")
+    monkeypatch.setattr(tasks.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(tasks.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(tasks, "get_current_version", lambda: "0.3.14")
+    monkeypatch.setattr(
+        tasks,
+        "launch_windows_self_update",
+        lambda path: calls.append(path) or True,
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        tasks._check_staged_update()
+
+    assert raised.value.code == 0
+    assert calls == [staged]
 
 
 class _OfflineResponse:
