@@ -35,7 +35,7 @@ def build_command(system: str | None = None) -> list[str]:
         "--name",
         APP_NAME,
         "--clean",
-        "--noconfirm",
+        "--windowed",
         "--hidden-import=scipy",
         "--hidden-import=scipy.spatial",
         "--hidden-import=scipy.spatial.distance",
