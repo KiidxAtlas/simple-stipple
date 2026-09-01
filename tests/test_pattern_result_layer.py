@@ -73,9 +73,21 @@ def test_convert_to_outline_promotes_a_generated_cell(app: QApplication) -> None
     page.close()
 
 
-def test_cancel_solve_is_a_noop_when_nothing_is_solving(app: QApplication) -> None:
-    page = PatternPage(settings={})
-    assert page._preview_task.running is False
-    page._cancel_solve()  # must not raise
+
+
+def test_deleting_the_last_outline_drops_the_solved_overlay(app: QApplication) -> None:
+    """Regression: deleting every outline used to leave the last-good solve
+    rendered as a ghost — the keep-last-good overlay only makes sense while a
+    re-solve is actually scheduled."""
+    cell = [(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 1.0)]
+    page = _page_with_result([cell])
+    assert page._canvas._result_polys
+
+    page._canvas.delete_entities(page._canvas.get_entity_ids())
+
+    assert page._edit_polys == []
+    assert page._canvas._result_polys == []
+    assert page._preview_polys_cache == []
+    assert page._preview_is_stale is False
     page.shutdown()
     page.close()

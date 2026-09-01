@@ -1004,6 +1004,12 @@ class PatternPage(BasePage):
     # ── Preview / reset ───────────────────────────────────────────────────────
 
     def _reset_preview(self) -> None:
+        self._clear_preview_state()
+        self._schedule_preview()
+        self._emit_state_changed()
+
+    def _clear_preview_state(self) -> None:
+        """Drop the solved overlay and caches without scheduling a re-solve."""
         self._export_is_current = False
         self._preview_is_stale = False
         self._preview_polys_cache = []
@@ -1012,8 +1018,6 @@ class PatternPage(BasePage):
         self._canvas.set_result_polylines([])
         self._set_preview_status("Choose a treatment to solve a pattern")
         self._update_preview_controls()
-        self._schedule_preview()
-        self._emit_state_changed()
 
     # ── Build (UI construction) ───────────────────────────────────────────────
 
@@ -2233,11 +2237,17 @@ class PatternPage(BasePage):
         # geometry guards so configuring a future pattern can be saved,
         # recovered, and protected by the close confirmation.
         self._emit_state_changed()
-        if not self._zones and not self._edit_polys:
-            return
-        # Validation rides the solve debounce: a finding shows up while the
-        # geometry is being made, not at export where a fix is expensive.
+        # Preflight clears its own markers on empty geometry, so it runs
+        # before the empty-workspace guard to wipe stale findings too.
         self._refresh_preflight_markers()
+        if not self._zones and not self._edit_polys:
+            # Deleting the last outline must drop the last-good solve too —
+            # keeping it on screen is only right while a re-solve is coming.
+            # _schedule_preview also fires during __init__, before the canvas
+            # exists; there is nothing to clear yet in that case.
+            if hasattr(self, "_canvas"):
+                self._clear_preview_state()
+            return
         self._preview_revision += 1
         self._invalidate_preview_cache()
         if self._preview_task.running:
