@@ -33,6 +33,7 @@ LOGGER = logging.getLogger(__name__)
 # they finished instead of letting window destruction delete a running thread.
 _DETACHED_UPDATE_THREADS: set[Any] = set()
 
+
 def _document_hash(document: object) -> str:
     """Stable content hash used to recognise a state the user dismissed."""
     return hashlib.sha256(
@@ -521,8 +522,6 @@ class AutoCommitController(QObject):
                 pass
 
 
-
-
 def _check_staged_update() -> None:
     """Apply a pending staged update if one is newer than the running version.
 
@@ -612,6 +611,8 @@ except Exception as exc:
         creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
     )
     sys.exit(0)
+
+
 class TaskController:
     """Single lifecycle surface for background application tasks."""
 
