@@ -26,13 +26,12 @@ jobs:
           enable-cache: true
       - name: Install libegl1
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libegl1
-        timeout-minutes: 5
-      - run: uv run ruff check .
+      - run: uvx ruff check .
       - name: Circular import check
         run: uv run python scripts/check_circular_imports.py
       - run: uv run python -m compileall -q src tests
       - run: uv run python -c "import simple_stipple.app; import simple_stipple.app.launcher"
-      - run: uv run pytest -q --tb=short
+      - run: uvx pytest -q --tb=short
       - name: Type-check refactored boundaries
-        run: uv run mypy src
-      - run: uv run pyright
+        run: uvx mypy src
+      - run: uvx pyright
