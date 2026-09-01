@@ -64,7 +64,7 @@ from simple_stipple.ui.dialogs.files import VectorImportModeDialog
 from simple_stipple.ui.dialogs.settings_dialog import SettingsDialog
 from simple_stipple.ui.dialogs.support import SUPPORT_URL, SupportMeDialog
 from simple_stipple.ui.dialogs.update_dialog import UpdateDialog
-from simple_stipple.ui.style import STATUS_OK, accessibility_palette, load_app_qss
+from simple_stipple.ui.style import STATUS_OK, accessibility_palette, apply_dark_theme, load_app_qss
 
 
 @pytest.fixture(scope="module")
@@ -325,6 +325,7 @@ def test_inspector_sliders_do_not_consume_scroll_wheel_input(app: QApplication) 
 
 
 def test_canvas_numeric_controls_meet_the_shared_target_size(app: QApplication) -> None:
+    apply_dark_theme(app)  # min-heights come from theme.qss; don't rely on test order
     canvas = DxfCanvas()
     panel = CanvasPropertiesPanel(canvas)
     precision = CanvasPrecisionBar(canvas)
