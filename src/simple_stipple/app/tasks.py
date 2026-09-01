@@ -4,6 +4,8 @@ import hashlib
 import json
 import logging
 import subprocess
+import sys
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +23,7 @@ from simple_stipple.platform.storage import (
 if TYPE_CHECKING:
     from simple_stipple.app.window import App
 
+from simple_stipple.platform.updates import _compare_versions, get_current_version
 from simple_stipple.ui.components.feedback import refresh_style
 
 LOGGER = logging.getLogger(__name__)
@@ -518,6 +521,97 @@ class AutoCommitController(QObject):
                 pass
 
 
+
+
+def _check_staged_update() -> None:
+    """Apply a pending staged update if one is newer than the running version.
+
+    When the user dismisses the restart prompt after downloading, the staged
+    EXE sits in the temp directory.  On the next launch this function detects
+    it, launches a background helper that replaces the running EXE, and then
+    exits the current process so the replacement can proceed.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+
+    current_version = get_current_version()
+    staging_dir = Path(tempfile.gettempdir()) / "simple-stipple-updates"
+
+    if not staging_dir.is_dir():
+        return
+
+    # Find the newest staged EXE whose version is newer than current.
+    best_exe: Path | None = None
+    best_version: str | None = None
+
+    for exe in staging_dir.glob("*.exe"):
+        # Filename pattern: SimpleStipple-0.3.10.exe
+        name = exe.stem  # "SimpleStipple-0.3.10"
+        parts = name.rsplit("-", 1)
+        if len(parts) != 2:
+            continue
+        ver = parts[1]
+        if _compare_versions(ver, current_version) <= 0:
+            continue
+        if best_version is None or _compare_versions(ver, best_version) > 0:
+            best_version = ver
+            best_exe = exe
+
+    if best_exe is None:
+        return
+
+    # Launch a background helper that will replace the EXE after this
+    # process exits.  The helper is a self-contained Python script.
+    helper = Path(tempfile.gettempdir()) / "ss_apply_update.py"
+    helper.write_text(
+        f"""\
+import os, sys, time, subprocess
+
+staged = r"{best_exe}"
+target = r"{sys.executable}"
+log_path = Path(__file__).with_name("ss_apply_update.log")
+
+def log(msg):
+    log_path.write_text(f"{{time.strftime('%Y-%m-%d %H:%M:%S')}} {{msg}}\\n", encoding="utf-8")
+
+try:
+    log("Waiting for Simple Stipple to exit...")
+    for _ in range(1200):  # up to 10 minutes
+        time.sleep(0.5)
+        # Check if any Simple Stipple process is still running
+        try:
+            import psutil
+            for p in psutil.process_iter(["name", "exe"]):
+                try:
+                    if p.info["exe"] and target.lower() in p.info["exe"].lower():
+                        break
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            else:
+                break
+        except ImportError:
+            # Fallback: just wait
+            break
+
+    log("Replacing EXE...")
+    backup = Path(str(target) + ".previous")
+    if target.exists():
+        backup.write_bytes(target.read_bytes())
+    os.replace(staged, target)
+    log("Relaunching...")
+    subprocess.Popen([target], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+    log("Done.")
+except Exception as exc:
+    log(f"Failed: {{exc}}")
+"""
+    )
+
+    # Launch the helper detached, then exit this process immediately.
+    subprocess.Popen(
+        [sys.executable, str(helper)],
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+    sys.exit(0)
 class TaskController:
     """Single lifecycle surface for background application tasks."""
 
@@ -533,6 +627,7 @@ class TaskController:
         self._update_start_timer.timeout.connect(self.updates._attempt_startup_update_check)
 
     def startup(self, *, check_updates: bool) -> None:
+        _check_staged_update()
         self._recovery_start_timer.start(200)
         if check_updates:
             self._update_start_timer.start(1000)

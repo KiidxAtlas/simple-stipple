@@ -342,23 +342,11 @@ class UpdateDialog(QDialog):
             return
 
         if system == "Windows" and can_self_update_windows():
-            reply = QMessageBox.question(
-                self,
-                "Ready to Restart",
-                "The verified update is ready. Restart Simple Stipple now to finish installing?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                if launch_windows_self_update(download_path):
-                    self.accept()
-                    QCoreApplication.quit()
-                    return
-                QMessageBox.critical(
-                    self,
-                    "Could Not Start Installer",
-                    "The update was downloaded and verified, but the installer could not start. "
-                    "Try again or install it manually from the staged file.",
-                )
+            if launch_windows_self_update(download_path):
+                self.accept()
+                QCoreApplication.quit()
+                return
+            _LOG.warning("Self-update launcher failed; falling through to manual install")
 
         QMessageBox.information(
             self,
