@@ -96,7 +96,6 @@ __all__ = [
     "poisson_disk_points",
     "prewarm",
     "query_within_radius",
-    "resample_path",
     "tessellate_arc",
     "tessellate_circles",
     "voronoi_diagram",
@@ -242,33 +241,8 @@ def poisson_disk_points(min_x, min_y, max_x, max_y, min_distance, seed):
     return points[:count]
 
 
-@njit(cache=_CACHE_ENABLED)
-def resample_path(points, targets):
-    cumulative = np.empty(len(points), dtype=np.float64)
-    cumulative[0] = 0.0
-    for index in range(1, len(points)):
-        dx = points[index, 0] - points[index - 1, 0]
-        dy = points[index, 1] - points[index - 1, 1]
-        cumulative[index] = cumulative[index - 1] + math.sqrt(dx * dx + dy * dy)
-    output = np.empty((len(targets), 2), dtype=np.float64)
-    segment = 0
-    for sample, target in enumerate(targets):
-        while segment < len(points) - 2 and target > cumulative[segment + 1]:
-            segment += 1
-        span = cumulative[segment + 1] - cumulative[segment]
-        ratio = 0.0 if span <= 1e-12 else (target - cumulative[segment]) / span
-        output[sample, 0] = (
-            points[segment, 0] + (points[segment + 1, 0] - points[segment, 0]) * ratio
-        )
-        output[sample, 1] = (
-            points[segment, 1] + (points[segment + 1, 1] - points[segment, 1]) * ratio
-        )
-    return output, cumulative[-1]
-
-
 def prewarm() -> None:
     """Compile the small core signatures without retaining generated data."""
     tessellate_arc(0.0, 0.0, 1.0, 0.0, math.tau, 8)
     tessellate_circles(np.asarray(((0.0, 0.0),)), 1.0, 8)
     poisson_disk_points(0.0, 0.0, 2.0, 2.0, 0.5, 42)
-    resample_path(np.asarray(((0.0, 0.0), (1.0, 0.0))), np.asarray((0.0, 1.0)))

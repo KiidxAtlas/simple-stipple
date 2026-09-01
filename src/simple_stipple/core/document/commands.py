@@ -405,13 +405,6 @@ class ReplaceDocumentCommand(Command):
 
 
 @dataclass(frozen=True, slots=True)
-class ResampleCommand(EntityChangeCommand):
-    command_type: ClassVar[str] = "resample"
-    value: float = 0.0
-    by_count: bool = False
-
-
-@dataclass(frozen=True, slots=True)
 class MergeCommand(EntityChangeCommand):
     command_type: ClassVar[str] = "merge"
 
@@ -434,7 +427,6 @@ _COMMAND_TYPES: dict[str, type[Command]] = {
         CreateCommand,
         DeleteCommand,
         ReplaceDocumentCommand,
-        ResampleCommand,
         MergeCommand,
         ExplodeCommand,
     )

@@ -19,7 +19,6 @@ from simple_stipple.core.document.commands import (
     MergeCommand,
     MoveEntityCommand,
     ReplaceDocumentCommand,
-    ResampleCommand,
     RestoreEntitiesCommand,
     SelectCommand,
     SplitCommand,
@@ -38,7 +37,6 @@ from simple_stipple.core.document.model import (
     new_entity_id,
 )
 from simple_stipple.core.editing.boolean import boolean_polylines
-from simple_stipple.core.editing.smoothing import resample_by_count, resample_by_spacing
 from simple_stipple.core.editing.topology import (
     PathInput,
     explode_path,
@@ -271,18 +269,6 @@ class DocumentService:
                     [entity.points for entity in sources], command.operation
                 )
             )
-        elif isinstance(command, ResampleCommand):
-            output = []
-            for entity in sources:
-                points = (
-                    resample_by_count(entity.points, int(command.value))
-                    if command.by_count
-                    else resample_by_spacing(entity.points, command.value)
-                )
-                copy = deepcopy(entity)
-                copy.points, copy.kind, copy.meta = points, "polyline", None
-                output.append(_snapshot(copy))
-            snapshots = tuple(output)
         elif isinstance(command, MergeCommand):
             merged = merge_paths(
                 # Parametric entities store sparse defining points (for
@@ -487,12 +473,6 @@ class DocumentService:
                 created_ids=selected_ids,
                 removed_ids=command.entity_ids,
                 selected_ids=selected_ids,
-            )
-        if isinstance(command, ResampleCommand):
-            self._replace_entities(command.entity_ids, command.after)
-            self.document.select_ids(command.entity_ids)
-            return OperationResult(
-                bool(command.after), "Resampled", selected_ids=command.entity_ids
             )
         if isinstance(command, MergeCommand):
             self._replace_entities(command.entity_ids, command.after)
