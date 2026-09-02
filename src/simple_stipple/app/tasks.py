@@ -4,8 +4,6 @@ import hashlib
 import json
 import logging
 import subprocess
-import sys
-import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,11 +21,6 @@ from simple_stipple.platform.storage import (
 if TYPE_CHECKING:
     from simple_stipple.app.window import App
 
-from simple_stipple.platform.updates import (
-    _compare_versions,
-    get_current_version,
-    launch_windows_self_update,
-)
 from simple_stipple.ui.components.feedback import refresh_style
 
 LOGGER = logging.getLogger(__name__)
@@ -526,32 +519,6 @@ class AutoCommitController(QObject):
                 pass
 
 
-def _check_staged_update() -> None:
-    """Apply a newer staged Windows update before normal startup."""
-    if sys.platform != "win32" or not getattr(sys, "frozen", False):
-        return
-
-    staging_dir = Path(tempfile.gettempdir()) / "simple-stipple-updates"
-    if not staging_dir.is_dir():
-        return
-
-    current_version = get_current_version()
-    candidates: list[tuple[str, Path]] = []
-    for exe in staging_dir.glob("SimpleStipple-*.exe"):
-        version = exe.stem.removeprefix("SimpleStipple-")
-        if _compare_versions(version, current_version) > 0:
-            candidates.append((version, exe))
-    if not candidates:
-        return
-
-    _, staged_executable = max(
-        candidates,
-        key=lambda item: tuple(int(part) for part in item[0].split(".") if part.isdigit()),
-    )
-    if launch_windows_self_update(staged_executable):
-        raise SystemExit(0)
-
-
 class TaskController:
     """Single lifecycle surface for background application tasks."""
 
@@ -567,7 +534,8 @@ class TaskController:
         self._update_start_timer.timeout.connect(self.updates._attempt_startup_update_check)
 
     def startup(self, *, check_updates: bool) -> None:
-        _check_staged_update()
+        # Windows updates are launched through the native installer after the
+        # verified download completes; startup must not inspect stale temp files.
         self._recovery_start_timer.start(200)
         if check_updates:
             self._update_start_timer.start(1000)

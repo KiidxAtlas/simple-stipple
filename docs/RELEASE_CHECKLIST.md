@@ -59,10 +59,11 @@ Create and push the tag from the public branch:
 
 ## 4. Artifact gate
 
-Do not announce until the release workflow is green and the GitHub release contains both artifacts and both checksums:
+Do not announce until the release workflow is green and the GitHub release contains
+the native installers and their checksums:
 
-- [ ] `SimpleStipple.exe` launches on a supported Windows machine.
-- [ ] `SimpleStipple-macOS.dmg` opens and the app launches on a supported macOS machine.
+- [ ] `SimpleStipple-Setup-<version>.exe` installs and launches on Windows.
+- [ ] `SimpleStipple-macOS.dmg` opens and the app launches on macOS.
 - [ ] The `.sha256` sidecars match the downloaded files.
 - [ ] The release notes explain the user-visible changes, upgrade notes, and known limitations.
 - [ ] Update checking finds the release and verifies its checksum.

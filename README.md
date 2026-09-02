@@ -45,12 +45,15 @@ Included pattern generators cover Honeycomb, Basketweave, Brick, Knurling, Mesh,
 
 ## Download the desktop app
 
-Prebuilt artifacts are published on the [Releases page](https://github.com/KiidxAtlas/simple-stipple/releases):
+Prebuilt installers are published on the [Releases page](https://github.com/KiidxAtlas/simple-stipple/releases):
 
-- **Windows:** `SimpleStipple.exe`
+- **Windows:** `SimpleStipple-Setup-<version>.exe`
 - **macOS:** `SimpleStipple-macOS.dmg`
 
-Each artifact includes a `.sha256` checksum. Windows can also check for verified updates from **Help → Check for Updates**. macOS releases require signing and notarization before publication.
+Each artifact includes a `.sha256` checksum. Windows updates download and launch
+the native installer from **Help → Check for Updates**; the installer handles
+closing, replacing, and relaunching the app. macOS updates open the verified DMG
+for the user to install.
 
 For a source install, see the instructions below. Linux users can run from source; packaged Linux artifacts are not currently published.
 

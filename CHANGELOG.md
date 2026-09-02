@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.18 — 2026-09-01
+
+### Changed
+
+- **Windows updates use a native installer** — updates are now installed by
+  Inno Setup instead of replacing the running executable from a temporary
+  directory. This preserves rollback and restart behavior in the installer.
+
+
 ## 0.3.17 — 2026-09-01
 
 ### Fixed

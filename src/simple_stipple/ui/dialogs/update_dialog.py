@@ -22,12 +22,12 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.platform.updates import (
     UpdateInfo,
-    can_self_update_windows,
+    can_install_update_windows,
     check_for_updates,
     download_update,
     get_current_version,
     get_releases_page_url,
-    launch_windows_self_update,
+    launch_windows_installer,
     update_staging_path,
 )
 from simple_stipple.ui.components.layout import (
@@ -341,21 +341,21 @@ class UpdateDialog(QDialog):
             )
             return
 
-        if system == "Windows" and can_self_update_windows():
-            if launch_windows_self_update(download_path):
+        if system == "Windows" and can_install_update_windows():
+            if launch_windows_installer(download_path):
                 self.accept()
                 QCoreApplication.quit()
                 return
-            _LOG.warning("Self-update launcher failed; falling through to manual install")
+            _LOG.warning("Windows installer launch failed; falling through to manual install")
 
         QMessageBox.information(
             self,
             "Update Ready",
             f"The verified update was downloaded to:\n{download_path}\n\n"
-            "Open it to finish installing this platform's update.",
+            "Open the installer to finish installing this platform's update.",
         )
 
-        # Platforms without an in-place updater still open the verified artifact.
+        # Platforms without an installer launcher still open the verified artifact.
         try:
             if system == "Darwin":
                 subprocess.Popen(["open", str(download_path)])

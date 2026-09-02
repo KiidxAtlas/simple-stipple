@@ -1,4 +1,4 @@
-"""Regression checks for verified, restart-based desktop updates."""
+"""Regression checks for verified, installer-based desktop updates."""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ import importlib.util
 import json
 from pathlib import Path
 from types import ModuleType
-
-import pytest
 
 from simple_stipple.platform import updates
 
@@ -24,24 +22,14 @@ def test_update_staging_path_is_private_and_sanitized(tmp_path: Path, monkeypatc
     monkeypatch.setattr(updates.tempfile, "gettempdir", lambda: str(tmp_path))
     path = updates.update_staging_path("../v 1.2.3", "Windows")
     assert path.parent == tmp_path / "simple-stipple-updates"
-    assert path.name == "SimpleStipple-v-1.2.3.exe"
+    assert path.name == "SimpleStipple-Setup-v-1.2.3.exe"
 
 
-def test_windows_handoff_has_wait_rollback_replace_restart_and_elevation_steps() -> None:
-    script = updates._windows_updater_script()
-    assert "Get-Process -Id $ProcessId" in script
-    assert "Move-Item -LiteralPath $Target -Destination $Backup" in script
-    assert "Move-Item -LiteralPath $Backup -Destination $Target" in script
-    assert "Start-Process -FilePath $Target" in script
-    assert "Start-Process -FilePath \"powershell.exe\" -Verb RunAs" in script
-    assert "Requested elevated retry." in script
-
-
-def test_windows_self_update_launches_detached_helper(tmp_path: Path, monkeypatch) -> None:
+def test_windows_installer_launches_detached(tmp_path: Path, monkeypatch) -> None:
     current = tmp_path / "SimpleStipple.exe"
-    staged = tmp_path / "SimpleStipple-new.exe"
-    current.write_bytes(b"old")
-    staged.write_bytes(b"new")
+    installer = tmp_path / "SimpleStipple-Setup-1.2.3.exe"
+    current.write_bytes(b"current")
+    installer.write_bytes(b"installer")
     calls: list[tuple[list[str], dict]] = []
 
     monkeypatch.setattr(updates.platform, "system", lambda: "Windows")
@@ -53,41 +41,16 @@ def test_windows_self_update_launches_detached_helper(tmp_path: Path, monkeypatc
         lambda args, **kwargs: calls.append((args, kwargs)),
     )
 
-    assert updates.launch_windows_self_update(staged)
-    assert (tmp_path / "install-update.ps1").is_file()
+    assert updates.can_install_update_windows()
+    assert updates.launch_windows_installer(installer)
     args, kwargs = calls[0]
-    assert args[0] == "powershell.exe"
-    assert str(staged) in args
-    assert str(current.resolve()) in args
+    assert args == [
+        str(installer),
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/CLOSEAPPLICATIONS",
+    ]
     assert kwargs["close_fds"] is True
-
-
-def test_staged_update_startup_uses_windows_handoff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from simple_stipple.app import tasks
-
-    staging_dir = tmp_path / "simple-stipple-updates"
-    staging_dir.mkdir()
-    staged = staging_dir / "SimpleStipple-0.3.15.exe"
-    staged.write_bytes(b"new")
-    calls: list[Path] = []
-
-    monkeypatch.setattr(tasks.sys, "platform", "win32")
-    monkeypatch.setattr(tasks.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(tasks.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(tasks, "get_current_version", lambda: "0.3.14")
-    monkeypatch.setattr(
-        tasks,
-        "launch_windows_self_update",
-        lambda path: calls.append(path) or True,
-    )
-
-    with pytest.raises(SystemExit) as raised:
-        tasks._check_staged_update()
-
-    assert raised.value.code == 0
-    assert calls == [staged]
 
 
 class _OfflineResponse:
@@ -107,8 +70,8 @@ class _OfflineResponse:
 
 def _release_payload(digest: str, *, sidecar: bool = True) -> bytes:
     artifact = {
-        "name": "SimpleStipple.exe",
-        "browser_download_url": "https://example.invalid/SimpleStipple.exe",
+        "name": "SimpleStipple-Setup-99.0.0.exe",
+        "browser_download_url": "https://example.invalid/SimpleStipple-Setup-99.0.0.exe",
     }
     if digest:
         artifact["digest"] = digest
@@ -116,8 +79,10 @@ def _release_payload(digest: str, *, sidecar: bool = True) -> bytes:
     if sidecar:
         assets.append(
             {
-                "name": "SimpleStipple.exe.sha256",
-                "browser_download_url": "https://example.invalid/SimpleStipple.exe.sha256",
+                "name": "SimpleStipple-Setup-99.0.0.exe.sha256",
+                "browser_download_url": (
+                    "https://example.invalid/SimpleStipple-Setup-99.0.0.exe.sha256"
+                ),
             }
         )
     return json.dumps({"tag_name": "v99.0.0", "body": "notes", "assets": assets}).encode()
@@ -128,7 +93,7 @@ def test_update_check_uses_verified_sha256_sidecar_offline(monkeypatch) -> None:
     responses = iter(
         [
             _OfflineResponse(_release_payload("")),
-            _OfflineResponse(f"{expected}  SimpleStipple.exe\n".encode()),
+            _OfflineResponse(f"{expected}  SimpleStipple-Setup-99.0.0.exe\n".encode()),
         ]
     )
     monkeypatch.setattr(updates.platform, "system", lambda: "Windows")
@@ -165,7 +130,7 @@ def test_update_check_rejects_malformed_api_digest_and_uses_sidecar(monkeypatch)
     responses = iter(
         [
             _OfflineResponse(_release_payload("sha256:not-a-digest")),
-            _OfflineResponse(f"{expected}  SimpleStipple.exe\n".encode()),
+            _OfflineResponse(f"{expected}  SimpleStipple-Setup-99.0.0.exe\n".encode()),
         ]
     )
     monkeypatch.setattr(updates.platform, "system", lambda: "Windows")
@@ -205,6 +170,8 @@ def test_release_build_manifest_and_platform_commands_are_complete(tmp_path: Pat
     assert "--clean" in windows
     assert "--clean" in macos
     assert "--onefile" in windows
+    assert "--windowed" in windows
+    assert "--collect-all=scipy" in windows
     assert str(build.ROOT / "assets" / "icon.ico") in windows
     assert "--osx-bundle-identifier" in macos
     assert str(build.ROOT / "assets" / "icon.png") in macos

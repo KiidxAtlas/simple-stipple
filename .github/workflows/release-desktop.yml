@@ -35,8 +35,29 @@ jobs:
       - name: Build EXE
         run: python scripts/build_standalone.py
 
-      - name: Generate SHA-256 checksum
-        run: python scripts/build_standalone.py --checksum dist/SimpleStipple.exe
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress --yes
+          $innoSetupPath = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6"
+          $isccPath = Join-Path $innoSetupPath "ISCC.exe"
+          if (-not (Test-Path $isccPath)) {
+            throw "Inno Setup compiler not found at $isccPath"
+          }
+          $innoSetupPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build Windows installer
+        run: python scripts/build_installer.py
+
+      - name: Generate installer SHA-256 checksum
+        shell: pwsh
+        run: |
+          $version = (python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])").Trim()
+          $installer = "dist/SimpleStipple-Setup-$version.exe"
+          if (-not (Test-Path $installer)) {
+            throw "Expected installer not found: $installer"
+          }
+          python scripts/build_standalone.py --checksum $installer
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -44,8 +65,8 @@ jobs:
           name: SimpleStipple-windows
           if-no-files-found: error
           path: |
-            dist/SimpleStipple.exe
-            dist/SimpleStipple.exe.sha256
+            dist/SimpleStipple-Setup-*.exe
+            dist/SimpleStipple-Setup-*.exe.sha256
 
   build-macos:
     runs-on: macos-latest
@@ -187,15 +208,16 @@ jobs:
 
       - name: Verify release files
         run: |
-          test -s release/SimpleStipple.exe
-          test -s release/SimpleStipple.exe.sha256
+          version="${GITHUB_REF_NAME#v}"
+          test -s "release/SimpleStipple-Setup-${version}.exe"
+          test -s "release/SimpleStipple-Setup-${version}.exe.sha256"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release/SimpleStipple.exe
-            release/SimpleStipple.exe.sha256
+            release/SimpleStipple-Setup-*.exe
+            release/SimpleStipple-Setup-*.exe.sha256
           fail_on_unmatched_files: true
           body_path: release-notes.md
           overwrite_files: true

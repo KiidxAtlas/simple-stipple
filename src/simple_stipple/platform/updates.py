@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import platform
 import plistlib
 import re
@@ -22,7 +21,7 @@ _LOG = logging.getLogger(__name__)
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 _SHA256_PATTERN = re.compile(r"\A([0-9a-fA-F]{64})(?:\s+[*]?(\S+))?\s*\Z")
-_PACKAGED_FALLBACK_VERSION = "0.3.17"
+_PACKAGED_FALLBACK_VERSION = "0.3.18"
 
 
 def _read_version_from_pyproject() -> str:
@@ -126,8 +125,8 @@ def get_releases_page_url() -> str:
     return f"https://github.com/{_REPO_OWNER}/{_REPO_NAME}/releases"
 
 
-def can_self_update_windows() -> bool:
-    """Return whether this process is a replaceable frozen Windows executable."""
+def can_install_update_windows() -> bool:
+    """Return whether this process can launch the native Windows installer."""
     executable = Path(sys.executable)
     return (
         platform.system() == "Windows"
@@ -148,109 +147,44 @@ def update_staging_path(version: str, system: str | None = None) -> Path:
         "Linux": ".tar.gz",
     }.get(current_system, ".download")
     root = Path(tempfile.gettempdir()) / "simple-stipple-updates"
+    if current_system == "Windows":
+        return root / f"SimpleStipple-Setup-{safe_version}{suffix}"
     return root / f"SimpleStipple-{safe_version}{suffix}"
 
 
-def _windows_updater_script() -> str:
-    """PowerShell handoff that replaces the EXE after this process exits."""
-    return r"""param(
-    [Parameter(Mandatory=$true)][int]$ProcessId,
-    [Parameter(Mandatory=$true)][string]$NewFile,
-    [Parameter(Mandatory=$true)][string]$Target,
-    [Parameter(Mandatory=$true)][string]$LogFile,
-    [switch]$Elevated
-)
-$ErrorActionPreference = "Stop"
-$Backup = "$Target.previous"
-function Write-UpdateLog([string]$Message) {
-    Add-Content -LiteralPath $LogFile -Value "$(Get-Date -Format o) $Message"
-}
-try {
-    Write-UpdateLog "Update handoff started."
-    $Deadline = [DateTime]::UtcNow.AddMinutes(10)
-    while ((Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) -and
-           ([DateTime]::UtcNow -lt $Deadline)) {
-        Start-Sleep -Milliseconds 500
-    }
-    if (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
-        throw "Simple Stipple did not close within ten minutes."
-    }
-    if (-not (Test-Path -LiteralPath $NewFile)) {
-        throw "The staged update is missing."
-    }
-    if (Test-Path -LiteralPath $Backup) {
-        Remove-Item -LiteralPath $Backup -Force
-    }
-    Move-Item -LiteralPath $Target -Destination $Backup -Force
-    try {
-        Move-Item -LiteralPath $NewFile -Destination $Target -Force
-    } catch {
-        Move-Item -LiteralPath $Backup -Destination $Target -Force
-        throw
-    }
-    Start-Process -FilePath $Target
-    Write-UpdateLog "Update installed and relaunched."
-    Remove-Item -LiteralPath $Backup -Force -ErrorAction SilentlyContinue
-} catch {
-    $Message = $_.Exception.Message
-    Write-UpdateLog "Update failed: $Message"
-    if (-not $Elevated -and $Message -match "access|denied|permission") {
-        $Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass " +
-            "-File `"$PSCommandPath`" -ProcessId $ProcessId " +
-            "-NewFile `"$NewFile`" -Target `"$Target`" " +
-            "-LogFile `"$LogFile`" -Elevated"
-        Start-Process -FilePath "powershell.exe" -Verb RunAs `
-            -WindowStyle Hidden -ArgumentList $Arguments
-        Write-UpdateLog "Requested elevated retry."
-    }
-}
-"""
+def launch_windows_installer(installer_path: Path) -> bool:
+    """Launch a verified Inno Setup installer in a detached process.
 
-
-def launch_windows_self_update(staged_executable: Path) -> bool:
-    """Launch a detached updater that replaces and restarts this frozen EXE.
-
-    The caller must quit the application after this returns ``True``. The
-    helper waits for the current process to release the executable, preserves
-    one rollback copy during replacement, and only then starts the new build.
+    Inno Setup handles closing the running application and replacing the
+    installed files. The caller is responsible for verifying the downloaded
+    artifact before invoking this function.
     """
-    if not can_self_update_windows() or not staged_executable.is_file():
+    installer_path = Path(installer_path)
+    if (
+        not can_install_update_windows()
+        or installer_path.suffix.casefold() != ".exe"
+        or not installer_path.is_file()
+    ):
         return False
 
-    staging_dir = staged_executable.parent
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    helper = staging_dir / "install-update.ps1"
-    log_path = staging_dir / "install-update.log"
+    creation_flags = (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
     try:
-        helper.write_text(_windows_updater_script(), encoding="utf-8")
-        creation_flags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        )
         subprocess.Popen(
             [
-                "powershell.exe",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(helper),
-                "-ProcessId",
-                str(os.getpid()),
-                "-NewFile",
-                str(staged_executable),
-                "-Target",
-                str(Path(sys.executable).resolve()),
-                "-LogFile",
-                str(log_path),
+                str(installer_path),
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/CLOSEAPPLICATIONS",
             ],
             close_fds=True,
             creationflags=creation_flags,
         )
     except (OSError, subprocess.SubprocessError):
-        _LOG.exception("Could not launch the Windows update handoff")
+        _LOG.exception("Could not launch the Windows installer")
         return False
     return True
 
@@ -419,8 +353,8 @@ def _get_download_url_for_platform(assets: list[dict]) -> str | None:
                 return asset.get("browser_download_url")
     elif system == "Windows":
         for asset in assets:
-            name = asset.get("name", "").lower()
-            if name.endswith(".exe"):
+            name = str(asset.get("name") or "").casefold()
+            if name.startswith("simplestipple-setup-") and name.endswith(".exe"):
                 return asset.get("browser_download_url")
     elif system == "Linux":
         for asset in assets:
