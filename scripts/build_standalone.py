@@ -47,7 +47,7 @@ def build_command(system: str | None = None) -> list[str]:
         cmd += ["--add-data", _add_data_arg(ROOT / source, destination, current_system)]
 
     if current_system == "Windows":
-        cmd += ["--onefile", "--icon", str(ROOT / "assets" / "icon.ico")]
+        cmd += ["--onedir", "--icon", str(ROOT / "assets" / "icon.ico")]
     elif current_system == "Darwin":
         cmd += ["--icon", str(ROOT / "assets" / "icon.png")]
         cmd += ["--osx-bundle-identifier", "com.kiidxatlas.simple-stipple"]

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.20 — 2026-09-02
+
+### Fixed
+
+- **Windows relaunch after installation** — the Windows payload now uses
+  PyInstaller onedir mode so the installer can relaunch it without the
+  one-file parent-process security validation failure.
+
+
 ## 0.3.19 — 2026-09-02
 
 ### Changed

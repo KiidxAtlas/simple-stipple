@@ -169,7 +169,8 @@ def test_release_build_manifest_and_platform_commands_are_complete(tmp_path: Pat
     macos = build.build_command("Darwin")
     assert "--clean" in windows
     assert "--clean" in macos
-    assert "--onefile" in windows
+    assert "--onedir" in windows
+    assert "--onefile" not in windows
     assert "--windowed" in windows
     assert "--collect-all=scipy" in windows
     assert str(build.ROOT / "assets" / "icon.ico") in windows

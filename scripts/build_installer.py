@@ -14,7 +14,7 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_SCRIPT = ROOT / "installer" / "SimpleStipple.iss"
 DIST_DIR = ROOT / "dist"
-PAYLOAD = DIST_DIR / "SimpleStipple.exe"
+PAYLOAD = DIST_DIR / "SimpleStipple"
 
 
 def project_version() -> str:
@@ -69,8 +69,8 @@ def build_command(iscc: Path, version: str) -> list[str]:
 def build_installer(*, iscc: Path | None = None, version: str | None = None) -> Path:
     """Compile and return the versioned Windows installer artifact."""
     resolved_version = version or project_version()
-    if not PAYLOAD.is_file():
-        raise FileNotFoundError(f"PyInstaller payload is missing: {PAYLOAD}")
+    if not (PAYLOAD / "SimpleStipple.exe").is_file():
+        raise FileNotFoundError(f"PyInstaller payload is missing: {PAYLOAD / 'SimpleStipple.exe'}")
 
     compiler = iscc or find_iscc()
     subprocess.run(
