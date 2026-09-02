@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.19 — 2026-09-02
+
+### Changed
+
+- **Test release** — publishes another native Windows installer to verify
+  the `.18 → .19` update flow.
+
+
 ## 0.3.18 — 2026-09-01
 
 ### Changed
