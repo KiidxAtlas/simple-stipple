@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simple-stipple"
-version = "0.3.16"
+version = "0.3.17"
 description = "Desktop app for drafting, tracing, and generating pattern fills for laser and vector workflows."
 keywords = ["laser engraving", "vector graphics", "DXF", "SVG", "stipple", "maker tools"]
 classifiers = [

@@ -1,5 +1,12 @@
 # Changelog
-## 0.3.16 — 2026-09-01
+
+## 0.3.17 — 2026-09-01
+
+### Fixed
+
+- **SciPy modules in Windows bundle** — collect SciPy’s complete package so
+  Trace no longer fails on `RigidTransform` or `_decomp_update` imports.
+
 
 ### Fixed
 

@@ -40,6 +40,7 @@ def build_command(system: str | None = None) -> list[str]:
         "--hidden-import=scipy.spatial",
         "--hidden-import=scipy.spatial.distance",
         "--hidden-import=scipy.special",
+        "--collect-all=scipy",
     ]
 
     for source, destination in DATA_FILES:
