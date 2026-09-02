@@ -24,9 +24,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+      - run: uv sync --extra dev
       - name: Install libegl1
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libegl1
-      - run: uv run ruff check .
+      - run: uvx ruff check .
       - name: Circular import check
         run: uv run python scripts/check_circular_imports.py
       - run: uv run python -m compileall -q src tests
