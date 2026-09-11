@@ -31,6 +31,7 @@ class GeometryPreflight:
     minimum_segment: float | None
     tolerance: float
     near_closed: int = 0
+    self_intersections: int = 0
     issues: tuple[GeometryIssue, ...] = ()
 
     @property
@@ -42,6 +43,7 @@ class GeometryPreflight:
             and self.duplicates == 0
             and self.tiny_paths == 0
             and self.near_closed == 0
+            and self.self_intersections == 0
         )
 
     def summary(self) -> str:
@@ -51,6 +53,7 @@ class GeometryPreflight:
             f"{self.invalid} invalid · {self.duplicates} duplicate · "
             f"{self.zero_segments} zero-length segments · {self.tiny_paths} tiny · "
             f"{self.near_closed} nearly closed"
+            f" · {self.self_intersections} self-intersecting"
         )
 
 
@@ -63,9 +66,21 @@ def scale_tolerance(polys: list[list[tuple[float, float]]]) -> float:
     return min(0.05, max(0.001, diagonal * 1e-5))
 
 
+def _revisited_vertex(poly: list[tuple[float, float]], tolerance: float) -> tuple[float, float] | None:
+    """Return a non-adjacent repeated vertex, excluding a normal ring closure."""
+    for index, point in enumerate(poly):
+        for previous in range(index - 1):
+            if math.dist(point, poly[previous]) > tolerance:
+                continue
+            if previous == 0 and index == len(poly) - 1:
+                continue
+            return point
+    return None
+
+
 def analyze_geometry(polys: list[list[tuple[float, float]]]) -> GeometryPreflight:
     tolerance = scale_tolerance(polys)
-    closed = invalid = duplicates = zero = tiny = near_closed = 0
+    closed = invalid = duplicates = zero = tiny = near_closed = self_intersections = 0
     minimum: float | None = None
     signatures: set[tuple[tuple[float, float], ...]] = set()
     issues: list[GeometryIssue] = []
@@ -166,6 +181,27 @@ def analyze_geometry(polys: list[list[tuple[float, float]]]) -> GeometryPrefligh
                 issues.append(
                     GeometryIssue("invalid", path_index, poly[0], "Unreadable open path", "error")
                 )
+        if len(poly) >= 4:
+            try:
+                line = LineString(poly)
+                if not line.is_simple:
+                    self_intersections += 1
+                    junction = _revisited_vertex(poly, tolerance)
+                    issues.append(
+                        GeometryIssue(
+                            "self_intersection",
+                            path_index,
+                            junction or poly[0],
+                            (
+                                "Path revisits a junction; split the branch into separate paths"
+                                if junction is not None
+                                else "Path crosses itself; split it at the crossing"
+                            ),
+                            "error",
+                        )
+                    )
+            except (TypeError, ValueError):
+                pass
     return GeometryPreflight(
         paths=len(polys),
         closed=closed,
@@ -177,5 +213,6 @@ def analyze_geometry(polys: list[list[tuple[float, float]]]) -> GeometryPrefligh
         minimum_segment=minimum,
         tolerance=tolerance,
         near_closed=near_closed,
+        self_intersections=self_intersections,
         issues=tuple(issues),
     )

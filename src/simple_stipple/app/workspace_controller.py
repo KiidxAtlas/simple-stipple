@@ -146,7 +146,7 @@ class WorkspaceController(_WorkspaceStateController):
 
         self._app._workspace_menu.addSeparator()
 
-        self._app._repo_dialog_action = QAction("Repository Sync…", self._app)
+        self._app._repo_dialog_action = QAction("Open Repository", self._app)
         self._app._repo_dialog_action.setShortcut(QKeySequence(self._app._shortcut("tab.repo")))
         self._app._repo_dialog_action.triggered.connect(self._app._open_repo_dialog)
         self._app._workspace_menu.addAction(self._app._repo_dialog_action)

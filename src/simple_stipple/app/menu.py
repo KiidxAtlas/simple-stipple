@@ -294,13 +294,19 @@ class MenuController:
         )
         self._app._workspace_title_label.setToolTip(workspace_detail)
         self._app._workspace_title_label.setAccessibleDescription(workspace_detail)
-        if self._app._workspace_dirty:
+        if getattr(self._app, "_restored_recovery_path", None) is not None:
+            chip_text, chip_tone = "Recovered workspace · save it", "warn"
+        elif self._app._workspace_dirty:
             chip_text, chip_tone = "Unsaved changes", "warn"
         elif self._app._workspace_path is None:
             chip_text, chip_tone = "Not saved", "neutral"
         else:
             chip_text, chip_tone = "Saved", "success"
         self._app._workspace_state_chip.setText(chip_text)
+        self._app._workspace_state_chip.setToolTip(f"{chip_text}. {workspace_detail}")
+        self._app._workspace_state_chip.setAccessibleDescription(
+            f"Workspace state: {chip_text}. {workspace_detail}"
+        )
         self._app._workspace_state_chip.setProperty("tone", chip_tone)
         refresh_style(self._app._workspace_state_chip)
         # Disable save actions if there's no workspace content
@@ -486,7 +492,7 @@ class CommandController:
             "workspace.open",
             "workspace.save",
             "workspace.save_as",
-            "tab.repo",  # Repository Sync menu action owns this shortcut
+            "tab.repo",  # Repository menu action owns this shortcut
         }
         for cmd in self._build_commands():
             if cmd.action_id not in _MENU_HANDLED:
@@ -614,14 +620,6 @@ class CommandController:
                     lambda page_id=spec.page_id: self._app._switch_to_page(page_id),  # type: ignore[misc]
                 )
             )
-        cmds.append(
-            CommandSpec(
-                "tab.repo",
-                "App: Repository Sync",
-                "repo git sync pull push commit",
-                self._app._open_repo_dialog,
-            )
-        )
         return cmds
 
     def _menu_redo(self) -> None:

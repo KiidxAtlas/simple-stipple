@@ -444,9 +444,8 @@ def test_detection_handles_hand_drawn_closure_and_rotation() -> None:
     assert detect_primitive(clean) is not None, "rotation alone must not defeat detection"
 
 
-def test_merge_intersecting_open_lines_welds_the_junction(app: QApplication) -> None:
-    """Merging crossing open shapes produces ONE polyline whose junction point
-    appears once per arm — all copies drag together like a connected polyline."""
+def test_merge_intersecting_open_lines_keeps_simple_branch_arms(app: QApplication) -> None:
+    """A crossing is a graph, so Merge keeps its four editable arms."""
     canvas = DxfCanvas()
     canvas.resize(600, 400)
     canvas.add_polylines_state(
@@ -456,15 +455,10 @@ def test_merge_intersecting_open_lines_welds_the_junction(app: QApplication) -> 
         ]
     )
     canvas.set_selection([e.id for e in canvas._entities])
-    assert canvas.merge_selected_segments_to_objects() == 1
-    assert len(canvas._entities) == 1
-    pts = canvas._entities[0].points
-    junction_copies = [
-        i for i, p in enumerate(pts) if abs(p[0] - 20.0) < 1e-6 and abs(p[1] - 10.0) < 1e-6
-    ]
-    assert len(junction_copies) == 3  # T junction visited once per arm
-    linked = canvas._linked_vertices_by_id(canvas._entities[0].id, junction_copies[0])
-    assert len(linked) == 3, "all junction copies must drag together"
+    assert canvas.merge_selected_segments_to_objects() == 4
+    assert len(canvas._entities) == 4
+    assert all(len(entity.points) == 2 for entity in canvas._entities)
+    assert all((20.0, 10.0) in entity.points for entity in canvas._entities)
     canvas.close()
 
 

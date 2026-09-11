@@ -94,6 +94,10 @@ class SettingsDialog(QDialog):
         ("persistent_notifications", "Keep canvas notifications visible longer", False),
     ]
 
+    _PRODUCTION_TOGGLES = [
+        ("export_review_enabled", "Show production review before export", True),
+    ]
+
     _SNAP_TOGGLES = [
         ("grid_visible", "Show grid by default", True),
         ("grid_snap", "Snap to grid by default", False),
@@ -187,6 +191,7 @@ class SettingsDialog(QDialog):
         self._entries: dict[str, QLineEdit] = {}
         self._toggles: dict[str, QCheckBox] = {}
         self._trace_default_entries: dict[str, QLineEdit] = {}
+        self._production_entries: dict[str, QLineEdit] = {}
         self._unit_combo: QComboBox | None = None
         self._smoothing_combo: QComboBox | None = None
         self._smooth_iterations_edit: QLineEdit | None = None
@@ -254,6 +259,33 @@ class SettingsDialog(QDialog):
         _, form = self._form_card(content_layout, "Outputs & Conversion")
         for key, label in self._FOLDER_FIELDS[2:]:
             self._add_folder_field(form, key, label)
+        for key, label, default in self._PRODUCTION_TOGGLES:
+            self._add_toggle(form, key, label, default)
+        profile_name = self._add_text_field(
+            form,
+            "Machine profile",
+            str(self._settings.get("machine_profile_name", "No machine selected")),
+        )
+        profile_name.setToolTip(
+            "A label used by the export review; this app never controls hardware."
+        )
+        self._production_entries["machine_profile_name"] = profile_name
+        for key, label, numeric_default in (
+            ("machine_bed_width_mm", "Machine bed width", 0.0),
+            ("machine_bed_height_mm", "Machine bed height", 0.0),
+            ("machine_feed_rate_mm_s", "Cut feed rate", 0.0),
+            ("machine_kerf_mm", "Kerf", 0.0),
+        ):
+            entry = self._add_suffix_field(
+                form,
+                label,
+                str(self._settings.get(key, numeric_default)),
+                "mm/s" if key == "machine_feed_rate_mm_s" else "mm",
+                QDoubleValidator(0.0, 1_000_000.0, 4, self),
+                width=100,
+            )
+            entry.setToolTip("Use 0 when this machine assumption is not configured.")
+            self._production_entries[key] = entry
 
         _, form = self._form_card(content_layout, "Repository")
         for key, label in self._REPO_FIELDS:
@@ -674,6 +706,15 @@ class SettingsDialog(QDialog):
         for key, toggle in self._toggles.items():
             self._settings[key] = toggle.isChecked()
 
+        for key, entry in self._production_entries.items():
+            if key == "machine_profile_name":
+                self._settings[key] = entry.text().strip() or "No machine selected"
+                continue
+            try:
+                self._settings[key] = float(entry.text() or 0.0)
+            except ValueError:
+                self._settings[key] = 0.0
+
         trace_defaults = dict(self._settings.get("trace_defaults") or {})
         for key, entry in self._trace_default_entries.items():
             v = entry.text().strip()
@@ -752,6 +793,8 @@ class SettingsDialog(QDialog):
             toggle.setChecked(bool(defaults.get(key, False)))
         for entry in self._trace_default_entries.values():
             entry.clear()
+        for key, entry in self._production_entries.items():
+            entry.setText(str(defaults.get(key, "")))
         if self._unit_combo is not None:
             self._unit_combo.setCurrentIndex(
                 max(0, self._unit_combo.findData(defaults["unit_system"]))

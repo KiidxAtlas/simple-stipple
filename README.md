@@ -90,6 +90,18 @@ python -m pip install -e '.[cad]'
 
 Try the included [sample SVG projects](examples/) if you want to test the workflow before preparing your own artwork.
 
+### Headless pattern generation
+
+For repeatable shop jobs or CI, generate a pattern without opening the desktop UI:
+
+```bash
+simple-stipple pattern outline.dxf result.dxf --preset honeycomb --size 1 --spacing 0.25
+```
+
+Use `--preset stipple --seed 42` for a deterministic stipple-dot output. Pass a folder for
+both `INPUT` and `OUTPUT` to process a batch (add `--recursive` for subfolders). Trace image
+folders headlessly with `simple-stipple trace INPUT OUTPUT --width-mm 100`.
+
 For the complete in-app guide, use **Help → User Manual**. The architecture and extension boundaries are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## File and safety notes

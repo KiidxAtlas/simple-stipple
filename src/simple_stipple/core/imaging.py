@@ -12,6 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageOps
+from shapely.geometry import Point as ShapelyPoint  # type: ignore[import-untyped]
 
 # Trace imaging is intentionally co-located with raster preparation: both are
 # pure Pillow/OpenCV transformations that translate between a source image and
@@ -47,6 +48,64 @@ def _close_poly(poly: Poly, tol: float = _CLOSE_TOL) -> Poly:
     if abs(poly[0][0] - poly[-1][0]) <= tol and abs(poly[0][1] - poly[-1][1]) <= tol:
         return list(poly)
     return list(poly) + [poly[0]]
+
+
+def tone_stipple(
+    image: Image.Image,
+    outline,
+    *,
+    dots: int = 1_000,
+    max_radius_mm: float = 0.35,
+    gamma: float = 1.0,
+    seed: int = 1,
+    segments: int = 16,
+) -> list[Poly]:
+    """Turn image darkness into deterministically placed, variable-size dots.
+
+    The image maps across ``outline.bounds``. Darker pixels receive more and
+    larger dots, while the outline keeps every emitted dot inside the part.
+    """
+    if dots <= 0 or max_radius_mm <= 0 or gamma <= 0 or segments < 6:
+        return []
+    if outline is None or getattr(outline, "is_empty", True):
+        return []
+    min_x, min_y, max_x, max_y = outline.bounds
+    width, height = max_x - min_x, max_y - min_y
+    if width <= 0 or height <= 0:
+        return []
+    gray = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+    if gray.size == 0:
+        return []
+    darkness = np.power(np.clip(1.0 - gray, 0.0, 1.0), gamma)
+    if float(darkness.max()) <= 1e-6:
+        return []
+    rng = np.random.default_rng(seed)
+    result: list[Poly] = []
+    attempts = max(dots * 30, 500)
+    image_height, image_width = darkness.shape
+    for _ in range(attempts):
+        if len(result) >= dots:
+            break
+        x = float(rng.uniform(min_x, max_x))
+        y = float(rng.uniform(min_y, max_y))
+        px = min(image_width - 1, max(0, int((x - min_x) / width * image_width)))
+        py = min(image_height - 1, max(0, int((max_y - y) / height * image_height)))
+        strength = float(darkness[py, px])
+        if strength <= 0 or float(rng.random()) > strength:
+            continue
+        radius = max_radius_mm * (0.2 + 0.8 * strength)
+        point = ShapelyPoint(x, y)
+        if outline.boundary.distance(point) < radius or not outline.contains(point):
+            continue
+        circle = [
+            (
+                x + radius * math.cos(2 * math.pi * index / segments),
+                y + radius * math.sin(2 * math.pi * index / segments),
+            )
+            for index in range(segments)
+        ]
+        result.append(circle + [circle[0]])
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +500,7 @@ __all__ = [
     "filter_contours",
     "image_to_outlines",
     "prepare_engraving_image",
+    "tone_stipple",
     "scale_to_mm",
     "simplify_contours",
 ]
@@ -462,6 +522,7 @@ class RasterEngravingSpec:
     passes: int = 1
     invert: bool = False
     rotation_deg: float = 0.0
+    dither: str = "continuous"
 
     def validated(self) -> RasterEngravingSpec:
         if self.width_mm <= 0 or self.height_mm <= 0:
@@ -480,7 +541,45 @@ class RasterEngravingSpec:
             raise ValueError("Passes must be between 1 and 100.")
         if not math.isfinite(self.rotation_deg):
             raise ValueError("Rotation must be a finite angle.")
+        if self.dither not in {"continuous", "floyd_steinberg", "ordered", "halftone"}:
+            raise ValueError("Dither must be continuous, Floyd–Steinberg, ordered, or halftone.")
         return self
+
+
+def _dither_power_map(image: Image.Image, method: str) -> Image.Image:
+    """Convert a continuous power map to a deterministic binary dither."""
+    if method == "continuous":
+        return image
+    if method == "floyd_steinberg":
+        return image.convert("1", dither=Image.Dither.FLOYDSTEINBERG).convert("L")
+
+    thresholds: tuple[tuple[int, ...], ...] = (
+        (0, 8, 2, 10),
+        (12, 4, 14, 6),
+        (3, 11, 1, 9),
+        (15, 7, 13, 5),
+    )
+    if method == "halftone":
+        thresholds = (
+            (0, 48, 12, 60, 3, 51, 15, 63),
+            (32, 16, 44, 28, 35, 19, 47, 31),
+            (8, 56, 4, 52, 11, 59, 7, 55),
+            (40, 24, 36, 20, 43, 27, 39, 23),
+            (2, 50, 14, 62, 1, 49, 13, 61),
+            (34, 18, 46, 30, 33, 17, 45, 29),
+            (10, 58, 6, 54, 9, 57, 5, 53),
+            (42, 26, 38, 22, 41, 25, 37, 21),
+        )
+    matrix = np.asarray(thresholds, dtype=np.float32)
+    values = np.asarray(image, dtype=np.float32)
+    tiled = np.tile(
+        (matrix + 0.5) * (255.0 / matrix.size),
+        (
+            math.ceil(values.shape[0] / matrix.shape[0]),
+            math.ceil(values.shape[1] / matrix.shape[1]),
+        ),
+    )[: values.shape[0], : values.shape[1]]
+    return Image.fromarray(np.where(values > tiled, 255, 0).astype(np.uint8), mode="L")
 
 
 def prepare_engraving_image(
@@ -542,7 +641,7 @@ def prepare_engraving_image(
                 ImageDraw.Draw(ring).polygon(pixels, fill=1)
                 mask = ImageChops.logical_xor(mask, ring)
         result = Image.composite(result, Image.new("L", result.size, 255), mask)
-    return result
+    return _dither_power_map(result, spec.dither)
 
 
 def export_raster_job(

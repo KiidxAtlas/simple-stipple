@@ -40,6 +40,7 @@ from simple_stipple.core.cad.detection import (
     convert_to_parametric,
     detected_entities,
 )
+from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.core.formats.service import DxfService, summarize_dxf_import_report
 from simple_stipple.features.base import BasePage
@@ -241,12 +242,16 @@ class DraftPage(BasePage):
         )
         self._canvas.set_context_menu_profile("draft")
         self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
+        profile = machine_profile_from_settings(self._settings)
+        self._canvas.set_machine_bed(profile.bed_width_mm, profile.bed_height_mm)
         self._canvas.set_selection_follows_geometry(True)
-        self._canvas.set_empty_message("Start a drawing\nImport a vector, draw, or trace an image")
+        self._canvas.set_empty_message(
+            "Start a project\nImport a vector, draw a part, or trace an image"
+        )
         self._canvas.set_empty_actions(
             [
-                ("Import vector…", self._browse_vector),
-                ("Draw one", lambda: self._canvas.set_mode("draw")),
+                ("Start from vector…", self._browse_vector),
+                ("Draw a part", lambda: self._canvas.set_mode("draw")),
                 ("Trace an image", lambda: self.openPageRequested.emit("trace")),
             ]
         )
@@ -629,6 +634,10 @@ class DraftPage(BasePage):
             [list(record["polyline"]) for record in export_plan.records],
             action="Export",
             allow_open_paths=True,
+            unit=str(getattr(self._canvas, "_unit_system", "mm")),
+            profile=machine_profile_from_settings(self._settings),
+            operations=tuple(self._canvas.layer_names()),
+            show_review=bool(self._settings.get("export_review_enabled", False)),
         )
         if not proceed:
             self._canvas.set_geometry_health_visible(True, announce=True)
@@ -670,9 +679,7 @@ class DraftPage(BasePage):
                 ],
                 entity_meta=[record.get("meta") for record in export_plan.first_layer_records],
                 extra_layer_records=export_plan.extra_layer_records,
-                entity_groups=[
-                    record.get("group") for record in export_plan.first_layer_records
-                ],
+                entity_groups=[record.get("group") for record in export_plan.first_layer_records],
                 group_labels=export_plan.group_labels,
                 object_names=[
                     record.get("object_name") for record in export_plan.first_layer_records
@@ -1136,9 +1143,7 @@ class DraftPage(BasePage):
         if object_names:
             runtime = self._rt()
             for entry in object_names:
-                entity_id = id_by_layer_index.get(
-                    (str(entry.get("layer")), entry.get("index"))
-                )
+                entity_id = id_by_layer_index.get((str(entry.get("layer")), entry.get("index")))
                 name = entry.get("name")
                 if entity_id is not None and name:
                     runtime.rename_shape(str(entry.get("layer")), entity_id, str(name))

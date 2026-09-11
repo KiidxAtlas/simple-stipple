@@ -24,7 +24,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
+    QHBoxLayout,
     QLineEdit,
+    QListWidgetItem,
     QMessageBox,
     QVBoxLayout,
     QWidget,
@@ -39,7 +41,12 @@ from simple_stipple.core.formats.service import (
 from simple_stipple.core.formats.svg import read_svg_images
 from simple_stipple.core.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
 from simple_stipple.core.patterns.presets import ensure_builtins_seeded
-from simple_stipple.core.patterns.processing import PATTERNS, PatternProcessor
+from simple_stipple.core.patterns.processing import (
+    PatternProcessor,
+    available_patterns,
+    load_generator_entry_points,
+)
+from simple_stipple.core.cad.production import machine_profile_from_settings, order_for_cut
 from simple_stipple.canvas.constants import DIM
 from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.features.base import BasePage
@@ -72,8 +79,13 @@ from simple_stipple.features.pattern.session import (
 from simple_stipple.ui.dialogs.laserstar_export_dialog import LaserStarExportDialog
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.features.pattern.form import (
+    PATTERN_SUMMARY_FIELDS,
     collect_pattern_params,
+    fill_subtitle,
+    outline_subtitle,
+    pattern_subtitle,
     restore_form_state,
+    zones_subtitle,
 )
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
@@ -262,7 +274,8 @@ class PatternPage(BasePage):
                 save_settings(self._settings)
             except OSError:
                 LOGGER.exception("Failed to persist seeded pattern presets")
-        self._base_patterns: list[str] = list(PATTERNS)
+        load_generator_entry_points()
+        self._base_patterns: list[str] = list(available_patterns())
         self._load_state()
 
         self._preview_polys_cache: list[list[tuple[float, float]]] = []
@@ -323,6 +336,12 @@ class PatternPage(BasePage):
 
         build_left(self, left)
         build_right(self, right)
+        drawer_controls = QHBoxLayout()
+        drawer_controls.setSpacing(6)
+        drawer_controls.addStretch()
+        self._splitter.add_drawer_toggle_to(drawer_controls)
+        self._canvas_splitter.add_drawer_toggle_to(drawer_controls)
+        root.insertLayout(0, drawer_controls)
         self._set_advanced_mode(self._advanced_mode_cb.isChecked())
         self._refresh_zone_list()
         refresh_pattern_properties_panel(self)
@@ -731,6 +750,19 @@ class PatternPage(BasePage):
             self._status, text, color, hide_when_empty=False, neutral_role="status-chip"
         )
 
+    def show_handoff_receipt(
+        self, source_label: str, polys: list[list[tuple[float, float]]]
+    ) -> None:
+        """Explain what arrived after a cross-page transfer."""
+        closed = sum(1 for poly in polys if len(poly) >= 4 and poly[0] == poly[-1])
+        open_count = len(polys) - closed
+        detail = f"{len(polys)} outline{'s' if len(polys) != 1 else ''} loaded from {source_label}"
+        if open_count:
+            detail += f" · {open_count} open path{'s' if open_count != 1 else ''} need Draft before patterning"
+        else:
+            detail += f" · {closed} closed region{'s' if closed != 1 else ''} ready to pattern"
+        self._set_status(detail + ". Next: choose a pattern, then review Output.", STATUS_OK)
+
     def _parse_float_field(
         self,
         entry,
@@ -920,20 +952,15 @@ class PatternPage(BasePage):
     # ── Continuous validation ─────────────────────────────────────────────────
 
     def _refresh_preflight_markers(self, *_args) -> None:
-        """Put preflight findings on the part while it is being designed.
-
-        Preflight already produced records carrying a point and a severity; it
-        just ran at export, where a fix is expensive. It now runs on the same
-        debounce as the solver and draws on the canvas.
-        """
+        """Summarize all findings; reserve endpoint overlays for explicit review."""
         if not hasattr(self, "_output_preflight"):
             return
         from simple_stipple.core.cad.preflight import analyze_geometry
         from simple_stipple.features.pattern.export import density_issues
 
         report = analyze_geometry([list(poly) for poly in self._edit_polys])
-        # An open endpoint is only informational when open paths are a valid
-        # output. When they are not, it is the finding the user most needs.
+        # Open endpoints still matter to export readiness, but a line's normal
+        # endpoints should not look like errors during everyday drawing.
         allow_open = self._export_open_paths_cb.isChecked()
         issues = [
             issue
@@ -950,18 +977,62 @@ class PatternPage(BasePage):
                 issues.extend(density_issues(self._snapshot_zone_jobs(), minimum))
             except ValueError:
                 pass  # nothing solvable yet; geometry findings still stand
-        self._canvas.set_issue_markers(issues)
+        self._canvas.set_issue_markers(
+            [issue for issue in issues if issue.kind not in {"open_start", "open_end"}]
+        )
         if not self._edit_polys:
             text = "Preflight · Load an outline to begin"
         elif issues:
             errors = sum(1 for issue in issues if issue.severity == "error")
             text = (
                 f"Preflight · {len(issues)} finding{'s' if len(issues) != 1 else ''}"
-                f"{f' ({errors} blocking)' if errors else ''} — marked on the canvas"
+                f"{f' ({errors} blocking)' if errors else ''} — review with Geometry Health"
             )
         else:
             text = f"Preflight · {report.paths} paths, no findings"
         self._output_preflight.setText(text)
+        if hasattr(self, "_geometry_findings") and not self._geometry_findings.isHidden():
+            self._populate_geometry_findings(report.issues, issues)
+
+    def _populate_geometry_findings(self, geometry_issues, output_issues) -> None:
+        findings = list(geometry_issues)
+        findings.extend(issue for issue in output_issues if issue not in findings)
+        current = self._geometry_findings.currentItem()
+        selected = current.data(Qt.ItemDataRole.UserRole) if current else None
+        self._geometry_findings.blockSignals(True)
+        self._geometry_findings.clear()
+        for issue in findings:
+            message = {"open_start": "Start endpoint", "open_end": "End endpoint"}.get(
+                issue.kind, issue.message
+            )
+            item = QListWidgetItem(f"{message} · Path {issue.path_index + 1}")
+            item.setData(Qt.ItemDataRole.UserRole, issue)
+            self._geometry_findings.addItem(item)
+            if issue == selected:
+                self._geometry_findings.setCurrentItem(item)
+        if not findings:
+            self._geometry_findings.addItem("No geometry findings")
+        height = sum(
+            self._geometry_findings.sizeHintForRow(row)
+            for row in range(self._geometry_findings.count())
+        )
+        self._geometry_findings.setFixedHeight(
+            min(140, height + 2 * self._geometry_findings.frameWidth() + 8)
+        )
+        self._geometry_findings.blockSignals(False)
+
+    def _check_geometry(self) -> None:
+        self._canvas_splitter._set_drawer_open(True)
+        self._geometry_findings.setVisible(True)
+        self._geometry_markers_cb.setChecked(True)
+        self._canvas.set_geometry_health_visible(True)
+        self._refresh_preflight_markers()
+
+    def _select_geometry_finding(self, item, _previous=None) -> None:
+        if item is not None:
+            finding = item.data(Qt.ItemDataRole.UserRole)
+            if finding is not None:
+                self._on_issue_marker_clicked(finding)
 
     def _on_issue_marker_clicked(self, marker) -> bool:
         """Select the path a finding belongs to, so the fix is one click away."""
@@ -1448,14 +1519,23 @@ class PatternPage(BasePage):
                 "Export blocked: minimum engraving power exceeds maximum power.", STATUS_ERR
             )
             return
-        proceed, _report = export_preflight(
-            self,
-            [list(poly) for poly in self._edit_polys],
-            action="Export",
-            allow_open_paths=self._export_open_paths_cb.isChecked(),
-        )
+        health_visible = bool(self._canvas.get_view_state()["geometry_health_visible"])
+        self._canvas.set_geometry_health_visible(True)
+        try:
+            proceed, _report = export_preflight(
+                self,
+                [list(poly) for poly in self._edit_polys],
+                action="Export",
+                allow_open_paths=self._export_open_paths_cb.isChecked(),
+                unit=str(self._settings.get("unit_system", "mm")),
+                profile=machine_profile_from_settings(self._settings),
+                operations=tuple(operation.label for operation in operations),
+                show_review=bool(self._settings.get("export_review_enabled", False)),
+            )
+        finally:
+            self._canvas.set_geometry_health_visible(health_visible)
         if not proceed:
-            self._canvas.set_geometry_health_visible(True, announce=True)
+            self._check_geometry()
             self._set_status("Export paused — review highlighted geometry.", STATUS_WARN)
             return
         # Export solves at full quality regardless of the preview setting: the
@@ -1484,6 +1564,7 @@ class PatternPage(BasePage):
             passes=self._engrave_passes.value(),
             invert=self._engrave_invert.isChecked(),
             rotation_deg=self._engrave_rotation.value(),
+            dither=str(self._engrave_dither.currentData()),
         )
         return self._engraving_image_path, job, self._engraving_mask_polys()
 
@@ -1500,6 +1581,11 @@ class PatternPage(BasePage):
             QMessageBox.warning(self, "Export", str(exc))
             return
         vectors = list(self._preview_polys_cache) if wants_vectors else []
+        # Output order is a production choice, not a renderer detail.  Apply
+        # the existing checkbox consistently before every vector writer,
+        # including SVG/DXF packages that previously ignored it.
+        if vectors and self._optimize_paths_cb.isChecked():
+            vectors = order_for_cut(vectors)
         if self._export_format == "laserstar":
             self._write_laserstar_package(
                 operations, vectors, raster_source, engraving_job, raster_mask
@@ -1629,6 +1715,7 @@ class PatternPage(BasePage):
                             "pattern": value,
                             "custom_tile_polys": self._custom_tile_polys,
                         },
+                        restore_document_lattice=not self._loading_zone,
                     )
                 finally:
                     self._applying_tile_settings = False
@@ -1647,6 +1734,8 @@ class PatternPage(BasePage):
         self._refresh_section_subtitles()
 
     def _update_custom_pattern_actions(self, value: str):
+        if hasattr(self, "_tile_library_widget"):
+            self._tile_library_widget.setVisible(self._pattern_key(value) == "Custom Tile")
         return update_custom_pattern_actions(self, value)
 
     def use_custom_tile(self, polys: list[list[tuple[float, float]]]):
@@ -1686,98 +1775,60 @@ class PatternPage(BasePage):
         if not getattr(self, "_pattern_section", None):
             return
         path = self._dxf_edit.text().strip() if hasattr(self, "_dxf_edit") else ""
-        if path:
-            try:
-                w = float(self._scale_w.text() or "0")
-                h = float(self._scale_h.text() or "0")
-            except ValueError:
-                w = h = 0.0
-            dims = f"{w:.1f} × {h:.1f} mm" if w and h else "—"
-            self._shape_section.set_subtitle(f"{Path(path).name} · {dims}")
-        else:
-            self._shape_section.set_subtitle("No file loaded", dim=True)
-        _PATTERN_KEY_DIMS: dict[str, tuple[str, str]] = {
-            "Honeycomb": ("_hex_r", "mm"),
-            "Flow Lines": ("_flow_spacing", "mm"),
-            "Gradient Honeycomb": ("_grad_r_max", "mm"),
-            "Stipple Dots": ("_stip_spacing", "mm"),
-            "Brick": ("_brick_w", "mm"),
-            "Mesh": ("_mesh_spacing", "mm"),
-            "Basketweave": ("_basket_gap", "mm"),
-            "Braid": ("_braid_spacing", "mm"),
-            "Fish Scale": ("_fish_w", "mm"),
-            "Voronoi": ("_vor_cells", "cells"),
-            "Topographic": ("_topo_spacing", "mm"),
-        }
-        pname = self._pattern_combo.currentText() if hasattr(self, "_pattern_combo") else ""
-        if pname and pname != "— None —":
-            key_dim = ""
-            if pname in _PATTERN_KEY_DIMS:
-                attr, unit = _PATTERN_KEY_DIMS[pname]
-                widget = getattr(self, attr, None)
-                if widget is not None and hasattr(widget, "text"):
-                    val = widget.text().strip()
-                    if val:
-                        key_dim = f" · {val} {unit}".rstrip()
-            mod_parts: list[str] = []
-            try:
-                fade = (
-                    float(self._border_fade.text() or DEFAULT_BORDER_FADE)
-                    if hasattr(self, "_border_fade")
-                    else 0.0
-                )
-                if fade > 0:
-                    mod_parts.append(f"Fade {fade:.1f}mm")
-            except ValueError:
-                # A partially typed optional value is omitted from the subtitle.
-                mod_parts.clear()
-            mod_str = " · " + " · ".join(mod_parts) if mod_parts else ""
-            self._pattern_section.set_subtitle(f"{pname}{key_dim}{mod_str}")
-        else:
-            self._pattern_section.set_subtitle("None", dim=True)
+        text, dim = outline_subtitle(
+            path,
+            self._scale_w.text() if path else "",
+            self._scale_h.text() if path else "",
+        )
+        self._shape_section.set_subtitle(text, dim=dim)
+
+        name = self._pattern_combo.currentText() if hasattr(self, "_pattern_combo") else ""
+        attr, unit = PATTERN_SUMMARY_FIELDS.get(name, ("", ""))
+        widget = getattr(self, attr, None)
+        dimension = widget.text() if widget is not None and hasattr(widget, "text") else ""
+        text, dim = pattern_subtitle(
+            name,
+            dimension,
+            unit,
+            self._border_fade.text() if hasattr(self, "_border_fade") else "0",
+        )
+        self._pattern_section.set_subtitle(text, dim=dim)
+
         if hasattr(self, "_fill_mode_combo"):
             mode = self._fill_mode_combo.currentData() or "none"
-            if mode == "none":
-                self._fill_section.set_subtitle("None", dim=True)
-            else:
-                spacing = self._fill_spacing.text().strip() or "?"
-                fill_targets: list[str] = []
-                if (
+            text, dim = fill_subtitle(
+                mode,
+                self._fill_mode_combo.currentText(),
+                self._fill_spacing.text() if mode != "none" else "",
+                target_outline=bool(
                     getattr(self, "_fill_target_outline_cb", None)
                     and self._fill_target_outline_cb.isChecked()
-                ):
-                    fill_targets.append("Outline")
-                if (
+                ),
+                target_pattern=bool(
                     getattr(self, "_fill_target_pattern_cb", None)
                     and self._fill_target_pattern_cb.isChecked()
-                ):
-                    fill_targets.append("Pattern")
-                target_str = " + ".join(fill_targets) if fill_targets else "No target"
-                fill_line_count = len(
-                    (self._preview_categories if hasattr(self, "_preview_categories") else {}).get(
-                        "fill", []
-                    )
-                )
-                count_str = f" · {fill_line_count} lines" if fill_line_count else ""
-                self._fill_section.set_subtitle(
-                    f"{self._fill_mode_combo.currentText()} · {spacing} mm · {target_str}{count_str}"
-                )
+                ),
+                line_count=len(getattr(self, "_preview_categories", {}).get("fill", [])),
+            )
+            self._fill_section.set_subtitle(text, dim=dim)
         if hasattr(self, "_zones_section") and isinstance(self._zones_section, CollapsibleSection):
-            n = len(self._zones) if hasattr(self, "_zones") else 0
-            if n == 0:
-                self._zones_section.set_subtitle(
-                    "Optional · different pattern for a selection", dim=True
-                )
-            else:
-                self._zones_section.set_subtitle(f"{n} zone{'s' if n != 1 else ''} assigned")
+            text, dim = zones_subtitle(len(self._zones) if hasattr(self, "_zones") else 0)
+            self._zones_section.set_subtitle(text, dim=dim)
+
+    @staticmethod
+    def _pattern_shortcut(key: str) -> QKeySequence:
+        modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
+        return QKeySequence(f"{modifier}+{key}")
+
+    def _pattern_shortcut_text(self, key: str) -> str:
+        return self._pattern_shortcut(key).toString(QKeySequence.SequenceFormat.NativeText)
 
     def _install_pattern_shortcuts(self) -> None:
-        modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
-        QShortcut(QKeySequence(f"{modifier}+Z"), self, self._undo_pattern)
-        QShortcut(QKeySequence(f"{modifier}+Shift+Z"), self, self._redo_pattern)
-        QShortcut(QKeySequence(f"{modifier}+E"), self, self._export_document_job)
-        QShortcut(QKeySequence(f"{modifier}+R"), self, self._reload_dxf)
-        QShortcut(QKeySequence(f"{modifier}+P"), self, self._apply_selected_preset)
+        QShortcut(self._pattern_shortcut("Z"), self, self._undo_pattern)
+        QShortcut(self._pattern_shortcut("Shift+Z"), self, self._redo_pattern)
+        QShortcut(self._pattern_shortcut("E"), self, self._export_document_job)
+        QShortcut(self._pattern_shortcut("R"), self, self._reload_dxf)
+        QShortcut(self._pattern_shortcut("P"), self, self._apply_selected_preset)
 
     def _undo_treatment_hook(self) -> bool:
         """Canvas undo hook — revert a treatment change if it is the latest."""
@@ -1814,23 +1865,16 @@ class PatternPage(BasePage):
 
     def command_palette_commands(self) -> list[dict]:
         """Commands contributed to the application's single global palette."""
-        modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
-
-        def shortcut(key: str) -> str:
-            return QKeySequence(f"{modifier}+{key}").toString(
-                QKeySequence.SequenceFormat.NativeText
-            )
-
         commands: list[dict] = [
             {
                 "title": "Export job",
-                "shortcut": shortcut("E"),
+                "shortcut": self._pattern_shortcut_text("E"),
                 "subtitle": "Write every enabled operation as one job",
                 "run": self._export_document_job,
             },
             {
                 "title": "Reload source DXF",
-                "shortcut": shortcut("R"),
+                "shortcut": self._pattern_shortcut_text("R"),
                 "subtitle": "Re-read the outline file from disk",
                 "run": self._reload_dxf,
             },
@@ -1846,7 +1890,7 @@ class PatternPage(BasePage):
             },
             {
                 "title": "Apply selected preset",
-                "shortcut": shortcut("P"),
+                "shortcut": self._pattern_shortcut_text("P"),
                 "subtitle": "Load the highlighted preset parameters",
                 "run": self._apply_selected_preset,
             },
@@ -2532,9 +2576,15 @@ class PatternPage(BasePage):
             if self._generate_task.running:
                 export_tip = "Stop the current pattern export"
             elif can_export:
-                export_tip = "Export the current outline, pattern, and/or fill as a DXF  (⌘E)"
+                export_tip = (
+                    "Export the current outline, pattern, and/or fill in the chosen format  "
+                    f"({self._pattern_shortcut_text('E')})"
+                )
             else:
-                export_tip = "Load an outline to export it, a fill, or a pattern  (⌘E)"
+                export_tip = (
+                    "Load an outline to export it, a fill, or a pattern  "
+                    f"({self._pattern_shortcut_text('E')})"
+                )
             self._gen_btn.setToolTip(export_tip)
         self._refresh_output_panel()
         # Keep the core Pattern controls discoverable in the empty state.

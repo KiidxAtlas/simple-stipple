@@ -270,6 +270,15 @@ class DocumentService:
                 )
             )
         elif isinstance(command, MergeCommand):
+            # A merge creates one new path topology.  Its inherited document
+            # attributes must be unambiguous: silently moving a Score path to
+            # Cut (or turning a normal path into construction) is unsafe.
+            attributes = {
+                (entity.layer, entity.construction, entity.hidden, entity.locked, entity.group)
+                for entity in sources
+            }
+            if len(sources) < 2 or len(attributes) != 1:
+                return replace(command, before=(), after=())
             merged = merge_paths(
                 # Parametric entities store sparse defining points (for
                 # example spline controls), not the path shown on canvas.
@@ -295,6 +304,7 @@ class DocumentService:
                         construction=item.construction,
                         hidden=sources[0].hidden,
                         locked=sources[0].locked,
+                        group=sources[0].group,
                         layer=sources[0].layer,
                     )
                 )

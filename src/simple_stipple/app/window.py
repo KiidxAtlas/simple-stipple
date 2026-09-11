@@ -187,7 +187,6 @@ class App(QMainWindow):
                 "Pattern — generate fills from a prepared outline",
                 "Trace — turn a raster image into editable vector outlines",
                 "Convert — convert or repair vector files",
-                "Repository — review, commit, pull, and push Git changes",
             )
         ):
             self._tabs.setTabToolTip(index, tooltip)
@@ -362,8 +361,8 @@ class App(QMainWindow):
     def _init_tab_bindings(self) -> None:
         self._draft_page: Any = self._page_runtime.get("draft")
         self._pattern_page: Any = cast(Any, self._page_runtime.get("pattern"))
-        # Repository Sync is a first-class page; the File menu action points
-        # to this same instance so its state cannot diverge.
+        # Repository is a first-class page; the File menu action points to
+        # this same instance so its state cannot diverge.
         self._repo_page: Any = self._page_runtime.get("repository")
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
@@ -430,8 +429,8 @@ class App(QMainWindow):
         self._page_runtime.switch_to("convert")
 
     def _open_repo_dialog(self) -> None:
-        """Navigate to Repository Sync from the File menu."""
-        self._page_runtime.switch_to("repository")
+        """Open Repository in the primary workflow tabs."""
+        self._switch_to_page("repository")
 
     def _has_workspace_content(self) -> bool:
         return self._page_runtime.has_workspace_content()
@@ -449,6 +448,7 @@ class App(QMainWindow):
             source_label=f"{source_label} selection",
             offer_undo=True,
         )
+        self._pattern_page.show_handoff_receipt(source_label, polys)
         self._tabs.setCurrentWidget(self._pattern_page)
         self._schedule_workspace_dirty_check()
 
@@ -504,8 +504,9 @@ class App(QMainWindow):
             float(self._settings.get("ui_scale", 1.0) or 1.0),
         )
         app.setProperty("basePointSize", base_size)
-        font.setPointSizeF(scaled_size)
-        app.setFont(font)
+        if font.pointSizeF() != scaled_size:
+            font.setPointSizeF(scaled_size)
+            app.setFont(font)
         high_contrast = bool(self._settings.get("high_contrast", False))
         appearance = str(self._settings.get("appearance", "system"))
         if appearance == "system":
@@ -517,15 +518,17 @@ class App(QMainWindow):
         app.setProperty("reducedMotion", bool(self._settings.get("reduced_motion", False)))
         density = str(self._settings.get("interface_density", "compact"))
         app.setProperty("interfaceDensity", density)
-        app.setPalette(accessibility_palette(high_contrast, appearance))
-        app.setStyleSheet(
-            load_app_qss(
-                scale=float(self._settings.get("ui_scale", 1.0) or 1.0),
-                high_contrast=high_contrast,
-                appearance=appearance,
-                density=density,
-            )
+        palette = accessibility_palette(high_contrast, appearance)
+        if app.palette() != palette:
+            app.setPalette(palette)
+        qss = load_app_qss(
+            scale=float(self._settings.get("ui_scale", 1.0) or 1.0),
+            high_contrast=high_contrast,
+            appearance=appearance,
+            density=density,
         )
+        if app.styleSheet() != qss:
+            app.setStyleSheet(qss)
 
     def _on_draw_sidebar_height_changed(self, height: int) -> None:
         """Persist a live sidebar-resize drag and echo the new height to

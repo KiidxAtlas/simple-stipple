@@ -6,6 +6,9 @@ jobs a feature-local home instead of routing them through a mixed-purpose facade
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +38,7 @@ class EngravingJob:
     invert: bool
     passes: int
     rotation_deg: float
+    dither: str = "continuous"
 
     def raster_spec(self) -> RasterEngravingSpec:
         return RasterEngravingSpec(
@@ -50,6 +54,7 @@ class EngravingJob:
             invert=self.invert,
             passes=self.passes,
             rotation_deg=self.rotation_deg,
+            dither=self.dither,
         )
 
 
@@ -67,6 +72,7 @@ def build_engraving_job(
     passes: int,
     invert: bool,
     rotation_deg: float,
+    dither: str = "continuous",
 ) -> EngravingJob:
     """Create a feature-neutral engraving payload from a UI control snapshot."""
     return EngravingJob(
@@ -82,6 +88,7 @@ def build_engraving_job(
         passes=passes,
         invert=invert,
         rotation_deg=rotation_deg,
+        dither=dither,
     )
 
 
@@ -157,6 +164,66 @@ def export_document_file(
     engraving_job: EngravingJob | None = None,
     engraving_mask: list[list[tuple[float, float]]] | None = None,
 ) -> list[Path]:
+    """Prepare every output before publishing; restore originals on failure."""
+    target = Path(output_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{target.stem}-export-", dir=target.parent))
+    cleanup = True
+    try:
+        prepared = _write_document_files(
+            str(staging / target.name),
+            export_format,
+            vector_polys,
+            engraving_source=engraving_source,
+            engraving_job=engraving_job,
+            engraving_mask=engraving_mask,
+        )
+        backups = staging / "originals"
+        backups.mkdir()
+        destinations = [target.parent / path.name for path in prepared]
+        originals = {}
+        for destination in destinations:
+            if destination.exists() or destination.is_symlink():
+                backup = backups / destination.name
+                shutil.copy2(destination, backup, follow_symlinks=False)
+                originals[destination] = backup
+        installed = []
+        try:
+            for source, destination in zip(prepared, destinations, strict=True):
+                os.replace(source, destination)
+                installed.append(destination)
+        except OSError as failure:
+            recovery_errors = []
+            for destination in reversed(installed):
+                try:
+                    if destination in originals:
+                        os.replace(originals[destination], destination)
+                    else:
+                        destination.unlink()
+                except OSError as recovery_error:
+                    recovery_errors.append(str(recovery_error))
+            if recovery_errors:
+                cleanup = False
+                raise OSError(
+                    f"Export failed: {failure}. Some files could not be restored: "
+                    f"{'; '.join(recovery_errors)}. Original files are preserved in {backups}."
+                ) from failure
+            raise
+        return destinations
+    finally:
+        if cleanup:
+            shutil.rmtree(staging)
+
+
+def _write_document_files(
+    output_path: str,
+    export_format: str,
+    vector_polys: list[list[tuple[float, float]]],
+    *,
+    engraving_source: str | None = None,
+    engraving_job: EngravingJob | None = None,
+    engraving_mask: list[list[tuple[float, float]]] | None = None,
+) -> list[Path]:
     """Write one single-file export, plus a raster sidecar when needed.
 
     Returns every path written, first one first. SVG embeds the image; DXF
@@ -207,13 +274,13 @@ def export_document_file(
         write_polylines_dxf(vector_polys, str(target))
 
     if engraving_source and spec is not None:
-        png, metadata, _svg = export_raster_job(
+        png, metadata, positioned_svg = export_raster_job(
             engraving_source,
             target.with_name(f"{target.stem}-engraving.png"),
             spec,
             engraving_mask,
         )
-        written.extend([png, metadata])
+        written.extend([png, metadata, positioned_svg])
     return written
 
 

@@ -32,10 +32,13 @@ ruff check src tests
 | `app/` | startup, window, navigation, menus, app-wide tasks | geometry or reusable canvas tools |
 | `resources/` | packaged DXF tiles and other runtime data | executable code |
 
-`core/` is defined by one testable rule: **if it does not import Qt, it belongs
-in `core/`.** That replaces the older `engine/` vs `document/` split, which
-forced an unanswerable question ("is this document state or an algorithm?") for
-modules like `cad/editor_geometry.py` and `cad/preflight.py`.
+`core/` is Qt-free, but Qt-freedom alone does not decide a module's home.
+Reusable document, geometry, format, imaging, and pattern logic belongs in
+`core/`; workflow-specific state and orchestration may remain in `features/`
+when it has no independent consumer. This replaces the older `engine/` vs
+`document/` split, which forced an unanswerable question ("is this document
+state or an algorithm?") for modules like `core/cad/geometry.py` and
+`core/cad/preflight.py`.
 
 Within `core/`, `document/` owns editable state, commands, history, and the
 workspace schema; the remaining subpackages are stateless algorithms. Only
@@ -117,24 +120,24 @@ persistent state.
 
 ### Edit geometry
 
-`editor.widget.DxfCanvas` turns pointer and keyboard interaction into editor
-operations and `document.service.DocumentService` commands. The service owns
+`canvas.widget.DxfCanvas` turns pointer and keyboard interaction into editor
+operations and `core.document.service.DocumentService` commands. The service owns
 mutation, validation, undo/redo history, and change notifications. Widgets
 should not mutate `CanvasDocument` directly when a change must be undoable.
 
 ### Import and export
 
 Feature pages own user intent, dialogs, progress, cancellation, and visible
-status. `engine.formats` owns parsing and serialization; `engine.cad` owns
+status. `core.formats` owns parsing and serialization; `core.cad` owns
 shape semantics. This keeps file code Qt-free and reusable across workflows.
 
 ### Pattern and imaging
 
 `features.pattern.outline_state` handles pure outline normalization, identity
-reconciliation, records, layers, bounds, and containment. `engine.patterns`
+reconciliation, records, layers, bounds, and containment. `core.patterns`
 generates fills. `PatternPage` coordinates Qt controls, workers, preview,
 cancellation, and export. Trace follows the same division: `TracePage` owns
-interaction while `engine.imaging` owns image processing.
+interaction while `core.imaging` owns image processing.
 
 ## Placement guide
 
@@ -163,14 +166,13 @@ interaction while `engine.imaging` owns image processing.
 ## Important extension seams
 
 - `features.pattern.outline_state` — non-Qt Pattern outline state.
-- `editor.rendering.dense_preview` — retained preview batching and raster cache.
+- `canvas.rendering.DensePreviewRenderer` — retained preview batching and raster cache.
 - `canvas.view.config` — CanvasView construction plus grid, snap, context-menu,
   and status settings.
-- `engine.cad.curves` — spline and Bezier control-point behavior.
-- `features.trace.dxf_export` — outlined-DXF export workflow.
-- `features.draft.svg_backdrop` — imported SVG reference-artwork lifecycle.
-- `ui.components.{units,notifications,recent}` and `ui.dialogs.files` — shared
-  UI behavior not specific to the editor.
+- `core.cad.geometry` — CAD curve and outline geometry.
+- `features.trace.session` — traced-outline DXF export workflow.
+- `features.draft.session` — imported SVG reference-artwork lifecycle.
+- `ui.components.{units,feedback,recent}` — shared UI behavior not specific to the editor.
 
 ## Tests and release checks
 

@@ -17,33 +17,39 @@ from simple_stipple.canvas.tools.selection import SelectTool
 from simple_stipple.ui.components.focus import blur_focused_line_edit
 
 
-def keyPressEvent(self, event: QKeyEvent):
-    key = event.key()
-    mods = event.modifiers()
-    shift_mod = bool(mods & Qt.KeyboardModifier.ShiftModifier)
-
-    if key == Qt.Key.Key_Space and not event.isAutoRepeat():
-        self._space_pan_active = True
-        self._space_pan_dragging = False
-        self._update_cursor()
+def _handle_space_pan_key(view, event: QKeyEvent) -> bool:
+    if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+        view._space_pan_active = True
+        view._space_pan_dragging = False
+        view._update_cursor()
         event.accept()
-        return
+        return True
+    return False
 
+
+def _handle_coordinate_entry_key(view, event: QKeyEvent) -> bool:
     if event.text() == "@" and not isinstance(QApplication.focusWidget(), QLineEdit):
-        self.show_coordinate_entry("@")
+        view.show_coordinate_entry("@")
         event.accept()
-        return
+        return True
+    return False
 
+
+def _handle_tool_key(view, event: QKeyEvent) -> bool:
     # Tool-specific keys (e.g. quick-shape letters) beat the registry.
-    _tool = self._tools.get(self._mode)
+    _tool = view._tools.get(view._mode)
     if _tool is not None and _tool.key(event):
         event.accept()
-        return
+        return True
+    return False
 
+
+def _handle_arrow_nudge_key(view, event: QKeyEvent, shift_mod: bool) -> bool:
+    key = event.key()
     # Arrow key nudge
     if (
-        self._selectable
-        and self._sel
+        view._selectable
+        and view._sel
         and key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down)
     ):
         amount = 1.0 if shift_mod else 0.1
@@ -56,69 +62,88 @@ def keyPressEvent(self, event: QKeyEvent):
             dy = amount
         elif key == Qt.Key.Key_Down:
             dy = -amount
-        self._nudge_selected(dx, dy)
-        return
+        view._nudge_selected(dx, dy)
+        return True
+    return False
 
-    if key == Qt.Key.Key_Escape:
-        self._dismiss_hud_prompt()
-        fw = QApplication.focusWidget()
-        if isinstance(fw, QLineEdit) and bool(fw.property("shape_hud_temp")):
-            self._dismiss_shape_dim_inputs()
-        # Scale and Dimension are modal canvas tools: one Escape always
-        # exits the mode completely, even when a target-distance field
-        # has focus or a multi-click placement is in progress.
-        if self._dimension_mode or self._measure_mode:
-            self._dimension_mode = False
-            self._dim_pending_p1 = None
-            self._dim_pending_p2 = None
-            self._dim_selected_segments.clear()
-            self._dim_hover_segment = None
-            self._dimension_tool.reset()
-            self._measure_mode = False
-            self._measure_anchor = None
-            self._measure_hover = None
-            self._measure_locked = False
-            self._measure_end = None
-            self._measure_snapped_a = False
-            self._measure_snapped_b = False
-            self._dismiss_measure_edit()
-            self.setFocus()
-            if self._mode != "select":
-                self.set_mode("select")
-            else:
-                self._update_cursor()
-                self._redraw()
-                self.modeChanged.emit("select")
-            return
-        if blur_focused_line_edit(self, within=self):
-            return
-        # If a dim field has focus or is dirty, blur and reset it first
-        has_dim_focus = (
-            self._dim_distance_edit is not None and self._dim_distance_edit.hasFocus()
-        ) or (self._dim_angle_edit is not None and self._dim_angle_edit.hasFocus())
-        if has_dim_focus or self._dim_distance_dirty or self._dim_angle_dirty:
-            self._dim_distance_dirty = False
-            self._dim_angle_dirty = False
-            self.setFocus()  # return focus to canvas
-            return
-        # Cancel a live move/gizmo/vertex drag before it can be
-        # mistaken for a plain "clear selection" — otherwise the drag
-        # keeps applying to a selection that was just emptied out from
-        # under it, freezing the shape at its half-dragged position.
-        if self._cancel_active_drag():
-            return
-        # First Escape mid-draw drops the unfinished path but keeps the
-        # tool armed; the fall-through below exits the tool entirely.
-        if self._cancel_draw_in_progress():
-            return
-        if self._bg_selected:
-            self.select_background_image(False)
-            return
-        # In select mode, Escape clears selection
-        if self._mode == "select" and self._sel:
-            self.deselect_all()
-            return
-        self._escape_cb()
+
+def _handle_escape_key(view, event: QKeyEvent) -> bool:
+    if event.key() != Qt.Key.Key_Escape:
+        return False
+    view._dismiss_hud_prompt()
+    fw = QApplication.focusWidget()
+    if isinstance(fw, QLineEdit) and bool(fw.property("shape_hud_temp")):
+        view._dismiss_shape_dim_inputs()
+    # Scale and Dimension are modal canvas tools: one Escape always exits the
+    # mode completely, even when a target-distance field has focus or a
+    # multi-click placement is in progress.
+    if view._dimension_mode or view._measure_mode:
+        view._dimension_mode = False
+        view._dim_pending_p1 = None
+        view._dim_pending_p2 = None
+        view._dim_selected_segments.clear()
+        view._dim_hover_segment = None
+        view._dimension_tool.reset()
+        view._measure_mode = False
+        view._measure_anchor = None
+        view._measure_hover = None
+        view._measure_locked = False
+        view._measure_end = None
+        view._measure_snapped_a = False
+        view._measure_snapped_b = False
+        view._dismiss_measure_edit()
+        view.setFocus()
+        if view._mode != "select":
+            view.set_mode("select")
+        else:
+            view._update_cursor()
+            view._redraw()
+            view.modeChanged.emit("select")
+        return True
+    if blur_focused_line_edit(view, within=view):
+        return True
+    # If a dim field has focus or is dirty, blur and reset it first.
+    has_dim_focus = (
+        view._dim_distance_edit is not None and view._dim_distance_edit.hasFocus()
+    ) or (view._dim_angle_edit is not None and view._dim_angle_edit.hasFocus())
+    if has_dim_focus or view._dim_distance_dirty or view._dim_angle_dirty:
+        view._dim_distance_dirty = False
+        view._dim_angle_dirty = False
+        view.setFocus()  # return focus to canvas
+        return True
+    # Cancel a live move/gizmo/vertex drag before it can be mistaken for a
+    # plain "clear selection".  The drag otherwise continues against an empty
+    # selection and leaves geometry at a half-dragged position.
+    if view._cancel_active_drag():
+        return True
+    # First Escape mid-draw drops the unfinished path but keeps the tool armed;
+    # the fall-through below exits the tool entirely.
+    if view._cancel_draw_in_progress():
+        return True
+    if view._bg_selected:
+        view.select_background_image(False)
+        return True
+    if view._mode == "select" and view._sel:
+        view.deselect_all()
+        return True
+    view._escape_cb()
+    return True
+
+
+def keyPressEvent(self, event: QKeyEvent):
+    key = event.key()
+    mods = event.modifiers()
+    shift_mod = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+
+    if _handle_space_pan_key(self, event):
+        return
+    if _handle_coordinate_entry_key(self, event):
+        return
+    if _handle_tool_key(self, event):
+        return
+    if _handle_arrow_nudge_key(self, event, shift_mod):
+        return
+    if _handle_escape_key(self, event):
         return
 
     # An editable image is a first-class canvas target.  Give it the same

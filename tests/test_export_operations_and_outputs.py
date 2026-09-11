@@ -1,16 +1,18 @@
 """Behavioral coverage for fabrication operations and export outputs.
 
-The document produces operations, not an export "kind". Preflight runs while
-the design is being made and is drawn on the part, not summarised at export.
+The document produces operations, not an export "kind". Preflight preserves
+live error markers while ordinary line endpoints stay quiet until review.
 """
 
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QCoreApplication, QEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QEvent, QTimer
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from simple_stipple.core.cad.preflight import GeometryIssue
+from simple_stipple.core.cad.production import order_for_cut
 from simple_stipple.features.pattern.export import density_issues, document_operations
 from simple_stipple.features.pattern.page import PatternPage
 
@@ -67,6 +69,13 @@ def test_the_reference_scenario_is_one_job_of_three_operations(app: QApplication
     page.close()
 
 
+def test_pattern_export_order_uses_the_shared_containment_aware_planner() -> None:
+    outer = [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0), (0.0, 0.0)]
+    inner = [(5.0, 5.0), (10.0, 5.0), (10.0, 10.0), (5.0, 10.0), (5.0, 5.0)]
+
+    assert order_for_cut([outer, inner]) == [inner, outer]
+
+
 def test_run_order_is_engrave_then_mark_then_cut(app: QApplication) -> None:
     page = PatternPage(settings={})
     page.load_outline_polys([OUTER, CIRCLE])
@@ -107,22 +116,88 @@ def test_rows_reorder_and_switch_off_without_touching_the_treatment(
     page.close()
 
 
-def test_preflight_marks_the_canvas_while_drawing_not_at_export(
+def test_preflight_marks_geometry_errors_while_drawing(
     app: QApplication,
 ) -> None:
-    """An open path that should be closed is a marker on the part, now."""
+    """A zero-length segment still gets a locatable, selectable live marker."""
     page = PatternPage(settings={})
-    page.load_outline_polys([[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]])
+    page.load_outline_polys([[(0.0, 0.0), (10.0, 0.0), (10.0, 0.0), (10.0, 10.0)]])
     page._refresh_preflight_markers()
 
     markers = page._canvas._issue_markers
-    assert markers, "an unclosed path produced no finding"
+    assert any(m.kind == "zero_segment" and m.severity == "error" for m in markers)
+    assert not any(m.kind in {"open_start", "open_end"} for m in markers)
     assert all(hasattr(m, "point") and hasattr(m, "severity") for m in markers)
     assert "finding" in page._output_preflight.text()
 
     # Clicking one selects the path it belongs to.
     assert page._on_issue_marker_clicked(markers[0]) is True
     assert page._canvas.get_selected_ids() == [page._outline_ids[0]]
+    page.shutdown()
+    page.close()
+
+
+@pytest.mark.parametrize("allow_open", [False, True])
+def test_line_endpoints_appear_only_in_geometry_review(app: QApplication, allow_open) -> None:
+    page = PatternPage(settings={})
+    line = [[(20.0, 20.0), (80.0, 80.0)]]
+    page.load_outline_polys(line)
+    page._export_open_paths_cb.setChecked(allow_open)
+    page._refresh_preflight_markers()
+    assert page._canvas._issue_markers == ()
+    assert not page._canvas.get_view_state()["geometry_health_visible"]
+    assert ("no findings" if allow_open else "2 findings") in page._output_preflight.text()
+
+    def paint_health():
+        image = QImage(400, 300, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        page._canvas._renderer._paint_geometry_health(painter)
+        painter.end()
+        return image
+
+    blank = paint_health()
+    page._canvas.set_geometry_health_visible(True)
+    assert paint_health() != blank
+    page._canvas.set_geometry_health_visible(False)
+    assert paint_health() == blank
+    assert page._canvas.get_polylines_state() == line
+    page.shutdown()
+    page.close()
+
+
+@pytest.mark.parametrize("proceed", [False, True])
+@pytest.mark.parametrize("health_visible", [False, True])
+def test_open_line_export_reviews_geometry_and_preserves_overlay_choice(
+    app: QApplication, monkeypatch: pytest.MonkeyPatch, proceed, health_visible
+) -> None:
+    page = PatternPage(settings={})
+    page.load_outline_polys([[(20.0, 20.0), (80.0, 80.0)]])
+    page._canvas.set_geometry_health_visible(health_visible)
+    solve_requests = []
+    monkeypatch.setattr(page, "_with_solved_pattern", solve_requests.append)
+    original_exec = QMessageBox.exec
+    reviews = []
+
+    def review(box):
+        reviews.append(box.informativeText())
+        assert "open path(s)" in box.informativeText()
+        assert page._canvas.get_view_state()["geometry_health_visible"]
+        role = (
+            QMessageBox.ButtonRole.DestructiveRole if proceed else QMessageBox.ButtonRole.RejectRole
+        )
+        button = next(b for b in box.buttons() if box.buttonRole(b) == role)
+        QTimer.singleShot(0, button.click)
+        return original_exec(box)
+
+    monkeypatch.setattr(QMessageBox, "exec", review)
+    page._export_document_job()
+    assert len(reviews) == 1
+    assert bool(solve_requests) is proceed
+    assert page._canvas.get_view_state()["geometry_health_visible"] is (
+        health_visible if proceed else True
+    )
+    assert page._canvas._issue_markers == ()
     page.shutdown()
     page.close()
 

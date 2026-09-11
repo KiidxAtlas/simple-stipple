@@ -341,6 +341,9 @@ def _initialize_view(
 
     # Image bounds reference rectangle
     self._img_bounds = None
+    # Machine work area is a view-only reference supplied by the active page.
+    # It never changes document geometry or export coordinates.
+    self._machine_bed_mm = None
 
     # Background image overlay
     self._bg_pil = None

@@ -163,7 +163,7 @@ def _reflect_across_line(point: Point, line: tuple[Point, Point]) -> Point:
 
 
 def solve_constraints(
-    geometry: dict[str, list[Point]], constraints: list[GeometricConstraint], *, passes: int = 4
+    geometry: dict[str, list[Point]], constraints: list[GeometricConstraint], *, passes: int = 32
 ) -> dict[str, list[Point]]:
     """Apply explicit constraints sequentially; IDs make compaction/reordering safe."""
     solved = {key: list(points) for key, points in geometry.items()}
@@ -313,19 +313,43 @@ def solve_constraints(
                 updated[:3] = [q0, q1, q2]
                 solved[ids[1]] = updated
                 continue
+            if not ids:
+                continue
             first_ref = _constraint_line(solved, constraint, 0)
             if first_ref is None:
                 continue
             first_line: tuple[Point, Point] = (first_ref[0], first_ref[1])
-            if not ids:
-                continue
             if constraint.kind == "horizontal":
-                y = (first_line[0][1] + first_line[1][1]) / 2.0
-                solved[ids[0]] = [(first_line[0][0], y), (first_line[1][0], y)]
+                start, end = first_line
+                dx = end[0] - start[0]
+                # Preserve the source endpoint and rotate a vertical edge
+                # instead of collapsing it to a zero-length segment.
+                horizontal_end = (
+                    (end[0], start[1])
+                    if abs(dx) > 1e-12
+                    else (start[0] + math.dist(start, end), start[1])
+                )
+                solved[ids[0]] = _with_segment(
+                    solved[ids[0]],
+                    first_ref,
+                    start,
+                    horizontal_end,
+                )
                 continue
             if constraint.kind == "vertical":
-                x = (first_line[0][0] + first_line[1][0]) / 2.0
-                solved[ids[0]] = [(x, first_line[0][1]), (x, first_line[1][1])]
+                start, end = first_line
+                dy = end[1] - start[1]
+                vertical_end = (
+                    (start[0], end[1])
+                    if abs(dy) > 1e-12
+                    else (start[0], start[1] + math.dist(start, end))
+                )
+                solved[ids[0]] = _with_segment(
+                    solved[ids[0]],
+                    first_ref,
+                    start,
+                    vertical_end,
+                )
                 continue
             if len(ids) < 2:
                 continue
@@ -507,6 +531,22 @@ def constraint_residuals(
                 for point, target in zip(second_points[:3], expected, strict=True)
             )
             continue
+        if constraint.kind == "fixed":
+            stored = constraint.parameters.get("points")
+            if not ids or not isinstance(stored, list):
+                residuals[constraint.id] = math.inf
+                continue
+            try:
+                points = geometry.get(ids[0])
+                if points is None or len(points) != len(stored):
+                    raise ValueError
+                residuals[constraint.id] = max(
+                    math.dist(point, (float(target[0]), float(target[1])))
+                    for point, target in zip(points, stored, strict=True)
+                )
+            except (TypeError, ValueError, IndexError):
+                residuals[constraint.id] = math.inf
+            continue
         first_ref = _constraint_line(geometry, constraint, 0) if ids else None
         first = first_ref[:2] if first_ref is not None else None
         if first is None:
@@ -517,19 +557,6 @@ def constraint_residuals(
             continue
         if constraint.kind == "vertical":
             residuals[constraint.id] = abs(first[1][0] - first[0][0])
-            continue
-        if constraint.kind == "fixed":
-            stored = constraint.parameters.get("points")
-            if not isinstance(stored, list):
-                residuals[constraint.id] = math.inf
-                continue
-            try:
-                residuals[constraint.id] = max(
-                    math.dist(point, (float(target[0]), float(target[1])))
-                    for point, target in zip(first, stored, strict=True)
-                )
-            except (TypeError, ValueError, IndexError):
-                residuals[constraint.id] = math.inf
             continue
         second_ref = _constraint_line(geometry, constraint, 1) if len(ids) >= 2 else None
         second = second_ref[:2] if second_ref is not None else None

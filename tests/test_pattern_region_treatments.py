@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from shapely.geometry import LineString, Polygon
+
 from simple_stipple.core.patterns.processing import PatternProcessor
 from simple_stipple.features.pattern.regions.treatments import (
     engraving_mask_polys,
@@ -160,6 +162,82 @@ def test_untreated_outlines_still_reach_the_cut_layer() -> None:
         all_polys=[grip, slide, spacer],
     )
     assert len(border) == 3
+
+
+def test_untreated_contained_outline_is_a_hole_in_outer_fill() -> None:
+    """A one-zone fill must not hatch through an unassigned inner contour."""
+    service = PatternProcessor()
+    fill: list[list[tuple[float, float]]] = []
+    outer = ring(100.0)
+    hole = ring(30.0, 35.0)
+    zone = {
+        "outline_ids": ["outer"],
+        "polys": [outer],
+        "pattern": "— None —",
+        "params": {},
+        "scale": (100.0, 100.0),
+        "fill": {"mode": "lines", "spacing": 5.0, "target_outline": True},
+        "output_mode": "fill",
+    }
+
+    service.build_zone_pattern_polys(
+        [zone],
+        include_border=True,
+        orig_w=100.0,
+        orig_h=100.0,
+        all_polys=[outer, hole],
+        fill_polys_out=fill,
+    )
+
+    hole_interior = Polygon(hole).buffer(-0.001)
+    assert fill
+    assert all(LineString(stroke).intersection(hole_interior).is_empty for stroke in fill)
+
+    # The interactive preview has a separate zone-composition path; it must
+    # use exactly the same automatic hole rule as the export-oriented builder.
+    preview = service.build_preview_zone_polys(
+        [zone],
+        [outer, hole],
+        orig_w=100.0,
+        orig_h=100.0,
+    )
+    assert preview["fill"]
+    assert all(
+        LineString(stroke).intersection(hole_interior).is_empty
+        for stroke in preview["fill"]
+    )
+
+
+def test_every_nested_untreated_outline_stays_empty_in_outer_fill() -> None:
+    """Nested automatic holes are solids, not an even-odd exclusion compound."""
+    service = PatternProcessor()
+    outer = ring(100.0)
+    middle_hole = ring(60.0, 20.0)
+    inner_hole = ring(20.0, 40.0)
+    zone = {
+        "outline_ids": ["outer"],
+        "polys": [outer],
+        "pattern": "— None —",
+        "params": {},
+        "scale": (100.0, 100.0),
+        "fill": {"mode": "lines", "spacing": 5.0, "target_outline": True},
+        "output_mode": "fill",
+    }
+
+    preview = service.build_preview_zone_polys(
+        [zone],
+        [outer, middle_hole, inner_hole],
+        orig_w=100.0,
+        orig_h=100.0,
+    )
+
+    assert preview["fill"]
+    for hole in (middle_hole, inner_hole):
+        hole_interior = Polygon(hole).buffer(-0.001)
+        assert all(
+            LineString(stroke).intersection(hole_interior).is_empty
+            for stroke in preview["fill"]
+        )
 
 
 # ── Workspace migration ───────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import hashlib
 import logging
 import math
 from copy import deepcopy
+from importlib.metadata import entry_points
 from typing import Any, cast
 
 from shapely import prepared as _shp_prepared  # type: ignore[import-untyped]
@@ -121,21 +122,70 @@ PATTERNS = (
 )
 
 
+_GENERATORS: dict[str, Any] = {
+    "gen_honeycomb": gen_honeycomb,
+    "gen_custom_tile": _gen_custom_tile,
+    "gen_knurling": gen_knurling,
+    "gen_seigaiha": gen_seigaiha,
+    "gen_truchet": gen_truchet,
+    "gen_stipple_dots": gen_stipple_dots,
+    "gen_brick": gen_brick,
+    "gen_basketweave": gen_basketweave,
+    "gen_mesh": gen_mesh,
+    "gen_voronoi": gen_voronoi,
+    "gen_stipple_interlaced": gen_stipple_interlaced,
+}
+_EXTERNAL_PATTERNS: dict[str, Any] = {}
+
+
+def register_generator(name: str, generator: Any, *, replace: bool = False) -> None:
+    """Register an extension generator without allowing accidental overrides."""
+    if not name.strip():
+        raise ValueError("A generator name is required.")
+    if not callable(generator):
+        raise TypeError("A pattern generator must be callable.")
+    if name in _GENERATORS and not replace:
+        raise ValueError(f"Generator {name!r} is already registered.")
+    _GENERATORS[name] = generator
+
+
+def register_pattern(name: str, generator: Any, *, replace: bool = False) -> None:
+    """Register an optional UI-visible pattern callable ``(outline, params)``."""
+    if not name.strip() or name == NULL_PATTERN:
+        raise ValueError("A non-empty pattern name is required.")
+    if not callable(generator):
+        raise TypeError("A pattern generator must be callable.")
+    if name in PATTERNS or (name in _EXTERNAL_PATTERNS and not replace):
+        raise ValueError(f"Pattern {name!r} is already registered.")
+    _EXTERNAL_PATTERNS[name] = generator
+
+
+def available_patterns() -> tuple[str, ...]:
+    """Built-ins followed by optional pattern-pack names."""
+    return (*PATTERNS, *_EXTERNAL_PATTERNS)
+
+
+def load_generator_entry_points() -> tuple[str, ...]:
+    """Load optional ``simple_stipple.pattern_generators`` entry points.
+
+    Bad third-party packages are logged and skipped, so an optional pattern
+    pack can never prevent the desktop app from opening.
+    """
+    loaded: list[str] = []
+    entries = entry_points()
+    selected = entries.select(group="simple_stipple.pattern_generators")
+    for item in selected:
+        try:
+            register_pattern(item.name, item.load())
+            loaded.append(item.name)
+        except (AttributeError, ImportError, TypeError, ValueError) as exc:
+            LOGGER.warning("Could not load pattern generator %s: %s", item.name, exc)
+    return tuple(loaded)
+
+
 def get_generator(name: str):
-    """Return a named generator function from the pattern modules."""
-    return {
-        "gen_honeycomb": gen_honeycomb,
-        "gen_custom_tile": _gen_custom_tile,
-        "gen_knurling": gen_knurling,
-        "gen_seigaiha": gen_seigaiha,
-        "gen_truchet": gen_truchet,
-        "gen_stipple_dots": gen_stipple_dots,
-        "gen_brick": gen_brick,
-        "gen_basketweave": gen_basketweave,
-        "gen_mesh": gen_mesh,
-        "gen_voronoi": gen_voronoi,
-        "gen_stipple_interlaced": gen_stipple_interlaced,
-    }[name]
+    """Return a registered built-in or extension generator."""
+    return _GENERATORS[name]
 
 
 LOGGER = logging.getLogger(__name__)
@@ -213,7 +263,7 @@ RETIRED_PATTERNS: dict[str, str] = {
 def migrate_pattern_name(pattern: str) -> str:
     """Map a retired pattern name onto the one that replaced it."""
     name = str(pattern or NULL_PATTERN).strip() or NULL_PATTERN
-    if name in PATTERNS:
+    if name in available_patterns():
         return name
     return RETIRED_PATTERNS.get(name, NULL_PATTERN)
 
@@ -601,6 +651,9 @@ class PatternProcessor:
             return get_generator("gen_voronoi")(
                 outline, params["n_cells"], params["gap"], params["seed"]
             )
+        extension = _EXTERNAL_PATTERNS.get(pattern)
+        if extension is not None:
+            return extension(outline, dict(params))
         raise ValueError(f"Pattern '{pattern}' is no longer available.")
 
     @staticmethod
@@ -722,11 +775,23 @@ class PatternProcessor:
                 orig_w=orig_w,
                 orig_h=orig_h,
             )
-            # build_fill_region (not polylines_to_outline) handles a cutout
-            # of ANY gap size via Shapely's implicit ring-closing — an open
-            # cutout shouldn't fail to exclude just because its gap exceeds
-            # polylines_to_outline's lenient few-mm "closed enough" check.
-            excl_outline = build_fill_region(excl_scaled)
+            # Build every exclusion as a solid, then union it. Passing all of
+            # the rings to build_fill_region at once applies even-odd nesting:
+            # with an outer hole and an inner hole it would recreate the inner
+            # island. That is correct for one compound drawing, but wrong for
+            # zone exclusions where each contained contour means "do not
+            # fill here". Processing each path also retains Shapely's
+            # gap-closing behavior for open cutout paths.
+            exclusion_shapes = [
+                shape
+                for poly in excl_scaled
+                if (shape := build_fill_region([poly])) is not None and not shape.is_empty
+            ]
+            excl_outline = None
+            if exclusion_shapes:
+                from shapely.ops import unary_union  # type: ignore[import-untyped]
+
+                excl_outline = unary_union(exclusion_shapes)
             if excl_outline is not None:
                 excl_outline = _repair_overlay_geometry(excl_outline)
                 if excl_outline is not None and not excl_outline.is_empty:
@@ -950,16 +1015,20 @@ class PatternProcessor:
 
     @staticmethod
     def _zone_nested_exclusions(
-        zones: list[dict], target_idx: int
+        zones: list[dict],
+        target_idx: int,
+        *,
+        all_polys: list[list[tuple[float, float]]] | None = None,
     ) -> list[list[tuple[float, float]]]:
-        """Other zones' shapes that sit inside THIS zone's own outline.
+        """Contained outlines that must stay empty in this zone's treatment.
 
         Zones are generated independently, so an outer zone has no idea an
         inner zone's shape exists inside it — its pattern fill would cover
         the whole outline, including the differently-patterned inner
-        shape's area, and visually overlay it. Treating any other zone's
-        outline as an automatic cutout when it's geometrically contained in
-        this zone mirrors the existing "open shape = cutout" convention.
+        shape's area, and visually overlay it. A closed outline that has no
+        treatment has the same geometric meaning: when the user fills the
+        outer region, that inner contour is a hole, not an independently
+        fillable island. ``all_polys`` supplies those untreated contours.
 
         This is the pass that makes a region subtract itself from the region
         containing it — the plan pencilled it in for deletion in Phase 5 on
@@ -985,34 +1054,47 @@ class PatternProcessor:
 
         from shapely.geometry import Polygon as _Poly
 
+        target_signatures = {PatternProcessor._poly_signature(poly) for poly in target_polys}
+        seen_signatures: set[tuple[tuple[float, float], ...]] = set()
         nested: list[list[tuple[float, float]]] = []
-        for other_idx, other in enumerate(zones):
-            if other_idx == target_idx:
+
+        # Preserve the established order for treated zones, then add any
+        # unassigned document contours. The signature checks avoid subtracting
+        # the same child twice when it appears in both collections.
+        candidates = [
+            poly
+            for other_idx, other in enumerate(zones)
+            if other_idx != target_idx
+            for poly in (other.get("polys") or [])
+        ] + list(all_polys or [])
+        for poly in candidates:
+            signature = PatternProcessor._poly_signature(poly)
+            if signature in target_signatures or signature in seen_signatures:
                 continue
-            for poly in other.get("polys") or []:
-                if len(poly) < 3:
+            if len(poly) < 3:
+                continue
+            try:
+                shp = _Poly(poly)
+                if not shp.is_valid:
+                    shp = shp.buffer(0)
+                if shp.is_empty:
                     continue
-                try:
-                    shp = _Poly(poly)
-                    if not shp.is_valid:
-                        shp = shp.buffer(0)
-                    if shp.is_empty:
-                        continue
-                    # Full containment of the OTHER shape within this
-                    # zone's region — not just a point test, which would
-                    # false-positive whenever a much larger shape's
-                    # representative point happens to land inside a small
-                    # nested zone (e.g. the outer outline's own centroid
-                    # sitting inside a small inner zone near the middle).
-                    # ``contains`` excludes a shape that touches the parent
-                    # boundary. Preview cells are often clipped at that
-                    # boundary, so use covers (after repair) to keep the
-                    # parent treatment from bleeding into a child zone.
-                    if not prep.covers(shp):
-                        continue
-                except (ValueError, TypeError):
+                # Full containment of the OTHER shape within this
+                # zone's region — not just a point test, which would
+                # false-positive whenever a much larger shape's
+                # representative point happens to land inside a small
+                # nested zone (e.g. the outer outline's own centroid
+                # sitting inside a small inner zone near the middle).
+                # ``contains`` excludes a shape that touches the parent
+                # boundary. Preview cells are often clipped at that
+                # boundary, so use covers (after repair) to keep the
+                # parent treatment from bleeding into a child zone.
+                if not prep.covers(shp):
                     continue
-                nested.append(poly)
+            except (ValueError, TypeError):
+                continue
+            seen_signatures.add(signature)
+            nested.append(poly)
         return nested
 
     def build_zone_pattern_polys(
@@ -1052,7 +1134,7 @@ class PatternProcessor:
             elif output_mode == "outline":
                 zone_pattern = NULL_PATTERN
                 zone_fill_options = None
-            nested_exclusions = self._zone_nested_exclusions(zones, idx)
+            nested_exclusions = self._zone_nested_exclusions(zones, idx, all_polys=all_polys)
             zone_generated = self.build_pattern_polys(
                 zone["polys"] + floating_cutouts,
                 pattern=zone_pattern,
@@ -1206,7 +1288,9 @@ class PatternProcessor:
             elif output_mode in {"outline", "none"}:
                 zone_pattern = NULL_PATTERN
                 zone_fill_options = None
-            nested_exclusions = self._zone_nested_exclusions(zones, zone_idx)
+            nested_exclusions = self._zone_nested_exclusions(
+                zones, zone_idx, all_polys=all_polys
+            )
             zone_generated = (
                 []
                 if output_mode == "none"

@@ -32,8 +32,8 @@ def _module_path(module: str) -> Path | None:
     for candidate in (base.with_suffix(".py"), base / "__init__.py"):
         if candidate.is_file():
             return candidate
-    # ``engine.editing`` is intentionally a namespace directory while it is
-    # being consolidated; it is still an importable current module home.
+    # Namespace packages remain valid while a capability is being consolidated;
+    # accept a directory that contains Python modules as a current module home.
     if base.is_dir() and any(base.glob("*.py")):
         return base
     return None
@@ -108,6 +108,13 @@ def test_public_facades_and_entry_points_are_explicit_before_reorganization() ->
         "convert",
         "repository",
     ]
+    assert [spec.page_id for spec in default_page_specs() if spec.visible_in_tabs] == [
+        "draft",
+        "pattern",
+        "trace",
+        "convert",
+        "repository",
+    ]
 
 
 def test_architecture_document_describes_current_boundaries_and_public_surfaces() -> None:
@@ -116,7 +123,7 @@ def test_architecture_document_describes_current_boundaries_and_public_surfaces(
         "## Dependency direction",
         "tests/test_dependency_boundaries.py",
         "## Public surfaces",
-        "editor.widget.DxfCanvas",
-        "document.service.DocumentService",
+        "canvas.widget.DxfCanvas",
+        "core.document.service.DocumentService",
     ):
         assert phrase in architecture

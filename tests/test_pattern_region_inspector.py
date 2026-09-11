@@ -47,7 +47,7 @@ def test_the_same_widgets_edit_a_region_or_the_document(app: QApplication) -> No
 
     # Nothing selected: the inspector is the document's, and says so.
     page._zone_list.setCurrentRow(-1)
-    assert "Document defaults" in page._pattern_props_scope.text()
+    assert "All regions" in page._pattern_props_scope.text()
     page._pattern_combo.setCurrentText("Honeycomb")
     assert page._treatments == {}
 
@@ -98,7 +98,7 @@ def test_empty_canvas_offers_buttons_not_numbered_prose(app: QApplication) -> No
     bar = page._canvas._empty_actions_bar
     assert bar is not None
     labels = [button.text() for button in bar.findChildren(type(bar.children()[1]))]
-    assert "Import outline…" in labels
+    assert "Start from outline…" in labels
 
     page._canvas.sync_empty_actions()
     assert bar.isVisibleTo(page._canvas)

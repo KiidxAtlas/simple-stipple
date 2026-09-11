@@ -13,6 +13,7 @@ from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -38,6 +39,7 @@ from simple_stipple.canvas.runtime import (
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.core.cad.preflight import analyze_geometry
+from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job, image_to_outlines
 from simple_stipple.features.base import BasePage
 from simple_stipple.features.canvas_runtime import TraceCanvasPageRuntime
@@ -102,7 +104,7 @@ class TracePage(BasePage):
 
     _trace_done = Signal(object)  # (display_img, polys, img_w_px, img_h_px, width_mm)
     _trace_error = Signal(object)
-    _trace_progress = Signal(int, str)  # (percent, label)
+    _trace_progress = Signal(int, int, str)  # (revision, percent, label)
     _trace_cancelled = Signal(int)  # (trace_token)
     sendSelectedToDraftRequested = Signal(object)
     sendSelectedToPatternRequested = Signal(object)
@@ -718,6 +720,8 @@ class TracePage(BasePage):
         )
         self._canvas.set_context_menu_profile("trace")
         self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
+        profile = machine_profile_from_settings(self._settings)
+        self._canvas.set_machine_bed(profile.bed_width_mm, profile.bed_height_mm)
         self._canvas.set_empty_message(
             "Start a trace\nOpen an image, adjust cleanup, then export or send the result"
         )
@@ -1062,6 +1066,7 @@ class TracePage(BasePage):
         if self._running:
             self._trace_pending = True
             return
+        trace_token = self._trace_revision
         fields = TraceFieldBindings(
             blur=self._blur,
             simplify=self._simplify,
@@ -1082,7 +1087,7 @@ class TracePage(BasePage):
             kwargs = build_trace_kwargs(
                 fields,
                 parse_float_field=self._parse_float_field,
-                on_progress=lambda pct, lbl: self._trace_progress.emit(pct, lbl),
+                on_progress=lambda pct, lbl: self._trace_progress.emit(trace_token, pct, lbl),
             )
         except ValueError:
             # _parse_float_field (like every other page's) raises on an
@@ -1104,7 +1109,6 @@ class TracePage(BasePage):
         cancel_event = threading.Event()
         self._cancel_event = cancel_event
         old_event.set()
-        trace_token = self._trace_revision
         self._active_trace_token = trace_token
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
@@ -1246,6 +1250,7 @@ class TracePage(BasePage):
         return f"Trace failed; the previous result is retained. {remedy} Details: {message}"
 
     def _select_next_action(self, choice: str) -> None:
+        """Remember the destination without unexpectedly leaving the page."""
         self._settings["trace_next_action"] = choice
         labels = {
             "draft": "Next — Edit in Draft",
@@ -1253,7 +1258,7 @@ class TracePage(BasePage):
             "export": "Next — Export DXF",
         }
         self._next_btn.setText(labels.get(choice, labels["draft"]))
-        self._run_remembered_next()
+        self._set_status("Next step updated. Select Continue when the trace is ready.", STATUS_OK)
 
     def _run_remembered_next(self) -> None:
         choice = str(self._settings.get("trace_next_action", "draft"))
@@ -1306,7 +1311,14 @@ class TracePage(BasePage):
         self._canny_widget.setVisible(edge)
         self._schedule_trace()
 
-    def _on_trace_progress(self, percent: int, label: str) -> None:
+    def _on_trace_progress(self, trace_token: int, percent: int, label: str) -> None:
+        if (
+            self._shutting_down
+            or not self._running
+            or trace_token != self._trace_revision
+            or trace_token != self._active_trace_token
+        ):
+            return
         self._progress.setRange(0, 100)
         self._progress.setValue(percent)
         if percent < 100:
@@ -1430,6 +1442,11 @@ class TracePage(BasePage):
         passes = QSpinBox()
         passes.setRange(1, 100)
         invert = QCheckBox("Invert light and dark")
+        dither = QComboBox()
+        dither.addItem("Continuous tone", "continuous")
+        dither.addItem("Floyd–Steinberg", "floyd_steinberg")
+        dither.addItem("Ordered", "ordered")
+        dither.addItem("Halftone", "halftone")
         for label, field in (
             ("X position (mm)", x),
             ("Y position (mm)", y),
@@ -1446,6 +1463,7 @@ class TracePage(BasePage):
         ):
             form.addRow(label, field)
         form.addRow("Tone", invert)
+        form.addRow("Dither", dither)
         layout.addLayout(form)
         warning = QLabel(
             "Depth cannot be predicted from an image alone. Test power, speed, interval, and "
@@ -1487,6 +1505,7 @@ class TracePage(BasePage):
                 brightness=brightness.value(),
                 passes=passes.value(),
                 invert=invert.isChecked(),
+                dither=str(dither.currentData()),
             )
             png, metadata, positioned = export_raster_job(self._img_path, out, spec)
             self._last_out = str(png)

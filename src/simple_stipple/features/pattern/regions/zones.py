@@ -283,7 +283,7 @@ def on_zone_selected(page: Any, row: int) -> None:
         # the defaults you just set are what clicking a shape applies.
         form_state = treatment.get("form_state")
         if isinstance(form_state, dict) and form_state:
-            restore_form_state(page, form_state)
+            restore_form_state(page, form_state, restore_document_lattice=False)
         if kind == "engrave":
             page._populate_pattern_combo(page._pattern_combo, IMAGE_PATTERN)
         page._switch_pattern(page._pattern_combo.currentText())

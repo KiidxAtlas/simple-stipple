@@ -76,6 +76,7 @@ def get_pattern_workspace_state(page: Any) -> dict:
             "gamma": page._engrave_gamma.value(),
             "passes": page._engrave_passes.value(),
             "invert": page._engrave_invert.isChecked(),
+            "dither": page._engrave_dither.currentData(),
             "material": page._engrave_material.currentData(),
         },
     }
@@ -163,6 +164,10 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._engrave_gamma.setValue(float(engraving.get("gamma", 1)))
         page._engrave_passes.setValue(int(engraving.get("passes", 1)))
         page._engrave_invert.setChecked(bool(engraving.get("invert", False)))
+        dither_index = page._engrave_dither.findData(
+            str(engraving.get("dither", "continuous"))
+        )
+        page._engrave_dither.setCurrentIndex(max(0, dither_index))
         material_index = page._engrave_material.findData(str(engraving.get("material", "custom")))
         page._engrave_material.blockSignals(True)
         page._engrave_material.setCurrentIndex(max(0, material_index))

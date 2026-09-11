@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from PySide6.QtWidgets import QMessageBox, QWidget
 
 from simple_stipple.core.cad.preflight import GeometryPreflight, analyze_geometry
+from simple_stipple.core.cad.production import MachineProfile, estimate_job
+from simple_stipple.ui.dialogs.export_review import ExportReviewDialog
 
 
 def export_preflight(
@@ -13,9 +17,29 @@ def export_preflight(
     *,
     action: str,
     allow_open_paths: bool,
+    unit: str = "mm",
+    profile: MachineProfile | None = None,
+    operations: Sequence[str] = (),
+    show_review: bool = False,
 ) -> tuple[bool, GeometryPreflight]:
-    """Validate export geometry and ask before continuing with known risks."""
+    """Review production facts, then ask before continuing with known risks."""
     report = analyze_geometry(polylines)
+    estimate = estimate_job(
+        polylines, feed_rate_mm_s=profile.feed_rate_mm_s if profile is not None else None
+    )
+    if show_review:
+        review = ExportReviewDialog(
+            action=action,
+            report=report,
+            estimate=estimate,
+            unit=unit,
+            profile=profile,
+            operations=operations,
+            allow_open_paths=allow_open_paths,
+            parent=parent,
+        )
+        if review.exec() != review.DialogCode.Accepted:
+            return False, report
     open_blockers = report.open if not allow_open_paths else 0
     if report.ready and not open_blockers:
         return True, report
@@ -27,6 +51,7 @@ def export_preflight(
         (report.zero_segments, "zero-length segment(s)"),
         (report.tiny_paths, "path(s) below the geometry tolerance"),
         (report.near_closed, "nearly closed path(s)"),
+        (report.self_intersections, "self-intersecting path(s)"),
     )
     details = [f"{count} {label}" for count, label in counts if count]
     box = QMessageBox(parent)

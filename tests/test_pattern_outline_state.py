@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from simple_stipple.core.patterns.outline_identity import resolve_outline_ids, sync_outline_ids
 from simple_stipple.features.draft.model import DraftModel
 from simple_stipple.features.pattern.model import PatternModel
@@ -9,6 +11,7 @@ from simple_stipple.features.pattern.outline_state import (
     canvas_records,
     normalize_outline_items,
     outline_bounds,
+    read_outline_vector,
     reconcile_outline_ids,
     smallest_containing_outline,
 )
@@ -71,6 +74,14 @@ def test_outline_records_reconcile_identity_and_layer_order() -> None:
     assert [record["layer"] for record in records] == ["Cut", "Outline"]
     assert layers == ["Cut", "Outline"]
     assert outline_bounds(paths) == (2.0, 2.0)
+
+
+def test_pattern_svg_outline_reader_reports_invalid_xml(tmp_path) -> None:
+    path = tmp_path / "broken.svg"
+    path.write_text('<svg><path d="M0,0 L10,10"></svg')
+
+    with pytest.raises(ValueError, match=r"Could not parse broken\.svg as SVG"):
+        read_outline_vector(path)
 
 
 def test_smallest_containing_outline_prefers_nested_region() -> None:

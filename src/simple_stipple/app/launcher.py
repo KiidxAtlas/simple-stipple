@@ -125,9 +125,15 @@ def main(argv: list[str] | None = None) -> int:
     arguments, so this composes the two exactly like ``main.py`` at the
     repo root does, just as an importable function instead of a script.
     """
+    command_args = list(argv) if argv is not None else sys.argv[1:]
+    if command_args and command_args[0] in {"pattern", "trace"}:
+        from simple_stipple.app.cli import main as cli_main
+
+        return cli_main(command_args)
+
     from simple_stipple.platform.launcher import main as _bootstrap
 
-    return _bootstrap(argv, run_app=run_app)
+    return _bootstrap(command_args, run_app=run_app)
 
 
 __all__ = ["main", "run_app"]

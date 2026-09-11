@@ -26,6 +26,7 @@ class PageSpec:
     command_keywords: str
     factory: PageFactory
     content_canvas_attrs: tuple[str, ...] = ()
+    visible_in_tabs: bool = True
 
     @property
     def shortcut_id(self) -> str:
@@ -156,7 +157,8 @@ class PageRuntime:
         for spec in self._specs:
             page = spec.factory(self._settings)
             self._page_by_id[spec.page_id] = page
-            self._page_widget.addTab(page, spec.title)
+            if spec.visible_in_tabs:
+                self._page_widget.addTab(page, spec.title)
 
     def specs(self) -> tuple[PageSpec, ...]:
         return self._specs

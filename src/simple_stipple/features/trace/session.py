@@ -18,6 +18,7 @@ from typing import Any, cast
 from PIL import Image
 from PySide6.QtWidgets import QMessageBox
 
+from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.document.model import TraceTabState
 from simple_stipple.core.formats.service import DxfService
 from simple_stipple.core.imaging import TraceCancelled, image_to_outlines
@@ -212,11 +213,16 @@ def _export_records(self, records: list[dict], *, title: str, selected: bool) ->
             QMessageBox.critical(self, "Export", message)
         return
     action = "Export Selected" if selected else "Export"
+    settings = getattr(self, "_settings", {})
     proceed, _report = export_preflight(
         self,
         [list(record["polyline"]) for record in records],
         action=action,
         allow_open_paths=True,
+        unit=str(getattr(self._canvas, "_unit_system", "mm")),
+        profile=machine_profile_from_settings(settings),
+        operations=("Traced outlines",),
+        show_review=bool(settings.get("export_review_enabled", False)),
     )
     if not proceed:
         self._canvas.set_geometry_health_visible(True, announce=True)

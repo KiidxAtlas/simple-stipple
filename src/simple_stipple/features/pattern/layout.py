@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QToolButton,
@@ -38,6 +39,7 @@ from simple_stipple.canvas.runtime import (
 )
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
+from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.features.canvas_runtime import PatternCanvasPageRuntime
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
@@ -102,8 +104,8 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._cancel_preview_btn.setAccessibleName("Cancel solve")
     page._cancel_preview_btn.setVisible(False)
     page._cancel_preview_btn.clicked.connect(page._cancel_solve)
-    page._reset_preview_btn = QPushButton("Reset")
-    page._reset_preview_btn.setToolTip("Clear the preview cache and rebuild")
+    page._reset_preview_btn = QPushButton("Rebuild preview")
+    page._reset_preview_btn.setToolTip("Generate a fresh preview from the current settings")
     page._reset_preview_btn.clicked.connect(page._reset_preview)
     # Heavy patterns slow outline editing to a crawl; this hides the solved
     # result (and defers re-solves) until toggled back on. Mirrors the eye on
@@ -137,18 +139,20 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     )
     page._canvas.set_context_menu_profile("pattern")
     page._canvas.set_context_menu_profiles(page._settings.get("context_menu_profiles", {}))
+    profile = machine_profile_from_settings(page._settings)
+    page._canvas.set_machine_bed(profile.bed_width_mm, profile.bed_height_mm)
     # Preview rows are virtual categories, but editable outlines retain their
     # original document layers so the layer tree remains useful.
     page._canvas.set_layer_model([], None)
     page._canvas.set_empty_message(
-        "Start a pattern\nImport a closed outline, draw one, or trace an image"
+        "Start a pattern project\nImport a closed outline, draw one, or trace an image"
     )
     # The next actions are buttons, not numbered prose telling you to go and
     # find them somewhere else.
     page._canvas.set_empty_actions(
         [
-            ("Import outline…", page._browse_dxf),
-            ("Draw one", lambda: page._canvas.set_mode("draw")),
+            ("Start from outline…", page._browse_dxf),
+            ("Draw an outline", lambda: page._canvas.set_mode("draw")),
             ("Trace an image", lambda: page.openPageRequested.emit("trace")),
         ]
     )
@@ -202,6 +206,12 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     # Keep sticky footer controls clear of the splitter and window edge.
     side_layout.setContentsMargins(8, 0, 8, 8)
     side_layout.setSpacing(8)
+    details_content, details_layout = collapsible_content_widget()
+    page._details_scroll = QScrollArea()
+    page._details_scroll.setWidgetResizable(True)
+    page._details_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    page._details_scroll.setWidget(details_content)
+    side_layout.addWidget(page._details_scroll, stretch=1)
     # Compatibility alias: the Zone Manager is mounted in the left workflow
     # panel, so the right inspector no longer spends space on a second copy.
     page._zone_scroll = page._zones_section
@@ -226,8 +236,8 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._layers_tree.layerVisibilityChanged.connect(page._on_pattern_layer_visibility_changed)
     page._zone_layers_splitter.addWidget(page._layer_module)
     page._zone_layers_splitter.setStretchFactor(0, 1)
-    side_layout.addWidget(page._zone_layers_splitter, stretch=1)
-    build_export_section(page, side_layout)
+    details_layout.addWidget(page._zone_layers_splitter, stretch=1)
+    build_export_section(page, side_layout, options_layout=details_layout)
 
     page._canvas_runtime = PatternCanvasPageRuntime(
         canvas=page._canvas,
@@ -268,7 +278,7 @@ def refresh_pattern_properties_panel(page: Any) -> None:
         kind = treatment_kind(page, region_ids[row])
         page._pattern_props_scope.setText(f"Region {row + 1} · {TREATMENT_LABELS[kind]}")
     else:
-        page._pattern_props_scope.setText("Document defaults · nothing selected")
+        page._pattern_props_scope.setText("All regions · default treatment")
     page._pattern_props_scope.setProperty("editing", editing)
     refresh_style(page._pattern_props_scope)
 
@@ -327,7 +337,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     page._zone_list.deletePressed.connect(page._remove_selected_zone)
     zones_layout.addWidget(page._zone_list)
 
-    page._pattern_props_scope = QLabel("Document defaults")
+    page._pattern_props_scope = QLabel("All regions · default treatment")
     page._pattern_props_scope.setWordWrap(True)
     page._pattern_props_scope.setProperty("role", "zone-edit-scope")
     zones_layout.addWidget(page._pattern_props_scope)
@@ -378,7 +388,9 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     _reload_btn.setIcon(QIcon(str(icon_path("reload.svg"))))
     _reload_btn.setAccessibleName("Reload outline file")
     _reload_btn.setFixedSize(32, 32)
-    _reload_btn.setToolTip("Re-read the current vector file from disk  (⌘R)")
+    _reload_btn.setToolTip(
+        f"Re-read the current vector file from disk  ({page._pattern_shortcut_text('R')})"
+    )
     _reload_btn.clicked.connect(page._reload_dxf)
     path_row.addWidget(_reload_btn)
     shape_layout.addLayout(path_row)
@@ -433,7 +445,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._pattern_combo.currentTextChanged.connect(page._switch_pattern)
     pattern_layout.addWidget(page._pattern_combo)
 
-    section_label(pattern_layout, "Presets")
+    preset_content, preset_layout = collapsible_content_widget(spacing=6)
     page._preset_combo = QComboBox()
     page._preset_combo.setEditable(True)
     page._preset_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -445,7 +457,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     preset_editor = page._preset_combo.lineEdit()
     if preset_editor is not None:
         preset_editor.setPlaceholderText("Name or select preset…")
-    pattern_layout.addWidget(page._preset_combo)
+    preset_layout.addWidget(page._preset_combo)
     preset_actions = QHBoxLayout()
     preset_actions.setSpacing(4)
     # These actions share a narrow inspector row. Use the action verb on the
@@ -453,7 +465,9 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     # clipping a meaningful label just to repeat context.
     load_preset_btn = QPushButton("Apply")
     load_preset_btn.setAccessibleName("Apply selected preset")
-    load_preset_btn.setToolTip("Apply the selected preset to current parameters  (⌘P)")
+    load_preset_btn.setToolTip(
+        f"Apply the selected preset to current parameters  ({page._pattern_shortcut_text('P')})"
+    )
     load_preset_btn.clicked.connect(page._apply_selected_preset)
     preset_actions.addWidget(load_preset_btn, stretch=1)
     save_preset_btn = QPushButton("Save")
@@ -472,14 +486,14 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     overflow_menu.addAction("Manage presets…", page._open_preset_manager)
     overflow_btn.setMenu(overflow_menu)
     preset_actions.addWidget(overflow_btn)
-    pattern_layout.addLayout(preset_actions)
+    preset_layout.addLayout(preset_actions)
     page._refresh_preset_combo()
     # ── Document pattern grid ─────────────────────────────────────────────
     # One grid for the whole document is what makes two adjacent regions with
     # the same settings meet without a seam. It parameterizes pattern
     # placement, so it lives with the pattern controls, at document scope,
     # rather than as a phase offset the user has to retype per region.
-    section_label(pattern_layout, "Pattern grid")
+    grid_content, grid_layout = collapsible_content_widget(spacing=6)
     grid_row = QGridLayout()
     grid_row.addWidget(QLabel("Origin X (mm)"), 0, 0)
     page._lattice_origin_x = QLineEdit("0")
@@ -501,13 +515,13 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     )
     page._lattice_seed.textChanged.connect(page._on_document_lattice_changed)
     grid_row.addWidget(page._lattice_seed, 2, 1)
-    pattern_layout.addLayout(grid_row)
+    grid_layout.addLayout(grid_row)
     page._lattice_snap_btn = QPushButton("Snap grid to selection")
     page._lattice_snap_btn.setToolTip(
         "Move the document grid origin to the corner of the current selection"
     )
     page._lattice_snap_btn.clicked.connect(page._snap_lattice_to_selection)
-    pattern_layout.addWidget(page._lattice_snap_btn)
+    grid_layout.addWidget(page._lattice_snap_btn)
     _sp = page._on_inspector_edit
     # Derived from the spec table, never hand-listed: a hardcoded list silently
     # skipped building widgets for newly added patterns, and
@@ -518,12 +532,13 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
         page._pattern_widgets[name] = w
         pattern_layout.addWidget(w)
         w.hide()
+    page._tile_library_widget, tile_library_layout = collapsible_content_widget(spacing=6)
     tile_actions = QHBoxLayout()
     page._tile_name_edit = QLineEdit()
     page._tile_name_edit.setPlaceholderText("Custom tile name")
     page._tile_name_edit.setToolTip("Name the tile before saving it to the library")
     page._tile_name_edit.returnPressed.connect(page._save_tile_motif)
-    tile_actions.addWidget(page._tile_name_edit, stretch=1)
+    tile_library_layout.addWidget(page._tile_name_edit)
     page._save_tile_btn = QPushButton("Save custom tile")
     page._save_tile_btn.setToolTip("Save the current Custom Tile geometry into the Pattern list")
     page._save_tile_btn.clicked.connect(page._save_tile_motif)
@@ -535,11 +550,12 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     open_tiles_btn = QPushButton("Open Tiles Folder")
     open_tiles_btn.setToolTip("Open the configured DXF custom-tile library")
     open_tiles_btn.clicked.connect(page._open_custom_tiles_folder)
-    tile_actions.addWidget(open_tiles_btn)
+    tile_library_layout.addLayout(tile_actions)
+    tile_library_layout.addWidget(open_tiles_btn)
     page._save_tile_btn.hide()
     page._tile_name_edit.hide()
     page._delete_tile_btn.hide()
-    pattern_layout.addLayout(tile_actions)
+
     tile_asset_actions = QHBoxLayout()
     page._tile_asset_status = QLabel("")
     page._tile_asset_status.setWordWrap(True)
@@ -554,7 +570,9 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._tile_asset_status.hide()
     page._locate_tile_btn.hide()
     page._repair_tile_btn.hide()
-    pattern_layout.addLayout(tile_asset_actions)
+    tile_library_layout.addLayout(tile_asset_actions)
+    pattern_layout.addWidget(page._tile_library_widget)
+    page._tile_library_widget.hide()
     page._modifiers_label = section_label(pattern_layout, "Modifiers")
     page._modifiers_widget = QWidget()
     rot_row = QGridLayout(page._modifiers_widget)
@@ -612,6 +630,12 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     pattern_layout.addWidget(page._modifiers_widget)
     page._modifiers_label.hide()
     page._modifiers_widget.hide()
+    page._presets_section = CollapsibleSection("Presets", preset_content, expanded=False)
+    pattern_layout.addWidget(page._presets_section)
+    page._pattern_grid_section = CollapsibleSection(
+        "Pattern grid", grid_content, expanded=False, subtitle="Document origin and seed"
+    )
+    pattern_layout.addWidget(page._pattern_grid_section)
     page._pattern_section = CollapsibleSection(
         "2. Pattern", pattern_content, expanded=True, subtitle="Choose a pattern"
     )
@@ -784,12 +808,19 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     appearance_grid.addWidget(page._engrave_gamma, 0, 1)
     page._engrave_invert = QCheckBox("Invert light and dark")
     appearance_grid.addWidget(page._engrave_invert, 1, 0, 1, 2)
+    page._engrave_dither = QComboBox()
+    page._engrave_dither.addItem("Continuous tone", "continuous")
+    page._engrave_dither.addItem("Floyd–Steinberg", "floyd_steinberg")
+    page._engrave_dither.addItem("Ordered", "ordered")
+    page._engrave_dither.addItem("Halftone", "halftone")
+    appearance_grid.addWidget(QLabel("Dither"), 2, 0)
+    appearance_grid.addWidget(page._engrave_dither, 2, 1)
     clip_hint = QLabel(
         "Clipped to the region carrying the Engrave treatment, or the whole outline if none does."
     )
     clip_hint.setWordWrap(True)
     clip_hint.setProperty("role", "hint-sm")
-    appearance_grid.addWidget(clip_hint, 2, 0, 1, 2)
+    appearance_grid.addWidget(clip_hint, 3, 0, 1, 2)
     form.addLayout(appearance_grid)
 
     process_content, process = collapsible_content_widget(spacing=8)
@@ -878,6 +909,7 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
         field.valueChanged.connect(page._update_engraving_section_summaries)
     page._engrave_passes.valueChanged.connect(page._update_engraving_section_summaries)
     page._engrave_invert.toggled.connect(page._update_engraving_section_summaries)
+    page._engrave_dither.currentIndexChanged.connect(page._update_engraving_section_summaries)
     page._engrave_material.currentIndexChanged.connect(page._update_engraving_section_summaries)
     page._engraving_section = CollapsibleSection(
         "Image Engraving", content, expanded=False, subtitle="Add an image to begin"
@@ -886,7 +918,7 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     page._refresh_engraving_ui()
 
 
-def build_export_section(page: Any, layout: QVBoxLayout) -> None:
+def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBoxLayout) -> None:
     # Export options live in a card matching Shape/Pattern/Fill/Zones —
     # previously a bare caption label, the odd one out on this sidebar.
     # The action button/progress/status stay outside and unwrapped
@@ -954,7 +986,7 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     density_row.addWidget(page._min_density_edit)
     density_row.addStretch()
     card_layout.addLayout(density_row)
-    layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
+    options_layout.addWidget(CollapsibleSection("Export options", card_content, expanded=False))
 
     # ── Output ────────────────────────────────────────────────────────────
     # What the document produces, in run order. Not a format to pick before
@@ -982,8 +1014,25 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     page._output_preflight.setWordWrap(True)
     page._output_preflight.setProperty("role", "hint")
     output_layout.addWidget(page._output_preflight)
+    check_row = QHBoxLayout()
+    page._check_geometry_btn = QPushButton("Check geometry")
+    page._check_geometry_btn.clicked.connect(page._check_geometry)
+    check_row.addWidget(page._check_geometry_btn)
+    page._geometry_markers_cb = QCheckBox("Show markers")
+    page._geometry_markers_cb.setChecked(
+        bool(page._canvas.get_view_state()["geometry_health_visible"])
+    )
+    page._geometry_markers_cb.toggled.connect(page._canvas.set_geometry_health_visible)
+    check_row.addWidget(page._geometry_markers_cb)
+    output_layout.addLayout(check_row)
+    page._geometry_findings = QListWidget()
+    page._geometry_findings.setAccessibleName("Geometry findings")
+    page._geometry_findings.setMaximumHeight(140)
+    page._geometry_findings.setVisible(False)
+    page._geometry_findings.currentItemChanged.connect(page._select_geometry_finding)
+    output_layout.addWidget(page._geometry_findings)
     page._output_section = CollapsibleSection("Output", output_content, expanded=True)
-    layout.addWidget(page._output_section)
+    options_layout.addWidget(page._output_section)
 
     # Primary action plus a format picker beside it. The format changes what
     # the file is, never which operations get written — that is the Output
@@ -995,7 +1044,10 @@ def build_export_section(page: Any, layout: QVBoxLayout) -> None:
     page._gen_btn = primary_button(
         EXPORT_BUTTON_LABEL[export_format],
         height=38,
-        tooltip="Write every enabled operation in the chosen format  (⌘E)",
+        tooltip=(
+            "Write every enabled operation in the chosen format  "
+            f"({page._pattern_shortcut_text('E')})"
+        ),
     )
     page._gen_btn.clicked.connect(page._export_document_job)
     export_action_row = QHBoxLayout()

@@ -72,7 +72,7 @@ _APP_LABELS: dict[str, str] = {
     "tab.pattern": "Switch to Pattern Tab",
     "tab.trace": "Switch to Trace Tab",
     "tab.convert": "Switch to Convert Tab",
-    "tab.repo": "Open Repository Sync",
+    "tab.repo": "Switch to Repository Tab",
 }
 
 _APP_GROUPS: dict[str, str] = {

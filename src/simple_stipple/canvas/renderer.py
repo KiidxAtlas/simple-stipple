@@ -1761,17 +1761,18 @@ class CanvasRenderer:
 
         parts = []
         if counts["error"]:
-            parts.append(f"{counts['error']} error")
+            label = "branched/crossing path" if report.self_intersections else "error"
+            parts.append(f"{counts['error']} {label}")
         if counts["warning"]:
             parts.append(f"{counts['warning']} warning")
         if counts["info"]:
-            parts.append(f"{counts['info']} endpoint")
+            parts.append(f"{counts['info']} open endpoint")
         summary = "Geometry healthy" if not parts else " · ".join(parts)
         painter.setFont(_FONT_HEL_9_DEMIBOLD)
         metrics = QFontMetrics(painter.font())
         width = metrics.horizontalAdvance(summary) + 14
         x = self._chrome_left() + 8
-        y = self._chrome_top() + 8
+        y = self._chrome_top() + 30
         painter.setPen(QPen(QColor("#30363d"), 1))
         painter.setBrush(QBrush(QColor(13, 17, 23, 220)))
         painter.drawRoundedRect(QRectF(x, y, width, 22), 4, 4)
@@ -2125,6 +2126,7 @@ class CanvasRenderer:
         h = max(self._host.height(), 100)
         painter.fillRect(self._host.rect(), Q_BG)
         self._paint_view_references(painter, w, h)
+        self._paint_machine_bed(painter)
 
         # Background image overlay
         if self._host._bg_pil and self._host._bg_w_mm > 0 and self._host._bg_h_mm > 0:
@@ -2413,6 +2415,26 @@ class CanvasRenderer:
             )
 
         painter.end()
+
+    def _paint_machine_bed(self, painter: QPainter) -> None:
+        """Draw the configured work area as a non-interactive canvas reference."""
+        bed = getattr(self._host, "_machine_bed_mm", None)
+        if bed is None:
+            return
+        width_mm, height_mm = bed
+        if width_mm <= 0 or height_mm <= 0:
+            return
+        x0, y0 = self._host._w2c(0.0, 0.0)
+        x1, y1 = self._host._w2c(width_mm, height_mm)
+        rect = QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized()
+        painter.save()
+        painter.setPen(QPen(QColor("#d29922"), 1.25, Qt.PenStyle.DashLine))
+        painter.setBrush(QColor(210, 153, 34, 16))
+        painter.drawRect(rect)
+        painter.setPen(QColor("#e3b341"))
+        painter.setFont(QFont("Helvetica", 9))
+        painter.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, f"Machine bed · {width_mm:g} × {height_mm:g} mm")
+        painter.restore()
 
     def _paint_chrome_rulers(self, painter: QPainter) -> None:
         """Rulers paint over everything else (chrome layer)."""

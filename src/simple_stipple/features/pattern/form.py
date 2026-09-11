@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -35,6 +36,74 @@ from simple_stipple.features.pattern.defaults import (
 from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
 
 MAX_PATTERN_DIMENSION_MM = 20.0
+
+PATTERN_SUMMARY_FIELDS: dict[str, tuple[str, str]] = {
+    "Honeycomb": ("_hex_r", "mm"),
+    "Flow Lines": ("_flow_spacing", "mm"),
+    "Gradient Honeycomb": ("_grad_r_max", "mm"),
+    "Stipple Dots": ("_stip_spacing", "mm"),
+    "Brick": ("_brick_w", "mm"),
+    "Mesh": ("_mesh_spacing", "mm"),
+    "Basketweave": ("_basket_gap", "mm"),
+    "Braid": ("_braid_spacing", "mm"),
+    "Fish Scale": ("_fish_w", "mm"),
+    "Voronoi": ("_vor_cells", "cells"),
+    "Topographic": ("_topo_spacing", "mm"),
+}
+
+
+def outline_subtitle(path: str, width: str, height: str) -> tuple[str, bool]:
+    """Describe an outline while tolerating dimensions still being edited."""
+    if not path.strip():
+        return "No file loaded", True
+    try:
+        w, h = float(width or "0"), float(height or "0")
+    except ValueError:
+        w = h = 0.0
+    dims = f"{w:.1f} × {h:.1f} mm" if w and h else "—"
+    return f"{Path(path.strip()).name} · {dims}", False
+
+
+def pattern_subtitle(name: str, dimension: str, unit: str, fade_text: str) -> tuple[str, bool]:
+    """Describe the selected generator without rejecting partial numeric input."""
+    if not name or name == "— None —":
+        return "None", True
+    detail = f" · {dimension.strip()} {unit}".rstrip() if dimension.strip() else ""
+    try:
+        fade = float(fade_text or DEFAULT_BORDER_FADE)
+    except ValueError:
+        fade = 0.0
+    modifier = f" · Fade {fade:.1f}mm" if fade > 0 else ""
+    return f"{name}{detail}{modifier}", False
+
+
+def fill_subtitle(
+    mode: str,
+    label: str,
+    spacing: str,
+    *,
+    target_outline: bool,
+    target_pattern: bool,
+    line_count: int,
+) -> tuple[str, bool]:
+    """Summarize fill settings and the last generated line count."""
+    if mode == "none":
+        return "None", True
+    targets = []
+    if target_outline:
+        targets.append("Outline")
+    if target_pattern:
+        targets.append("Pattern")
+    target_text = " + ".join(targets) if targets else "No target"
+    count_text = f" · {line_count} lines" if line_count else ""
+    return f"{label} · {spacing.strip() or '?'} mm · {target_text}{count_text}", False
+
+
+def zones_subtitle(count: int) -> tuple[str, bool]:
+    """Keep an empty zone group explanatory and populated groups countable."""
+    if count == 0:
+        return "Optional · different pattern for a selection", True
+    return f"{count} zone{'s' if count != 1 else ''} assigned", False
 
 
 @dataclass
@@ -648,11 +717,15 @@ def collect_form_state(page: Any) -> dict:
     return data
 
 
-def restore_form_state(page: Any, payload: dict) -> None:
+def restore_form_state(
+    page: Any, payload: dict, *, restore_document_lattice: bool = True
+) -> None:
     """Write fill-parameter widget values from a plain dict.
 
     Missing keys fall back to the current widget values, so partial payloads
     (e.g. presets that predate a new field) apply safely.
+    Region selection preserves the document lattice even when an older
+    region or custom-tile snapshot contains its own origin and seed.
     """
     # Merge: current state supplies defaults for any missing keys
     values = collect_form_state(page)
@@ -690,10 +763,11 @@ def restore_form_state(page: Any, payload: dict) -> None:
     page._preview_quality_combo.setCurrentIndex(
         max(0, page._preview_quality_combo.findData(quality))
     )
-    page._lattice_origin_x.setText(str(values.get("lattice_origin_x", "0")))
-    page._lattice_origin_y.setText(str(values.get("lattice_origin_y", "0")))
-    page._lattice_seed.setText(str(values.get("lattice_seed", "1")))
-    page._push_document_lattice()
+    if restore_document_lattice:
+        page._lattice_origin_x.setText(str(values.get("lattice_origin_x", "0")))
+        page._lattice_origin_y.setText(str(values.get("lattice_origin_y", "0")))
+        page._lattice_seed.setText(str(values.get("lattice_seed", "1")))
+        page._push_document_lattice()
     page._on_fill_mode_changed()
     if "custom_tile_polys" in values:
         raw_tile = values.get("custom_tile_polys") or []

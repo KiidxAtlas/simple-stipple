@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import xml.etree.ElementTree as ET
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,9 +136,12 @@ def read_outline_vector(
         document = read_fvi_file(path)
         return VectorOutlineImport([list(poly) for poly in document.paths], [])
     if suffix == ".svg":
-        with tempfile.TemporaryDirectory(prefix="simple-stipple-pattern-svg-") as folder:
-            converted = Path(folder) / "outline.dxf"
-            convert_svg(path, converted)
-            polylines, _report = read_dxf(str(converted))
-        return VectorOutlineImport([list(poly) for poly in polylines], list(read_svg_artwork(path)))
+        try:
+            with tempfile.TemporaryDirectory(prefix="simple-stipple-pattern-svg-") as folder:
+                converted = Path(folder) / "outline.dxf"
+                convert_svg(path, converted)
+                polylines, _report = read_dxf(str(converted))
+            return VectorOutlineImport([list(poly) for poly in polylines], list(read_svg_artwork(path)))
+        except ET.ParseError as exc:
+            raise ValueError(f"Could not parse {Path(path).name} as SVG: {exc}") from exc
     raise ValueError("Choose an FVI or SVG vector file.")

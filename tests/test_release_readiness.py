@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import tomllib
 
 ROOT = Path(__file__).parents[1]
 SUBPROCESS_ENV = {
@@ -70,8 +71,11 @@ def test_startup_and_shutdown_complete(source: str) -> None:
 
 
 def test_release_metadata_check_is_non_mutating() -> None:
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        version = tomllib.load(handle)["project"]["version"]
+    tag = f"v{version}"
     result = subprocess.run(
-        ["bash", "scripts/release.sh", "--check", "v0.3.9"],
+        ["bash", "scripts/release.sh", "--check", tag],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -79,4 +83,4 @@ def test_release_metadata_check_is_non_mutating() -> None:
         timeout=10,
     )
     assert result.returncode == 0, result.stderr or result.stdout
-    assert "Release metadata is consistent for v0.3.9." in result.stdout
+    assert f"Release metadata is consistent for {tag}." in result.stdout

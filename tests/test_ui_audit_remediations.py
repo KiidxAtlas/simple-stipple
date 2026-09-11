@@ -29,7 +29,11 @@ from simple_stipple.canvas.widgets.draw_sidebar import DrawSidebar, _ResizeHandl
 from simple_stipple.canvas.widgets.precision_bar import CanvasPrecisionBar
 from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip, canvas_toolbar
-from simple_stipple.core.cad.constraints import GeometricConstraint, solve_constraints
+from simple_stipple.core.cad.constraints import (
+    GeometricConstraint,
+    constraint_residuals,
+    solve_constraints,
+)
 from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.core.editing.topology import split_paths
 from simple_stipple.core.formats.dxf import polylines_to_outline
@@ -103,14 +107,14 @@ def test_draft_empty_canvas_offers_direct_actions(app: QApplication) -> None:
     bar = draft._canvas._empty_actions_bar
     assert bar is not None
     buttons = {button.text(): button for button in bar.findChildren(QPushButton)}
-    assert set(buttons) == {"Import vector…", "Draw one", "Trace an image"}
-    assert buttons["Import vector…"].property("role") == "primary"
-    assert buttons["Draw one"].property("role") == "secondary"
+    assert set(buttons) == {"Start from vector…", "Draw a part", "Trace an image"}
+    assert buttons["Start from vector…"].property("role") == "primary"
+    assert buttons["Draw a part"].property("role") == "secondary"
     assert buttons["Trace an image"].property("role") == "secondary"
     assert bar.isVisibleTo(draft._canvas)
     requested: list[str] = []
     draft.openPageRequested.connect(requested.append)
-    buttons["Draw one"].click()
+    buttons["Draw a part"].click()
     assert draft._canvas.get_mode() == "draw"
     buttons["Trace an image"].click()
     assert requested == ["trace"]
@@ -2003,6 +2007,113 @@ def test_constraints_accept_polyline_edges_and_two_edit_vertices(app: QApplicati
     points = [canvas._entities_by_id[first].points[1], canvas._entities_by_id[second].points[0]]
     assert points[0] == points[1]
     canvas.close()
+
+
+def test_horizontal_constraint_preserves_the_rest_of_a_polyline() -> None:
+    geometry = {"path": [(0.0, 0.0), (4.0, 1.0), (4.0, 3.0)]}
+    constraint = GeometricConstraint("horizontal", ("path",), {"first_segment": 1})
+
+    solved = solve_constraints(geometry, [constraint])
+
+    assert len(solved["path"]) == 3
+    assert solved["path"][0] == (0.0, 0.0)
+    assert solved["path"][1] == (4.0, 1.0)
+    assert solved["path"][2][1] == pytest.approx(1.0)
+
+
+def test_fixed_polyline_constraint_reports_a_satisfied_residual() -> None:
+    points = [(0.0, 0.0), (4.0, 1.0), (4.0, 3.0)]
+    constraint = GeometricConstraint(
+        "fixed", ("path",), {"points": [list(point) for point in points]}
+    )
+
+    assert constraint_residuals({"path": points}, [constraint])[constraint.id] == 0.0
+
+
+def test_unbound_fixed_constraint_reports_an_unsatisfied_residual() -> None:
+    constraint = GeometricConstraint("fixed", (), {"points": [[0.0, 0.0]]})
+
+    assert constraint_residuals({}, [constraint])[constraint.id] == float("inf")
+
+
+def test_locked_geometry_cannot_be_closed_or_split(app: QApplication) -> None:
+    canvas = DxfCanvas(selectable=True)
+    locked = EntityRecord(points=[(0.0, 0.0), (4.0, 0.0), (4.0, 3.0)], locked=True)
+    hidden = EntityRecord(points=[(0.0, 1.0), (4.0, 1.0)], hidden=True)
+    canvas._canvas_service.create_entities([locked, hidden])
+    canvas.set_selection([locked.id])
+
+    assert canvas.close_selected_polylines() == 0
+    assert canvas._split_geometry_with_line([(2.0, -1.0), (2.0, 2.0)]) == (False, 0, 0)
+    assert canvas._entities_by_id[locked.id].points == locked.points
+    assert canvas._entities_by_id[hidden.id].points == hidden.points
+    canvas.close()
+
+
+def test_merge_rejects_mixed_operation_attributes(app: QApplication) -> None:
+    canvas = DxfCanvas(selectable=True)
+    cut = EntityRecord(points=[(0.0, 0.0), (1.0, 0.0)], layer="Cut")
+    score = EntityRecord(points=[(1.0, 0.0), (2.0, 0.0)], layer="Score")
+    canvas._canvas_service.create_entities([cut, score])
+    canvas.set_selection([cut.id, score.id])
+
+    assert canvas.merge_selected_segments_to_objects() == 0
+    assert [(entity.id, entity.layer) for entity in canvas._entities] == [
+        (cut.id, "Cut"),
+        (score.id, "Score"),
+    ]
+    canvas.close()
+
+
+def test_auto_join_does_not_consume_locked_geometry(app: QApplication) -> None:
+    canvas = DxfCanvas(selectable=True)
+    locked = EntityRecord(points=[(0.0, 0.0), (1.0, 0.0)], locked=True)
+    new = EntityRecord(points=[(1.0, 0.0), (2.0, 0.0)])
+    canvas._canvas_service.create_entities([locked, new])
+
+    assert canvas._selection_service._try_merge_endpoints() is None
+    assert [(entity.points, entity.locked) for entity in canvas._entities] == [
+        (locked.points, True),
+        (new.points, False),
+    ]
+    canvas.close()
+
+
+def test_delete_undo_restores_constraints_and_driving_dimensions(app: QApplication) -> None:
+    canvas = DxfCanvas(selectable=True)
+    first = EntityRecord(points=[(0.0, 0.0), (1.0, 0.0)])
+    second = EntityRecord(points=[(0.0, 1.0), (1.0, 1.0)])
+    canvas._canvas_service.create_entities([first, second])
+    constraint = GeometricConstraint("parallel", (first.id, second.id))
+    canvas._constraints = [constraint]
+    canvas._dimensions = [
+        {"driving": {"sources": [{"entity_id": first.id, "segment_index": 0}]}}
+    ]
+    canvas.set_selection([first.id])
+
+    assert canvas.delete_selected() == 1
+    assert not canvas._constraints
+    assert not canvas._dimensions
+    assert canvas.undo()
+    assert [item.id for item in canvas._constraints] == [constraint.id]
+    assert canvas._dimensions
+    canvas.close()
+
+
+def test_long_constraint_chain_settles_without_false_conflicts() -> None:
+    geometry = {
+        name: [(float(index), 0.0), (float(index + 1), 0.0)]
+        for index, name in enumerate("abcdefg")
+    }
+    constraints = [
+        GeometricConstraint("coincident", (first, second), {"first_endpoint": 0, "second_endpoint": 0})
+        for first, second in (("f", "g"), ("e", "f"), ("d", "e"), ("c", "d"), ("b", "c"), ("a", "b"))
+    ]
+
+    solved = solve_constraints(geometry, constraints)
+    residuals = constraint_residuals(solved, constraints)
+
+    assert all(value == 0.0 for value in residuals.values())
 
 
 def test_merging_a_spline_uses_its_visible_curve_not_control_polygon(app: QApplication) -> None:

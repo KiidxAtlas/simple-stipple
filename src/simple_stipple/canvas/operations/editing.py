@@ -38,6 +38,7 @@ from simple_stipple.core.document.geometry import (
     update_entity_parameter,
 )
 from simple_stipple.core.document.model import (
+    Document,
     EntityRecord,
     OperationResult,
     new_entity_id,
@@ -50,6 +51,80 @@ from simple_stipple.core.editing.topology import (
     trim_polyline,
     trim_preview,
 )
+
+
+class SplitGeometryHost(Protocol):
+    """The document state that the draw/pen splitting operation may mutate."""
+
+    _document: Document
+    _entities_by_id: dict[str, EntityRecord]
+    _last_split_result_ids: set[str]
+    _last_split_source_ids: set[str]
+
+    def _entity_for_id(self, entity_id: str) -> EntityRecord | None: ...
+
+
+def _split_geometry_with_line(
+    host: SplitGeometryHost, new_poly: list[tuple[float, float]]
+) -> tuple[bool, int, int]:
+    """Replace split entities and record their new IDs on a narrow host."""
+    host._last_split_source_ids = set()
+    # A cutter must never rewrite geometry the user has hidden, locked, or
+    # marked as construction.  Keep those records in the document untouched;
+    # they remain useful references but are not editable cutting targets.
+    targets = [
+        entity
+        for entity in host._entities_by_id.values()
+        if not entity.hidden and not entity.locked and not entity.construction
+    ]
+    entity_ids = [entity.id for entity in targets]
+    if not entity_ids:
+        return False, 0, 0
+    result = split_paths(
+        [list(entity.points) for entity in targets],
+        new_poly,
+        entity_ids,
+    )
+    if not result.changed:
+        host._last_split_result_ids = set()
+        return False, 0, 0
+
+    emitted: dict[str, int] = {}
+    replacements: dict[str, list[EntityRecord]] = {}
+    changed: list[EntityRecord] = []
+    for item in result.paths:
+        source = host._entity_for_id(item.source_id)
+        if source is None:
+            continue
+        piece_number = emitted.get(item.source_id, 0)
+        identifier = source.id if piece_number == 0 else new_entity_id()
+        emitted[item.source_id] = piece_number + 1
+        record = EntityRecord(
+            points=item.points,
+            id=identifier,
+            kind="polyline" if item.changed else source.kind,
+            meta=None if item.changed else deepcopy(source.meta),
+            construction=source.construction,
+            hidden=source.hidden,
+            locked=source.locked,
+            group=source.group if not item.changed else None,
+            layer=source.layer,
+        )
+        replacements.setdefault(item.source_id, []).append(record)
+        if item.changed:
+            changed.append(record)
+    entities: list[EntityRecord] = []
+    for source in host._entities_by_id.values():
+        # A protected entity was deliberately not handed to ``split_paths``;
+        # retain it at its existing stack position.
+        entities.extend(replacements.get(source.id, [source]))
+    host._document.entities = entities
+    host._document.ensure_unique_ids()
+    # Read ``.id`` only after ensure_unique_ids(), which rewrites duplicate
+    # ids in place on these same records.
+    host._last_split_result_ids = {record.id for record in changed}
+    host._last_split_source_ids = {item.source_id for item in result.paths if item.changed}
+    return True, result.closed_splits, result.open_splits
 
 
 class EditingService:
@@ -68,46 +143,7 @@ class EditingService:
     def _split_geometry_with_line(
         self, new_poly: list[tuple[float, float]]
     ) -> tuple[bool, int, int]:
-        entity_ids = [entity.id for entity in self._host._entities_by_id.values()]
-        result = split_paths(
-            [list(entity.points) for entity in self._host._entities_by_id.values()],
-            new_poly,
-            entity_ids,
-        )
-        if not result.changed:
-            self._host._last_split_result_ids = set()
-            return False, 0, 0
-
-        emitted: dict[str, int] = {}
-        entities: list[EntityRecord] = []
-        changed: list[EntityRecord] = []
-        for item in result.paths:
-            source = self._host._entity_for_id(item.source_id)
-            if source is None:
-                continue
-            piece_number = emitted.get(item.source_id, 0)
-            identifier = source.id if piece_number == 0 else new_entity_id()
-            emitted[item.source_id] = piece_number + 1
-            record = EntityRecord(
-                points=item.points,
-                id=identifier,
-                kind="polyline" if item.changed else source.kind,
-                meta=None if item.changed else deepcopy(source.meta),
-                construction=source.construction,
-                hidden=source.hidden,
-                locked=source.locked,
-                group=source.group if not item.changed else None,
-                layer=source.layer,
-            )
-            entities.append(record)
-            if item.changed:
-                changed.append(record)
-        self._host._document.entities = entities
-        self._host._document.ensure_unique_ids()
-        # Read ``.id`` only after ensure_unique_ids(), which rewrites duplicate
-        # ids in place on these same records.
-        self._host._last_split_result_ids = {record.id for record in changed}
-        return True, result.closed_splits, result.open_splits
+        return _split_geometry_with_line(cast(SplitGeometryHost, self._host), new_poly)
 
     def _carve_geometry_with_shape(self, cutter: list[tuple[float, float]]) -> tuple[bool, int]:
         """Subtract a closed drawn profile from every overlapping closed region."""
@@ -122,6 +158,7 @@ class EditingService:
         an annulus rather than incorrectly treating its inner contour as more
         material.  This is also the common commit path for procedural tools.
         """
+        self._host._last_split_source_ids = set()
         usable = [c for c in cutters if len(c) >= 4 and self._is_poly_closed(c)]
         if not usable:
             return False, 0
@@ -156,9 +193,15 @@ class EditingService:
 
         entities: list[EntityRecord] = []
         changed: list[EntityRecord] = []
+        changed_source_ids: set[str] = set()
         carved = 0
         for source in self._host._entities_by_id.values():
-            if not self._is_poly_closed(source.points) or source.locked or source.construction:
+            if (
+                not self._is_poly_closed(source.points)
+                or source.hidden
+                or source.locked
+                or source.construction
+            ):
                 entities.append(source)
                 continue
             source_shape = Polygon(source.points).buffer(0)
@@ -175,6 +218,7 @@ class EditingService:
                 continue
             rings = _rings(remaining)
             carved += 1
+            changed_source_ids.add(source.id)
             for ring_index, ring in enumerate(rings):
                 record = EntityRecord(
                     points=ring,
@@ -194,6 +238,7 @@ class EditingService:
         # Read ``.id`` only after ensure_unique_ids(), which rewrites duplicate
         # ids in place on these same records.
         self._host._last_split_result_ids = {record.id for record in changed}
+        self._host._last_split_source_ids = changed_source_ids
         return True, carved
 
     # ---- Snap helpers (inlined from _SnapMixin) ----
@@ -1439,12 +1484,18 @@ class EditingService:
         )
         if not entity_ids:
             return 0
-        result = self._host._canvas_service.execute(ExplodeCommand(entity_ids=entity_ids))
+        before = self._host._canvas_service.begin_preview()
+        result = self._host._canvas_service.execute(
+            ExplodeCommand(entity_ids=entity_ids), record=False
+        )
         if not result.changed:
             return 0
+        self._host._construction_service.discard_constraints_for_entities(set(entity_ids))
+        self._host._remove_dimensions_for_entities(set(entity_ids))
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
+        self._host._canvas_service.commit_preview(before)
         return len(result.selected_ids)
 
     def merge_selected_segments_to_objects(self, *, record_undo: bool = True) -> int:
@@ -1452,14 +1503,30 @@ class EditingService:
         if len(indices) < 2:
             return 0
         entity_ids = tuple(eid for eid in indices if self._host._entity_for_id(eid) is not None)
+        sources = [self._host._entity_for_id(eid) for eid in entity_ids]
+        attributes = {
+            (entity.layer, entity.construction, entity.hidden, entity.locked, entity.group)
+            for entity in sources
+            if entity is not None
+        }
+        if len(attributes) != 1:
+            self._host._show_flash(
+                "Merge paths from the same layer, group, and construction state", 1800
+            )
+            return 0
+        before = self._host._canvas_service.begin_preview() if record_undo else None
         result = self._host._canvas_service.execute(
-            MergeCommand(entity_ids=entity_ids), record=record_undo
+            MergeCommand(entity_ids=entity_ids), record=False
         )
         if not result.changed:
             return 0
+        self._host._construction_service.discard_constraints_for_entities(set(entity_ids))
+        self._host._remove_dimensions_for_entities(set(entity_ids))
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
+        if before is not None:
+            self._host._canvas_service.commit_preview(before)
         return len(result.selected_ids)
 
     # ── Base right-click handling + vertex ops (restored from _select/_edit mixins) ──
@@ -1947,6 +2014,11 @@ class SelectionService:
         elif getattr(self._host, "_draw_split_enabled", True) and close and len(cutter_poly) >= 4:
             split_happened, carved_regions = self._host._carve_geometry_with_shape(cutter_poly)
 
+        invalidated_ids = set(getattr(self._host, "_last_split_source_ids", set()))
+        if split_happened:
+            self._host._construction_service.discard_constraints_for_entities(invalidated_ids)
+            self._host._remove_dimensions_for_entities(invalidated_ids)
+
         # Closed profiles are persistent CAD geometry: carving subtracts their
         # area but does not consume the profile.  Only an open line/path that
         # fully splits a closed region acts as a disposable cutting stroke.
@@ -1984,6 +2056,10 @@ class SelectionService:
             }
         elif new_idx is not None:
             self._host._document.selection = {self._host._entities[new_idx].id}
+        # Drawing can split or merge entities.  Resolve/prune their dependent
+        # constraints before capturing the undo snapshot, so one Ctrl+Z
+        # restores both geometry and its constraint graph.
+        self._host._construction_service._solve_geometric_constraints()
         self._host._canvas_service.commit_preview(before)
         self._host._notify()
         self._host._fire_poly_change()
@@ -2058,6 +2134,9 @@ class SelectionService:
             else:
                 changed, closed_splits, open_splits = self._host._split_geometry_with_line(preview)
             if changed:
+                invalidated_ids = set(getattr(self._host, "_last_split_source_ids", set()))
+                self._host._construction_service.discard_constraints_for_entities(invalidated_ids)
+                self._host._remove_dimensions_for_entities(invalidated_ids)
                 # Closed profiles remain editable after carving.  Only an
                 # open curve that fully crosses a region is consumed.
                 consume = not close and closed_splits > 0
@@ -2069,6 +2148,7 @@ class SelectionService:
                     self._host._document.selection = {
                         eid for eid in self._host._last_split_result_ids if eid in live_ids
                     }
+                self._host._construction_service._solve_geometric_constraints()
                 self._host._canvas_service.commit_preview(before)
         if not changed:
             self._host._canvas_service.create_entities([entity])
@@ -2097,7 +2177,7 @@ class SelectionService:
         self._host._redraw()
 
     def _close_selected_polylines(self, *, record_undo: bool = True) -> int:
-        indices = self._host._selected_ids()
+        indices = self._host._mutable_selected_ids()
         if not indices:
             return 0
         candidates = []
@@ -2107,6 +2187,14 @@ class SelectionService:
                 continue
             poly = entity.points
             if len(poly) < 3 or self._host._is_poly_closed(poly):
+                continue
+            try:
+                from shapely.geometry import LineString
+
+                if not LineString(poly).is_simple:
+                    self._host._show_flash("Split branched paths before closing them", 1400)
+                    continue
+            except (TypeError, ValueError):
                 continue
             entity = deepcopy(entity)
             entity.points = [*poly, poly[0]]
@@ -2137,7 +2225,7 @@ class SelectionService:
             self._host._show_flash("Already closed", 900)
 
     def _open_selected_polylines(self) -> int:
-        indices = self._host._selected_ids()
+        indices = self._host._mutable_selected_ids()
         if not indices:
             return 0
         candidates = []
@@ -2163,7 +2251,7 @@ class SelectionService:
         if not self._host._sel:
             return
         candidates = []
-        for entity_id in self._host._sel:
+        for entity_id in self._host._mutable_selected_ids():
             entity = self._host._document.entity_for_id(entity_id)
             if entity is not None:
                 e = deepcopy(entity)
@@ -2192,8 +2280,16 @@ class SelectionService:
             if len(survivor) < 2:
                 break
             survivor_start, survivor_end = survivor[0], survivor[-1]
-            for i, poly in enumerate(e.points for e in self._host._entities):
-                if i == survivor_idx or len(poly) < 2:
+            for i, other in enumerate(self._host._entities):
+                poly = other.points
+                if (
+                    i == survivor_idx
+                    or len(poly) < 2
+                    or other.hidden
+                    or other.locked
+                    or other.layer != self._host._entities[survivor_idx].layer
+                    or other.construction != self._host._entities[survivor_idx].construction
+                ):
                     continue
                 p_start, p_end = poly[0], poly[-1]
                 if _eq(p_start, p_end):
@@ -2209,16 +2305,12 @@ class SelectionService:
                     merged = list(reversed(poly))[:-1] + survivor
                 if merged is None:
                     continue
-                popped_was_construction = self._host._entities[i].construction
-                survivor_was_construction = self._host._entities[survivor_idx].construction
                 self._host._entities[survivor_idx].points = merged
                 self._host._entities[survivor_idx].kind = "polyline"
                 self._host._entities[survivor_idx].meta = None
                 del self._host._entities[i]
                 if i < survivor_idx:
                     survivor_idx -= 1
-                if popped_was_construction or survivor_was_construction:
-                    self._host._entities[survivor_idx].construction = True
                 merged_any = True
                 changed = True
                 break
@@ -2363,6 +2455,19 @@ class ConstructionService:
         changed += self._apply_shape_and_projection_constraints(entities_by_id)
         return changed
 
+    def discard_constraints_for_entities(self, entity_ids: set[str]) -> int:
+        """Remove constraints whose references cannot survive a topology change."""
+        if not entity_ids:
+            return 0
+        retained = [
+            constraint
+            for constraint in self._host._constraints
+            if not entity_ids.intersection(constraint.entity_ids)
+        ]
+        removed = len(self._host._constraints) - len(retained)
+        self._host._constraints = retained
+        return removed
+
     def _apply_shape_and_projection_constraints(
         self, entities_by_id: dict[str, EntityRecord]
     ) -> int:
@@ -2433,11 +2538,11 @@ class ConstructionService:
             for ref in getattr(self._host, "_constraint_segment_refs", [])
             if isinstance(ref, dict) and str(ref.get("entity_id", "")) in self._host._entities_by_id
         ]
-        vertex_refs = [
+        vertex_refs = sorted(
             (str(entity_id), int(vertex_index))
             for entity_id, vertex_index in getattr(self._host, "_edit_selected_verts", set())
             if str(entity_id) in self._host._entities_by_id
-        ]
+        )
         line_indices = [
             index
             for index in self._host._selected_ids()

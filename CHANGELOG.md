@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.3.21 — 2026-09-11
+
+### Added
+
+- **Production review before export** — Pattern export can now show a review
+  sheet with geometry findings, path and segment counts, cut and travel
+  length, bounds, estimated cut time, bed fit, and the operations/layers that
+  will be written. It is enabled by default and can be turned off in Settings.
+- **Machine profiles** — configure a profile name, bed dimensions, feed rate,
+  and kerf in Settings. The configured bed appears on Draft, Pattern, and
+  Trace canvases and the export review warns when a job does not fit.
+- **Headless Pattern and Trace commands** — `simple-stipple pattern` and
+  `simple-stipple trace` process a single file or an input folder, with
+  recursive folders, deterministic stipple seeds, and folder-to-folder output.
+- **Command palette** — search app navigation and page actions from the shell
+  with the command-palette shortcut or the Commands button.
+- **Pattern lattice controls** — pattern regions share one document origin,
+  stagger, and seed, so adjoining regions line up and stochastic patterns are
+  reproducible. Custom tiles retain their saved tile settings without replacing
+  the document lattice.
+- **Pattern extension registry** — optional pattern packs can register
+  generators through the `simple_stipple.pattern_generators` entry-point
+  group without modifying the application.
+- **Preset thumbnails** — the preset manager now shows a visual pattern tile
+  beside every preset.
+- **Batch conversion results** — FVI, DXF repair, DXF-to-SVG, and SVG-to-DXF
+  batch jobs now list every file outcome, let you open successful outputs, and
+  retry only failed files.
+- **Raster engraving dithering** — continuous tone, Floyd–Steinberg, ordered,
+  and halftone output are available in both Pattern image engraving and Trace
+  raster export.
+- **Geometry Health** — Pattern can list geometry findings, focus the selected
+  problem on the canvas, and surface self-intersections and revisited branch
+  junctions before export.
+
+### Changed
+
+- **Export operations are production-aware** — vector exports consistently
+  apply containment-aware inner-before-outer ordering when optimization is
+  enabled, while the production review reports the selected machine's kerf.
+- **Export writes are transactional** — all related vector and raster files
+  are prepared in a staging directory and published together, restoring the
+  originals if installation fails.
+- **Pattern regions respect nested outlines** — a treated outer region now
+  automatically leaves every contained, untreated closed outline empty. An
+  inner circle therefore remains a hole rather than receiving outer hatch
+  strokes.
+- **Workflow layout is more consistent** — Draft, Pattern, Trace, and Convert
+  use responsive drawers, keep primary actions reachable at compact sizes, and
+  provide clearer handoff, recovery, and conversion-result feedback.
+
+### Fixed
+
+- **Merge and branch handling** — merging crossing paths now keeps simple
+  branch arms instead of creating a self-intersecting backtracking polyline.
+  Closing a branched path is refused with an actionable message.
+- **Constraints and dimensions survive editing predictably** — splitting,
+  carving, merging, exploding, and deleting geometry remove invalid dependent
+  constraints/dimensions in the same undo step; undo restores the associated
+  state. Horizontal, vertical, and fixed constraints preserve complete
+  polylines and converge reliably.
+- **Protected geometry stays protected** — locked, hidden, and construction
+  geometry cannot be split, carved, closed, or silently merged by automatic
+  joining.
+- **Pattern and fill correctness** — nested untreated contours cannot be
+  filled through; custom-tile counters remain holes; export path ordering is
+  applied across all vector formats.
+- **Trace progress and next actions** — stale progress from a cancelled or
+  superseded trace no longer overwrites the active trace, and choosing a next
+  action no longer unexpectedly navigates away.
+- **Workspace and conversion feedback** — restored workspaces visibly ask to
+  be saved; Pattern handoffs show a receipt; Convert only offers Pattern for a
+  closed preview and preserves individual conversion outcomes.
+
 ## 0.3.20 — 2026-09-02
 
 ### Fixed

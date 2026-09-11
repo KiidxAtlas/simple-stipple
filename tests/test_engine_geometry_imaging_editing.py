@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from shapely.geometry import Polygon
 
 from simple_stipple.core.editing.boolean import (
     boolean_polylines,
@@ -13,6 +14,7 @@ from simple_stipple.core.editing.boolean import (
     clipper_union,
     offset_polyline,
 )
+from simple_stipple.core.editing.topology import PathInput, merge_paths
 from simple_stipple.core.geometry import (
     build_snap_tree,
     delaunay_triangulation,
@@ -27,6 +29,7 @@ from simple_stipple.core.imaging import (
     prepare_engraving_image,
     scale_to_mm,
     simplify_contours,
+    tone_stipple,
 )
 
 
@@ -81,6 +84,36 @@ def test_trace_pipeline_contract(tmp_path: Path) -> None:
         image_to_outlines(str(image_path), cancel_check=lambda: True)
 
 
+def test_tone_stipple_is_seeded_and_weights_dark_pixels() -> None:
+    image = Image.new("L", (20, 10), 255)
+    for x in range(10):
+        for y in range(10):
+            image.putpixel((x, y), 0)
+    outline = Polygon([(0, 0), (20, 0), (20, 10), (0, 10), (0, 0)])
+
+    first = tone_stipple(image, outline, dots=40, max_radius_mm=0.1, seed=9)
+    second = tone_stipple(image, outline, dots=40, max_radius_mm=0.1, seed=9)
+
+    assert first == second
+    assert first
+    assert all(sum(point[0] for point in dot[:-1]) / (len(dot) - 1) < 10 for dot in first)
+
+
+def test_raster_dither_modes_are_binary_and_deterministic() -> None:
+    image = Image.linear_gradient("L").resize((16, 8))
+    for method in ("floyd_steinberg", "ordered", "halftone"):
+        result = prepare_engraving_image(
+            image,
+            RasterEngravingSpec(
+                width_mm=4.0,
+                height_mm=2.0,
+                line_interval_mm=0.25,
+                dither=method,
+            ),
+        )
+        assert set(result.get_flattened_data()) <= {0, 255}
+
+
 def test_polygon_editing_contracts() -> None:
     left = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]
     right = [(1.0, 0.0), (3.0, 0.0), (3.0, 2.0), (1.0, 2.0), (1.0, 0.0)]
@@ -93,3 +126,18 @@ def test_polygon_editing_contracts() -> None:
     scaled = scale_to_mm([left], 1.0, 2)
     assert scaled[0][-1][1] == 2.0
     assert simplify_contours([left], 0.1)
+
+
+def test_merge_paths_nodes_crossing_open_paths_keeps_simple_branches() -> None:
+    """Noding a crossing must not manufacture a self-intersecting walk."""
+    merged = merge_paths(
+        [
+            PathInput([(0.0, 0.0), (2.0, 2.0)]),
+            PathInput([(0.0, 2.0), (2.0, 0.0)]),
+        ],
+        node_intersections=True,
+    )
+
+    assert len(merged) == 4
+    assert all((1.0, 1.0) in path.points for path in merged)
+    assert all(len(set(path.points)) == len(path.points) for path in merged)

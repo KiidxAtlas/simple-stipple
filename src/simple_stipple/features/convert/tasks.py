@@ -6,7 +6,11 @@ import logging
 import shutil
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
+from typing import Any, Literal, TypeVar
 
 from PySide6.QtCore import QCoreApplication, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
@@ -50,8 +54,95 @@ def _append_ignored_entities_note(msg: str, stats: dict) -> str:
     return f"{msg}  · ignored {ignored} unsupported entity(s)"
 
 
+_ResultValue = TypeVar("_ResultValue")
+
+
+@dataclass(frozen=True)
+class ConversionResult:
+    source: Path
+    output: Path
+    status: str
+    message: str
+    operation: Callable[[], Any] = field(repr=False, compare=False)
+
+
 class _ConversionSubTab(QWidget):
     """Shared cancellation, status, and file-picker behavior for conversion tools."""
+
+    results_changed = Signal()
+    _result_ready = Signal(int, object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._shutting_down = False
+        self._job_revision = 0
+        self._results: dict[Path, ConversionResult] = {}
+        self._result_ready.connect(self._receive_result)
+
+    @Slot(int, object)
+    def _receive_result(self, revision: int, result: ConversionResult) -> None:
+        if self._shutting_down or revision != self._job_revision:
+            return
+        self._results[result.source] = result
+        self.results_changed.emit()
+
+    def _execute_conversion(
+        self, source: str | Path, output: str | Path, operation: Callable[[], _ResultValue]
+    ) -> _ResultValue:
+        source, output = Path(source), Path(output)
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if source.resolve() == output.resolve():
+                shutil.copy2(source, source.with_suffix(source.suffix + ".bak"))
+            value = operation()
+        except Exception as exc:
+            status = "Skipped" if isinstance(exc, FviNoGeometryError) else "Failed"
+            self._result_ready.emit(
+                self._job_revision, ConversionResult(source, output, status, str(exc), operation)
+            )
+            raise
+        self._result_ready.emit(
+            self._job_revision,
+            ConversionResult(source, output, "Done", "Output written", operation),
+        )
+        return value
+
+    def retry_failed(self) -> None:
+        if getattr(self, "_running", False):
+            return
+        failed = [result for result in self._results.values() if result.status == "Failed"]
+        if not failed or not self._confirm_replace([result.output for result in failed]):
+            return
+        cancel_event = self._start_job(preserve_results=True)
+        self._refresh_readiness()
+        self._thread = threading.Thread(
+            target=self._retry_results, args=(failed, cancel_event), daemon=True
+        )
+        self._thread.start()
+
+    def _retry_results(self, failed: list[ConversionResult], cancel_event: threading.Event) -> None:
+        self._begin_batch(len(failed))
+        errors = 0
+        for index, result in enumerate(failed, start=1):
+            if cancel_event.is_set():
+                self._finish_cancelled()
+                self.results_changed.emit()
+                return
+            self._report_batch_progress(index, "Retrying", result.source.name)
+            try:
+                self._execute_conversion(result.source, result.output, result.operation)
+                self.log_line.emit(f"Retry succeeded: {result.source.name} → {result.output}")
+            except Exception as exc:
+                errors += 1
+                self.log_line.emit(f"Retry failed: {result.source.name}: {exc}")
+            self._record_batch_item(index)
+        self._running = False
+        self._refresh_readiness()
+        self._status_sig.emit(
+            f"Retry complete — {len(failed) - errors} succeeded, {errors} failed",
+            STATUS_WARN if errors else STATUS_OK,
+        )
+        self.results_changed.emit()
 
     log_line = Signal(str)
     _btn_state = Signal(bool)
@@ -121,11 +212,15 @@ class _ConversionSubTab(QWidget):
     def _refresh_readiness_on_gui(self) -> None:
         self._btn_state.emit(self.is_ready())
 
-    def _start_job(self) -> threading.Event:
+    def _start_job(self, *, preserve_results: bool = False) -> threading.Event:
         self._shutting_down = False
         self.blockSignals(False)
         self._cancel_event = threading.Event()
         self._running = True
+        self._job_revision += 1
+        if not preserve_results:
+            self._results.clear()
+        self.results_changed.emit()
         self._job_started_at = time.monotonic()
         self._job_completed = 0
         self._job_total = 0
@@ -478,8 +573,9 @@ class FviSubTab(_ConversionSubTab):
             else:
                 dest = fvi.with_suffix(".dxf")
             try:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                report = DxfService.convert_fvi_to_dxf(fvi, dest)
+                report = self._execute_conversion(
+                    fvi, dest, partial(DxfService.convert_fvi_to_dxf, fvi, dest)
+                )
                 src_path = Path(src)
                 display_source = str(fvi.relative_to(src_path)) if src_path.is_dir() else fvi.name
                 display_dest = str(dest.relative_to(Path(out_dir))) if out_dir else dest.name
@@ -705,7 +801,7 @@ class FixerSubTab(_ConversionSubTab):
         out_dir: str,
         cancel_event: threading.Event,
         include_subfolders: bool = True,
-        repair_mode: str = "safe",
+        repair_mode: Literal["safe", "flatten"] = "safe",
     ) -> None:
         files = self._collect_files(src, ".dxf", include_subfolders)
         if not files:
@@ -736,10 +832,9 @@ class FixerSubTab(_ConversionSubTab):
             destination = output_root / relative if output_root else source
             self._report_batch_progress(index, "Fixing", source.name)
             try:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                if destination.resolve() == source.resolve():
-                    shutil.copy2(source, source.with_suffix(source.suffix + ".bak"))
-                stats = fix_dxf(source, destination, mode=repair_mode)  # type: ignore[arg-type]
+                stats = self._execute_conversion(
+                    source, destination, partial(fix_dxf, source, destination, mode=repair_mode)
+                )
                 succeeded += 1
                 for key in totals:
                     totals[key] += int(stats.get(key, 0) or 0)
@@ -802,16 +897,13 @@ class FixerSubTab(_ConversionSubTab):
         src: str,
         out: str,
         cancel_event: threading.Event,
-        repair_mode: str = "safe",
+        repair_mode: Literal["safe", "flatten"] = "safe",
     ) -> None:
         try:
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
-            if Path(src).resolve() == Path(out).resolve():
-                source = Path(src)
-                shutil.copy2(source, source.with_suffix(source.suffix + ".bak"))
-            stats = fix_dxf(src, out, mode=repair_mode)  # type: ignore[arg-type]
+            stats = self._execute_conversion(src, out, partial(fix_dxf, src, out, mode=repair_mode))
             msg = (
                 f"Done — {stats['polylines_in']} in → {stats['polylines_out']} out"
                 f"  · closed {stats['closed']}"
@@ -991,7 +1083,7 @@ class SvgSubTab(_ConversionSubTab):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
-            stats = DxfService.dxf_to_svg(src, out)
+            stats = self._execute_conversion(src, out, partial(DxfService.dxf_to_svg, src, out))
             msg = (
                 f"Done — {stats['polylines']} polyline(s)"
                 f"  · {stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm"
@@ -1037,8 +1129,7 @@ class SvgSubTab(_ConversionSubTab):
             svg = Path(out_dir) / relative.with_suffix(".svg")
             self._report_batch_progress(index, "Converting", dxf.name)
             try:
-                svg.parent.mkdir(parents=True, exist_ok=True)
-                stats = DxfService.dxf_to_svg(dxf, svg)
+                stats = self._execute_conversion(dxf, svg, partial(DxfService.dxf_to_svg, dxf, svg))
                 msg = (
                     f"  ✓  {relative} → {svg.name}"
                     f"  ({stats['polylines']} polyline(s), "
@@ -1211,7 +1302,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
             if cancel_event.is_set():
                 self._finish_cancelled()
                 return
-            stats = DxfService.svg_to_dxf(src, out)
+            stats = self._execute_conversion(src, out, partial(DxfService.svg_to_dxf, src, out))
             msg = (
                 f"Done — {stats['polylines']} polyline(s)"
                 f"  · {stats['width_mm']:.1f} × {stats['height_mm']:.1f} mm"
@@ -1267,8 +1358,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
             dxf = Path(out_dir) / relative.with_suffix(".dxf")
             self._report_batch_progress(index, "Converting", svg.name)
             try:
-                dxf.parent.mkdir(parents=True, exist_ok=True)
-                stats = DxfService.svg_to_dxf(svg, dxf)
+                stats = self._execute_conversion(svg, dxf, partial(DxfService.svg_to_dxf, svg, dxf))
                 msg = (
                     f"  ✓  {relative} → {dxf.name}"
                     f"  ({stats['polylines']} polyline(s), "

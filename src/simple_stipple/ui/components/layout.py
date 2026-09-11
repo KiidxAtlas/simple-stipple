@@ -214,6 +214,7 @@ class ResponsiveContentSplitter(QSplitter):
     # window is never expanded by the combined pane minimum-size hints.
     COMPACT_WIDTH = 1100
     COMPACT_HYSTERESIS = 24
+    MIN_DRAWER_WIDTH = 220
 
     def __init__(self) -> None:
         super().__init__(Qt.Orientation.Horizontal)
@@ -222,6 +223,7 @@ class ResponsiveContentSplitter(QSplitter):
         self._drawer_size = 280
         self._compact = False
         self._compact_drawer_open = False
+        self._drawer_toggle_in_layout = False
         self._secondary_size_policy: QSizePolicy | None = None
         self._secondary_minimum_width = 0
         # A QWidget parented directly to QSplitter is automatically inserted as
@@ -255,6 +257,12 @@ class ResponsiveContentSplitter(QSplitter):
             self._drawer_size = sizes[index]
         self._update_responsive_state()
 
+    def add_drawer_toggle_to(self, layout: QHBoxLayout) -> None:
+        """Let a page reserve layout space for its drawer controls."""
+        self._drawer_toggle_in_layout = True
+        layout.addWidget(self._drawer_toggle)
+        self._update_responsive_state()
+
     def _set_drawer_open(self, opened: bool) -> None:
         index = self._responsive_secondary
         if index is None or self.count() < 2:
@@ -262,27 +270,27 @@ class ResponsiveContentSplitter(QSplitter):
         sizes = self.sizes()
         total = max(sum(sizes), self.width())
         if opened:
-            drawer = min(max(220, self._drawer_size), max(220, total // 2))
+            drawer = min(
+                max(self.MIN_DRAWER_WIDTH, self._drawer_size),
+                max(self.MIN_DRAWER_WIDTH, total // 2),
+            )
             sizes[index] = drawer
             sizes[1 - index] = max(1, total - drawer)
         else:
-            if sizes[index] > 0:
+            if sizes[index] >= self.MIN_DRAWER_WIDTH:
                 self._drawer_size = sizes[index]
             sizes[1 - index] = max(1, total)
             sizes[index] = 0
         self.setSizes(sizes)
-        self._drawer_toggle.setText(
-            f"Hide {self._drawer_label}" if opened else f"Show {self._drawer_label}"
-        )
-        self._drawer_toggle.setAccessibleDescription(self._drawer_toggle.text())
+        self._sync_drawer_from_sizes()
 
     def _toggle_drawer(self) -> None:
         index = self._responsive_secondary
         if index is not None:
-            opened = self.sizes()[index] == 0
+            # Qt can leave a collapsed pane a pixel wide after reflow. A
+            # clipped drawer must expand on click, not require another click.
+            opened = self.sizes()[index] < self.MIN_DRAWER_WIDTH
             self._set_drawer_open(opened)
-            if self._compact:
-                self._compact_drawer_open = opened
 
     def _sync_drawer_from_sizes(self, *_args) -> None:
         """Reflect handle drags (and programmatic resizes) in the toggle."""
@@ -292,7 +300,7 @@ class ResponsiveContentSplitter(QSplitter):
         sizes = self.sizes()
         if index >= len(sizes):
             return
-        opened = sizes[index] > 0
+        opened = sizes[index] >= self.MIN_DRAWER_WIDTH
         if opened:
             self._drawer_size = sizes[index]
         if self._compact:
@@ -325,9 +333,11 @@ class ResponsiveContentSplitter(QSplitter):
             self._compact = compact
             self._set_drawer_open(self._compact_drawer_open if compact else True)
         self._drawer_toggle.setVisible(compact)
-        self._position_drawer_toggle()
+        self._sync_drawer_from_sizes()
 
     def _position_drawer_toggle(self) -> None:
+        if self._drawer_toggle_in_layout:
+            return
         hint = self._drawer_toggle.sizeHint()
         width = max(112, hint.width() + 12)
         parent = self._drawer_toggle.parentWidget()

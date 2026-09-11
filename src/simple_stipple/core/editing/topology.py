@@ -96,7 +96,16 @@ def _node_open_paths_at_intersections(paths: list[PathInput]) -> list[PathInput]
     lines = [LineString(path.points) for path in paths if len(path.points) >= 2]
     if len(lines) < 2:
         return paths
-    merged = linemerge(unary_union(lines))
+    noded = unary_union(lines)
+    # ``unary_union`` is typed as a broad BaseGeometry even though a union of
+    # valid line strings is line-compatible.  Keep the runtime guard as well:
+    # linemerge cannot accept a collection containing a non-line geometry.
+    if isinstance(noded, LineString):
+        merged = noded
+    elif isinstance(noded, MultiLineString):
+        merged = linemerge(noded)
+    else:
+        return paths
     geoms = getattr(merged, "geoms", None)
     branches = list(geoms) if geoms is not None else [merged]
     construction = any(path.construction for path in paths)
@@ -175,16 +184,17 @@ def _walk_branches_into_chains(
 def merge_paths(
     paths: list[PathInput], tolerance: float = 0.01, *, node_intersections: bool = False
 ) -> list[PathInput]:
-    """Merge all connected segments in paths into maximal chains.
+    """Merge all connected segments in paths into maximal *simple* chains.
 
     With ``node_intersections=True``, open paths are first split at mutual
-    intersections, and junction-sharing branches are walked into a single
-    polyline per connected component (revisiting junction points as needed).
+    intersections.  A branch remains separate paths: an X or T junction is a
+    graph, not a single polyline.  Turning it into an Euler-style walk would
+    repeat its junction and create invalid, self-intersecting linework.
     """
     if node_intersections:
         noded = _node_open_paths_at_intersections(paths)
         if noded is not paths:
-            return _walk_branches_into_chains(noded, tolerance)
+            return noded
     segments = [
         (segment[0], segment[1], path.construction)
         for path in paths

@@ -1540,7 +1540,7 @@ wheels = [
 
 [[package]]
 name = "simple-stipple"
-version = "0.3.9"
+version = "0.3.21"
 source = { editable = "." }
 dependencies = [
     { name = "ezdxf" },

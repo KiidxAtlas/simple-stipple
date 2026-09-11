@@ -11,7 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -38,6 +39,44 @@ from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
 from simple_stipple.ui.style import STATUS_ERR, STATUS_OK
+
+
+def _preset_thumbnail(payload: dict) -> QIcon:
+    """Render a compact visual cue without generating full pattern geometry."""
+    pixmap = QPixmap(72, 44)
+    pixmap.fill(QColor("#1b2430"))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#6ee7b7"), 1.5))
+    pattern = str(payload.get("pattern", ""))
+    if pattern == "Stipple Dots":
+        painter.setBrush(QColor("#6ee7b7"))
+        for x in range(8, 70, 12):
+            for y in range(8 + (x // 12 % 2) * 4, 42, 12):
+                painter.drawEllipse(x, y, 3, 3)
+    elif pattern == "Honeycomb":
+        for x in range(8, 70, 16):
+            for y in range(6 + (x // 16 % 2) * 7, 42, 14):
+                painter.drawPolygon(
+                    [
+                        QPointF(x + 4, y),
+                        QPointF(x + 8, y + 3),
+                        QPointF(x + 8, y + 8),
+                        QPointF(x + 4, y + 11),
+                        QPointF(x, y + 8),
+                        QPointF(x, y + 3),
+                    ]
+                )
+    elif pattern == "Voronoi":
+        painter.drawLine(5, 5, 25, 38)
+        painter.drawLine(25, 38, 46, 6)
+        painter.drawLine(46, 6, 68, 36)
+        painter.drawLine(5, 20, 68, 20)
+    else:
+        for offset in range(-40, 80, 12):
+            painter.drawLine(offset, 43, offset + 34, 1)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class PresetManagerDialog(QDialog):
@@ -180,6 +219,7 @@ class PresetManagerDialog(QDialog):
             payload = self._presets[name]
             pattern = payload.get("pattern", "?")
             item = QListWidgetItem(name)
+            item.setIcon(_preset_thumbnail(payload))
             item.setData(Qt.ItemDataRole.UserRole, name)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
             details = "\n".join(f"{k}: {v}" for k, v in sorted(payload.items()) if k != "pattern")

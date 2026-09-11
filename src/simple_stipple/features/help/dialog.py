@@ -694,7 +694,7 @@ def _build_shortcuts() -> str:
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Ctrl+,</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Open Settings</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Ctrl+Shift+N</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">New Window (independent workspace)</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Alt+1 … Alt+4</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Switch to pages (Draft, Pattern, Trace, Convert)</td></tr>
-    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Alt+5</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Open Repository Sync window</td></tr>
+    <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Alt+5</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Switch to Repository</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Esc</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Cancel current tool / exit mode</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Shift+R / Shift+C / Shift+S / Shift+P</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Quick-shape drag (rectangle, circle, slot, hexagon) — Select mode</td></tr>
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Ctrl+R</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Toggle rulers</td></tr>
@@ -801,7 +801,7 @@ def _build_support() -> str:
     <li><strong>Workspace folder</strong> — default location for workspace files.</li>
     <li><strong>Pattern library folder</strong> — where pattern presets are stored.</li>
     <li><strong>Output folders</strong> — default locations for DXF, SVG, and trace outputs.</li>
-    <li><strong>Repository folder</strong> — default Git repository directory (Repository Sync window).</li>
+    <li><strong>Repository folder</strong> — default Git repository directory (Repository tab).</li>
     <li><strong>Auto-fetch on startup</strong> — automatically fetch remote repository metadata.</li>
     <li><strong>Check for updates on startup</strong> — silently check for app updates.</li>
     <li><strong>Display units</strong> — millimeters or inches. Changes every ruler, coordinate readout, and numeric-entry field across the app; the underlying geometry always stays in millimeters internally, so switching units never changes your actual drawing.</li>
@@ -1105,7 +1105,7 @@ def _build_repo_page() -> str:
 </h2>
 
 <h3 class="subheading">Overview</h3>
-<p>Repository Sync (<strong>File ▸ Repository Sync…</strong>, Alt+5) provides a simplified Git workflow for managing your project repository directly from the application.</p>
+<p>Repository (<strong>File ▸ Open Repository</strong>, Alt+5) provides a simplified Git workflow for managing your project repository directly from the application.</p>
 
 <h3 class="subheading">Setup</h3>
 <ol>
@@ -1191,7 +1191,7 @@ def _build_getting_started() -> str:
     <tr><td style="padding:6px;border-bottom:1px solid #30363d;"><strong>Convert</strong></td><td style="padding:6px;border-bottom:1px solid #30363d;">Alt+4</td><td style="padding:6px;border-bottom:1px solid #30363d;">Utilities — FVI→DXF, SVG↔DXF conversion, repair.</td></tr>
     </table>
 
-<p><em>Repository sync (Git pull/commit/push) lives under <strong>File ▸ Repository Sync…</strong> (Alt+5).</em></p>
+<p><em>Repository sync (Git pull/commit/push) lives in the <strong>Repository</strong> tab (Alt+5).</em></p>
 
 <p><em>Switch between pages using the tab bar or keyboard shortcuts. Each page maintains its own workspace state which is saved automatically.</em></p>
 """

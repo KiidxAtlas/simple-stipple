@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import tempfile
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 
@@ -159,7 +160,28 @@ def load_app_qss(
     # Qt's QSS url() needs forward slashes even on Windows, and the icon
     # directory may be a package path or a materialized archive.
     icons_dir = qss_path.with_name("icons").as_posix()
-    qss = qss_path.read_text(encoding="utf-8").replace("{ICONS_DIR}", icons_dir)
+    return _render_app_qss(
+        qss_path.read_text(encoding="utf-8"),
+        icons_dir,
+        scale=scale,
+        high_contrast=high_contrast,
+        appearance=appearance,
+        density=density,
+    )
+
+
+@lru_cache(maxsize=32)
+def _render_app_qss(
+    template: str,
+    icons_dir: str,
+    *,
+    scale: float,
+    high_contrast: bool,
+    appearance: str,
+    density: str,
+) -> str:
+    # Key by template contents too, so editing a theme never leaves a stale cache.
+    qss = template.replace("{ICONS_DIR}", icons_dir)
     qss = substitute_tokens(qss, resolve(appearance, high_contrast))
     qss += _density_overrides(density)
 
@@ -185,9 +207,14 @@ def load_app_qss(
 
 def apply_dark_theme(app: QApplication) -> None:
     """Apply app-wide palette and stylesheet at the composition boundary."""
-    app.setStyle("Fusion")
-    app.setPalette(accessibility_palette())
-    app.setStyleSheet(load_app_qss())
+    if app.style().objectName().casefold() != "fusion":
+        app.setStyle("Fusion")
+    palette = accessibility_palette()
+    if app.palette() != palette:
+        app.setPalette(palette)
+    qss = load_app_qss()
+    if app.styleSheet() != qss:
+        app.setStyleSheet(qss)
 
 
 # ── Spacing, motion ───────────────────────────────────────────────────────

@@ -954,13 +954,15 @@ class CanvasView(
             return 0
         from simple_stipple.core.document.commands import DeleteCommand
 
-        result = self._canvas_service.execute(DeleteCommand(entity_ids=tuple(drop)))
+        before = self._canvas_service.begin_preview()
+        result = self._canvas_service.execute(DeleteCommand(entity_ids=tuple(drop)), record=False)
         if not result.changed:
             return 0
         self._remove_dimensions_for_entities(set(drop))
         self._redraw()
         self._notify()
         self._fire_poly_change()
+        self._canvas_service.commit_preview(before)
         return len(drop)
 
     def delete_selected(self) -> int:
@@ -970,13 +972,17 @@ class CanvasView(
             return 0
         from simple_stipple.core.document.commands import DeleteCommand
 
-        result = self._canvas_service.execute(DeleteCommand(entity_ids=tuple(delete_set)))
+        before = self._canvas_service.begin_preview()
+        result = self._canvas_service.execute(
+            DeleteCommand(entity_ids=tuple(delete_set)), record=False
+        )
         if not result.changed:
             return 0
         self._remove_dimensions_for_entities(set(delete_set))
         self._redraw()
         self._notify()
         self._fire_poly_change()
+        self._canvas_service.commit_preview(before)
         return n
 
     def set_undo_hooks(self, undo=None, redo=None) -> None:
@@ -1500,6 +1506,14 @@ class CanvasView(
 
     def open_selected_polylines(self) -> int:
         return self._open_selected_polylines()
+
+    def set_machine_bed(self, width_mm: float | None, height_mm: float | None) -> None:
+        """Show a non-editable lower-left-origin machine work-area reference."""
+        if width_mm is None or height_mm is None or width_mm <= 0 or height_mm <= 0:
+            self._machine_bed_mm = None
+        else:
+            self._machine_bed_mm = (float(width_mm), float(height_mm))
+        self._redraw()
 
     @property
     def poly_count(self) -> int:
