@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.23 — 2026-09-21
+
+### Changed
+
+- **Canvas architecture is easier to inspect safely** — CanvasView state is
+  explicitly annotated, Pyright checks the complete source tree without
+  suppressions, and renderer, hit testing, and snapping share an immutable
+  frame-state model for viewport, selection, and interaction reads.
+- **Feature feedback is clearer and more accessible** — Pattern, Trace,
+  Convert, and Repository failures use consistent detailed error dialogs;
+  destructive Repository reset now states its consequence; and urgent errors
+  notify assistive technology.
+- **Conversion and Draft workflows are simpler to maintain** — conversion tool
+  labels, descriptions, tooltips, and primary actions share one specification;
+  Draft destructive confirmations share one contract; and Draft/Trace callback
+  bindings no longer mutate their classes after definition.
+
+### Fixed
+
+- **Desktop test teardown and release readiness** — Qt top-level widgets are
+  deterministically drained between tests, preventing the complete suite from
+  stalling; release metadata now carries the current patch version.
+
 ## 0.3.21 — 2026-09-11
 
 ### Added
