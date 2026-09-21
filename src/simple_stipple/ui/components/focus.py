@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import platform as _platform
 import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from PySide6.QtCore import (
     QEvent,
@@ -17,7 +18,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
+
+@contextmanager
+def blocked_signals(widget: QWidget) -> Iterator[None]:
+    """Temporarily suppress widget signals and restore the prior state."""
+    previous = widget.blockSignals(True)
+    try:
+        yield
+    finally:
+        widget.blockSignals(previous)
 
 
 def install_dialog_focus_lifecycle(

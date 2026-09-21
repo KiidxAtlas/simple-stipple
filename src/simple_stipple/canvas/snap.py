@@ -17,7 +17,7 @@ below draws from.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.canvas.constants import SNAP_DIST as _DRAG_SNAP_DIST
@@ -42,6 +42,7 @@ from simple_stipple.core.cad.snapping import (
 from simple_stipple.core.document.geometry import entity_center
 
 if TYPE_CHECKING:
+    from simple_stipple.canvas.objects import CanvasFrameState
     from simple_stipple.canvas.view.main import CanvasView
     from simple_stipple.core.cad.shape_base import Shape
 
@@ -478,6 +479,16 @@ class SnapEngine(_DragSnapResolver):
             return 1.0
         return max(0.0, min(2.0, value))
 
+    def _frame_state(self) -> CanvasFrameState | None:
+        frame_state = getattr(self.v, "frame_state", None)
+        if not callable(frame_state):
+            return None
+        return cast("CanvasFrameState", frame_state())
+
+    def _frame_entities(self):
+        frame = self._frame_state()
+        return frame.document.entities if frame is not None else self.v._entities
+
     # ── Public API ────────────────────────────────────────────────────────
 
     def query(
@@ -508,7 +519,7 @@ class SnapEngine(_DragSnapResolver):
         if self._snap_strength() <= 0.0:
             self.clear_relationship_reference()
             return None
-        polylines = {e.id: e.points for e in v._entities}
+        polylines = {entity.id: entity.points for entity in self._frame_entities()}
         # Locked and non-active-layer entities remain useful references, but
         # explicitly hidden geometry must not create invisible snap targets.
         hidden_polys = v._flagged("hidden")
@@ -673,9 +684,15 @@ class SnapEngine(_DragSnapResolver):
         Only nearby source segments participate, and the selected source is
         retained so feedback can identify the exact referenced geometry.
         """
+        frame = self._frame_state()
+        draw_primitive = (
+            frame.interaction.draw_primitive
+            if frame is not None
+            else getattr(self.v, "_draw_primitive", None)
+        )
         # Spline controls do not form straight segments. Treating their
         # control polygon as line geometry produced false relationship hints.
-        if getattr(self.v, "_draw_primitive", None) in {"spline", "bezier"}:
+        if draw_primitive in {"spline", "bezier"}:
             self.clear_relationship_reference()
             return None
         locked_reference = self.last_relationship_reference
@@ -692,12 +709,14 @@ class SnapEngine(_DragSnapResolver):
         combined_candidates: list[tuple[SnapResult, RelationshipReference]] = []
         sources = [
             (entity.id, entity.points, False)
-            for entity in self.v._entities
+            for entity in self._frame_entities()
             if entity.id not in (exclude or ())
             and entity.id not in hidden_ids
             and getattr(entity, "kind", "polyline") not in {"spline", "bezier"}
         ]
-        draw_points = list(getattr(self.v, "_draw_pts", []))
+        draw_points = list(
+            frame.interaction.draw_points if frame is not None else getattr(self.v, "_draw_pts", [])
+        )
         if len(draw_points) >= 2:
             # Committed segments of the in-progress polyline are always
             # relevant to the next segment, even though the unfinished shape
@@ -1011,7 +1030,7 @@ class SnapEngine(_DragSnapResolver):
             self.v, "_snap_align_y_enabled", getattr(self.v, "_snap_axis_alignment_enabled", True)
         )
         reference_c = self.v._w2c(*reference) if reference is not None else None
-        for entity in self.v._entities:
+        for entity in self._frame_entities():
             if entity.id in (exclude or ()) or entity.id in hidden_ids or not entity.points:
                 continue
             # Open-path endpoints are the primary intent. Closed paths have no
@@ -1215,7 +1234,7 @@ class SnapEngine(_DragSnapResolver):
         best_dist = self.INFERRED_LINE_SNAP_PX * self._snap_strength()
         hidden_ids = self.v._flagged("hidden")
         reference_c = self.v._w2c(*reference) if reference is not None else None
-        for entity in self.v._entities:
+        for entity in self._frame_entities():
             if entity.id in (exclude or ()) or entity.id in hidden_ids:
                 continue
             points = entity.points

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QLabel, QMenu
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.editing.corners import chamfered_corner_points, rounded_corner_points
-from simple_stipple.ui.components.units import suffix as _unit_suffix
+from simple_stipple.ui.components.units import unit_suffix as _unit_suffix
 
 
 def set_view_state(self, state: dict[str, Any]) -> None:
@@ -651,3 +651,18 @@ def exit_to_select(self) -> None:
     """
     self._cancel_active_drag()
     self._escape_cb()
+
+
+class CanvasViewCommandBindings:
+    """CanvasView command callbacks grouped by their owning module."""
+
+    _cancel_active_drag = _cancel_active_drag
+    _cancel_draw_in_progress = _cancel_draw_in_progress
+    _escape_cb = _escape_cb
+    exit_to_select = exit_to_select
+    _find_dimension_at = _find_dimension_at
+    _rightclick_cb = _rightclick_cb
+    _round_vertex = _round_vertex
+    _show_shape_dim_inputs = _show_shape_dim_inputs
+    get_export_dxf_state = get_export_dxf_state
+    set_view_state = set_view_state

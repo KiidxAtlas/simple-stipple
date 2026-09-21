@@ -1593,40 +1593,6 @@ class SelectionService:
     def __init__(self, host) -> None:
         self._host = host
 
-    def _transform_entity_meta(
-        self,
-        entity_id: str,
-        *,
-        center: tuple[float, float],
-        kind: str,
-        meta: dict[str, Any] | None,
-        transform: str,
-        factor: float | None = None,
-        angle_deg: float = 0.0,
-        axis: str | None = None,
-        dx: float = 0.0,
-        dy: float = 0.0,
-    ) -> None:
-        """Transform an entity's parametric metadata via its Shape class.
-
-        All per-kind transform math lives on the Shape subclasses in
-        src/simple_stipple/core/cad/shapes.py — this is a thin delegation shim kept for
-        the legacy kind+meta storage until the canvas migrates to shapes.
-        """
-        entity = self._host._entity_for_id(entity_id)
-        if entity is None:
-            return
-        transform_entity_metadata(
-            entity,
-            transform=transform,
-            center=center,
-            factor=factor,
-            angle_degrees=angle_deg,
-            axis=axis,
-            dx=dx,
-            dy=dy,
-        )
-
     @staticmethod
     def _translated_entity_meta(
         kind: str,
@@ -2768,9 +2734,7 @@ class ConstructionService:
                     self._host._constraint_segment_refs = [first_edge_ref]
                     self._host._constraint_pick_armed = kind
                     self._host._update_cursor()
-                    self._host._show_flash(
-                        "Click the edge to constrain it to · Esc cancels", 2000
-                    )
+                    self._host._show_flash("Click the edge to constrain it to · Esc cancels", 2000)
                     return 0
                 self._host._show_flash("Select two edges (Shift-click to add the second)", 1600)
                 return 0

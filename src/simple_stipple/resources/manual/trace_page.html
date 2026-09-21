@@ -1,0 +1,89 @@
+<h2 id="trace-page" class="section-heading">Trace Page — Image to Outline.</h2>
+
+<h3 class="subheading">Overview</h3>
+<p>
+  The Trace page converts raster images (PNG, JPG, BMP, TIFF, GIF, WebP) into
+  vector outlines suitable for laser cutting. It uses image tracing algorithms
+  to detect edges and convert them to DXF-compatible polylines.
+</p>
+
+<h3 class="subheading">Workflow</h3>
+<ol>
+  <li>
+    <strong>Import an image</strong> — drag and drop or use the file picker.
+    Supported formats: PNG, JPG, JPEG, BMP, TIFF, GIF, WebP.
+  </li>
+  <li>
+    <strong>Adjust tracing parameters</strong> — threshold, smoothing, minimum
+    feature size.
+  </li>
+  <li>
+    <strong>Preview the trace</strong> — see the vector overlay on your image.
+  </li>
+  <li>
+    <strong>Export as DXF</strong> — save the traced outlines for your laser
+    cutter.
+  </li>
+</ol>
+
+<h3 class="subheading">Parameters</h3>
+<ul>
+  <li>
+    <strong>Threshold:</strong> Controls the brightness cutoff for edge
+    detection. Higher values capture more detail but may add noise.
+  </li>
+  <li>
+    <strong>Smoothing:</strong> Reduces jagged edges in the traced output.
+  </li>
+  <li>
+    <strong>Minimum feature size:</strong> Ignores features smaller than this
+    value (in mm), reducing noise.
+  </li>
+  <li>
+    <strong>Output width (mm):</strong> Physical size of the traced output.
+  </li>
+  <li>
+    <strong>Aspect ratio lock:</strong> When enabled, maintains the original
+    image proportions.
+  </li>
+</ul>
+
+<h3 class="subheading">Features</h3>
+<ul>
+  <li>
+    <strong>Real-time preview:</strong> See tracing results update as you adjust
+    parameters.
+  </li>
+  <li>
+    <strong>Background image:</strong> The original image is shown as a
+    semi-transparent background for alignment.
+  </li>
+  <li>
+    <strong>Progress bar:</strong> Shows tracing progress with status messages.
+  </li>
+  <li><strong>Cancel:</strong> Cancel a long-running trace operation.</li>
+  <li>
+    <strong>Send to Draft/Pattern:</strong> Export traced geometry directly to
+    the Draft or Pattern pages.
+  </li>
+</ul>
+
+<h3 class="subheading">Tips</h3>
+<ul>
+  <li>
+    <strong>High-contrast images work best.</strong> Black-and-white or
+    high-contrast photos trace most accurately.
+  </li>
+  <li>
+    <strong>Use line art or logos</strong> for cleanest results. Photographs may
+    produce noisy outlines.
+  </li>
+  <li>
+    <strong>Adjust threshold carefully</strong> — too low misses details, too
+    high adds noise.
+  </li>
+  <li>
+    <strong>Increase minimum feature size</strong> to filter out small artifacts
+    from noisy images.
+  </li>
+</ul>

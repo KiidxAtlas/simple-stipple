@@ -44,7 +44,7 @@ from simple_stipple.features.repository import RepoPage
 from simple_stipple.ui.components import feedback
 from simple_stipple.ui.components.layout import CollapsibleSection
 from simple_stipple.ui.components.recent import KIND_DXF, list_recent
-from simple_stipple.ui.components.workflow import StatusRegion, set_status_label
+from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs import files as file_dialogs
 from simple_stipple.ui.style import resolve_tokens
 
@@ -296,17 +296,9 @@ def test_accessible_status_event_hook_distinguishes_alerts(
         feedback.QAccessible.Event.Alert,
     ]
 
-    announced: list[bool] = []
-    monkeypatch.setattr(
-        "simple_stipple.ui.components.workflow.announce_accessible",
-        lambda _widget, *, urgent=False: announced.append(urgent),
-    )
-    region = StatusRegion()
-    region.set_status("Finished", "success")
-    region.set_status("Failed", "danger")
     label = QLabel()
     set_status_label(label, "Invalid", "#f85149")
-    assert announced == [False, True, True]
+    assert label.property("role") == "status-err"
 
 
 def test_rapid_retrigger_coalesces_and_cancels_only_current_token() -> None:

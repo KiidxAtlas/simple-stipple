@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """CanvasView — interactive pan/zoom canvas widget with polyline selection, measure, draw, and edit tools."""
 
 from __future__ import annotations
@@ -6,7 +5,27 @@ from __future__ import annotations
 import math
 import time
 from copy import deepcopy
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from simple_stipple.canvas.hit_testing import HitTestService
+    from simple_stipple.canvas.operations.drawing import (
+        DrawOpsService,
+        HudTextService,
+        TextService,
+    )
+    from simple_stipple.canvas.operations.editing import (
+        ConstructionService,
+        EditingService,
+        GizmoService,
+        SmoothingService,
+    )
+    from simple_stipple.canvas.operations.interactions import ClipboardService
+    from simple_stipple.canvas.renderer import CanvasRenderer
+    from simple_stipple.canvas.snap import SnapEngine
+    from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
+    from simple_stipple.canvas.tools.tools import ScaleTool
+    from simple_stipple.core.document.organization import GroupingService, LayerService
 
 from PIL import Image as PILImage
 from PySide6.QtCore import (
@@ -21,90 +40,19 @@ from PySide6.QtWidgets import QWidget
 
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
-from simple_stipple.canvas.objects import CanvasModel
+from simple_stipple.canvas.objects import (
+    CanvasFrameState,
+    CanvasInteractionState,
+    CanvasModel,
+    CanvasService,
+    CanvasViewportState,
+    DocumentSnapshot,
+)
 from simple_stipple.canvas.operations.editing import SelectionService
-from simple_stipple.canvas.view.commands import (
-    _cancel_active_drag,
-    _cancel_draw_in_progress,
-    _escape_cb,
-    _find_dimension_at,
-    _rightclick_cb,
-    _round_vertex,
-    _show_shape_dim_inputs,
-    exit_to_select,
-    get_export_dxf_state,
-    set_view_state,
-)
-from simple_stipple.canvas.view.config import (
-    _context_menu_section_enabled,
-    _emit_cursor_position_update,
-    _initialize_view,
-    _queue_cursor_position_update,
-    get_cursor_world_pos,
-    get_zoom_percent,
-    set_aspect_ratio_locked,
-    set_construction_mode,
-    set_context_menu_overflow_sections,
-    set_context_menu_profile,
-    set_context_menu_profiles,
-    set_context_menu_sections,
-    set_grid_snap,
-    set_grid_spacing,
-    set_grid_visible,
-    set_property_highlight,
-    set_rotation_snap_increment,
-    set_snap_align_x,
-    set_snap_align_y,
-    set_snap_angle,
-    set_snap_axis_alignment,
-    set_snap_edge,
-    set_snap_equal_length,
-    set_snap_extension,
-    set_snap_intersection,
-    set_snap_master,
-    set_snap_midpoint,
-    set_snap_parallel,
-    set_snap_perpendicular,
-    set_snap_strength,
-    set_snap_tangent,
-    set_snap_vertex,
-)
-from simple_stipple.canvas.view.helpers import (
-    _animate_view_to,
-    _background_edit_hit,
-    add_polylines_state,
-    eventFilter,
-    get_command_guidance,
-    get_context_actions,
-    get_entity_records,
-    get_status_summary,
-    get_view_state,
-    select_geometry_category,
-    set_entity_records,
-    set_ghost_polylines,
-    set_mode,
-    show_coordinate_entry,
-    toggle_dimension_mode,
-    toggle_measure,
-    trigger_context_action,
-)
-from simple_stipple.canvas.view.interactions import (
-    _append_dimension,
-    _clear_dimensions,
-    _commit_annotation_edit,
-    _edit_driving_dimension,
-    _refresh_driving_dimensions,
-    _remove_dimension,
-    _remove_guide,
-    _set_dimension_precision,
-    _set_dimension_precision_value,
-    keyPressEvent,
-    keyReleaseEvent,
-    mouseDoubleClickEvent,
-    mouseMoveEvent,
-    mousePressEvent,
-    mouseReleaseEvent,
-)
+from simple_stipple.canvas.view.commands import CanvasViewCommandBindings
+from simple_stipple.canvas.view.config import CanvasViewConfigBindings, _initialize_view
+from simple_stipple.canvas.view.helpers import CanvasViewHelperBindings
+from simple_stipple.canvas.view.interactions import CanvasViewInteractionBindings
 from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.cad.shape_factory import ShapeFactory
 from simple_stipple.core.document.geometry import (
@@ -121,6 +69,10 @@ _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
 
 
 class CanvasView(
+    CanvasViewCommandBindings,
+    CanvasViewConfigBindings,
+    CanvasViewHelperBindings,
+    CanvasViewInteractionBindings,
     QWidget,
 ):
     """
@@ -147,6 +99,11 @@ class CanvasView(
             service.replace_document(document)
         else:
             model.replace_document(document)
+
+    @property
+    def document(self) -> CanvasDocument:
+        """Public read-only document surface for typed canvas consumers."""
+        return self._document
 
     @property
     def _entities(self) -> list[EntityRecord]:
@@ -276,6 +233,136 @@ class CanvasView(
     operation_failed = Signal(str)
     viewChanged = Signal()  # emitted on zoom/pan so status readouts can update live
     cursorPositionChanged = Signal(float, float)
+
+    # Instance state initialized by ``_initialize_view``/config bindings; declared
+    # here so the extracted tool/service modules are attribute-checked instead of
+    # suppressed. Pure annotations — no runtime effect.
+    _canvas_service: CanvasService
+    _lmb_prev: QPointF | None
+    _cursor_wx: float | None
+    _cursor_wy: float | None
+    _shift_drag: bool
+    _band_start: QPointF | None
+    _edit_drag_anchor: tuple[float, float] | None
+    _edit_drag_moved: bool
+    _edit_undo_pushed: bool
+    _edit_command_snapshot: DocumentSnapshot | None
+    _bezier_handle_drag: tuple[str, int, str] | None
+    _bezier_handle_drag_moved: bool
+    _bezier_handle_undo_pushed: bool
+    _bezier_command_snapshot: DocumentSnapshot | None
+    _hover_snap: tuple[float, float] | None
+    _hover_snap_type: str | None
+    _hit_test: HitTestService
+    _renderer: CanvasRenderer
+    _mode: str
+    _dimension_mode: bool
+    _dimension_kind: str
+    _dim_pending_p1: tuple[float, float] | None
+    _dim_pending_p2: tuple[float, float] | None
+    _dim_pending_offset: float
+    _dim_selected_segments: list[dict[str, Any]]
+    _dim_hover_segment: dict[str, Any] | None
+    _grouping_service: GroupingService
+    _snap_engine: SnapEngine
+    _selectable: Any
+    _band_additive: bool
+    _constraint_segment_refs: list[Any]
+    _edit_poly: Any
+    _edit_vert: Any
+    _gizmo_handle_rects: list[Any]
+    _gizmo_move_rect: Any
+    _gizmo_rotate_rect: Any
+    _gizmo_scale_rect: Any
+    _hover_bezier_handle: Any
+    _hover_poly: Any
+    _hover_snap_multi: list[Any]
+    _hover_vert: Any
+    _lasso_active: bool
+    _lasso_additive: bool
+    _lasso_points: list[Any]
+    _lmb_press: Any
+    _lmb_target: Any
+    _move_anchor_w: Any
+    _move_applied_w: tuple[float, float]
+    _move_command_snapshot: DocumentSnapshot | None
+    _move_dragging: bool
+    _move_origin: Any
+    _move_snap_exclude_segments: set[Any]
+    _move_snap_exclude_vertices: set[Any]
+    _move_start_pts: list[Any]
+    _move_undo_pushed: bool
+    _prev_cursor_display: Any
+    _draw_pts: list[tuple[float, float]]
+    _draw_primitive: str
+    _draw_arc_mode: str
+    _draw_arc_pts: list[Any]
+    _draw_constraint: Any
+    _draw_constraint_lock: Any
+    _draw_point_snap_types: list[Any]
+    _draw_snap: Any
+    _draw_snap_type: Any
+    _draw_shape_anchor_w: Any
+    _draw_shape_cursor_w: Any
+    _draw_shape_preview_active: bool
+    _angle_snap_active: bool
+    _dim_angle_dirty: bool
+    _dim_distance_dirty: bool
+    _knife_start_w: Any
+    _knife_end_w: Any
+    _measure_anchor: Any
+    _measure_end: Any
+    _measure_hover: Any
+    _measure_hover_pre: Any
+    _measure_locked: bool
+    _measure_snapped_a: bool
+    _measure_snapped_b: bool
+    _pen_dragging: bool
+    _pen_press_screen: Any
+    _pen_pts: list[Any]
+    _pen_tangents: list[Any]
+    _clipboard_service: ClipboardService
+    _construction_service: ConstructionService
+    _dimension_tool: SketchDimensionTool
+    _draw_ops: DrawOpsService
+    _editing: EditingService
+    _gizmo_service: GizmoService
+    _hud_service: HudTextService
+    _layer_service: LayerService
+    _measure_tool: ScaleTool
+    _selection_service: SelectionService
+    _smoothing_service: SmoothingService
+    _text_service: TextService
+    _tools: dict[str, Any]
+    _constraint_pick_armed: Any
+    _corner_pick_armed: Any
+    _draw_construction_mode: bool
+    _grid_snap: bool
+    _grid_spacing: float
+    _grid_visible: bool
+    _mbtn_rect: tuple[int, int, int, int]
+    _measure_mode: bool
+    _restoring_view: bool
+    _snap_strength: float
+    _snap_master_enabled: bool
+    _snap_vertex_enabled: bool
+    _snap_midpoint_enabled: bool
+    _snap_intersection_enabled: bool
+    _snap_edge_enabled: bool
+    _snap_tangent_enabled: bool
+    _snap_extension_enabled: bool
+    _snap_angle_enabled: bool
+    _snap_parallel_enabled: bool
+    _snap_perpendicular_enabled: bool
+    _snap_equal_length_enabled: bool
+    _snap_axis_alignment_enabled: bool
+    _snap_align_x_enabled: bool
+    _snap_align_y_enabled: bool
+    _space_pan_active: bool
+    _space_pan_dragging: bool
+    _view_back: list[Any]
+    _view_forward: list[Any]
+    _draw_split_enabled: bool
 
     def _flagged(self, attr: str) -> set[str]:
         """Entity IDs whose boolean ``attr`` is set."""
@@ -553,9 +640,6 @@ class CanvasView(
             poly, enter_edit=enter_edit, kind=kind, meta=meta
         )
 
-    def _transform_entity_meta(self, *args, **kwargs) -> None:
-        self._selection_service._transform_entity_meta(*args, **kwargs)
-
     @staticmethod
     def _translated_entity_meta(
         kind: str, meta: dict[str, Any] | None, dx: float, dy: float
@@ -663,13 +747,12 @@ class CanvasView(
         super().__init__(parent)
         _initialize_view(self, parent, selectable, on_change, on_mode_change, on_poly_change)
 
-    def load(
+    def _replace_entities_from_polylines(
         self,
         polys: list[list[tuple[float, float]]],
-        *,
-        fit: bool = True,
         entity_ids: list[str] | None = None,
     ) -> None:
+        """Replace document entities while preserving caller-supplied IDs."""
         ids = entity_ids if entity_ids is not None and len(entity_ids) == len(polys) else None
         self._entities = []
         for index, poly in enumerate(polys):
@@ -679,9 +762,16 @@ class CanvasView(
             self._entities.append(entity)
         self._sel = set()
         self._group_labels.clear()
-
         self._sync_shape_storage_from_entities()
 
+    def load(
+        self,
+        polys: list[list[tuple[float, float]]],
+        *,
+        fit: bool = True,
+        entity_ids: list[str] | None = None,
+    ) -> None:
+        self._replace_entities_from_polylines(polys, entity_ids)
         self._needs_fit = fit
         if fit:
             self._fit()
@@ -743,18 +833,7 @@ class CanvasView(
         fit: bool = False,
         entity_ids: list[str] | None = None,
     ) -> None:
-        ids = entity_ids if entity_ids is not None and len(entity_ids) == len(polys) else None
-        self._entities = []
-        for index, poly in enumerate(polys):
-            entity = EntityRecord(points=list(poly), layer=self._active_layer)
-            if ids is not None:
-                entity.id = ids[index]
-            self._entities.append(entity)
-        self._sel = set()
-        self._group_labels.clear()
-
-        self._sync_shape_storage_from_entities()
-
+        self._replace_entities_from_polylines(polys, entity_ids)
         if fit:
             self._needs_fit = True
             self._fit()
@@ -1801,6 +1880,29 @@ class CanvasView(
             return True
         return super().event(ev)
 
+    def frame_state(self) -> CanvasFrameState:
+        return CanvasFrameState(
+            document=self._document,
+            viewport=CanvasViewportState(
+                scale=self._scale,
+                origin_x=self._ox,
+                origin_y=self._oy,
+                width=self.width(),
+                height=self.height(),
+            ),
+            selection=frozenset(self._sel),
+            interaction=CanvasInteractionState(
+                mode=self._mode,
+                draw_primitive=self._draw_primitive,
+                draw_points=tuple(self._draw_pts),
+                cursor_world=(
+                    (self._cursor_wx, self._cursor_wy)
+                    if self._cursor_wx is not None and self._cursor_wy is not None
+                    else None
+                ),
+            ),
+        )
+
     def set_zoom_percent(self, percent: float) -> None:
         """Set zoom relative to the fit scale, anchored at the view center."""
         if self._fit_scale < _MIN_SCALE or percent <= 0:
@@ -1892,78 +1994,3 @@ class CanvasView(
             self.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.unsetCursor()
-
-
-CanvasView._cancel_active_drag = _cancel_active_drag
-CanvasView._cancel_draw_in_progress = _cancel_draw_in_progress
-CanvasView._escape_cb = _escape_cb
-CanvasView.exit_to_select = exit_to_select
-CanvasView._find_dimension_at = _find_dimension_at
-CanvasView._rightclick_cb = _rightclick_cb
-CanvasView._round_vertex = _round_vertex
-CanvasView._show_shape_dim_inputs = _show_shape_dim_inputs
-CanvasView.get_export_dxf_state = get_export_dxf_state
-CanvasView.set_view_state = set_view_state
-CanvasView._animate_view_to = _animate_view_to
-CanvasView._background_edit_hit = _background_edit_hit
-CanvasView.add_polylines_state = add_polylines_state
-CanvasView.eventFilter = eventFilter
-CanvasView.get_command_guidance = get_command_guidance
-CanvasView.get_context_actions = get_context_actions
-CanvasView.get_entity_records = get_entity_records
-CanvasView.get_status_summary = get_status_summary
-CanvasView.get_view_state = get_view_state
-CanvasView.select_geometry_category = select_geometry_category
-CanvasView.set_entity_records = set_entity_records
-CanvasView.set_ghost_polylines = set_ghost_polylines
-CanvasView.set_mode = set_mode
-CanvasView.show_coordinate_entry = show_coordinate_entry
-CanvasView.trigger_context_action = trigger_context_action
-CanvasView.toggle_dimension_mode = toggle_dimension_mode
-CanvasView.toggle_measure = toggle_measure
-CanvasView._append_dimension = _append_dimension
-CanvasView._clear_dimensions = _clear_dimensions
-CanvasView._commit_annotation_edit = _commit_annotation_edit
-CanvasView._edit_driving_dimension = _edit_driving_dimension
-CanvasView._refresh_driving_dimensions = _refresh_driving_dimensions
-CanvasView._remove_dimension = _remove_dimension
-CanvasView._remove_guide = _remove_guide
-CanvasView._set_dimension_precision = _set_dimension_precision
-CanvasView._set_dimension_precision_value = _set_dimension_precision_value
-CanvasView.keyPressEvent = keyPressEvent
-CanvasView.keyReleaseEvent = keyReleaseEvent
-CanvasView.mouseDoubleClickEvent = mouseDoubleClickEvent
-CanvasView.mouseMoveEvent = mouseMoveEvent
-CanvasView.mousePressEvent = mousePressEvent
-CanvasView.mouseReleaseEvent = mouseReleaseEvent
-CanvasView.set_grid_visible = set_grid_visible
-CanvasView.set_context_menu_sections = set_context_menu_sections
-CanvasView.set_context_menu_overflow_sections = set_context_menu_overflow_sections
-CanvasView.set_context_menu_profile = set_context_menu_profile
-CanvasView.set_context_menu_profiles = set_context_menu_profiles
-CanvasView._context_menu_section_enabled = _context_menu_section_enabled
-CanvasView.set_grid_snap = set_grid_snap
-CanvasView.set_grid_spacing = set_grid_spacing
-CanvasView.set_snap_master = set_snap_master
-CanvasView.set_snap_vertex = set_snap_vertex
-CanvasView.set_snap_midpoint = set_snap_midpoint
-CanvasView.set_snap_intersection = set_snap_intersection
-CanvasView.set_snap_edge = set_snap_edge
-CanvasView.set_snap_tangent = set_snap_tangent
-CanvasView.set_snap_extension = set_snap_extension
-CanvasView.set_snap_angle = set_snap_angle
-CanvasView.set_snap_parallel = set_snap_parallel
-CanvasView.set_snap_perpendicular = set_snap_perpendicular
-CanvasView.set_snap_equal_length = set_snap_equal_length
-CanvasView.set_snap_strength = set_snap_strength
-CanvasView.set_snap_axis_alignment = set_snap_axis_alignment
-CanvasView.set_snap_align_x = set_snap_align_x
-CanvasView.set_snap_align_y = set_snap_align_y
-CanvasView.set_construction_mode = set_construction_mode
-CanvasView.set_rotation_snap_increment = set_rotation_snap_increment
-CanvasView.set_aspect_ratio_locked = set_aspect_ratio_locked
-CanvasView.set_property_highlight = set_property_highlight
-CanvasView.get_zoom_percent = get_zoom_percent
-CanvasView.get_cursor_world_pos = get_cursor_world_pos
-CanvasView._queue_cursor_position_update = _queue_cursor_position_update
-CanvasView._emit_cursor_position_update = _emit_cursor_position_update

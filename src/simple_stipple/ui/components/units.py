@@ -81,9 +81,9 @@ def from_display(value: float, unit: str) -> float:
     return value * _MM_PER_INCH if unit == "in" else value
 
 
-def suffix(unit: str) -> str:
+def unit_suffix(unit: str) -> str:
     return "in" if unit == "in" else "mm"
 
 
 def format_length(value_mm: float, unit: str, *, decimals: int = 2) -> str:
-    return f"{to_display(value_mm, unit):.{decimals}f} {suffix(unit)}"
+    return f"{to_display(value_mm, unit):.{decimals}f} {unit_suffix(unit)}"

@@ -35,7 +35,7 @@ from simple_stipple.core.patterns.presets import (
 )
 from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
 from simple_stipple.platform.settings import save_settings
-from simple_stipple.ui.components.feedback import show_error
+from simple_stipple.ui.components.feedback import confirm, show_error
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
 from simple_stipple.ui.style import STATUS_ERR, STATUS_OK
@@ -319,14 +319,13 @@ class PresetManagerDialog(QDialog):
         name = self._selected_name()
         if name is None:
             return
-        result = QMessageBox.question(
+        if not confirm(
             self,
             "Delete Preset",
             f"Delete preset {name!r}? This cannot be undone.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if result != QMessageBox.StandardButton.Yes:
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default=QMessageBox.StandardButton.No,
+        ):
             return
         self._presets.pop(name, None)
         self._mark_dirty()

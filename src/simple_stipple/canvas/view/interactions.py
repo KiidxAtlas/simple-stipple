@@ -478,9 +478,7 @@ def mousePressEvent(self, event: QMouseEvent):
         return
 
     if btn == Qt.MouseButton.LeftButton and self._corner_pick_armed is not None:
-        command_id = (
-            "vertex.round" if self._corner_pick_armed == "round" else "vertex.chamfer"
-        )
+        command_id = "vertex.round" if self._corner_pick_armed == "round" else "vertex.chamfer"
         self._corner_pick_armed = None
         self._update_cursor()
         hit = self._hit_test.nearest_vertex_by_id(pos.x(), pos.y())
@@ -856,3 +854,23 @@ def _edit_driving_dimension(self, index: int) -> None:
 def _set_dimension_precision(self, index: int, precision: int) -> None:
     if self._set_dimension_precision_value(index, precision):
         self._notify()
+
+
+class CanvasViewInteractionBindings:
+    """CanvasView Qt event and dimension callbacks grouped by module."""
+
+    _append_dimension = _append_dimension
+    _clear_dimensions = _clear_dimensions
+    _commit_annotation_edit = _commit_annotation_edit
+    _edit_driving_dimension = _edit_driving_dimension
+    _refresh_driving_dimensions = _refresh_driving_dimensions
+    _remove_dimension = _remove_dimension
+    _remove_guide = _remove_guide
+    _set_dimension_precision = _set_dimension_precision
+    _set_dimension_precision_value = _set_dimension_precision_value
+    keyPressEvent = keyPressEvent
+    keyReleaseEvent = keyReleaseEvent
+    mouseDoubleClickEvent = mouseDoubleClickEvent
+    mouseMoveEvent = mouseMoveEvent
+    mousePressEvent = mousePressEvent
+    mouseReleaseEvent = mouseReleaseEvent

@@ -656,3 +656,25 @@ def get_entity_records(self) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+class CanvasViewHelperBindings:
+    """CanvasView state and navigation callbacks grouped by module."""
+
+    _animate_view_to = _animate_view_to
+    _background_edit_hit = _background_edit_hit
+    add_polylines_state = add_polylines_state
+    eventFilter = eventFilter
+    get_command_guidance = get_command_guidance
+    get_context_actions = get_context_actions
+    get_entity_records = get_entity_records
+    get_status_summary = get_status_summary
+    get_view_state = get_view_state
+    select_geometry_category = select_geometry_category
+    set_entity_records = set_entity_records
+    set_ghost_polylines = set_ghost_polylines
+    set_mode = set_mode
+    show_coordinate_entry = show_coordinate_entry
+    trigger_context_action = trigger_context_action
+    toggle_dimension_mode = toggle_dimension_mode
+    toggle_measure = toggle_measure

@@ -82,6 +82,7 @@ from simple_stipple.canvas.constants import (
 from simple_stipple.canvas.constants import (
     SNAP_CLOSE as _SNAP_CLOSE,
 )
+from simple_stipple.canvas.objects import CanvasFrameState, CanvasViewportState
 from simple_stipple.canvas.rendering import DensePreviewRenderer
 from simple_stipple.core.cad.geometry import (
     arc_from_center_start_end,
@@ -100,10 +101,10 @@ from simple_stipple.ui.components.units import (
     format_length as _fmt_len,
 )
 from simple_stipple.ui.components.units import (
-    suffix as _unit_suffix,
+    to_display as _to_display,
 )
 from simple_stipple.ui.components.units import (
-    to_display as _to_display,
+    unit_suffix as _unit_suffix,
 )
 
 _FONT_HEL_9 = QFont("Helvetica", 9)
@@ -898,9 +899,7 @@ class CanvasRenderer:
             vw = max(self._host.width(), 100)
             summary_text = f"Total: {_fmt_len(total_len, self._host._unit_system)}  |  {len(self._host._draw_pts)} pts"
             # Below the Scale pill (top band is chrome_top..+28), not beside it.
-            self._draw_badge(
-                painter, vw - 100, self._chrome_top() + 36, summary_text, 10
-            )
+            self._draw_badge(painter, vw - 100, self._chrome_top() + 36, summary_text, 10)
 
     def _paint_draw_shape_preview(self, painter: QPainter) -> None:
         if not self._host._draw_shape_preview_active or self._host._draw_shape_anchor_w is None:
@@ -1495,7 +1494,9 @@ class CanvasRenderer:
         if abs(rotation) <= 1e-9:
             return None
         xs, ys = zip(*sel_pts)
-        cx, cy = (float(v) for v in meta.get("center", ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)))
+        cx, cy = (
+            float(v) for v in meta.get("center", ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
+        )
         angle = math.radians(rotation)
         cos_a, sin_a = math.cos(angle), math.sin(angle)
         fracs = {
@@ -1519,8 +1520,10 @@ class CanvasRenderer:
         points["c"] = self._host._w2c(cx, cy)
         return points
 
-    def _paint_selection_bbox(self, painter: QPainter, visible: QRectF) -> None:
-        if not self._host._sel or self._host._mode != "select":
+    def _paint_selection_bbox(
+        self, painter: QPainter, visible: QRectF, frame: CanvasFrameState
+    ) -> None:
+        if not frame.selection or frame.interaction.mode != "select":
             self._host._gizmo_scale_rect = None
             self._host._gizmo_rotate_rect = None
             self._host._gizmo_move_rect = None
@@ -1528,8 +1531,8 @@ class CanvasRenderer:
             return
         sel_pts = [
             pt
-            for eid in self._host._sel
-            for entity in (self._host._entity_for_id(eid),)
+            for entity_id in frame.selection
+            for entity in (frame.document.entity_for_id(entity_id),)
             if entity is not None
             for pt in entity.points
         ]
@@ -2052,9 +2055,11 @@ class CanvasRenderer:
         painter.drawLine(QPointF(cursor_x, 0.0), QPointF(cursor_x, float(height)))
         painter.drawLine(QPointF(0.0, cursor_y), QPointF(float(width), cursor_y))
 
-    def _visible_world_rect(self, width: int, height: int) -> QRectF:
-        top_left_x, top_left_y = self._host._c2w(0.0, 0.0)
-        bottom_right_x, bottom_right_y = self._host._c2w(float(width), float(height))
+    def _visible_world_rect(self, viewport: CanvasViewportState) -> QRectF:
+        top_left_x, top_left_y = viewport.canvas_to_world(0.0, 0.0)
+        bottom_right_x, bottom_right_y = viewport.canvas_to_world(
+            float(viewport.width), float(viewport.height)
+        )
         return QRectF(
             QPointF(min(top_left_x, bottom_right_x), min(top_left_y, bottom_right_y)),
             QPointF(max(top_left_x, bottom_right_x), max(top_left_y, bottom_right_y)),
@@ -2122,8 +2127,9 @@ class CanvasRenderer:
         painter = QPainter(cast("QWidget", self._host))
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = max(self._host.width(), 100)
-        h = max(self._host.height(), 100)
+        frame = self._host.frame_state()
+        w = max(frame.viewport.width, 100)
+        h = max(frame.viewport.height, 100)
         painter.fillRect(self._host.rect(), Q_BG)
         self._paint_view_references(painter, w, h)
         self._paint_machine_bed(painter)
@@ -2163,10 +2169,10 @@ class CanvasRenderer:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(QRectF(QPointF(cx0, cy0), QPointF(cx1, cy1)))
 
-        _visible_world = self._visible_world_rect(w, h)
+        _visible_world = self._visible_world_rect(frame.viewport)
 
         self._paint_document_scene(painter, w, h, _visible_world)
-        self._paint_selection_overlay(painter, _visible_world)
+        self._paint_selection_overlay(painter, _visible_world, frame)
 
         # Construction lines (Feature 15)
         # Guide/measure lines (non-exported)
@@ -2433,7 +2439,11 @@ class CanvasRenderer:
         painter.drawRect(rect)
         painter.setPen(QColor("#e3b341"))
         painter.setFont(QFont("Helvetica", 9))
-        painter.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, f"Machine bed · {width_mm:g} × {height_mm:g} mm")
+        painter.drawText(
+            rect.adjusted(5, 3, -5, -3),
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+            f"Machine bed · {width_mm:g} × {height_mm:g} mm",
+        )
         painter.restore()
 
     def _paint_chrome_rulers(self, painter: QPainter) -> None:
@@ -2455,9 +2465,11 @@ class CanvasRenderer:
         # a problem you will only meet at the machine.
         self._paint_issue_markers(painter)
 
-    def _paint_selection_overlay(self, painter: QPainter, visible: Any) -> None:
+    def _paint_selection_overlay(
+        self, painter: QPainter, visible: Any, frame: CanvasFrameState
+    ) -> None:
         """Paint selection bounds/readouts and the active edit handles above the scene."""
-        self._paint_selection_bbox(painter, visible)
+        self._paint_selection_bbox(painter, visible, frame)
         self._paint_selection_readout(painter)
-        if self._host._mode == "edit":
+        if frame.interaction.mode == "edit":
             self._paint_edit_handles(painter)

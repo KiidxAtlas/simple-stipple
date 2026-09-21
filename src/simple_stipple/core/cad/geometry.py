@@ -34,14 +34,6 @@ from simple_stipple.core.cad.constants import (
 
 PointTuple = tuple[float, float]
 
-# Re-export for backwards compatibility — callers may import from geometry.
-__all__ = [
-    "EPS",
-    "EPS_SQ_DEGENERATE",
-    "MIN_SCALE",
-    "SNAP_DIST",
-]
-
 
 def distance(first: PointTuple, second: PointTuple) -> float:
     """Return the Euclidean distance between two drawing points."""
@@ -737,6 +729,11 @@ __all__ = [
     "shape_polygon",
     "shape_rect",
     "shape_slot",
+    "angle",
+    "diameter",
+    "distance",
+    "minimum_clearance",
+    "parse_coordinate",
 ]
 
 

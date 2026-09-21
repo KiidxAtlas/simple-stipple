@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import platform as _platform
 from collections.abc import Callable
 
 from PySide6.QtCore import (
@@ -12,8 +11,6 @@ from PySide6.QtCore import (
     Qt,
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
-
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
 def icon_from_painter(

@@ -59,10 +59,7 @@ from simple_stipple.ui.components.cycle_button import CycleIconButton
 from simple_stipple.ui.components.feedback import notification_history
 from simple_stipple.ui.components.focus import CanvasEscapeRouter
 from simple_stipple.ui.components.inputs import NoWheelSlider
-from simple_stipple.ui.components.workflow import (
-    OperationProgress,
-    set_status_label,
-)
+from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.files import VectorImportModeDialog
 from simple_stipple.ui.dialogs.settings_dialog import SettingsDialog
@@ -449,16 +446,6 @@ def test_draw_guidance_describes_the_actual_shape_gesture(app: QApplication) -> 
     guidance, _tone = canvas.get_command_guidance()
     assert guidance == "Rectangle: drag to size · Esc exits"
     canvas.close()
-
-
-def test_operation_progress_uses_semantic_role_and_cancellable_guidance(app: QApplication) -> None:
-    progress = OperationProgress()
-    assert progress.property("role") == "operation-progress"
-    assert progress._cancel.toolTip() == "Cancel the current operation"
-    progress.fail("The export could not be written. Choose another folder and try again.")
-    assert progress.property("tone") == "danger"
-    assert not progress.isHidden()
-    assert progress._cancel.isHidden()
 
 
 def test_canvas_hud_validation_state_clears_when_the_user_corrects_input(app: QApplication) -> None:
@@ -2086,9 +2073,7 @@ def test_delete_undo_restores_constraints_and_driving_dimensions(app: QApplicati
     canvas._canvas_service.create_entities([first, second])
     constraint = GeometricConstraint("parallel", (first.id, second.id))
     canvas._constraints = [constraint]
-    canvas._dimensions = [
-        {"driving": {"sources": [{"entity_id": first.id, "segment_index": 0}]}}
-    ]
+    canvas._dimensions = [{"driving": {"sources": [{"entity_id": first.id, "segment_index": 0}]}}]
     canvas.set_selection([first.id])
 
     assert canvas.delete_selected() == 1
@@ -2102,12 +2087,20 @@ def test_delete_undo_restores_constraints_and_driving_dimensions(app: QApplicati
 
 def test_long_constraint_chain_settles_without_false_conflicts() -> None:
     geometry = {
-        name: [(float(index), 0.0), (float(index + 1), 0.0)]
-        for index, name in enumerate("abcdefg")
+        name: [(float(index), 0.0), (float(index + 1), 0.0)] for index, name in enumerate("abcdefg")
     }
     constraints = [
-        GeometricConstraint("coincident", (first, second), {"first_endpoint": 0, "second_endpoint": 0})
-        for first, second in (("f", "g"), ("e", "f"), ("d", "e"), ("c", "d"), ("b", "c"), ("a", "b"))
+        GeometricConstraint(
+            "coincident", (first, second), {"first_endpoint": 0, "second_endpoint": 0}
+        )
+        for first, second in (
+            ("f", "g"),
+            ("e", "f"),
+            ("d", "e"),
+            ("c", "d"),
+            ("b", "c"),
+            ("a", "b"),
+        )
     ]
 
     solved = solve_constraints(geometry, constraints)

@@ -1,9 +1,9 @@
-# pyright: reportAttributeAccessIssue=false
 """Convert feature page shell and shared preview."""
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal, Slot
@@ -67,23 +67,49 @@ LOG_PANEL_MAX_HEIGHT = 260
 # ══════════════════════════════════════════════════════════════════════════
 
 
+@dataclass(frozen=True)
+class _ToolSpec:
+    label: str
+    description: str
+    action_label: str
+    tooltip: str
+
+
 class ConvertPage(BasePage):
     """Convert page — conversion and repair helpers for vector workflows."""
 
     openInDraftRequested = Signal(object)
     openInPatternRequested = Signal(object)
 
-    _TOOL_DESCS = (
-        "Convert FVI vector files to DXF. Supports single file or folder batch mode.",
-        "Clean up malformed DXF files — close open polylines, simplify, and remove degenerate geometry.",
-        "Export DXF as an SVG vector graphic for web or print workflows.",
-        "Import an SVG and convert its paths to DXF polylines.",
+    _TOOLS = (
+        _ToolSpec(
+            "FVI to DXF",
+            "Convert FVI vector files to DXF. Supports single file or folder batch mode.",
+            "Convert",
+            "Convert FVI files to DXF format",
+        ),
+        _ToolSpec(
+            "Repair DXF",
+            "Clean up malformed DXF files — close open polylines, simplify, and remove degenerate geometry.",
+            "Fix DXF",
+            "Repair and clean up DXF files",
+        ),
+        _ToolSpec(
+            "DXF to SVG",
+            "Export DXF as an SVG vector graphic for web or print workflows.",
+            "Convert to SVG",
+            "Export DXF as SVG vector graphics",
+        ),
+        _ToolSpec(
+            "SVG to DXF",
+            "Import an SVG and convert its paths to DXF polylines.",
+            "Convert to DXF",
+            "Import SVG files as DXF outlines",
+        ),
     )
-    _BTN_LABELS = ("Convert", "Fix DXF", "Convert to SVG", "Convert to DXF")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
-        super().__init__(parent)
-        self._settings: dict = settings or {}
+        super().__init__(parent, settings)
         self._initializing_task = True
 
         root = QVBoxLayout(self)
@@ -102,35 +128,23 @@ class ConvertPage(BasePage):
         left.addWidget(tool_label)
         self._tool_group = QButtonGroup(self)
         self._tool_group.setExclusive(True)
-        _tool_labels = [
-            "FVI to DXF",
-            "Repair DXF",
-            "DXF to SVG",
-            "SVG to DXF",
-        ]
-        _tool_tips = [
-            "Convert FVI files to DXF format",
-            "Repair and clean up DXF files",
-            "Export DXF as SVG vector graphics",
-            "Import SVG files as DXF outlines",
-        ]
         self._task_buttons_widget = QWidget()
         task_buttons_layout = QVBoxLayout(self._task_buttons_widget)
         task_buttons_layout.setContentsMargins(0, 0, 0, 0)
         task_buttons_layout.setSpacing(4)
-        for i, (lbl, tip) in enumerate(zip(_tool_labels, _tool_tips)):
-            btn = QPushButton(lbl)
+        for i, spec in enumerate(self._TOOLS):
+            btn = QPushButton(spec.label)
             btn.setCheckable(True)
             btn.setProperty("active", False)
             btn.setProperty("role", "tool-item")
             btn.setMinimumHeight(34)
-            btn.setToolTip(tip)
+            btn.setToolTip(spec.tooltip)
             self._tool_group.addButton(btn, i)
             task_buttons_layout.addWidget(btn)
         left.addWidget(self._task_buttons_widget)
         self._task_combo = QComboBox()
         self._task_combo.setAccessibleName("Conversion task")
-        self._task_combo.addItems(_tool_labels)
+        self._task_combo.addItems([spec.label for spec in self._TOOLS])
         self._task_combo.setVisible(False)
         left.addWidget(self._task_combo)
 
@@ -142,7 +156,7 @@ class ConvertPage(BasePage):
 
         left.addSpacing(4)
 
-        self._subtab_desc = QLabel(self._TOOL_DESCS[0])
+        self._subtab_desc = QLabel(self._TOOLS[0].description)
         self._subtab_desc.setProperty("role", "hint")
         self._subtab_desc.setWordWrap(True)
         left.addWidget(self._subtab_desc)
@@ -214,7 +228,7 @@ class ConvertPage(BasePage):
         footer_layout.setContentsMargins(12, 8, 12, 12)
         footer_layout.setSpacing(8)
 
-        self._footer_btn = QPushButton(self._BTN_LABELS[0])
+        self._footer_btn = QPushButton(self._TOOLS[0].action_label)
         self._footer_btn.setProperty("role", "primary")
         self._footer_btn.clicked.connect(self._trigger_active_subtab)
 
@@ -577,13 +591,14 @@ class ConvertPage(BasePage):
         if not self._initializing_task and self._settings.get("convert_selected_task") != idx:
             self._settings["convert_selected_task"] = idx
             save_settings(self._settings)
+        spec = self._TOOLS[idx]
         self._tool_stack.setCurrentIndex(idx)
-        self._subtab_desc.setText(self._TOOL_DESCS[idx])
+        self._subtab_desc.setText(spec.description)
         for btn in self._tool_group.buttons():
             active = self._tool_group.id(btn) == idx
             btn.setProperty("active", active)
             refresh_style(btn)
-        self._footer_btn.setText(self._BTN_LABELS[idx])
+        self._footer_btn.setText(spec.action_label)
         if hasattr(self, "_shared_input_hint"):
             self._shared_input_hint.setText(
                 (

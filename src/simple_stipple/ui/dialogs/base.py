@@ -1,9 +1,7 @@
-"""Template pattern for simple field-entry dialogs (plan.md Section 8.4 /
-Phase 3.2): a title, a content area, and an OK/Cancel button box are common
-boilerplate that every dialog in ``src/simple_stipple/ui/widgets/dialogs/`` currently
-rebuilds by hand. ``BaseDialog`` owns that boilerplate once; subclasses
-implement ``create_content()`` (required) and optionally ``validate()``/
-``on_accepted()``.
+"""Base class for field-entry dialogs.
+
+``BaseDialog`` owns the shared title, content area, and OK/Cancel button box;
+subclasses provide ``create_content()`` and optionally validation hooks.
 """
 
 from __future__ import annotations

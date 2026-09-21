@@ -1,5 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
-
 """Pointer-drag state transitions shared by the select and edit tools."""
 
 from __future__ import annotations

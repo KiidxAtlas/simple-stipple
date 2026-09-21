@@ -135,7 +135,9 @@ def test_draw_hud_only_on_request_and_anchored_to_badge(app: QApplication) -> No
     canvas.resize(600, 400)
     canvas.set_mode("draw")
     canvas._draw_primitive = "polyline"
-    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
+    QTest.mouseClick(
+        canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(100, 100)
+    )
     app.processEvents()
     assert canvas._draw_pts, "click did not start a polyline"
     assert canvas._dim_distance_edit is None, "boxed HUD must not auto-appear"
@@ -228,6 +230,7 @@ def test_select_mode_has_no_vertex_drag_but_gizmo_still_transforms(
     target = center + QPoint(0, 30)
     move = QMouseEvent(
         QMouseEvent.Type.MouseMove,
+        target.toPointF(),
         target.toPointF(),
         Qt.MouseButton.NoButton,
         Qt.MouseButton.LeftButton,
@@ -605,6 +608,7 @@ def test_shape_preview_has_no_commit_popup_and_enter_commits(app: QApplication) 
     mv = QMouseEvent(
         QMouseEvent.Type.MouseMove,
         QPoint(350, 300).toPointF(),
+        QPoint(350, 300).toPointF(),
         Qt.MouseButton.NoButton,
         Qt.MouseButton.NoButton,
         Qt.KeyboardModifier.NoModifier,
@@ -655,9 +659,7 @@ def test_auto_commit_controller_watches_only_when_enabled(
     assert ctrl._poll_timer.isActive() == (ctrl._repo() is not None)
 
     launched: list[tuple[str, list]] = []
-    monkeypatch.setattr(
-        ctrl, "_launch", lambda tag, cmds: launched.append((tag, cmds)) or True
-    )
+    monkeypatch.setattr(ctrl, "_launch", lambda tag, cmds: launched.append((tag, cmds)) or True)
     ctrl._poll()
     assert launched == [("status", [["status", "--porcelain"]])]
 

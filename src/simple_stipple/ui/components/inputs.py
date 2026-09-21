@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import platform as _platform
-
 from PySide6.QtCore import (
     QTimer,
 )
@@ -18,8 +16,6 @@ from PySide6.QtWidgets import (
 )
 
 from .feedback import refresh_style
-
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
 class ActionButton(QPushButton):

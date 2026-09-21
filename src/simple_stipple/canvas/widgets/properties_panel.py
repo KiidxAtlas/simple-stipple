@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.ui.components.layout import CollapsibleSection, container_with_layout
 from simple_stipple.ui.components.units import parse_numeric_expression, to_display
-from simple_stipple.ui.components.units import suffix as unit_suffix
+from simple_stipple.ui.components.units import unit_suffix as unit_suffix
 
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]

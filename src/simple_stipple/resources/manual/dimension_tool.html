@@ -1,0 +1,15 @@
+
+<h2 id="dimension-tool" class="section-heading">
+    Dimension Tool
+</h2>
+
+<p>The Dimension tool (<kbd>Shift+M</kbd>, or the dimension button in the canvas corner) creates persistent CAD-style measurements. Driving dimensions reshape supported geometry when edited; reference dimensions report geometry without changing it.</p>
+<ul>
+    <li><strong>Select segments:</strong> the same segment measures length; intersecting segments measure angle; parallel segments measure spacing; separate segments measure their shortest distance. Circles produce diameter dimensions. Point-to-point dimensions remain available for exact vertex measurements.</li>
+    <li><strong>Edit a value:</strong> double-click a supported driving dimension and enter a value or expression. Its fixed anchor stays in place while the affected edge or angle changes. If other dimensions cannot all be satisfied, the conflicting target is marked visibly instead of displaying a false value.</li>
+    <li><strong>Place the label:</strong> move the pointer and click to choose the dimension-line offset. Drag a placed dimension later to adjust that offset.</li>
+    <li>Dimensions snap to vertices/edges/guides while placing, exactly like the Draw and Scale tools.</li>
+    <li><strong>Deleting one:</strong> select it (click its line) and press Delete or Backspace.</li>
+    <li>Dimensions are saved with the workspace and exported as DXF dimension entities. Linear dimensions use <kbd>Shift+M</kbd>; diameter dimensions can be placed directly on circles, and Angular Dimension is available from the command palette.</li>
+    <li>Right-click a dimension to change display precision, toggle driving/reference behavior where supported, or delete it. Press <kbd>Esc</kbd> to leave Dimension mode.</li>
+</ul>

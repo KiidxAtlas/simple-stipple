@@ -27,7 +27,7 @@ from simple_stipple.canvas.operations.drawing import (
 )
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.units import from_display, to_display
-from simple_stipple.ui.components.units import suffix as unit_suffix
+from simple_stipple.ui.components.units import unit_suffix as unit_suffix
 
 
 class AddTextDialog(QDialog):

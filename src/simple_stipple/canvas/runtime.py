@@ -27,6 +27,7 @@ from simple_stipple.canvas.layers.logic import (
     hidden_bucket,
 )
 from simple_stipple.canvas.layers.widget import DxfLayersTree
+from simple_stipple.canvas.objects import CanvasViewPort
 from simple_stipple.canvas.widgets.precision_bar import CanvasPrecisionBar
 from simple_stipple.canvas.widgets.toolbar import canvas_toolbar
 from simple_stipple.ui.components.feedback import refresh_style
@@ -120,9 +121,6 @@ class CanvasRuntime:
 
     def layer_moved(self, layer: str, new_index: int) -> None:
         self._canvas.move_layer(layer, new_index)
-
-    def on_canvas_edit(self) -> None:
-        """Kept for API compatibility — entity state is already the truth."""
 
     # ── Visibility (entity-native) ────────────────────────────────────────
 
@@ -344,7 +342,7 @@ class CanvasRuntime:
 class CanvasPageRuntimeBase:
     """Shared toolbar / selection sync helpers for canvas-backed pages."""
 
-    def __init__(self, *, canvas: Any, toolbar_module: Any) -> None:
+    def __init__(self, *, canvas: CanvasViewPort, toolbar_module: Any) -> None:
         self._canvas = canvas
         self._toolbar_module = toolbar_module
 

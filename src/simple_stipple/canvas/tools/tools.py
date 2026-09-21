@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Canvas interaction tools.
 
 Each mode's mouse behavior lives in a Tool object with press/move/release/

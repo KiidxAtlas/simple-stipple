@@ -60,6 +60,9 @@ from simple_stipple.core.patterns.geometry import (
 from simple_stipple.core.patterns.geometry import (
     merge_and_classify_outlines as _merge_and_classify_outlines_shared,
 )
+from simple_stipple.core.patterns.geometry import (
+    repair_overlay_geometry as _repair_overlay_geometry,
+)
 from simple_stipple.core.patterns.outline_identity import (
     fresh_outline_ids as _fresh_outline_ids,
 )
@@ -81,31 +84,6 @@ from simple_stipple.core.patterns.tiling import (
     gen_seigaiha,
     gen_truchet,
 )
-
-
-def _repair_overlay_geometry(geometry: Any) -> Any | None:
-    """Return a valid geometry for Shapely overlay operations."""
-    if geometry is None:
-        return None
-    try:
-        if geometry.is_empty or geometry.is_valid:
-            return geometry
-    except (AttributeError, TypeError):
-        return None
-    try:
-        from shapely import make_valid  # type: ignore[import-untyped]
-
-        repaired = make_valid(geometry)
-        if not repaired.is_empty:
-            return repaired
-    except Exception:
-        pass
-    try:
-        repaired = geometry.buffer(0)
-        return None if repaired.is_empty else repaired
-    except Exception:
-        return None
-
 
 PATTERNS = (
     NULL_PATTERN,
@@ -807,8 +785,10 @@ class PatternProcessor:
                         if repaired_fill is not None and repaired_excl is not None:
                             try:
                                 fill_outline = repaired_fill.difference(repaired_excl)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                LOGGER.warning(
+                                    "Skipping invalid exclusion overlay after repair: %s", exc
+                                )
 
         # Always generate pattern elements inside the fill region (never
         # outside the outline). When ``invert_fill`` is requested we compute
@@ -1288,9 +1268,7 @@ class PatternProcessor:
             elif output_mode in {"outline", "none"}:
                 zone_pattern = NULL_PATTERN
                 zone_fill_options = None
-            nested_exclusions = self._zone_nested_exclusions(
-                zones, zone_idx, all_polys=all_polys
-            )
+            nested_exclusions = self._zone_nested_exclusions(zones, zone_idx, all_polys=all_polys)
             zone_generated = (
                 []
                 if output_mode == "none"

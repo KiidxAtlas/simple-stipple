@@ -1,5 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
-
 """Tools that select and edit existing geometry."""
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ from simple_stipple.canvas.tools.dragging import (
     start_bezier_handle_drag,
 )
 from simple_stipple.canvas.view.helpers import connected_entity_ids
+from simple_stipple.core.document.geometry import transform_entity_metadata
 
 
 class EditTool(CanvasTool):
@@ -452,12 +451,10 @@ class SelectTool(CanvasTool):
                             except (ValueError, KeyError):
                                 continue
                             entity.points = [(x + step_dx, y + step_dy) for x, y in entity.points]
-                            v._transform_entity_meta(
-                                entity_id,
-                                center=(0.0, 0.0),
-                                kind=entity.kind,
-                                meta=entity.meta,
+                            transform_entity_metadata(
+                                entity,
                                 transform="translate",
+                                center=(0.0, 0.0),
                                 dx=step_dx,
                                 dy=step_dy,
                             )

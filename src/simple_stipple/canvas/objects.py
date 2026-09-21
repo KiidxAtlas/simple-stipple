@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from PySide6.QtCore import QObject, Signal
@@ -16,8 +17,46 @@ from simple_stipple.core.document.commands import (
     ReplaceDocumentCommand,
     UpdateEntitiesCommand,
 )
+from simple_stipple.core.document.identity import EntityId
 from simple_stipple.core.document.model import CanvasDocument, EntityRecord, OperationResult
 from simple_stipple.core.document.service import DocumentEvent, DocumentService
+
+
+@dataclass(frozen=True, slots=True)
+class CanvasViewportState:
+    """Immutable coordinate transform for one canvas paint/input frame."""
+
+    scale: float
+    origin_x: float
+    origin_y: float
+    width: int
+    height: int
+
+    def canvas_to_world(self, x: float, y: float) -> tuple[float, float]:
+        return ((x - self.origin_x) / self.scale, (self.origin_y - y) / self.scale)
+
+    def world_to_canvas(self, x: float, y: float) -> tuple[float, float]:
+        return (self.origin_x + x * self.scale, self.origin_y - y * self.scale)
+
+
+@dataclass(frozen=True, slots=True)
+class CanvasInteractionState:
+    """Immutable active-tool state sampled for a canvas frame."""
+
+    mode: str = "select"
+    draw_primitive: str = "polyline"
+    draw_points: tuple[tuple[float, float], ...] = ()
+    cursor_world: tuple[float, float] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CanvasFrameState:
+    """Read-only document and viewport state consumed during one frame."""
+
+    document: CanvasDocument
+    viewport: CanvasViewportState
+    selection: frozenset[str] = field(default_factory=frozenset)
+    interaction: CanvasInteractionState = field(default_factory=CanvasInteractionState)
 
 
 class CanvasModel(QObject):
@@ -56,6 +95,33 @@ class CanvasModelPort(Protocol):
     document: CanvasDocument
 
     def replace_document(self, document: CanvasDocument) -> None: ...
+
+
+class CanvasViewPort(Protocol):
+    """Stable public canvas surface for shared UI modules.
+
+    The concrete ``CanvasView`` retains compatibility adapters, while
+    renderers, toolbars, and feature runtimes can depend on this contract
+    instead of probing private attributes.
+    """
+
+    @property
+    def document(self) -> CanvasDocument: ...
+
+    def get_mode(self) -> str: ...
+    def get_precision_state(self) -> dict[str, object]: ...
+    def get_polylines_state(self) -> list[list[tuple[float, float]]]: ...
+    def get_selected_ids(self) -> list[str]: ...
+    def get_status_summary(self) -> dict[str, object]: ...
+    def get_view_state(self) -> dict[str, object]: ...
+    def get_zoom_percent(self) -> float: ...
+    def get_cursor_world_pos(self) -> tuple[float, float] | None: ...
+    def set_mode(self, mode: str) -> None: ...
+    def set_grid_spacing(self, spacing: float) -> None: ...
+    def set_grid_snap(self, enabled: bool) -> None: ...
+    def set_selection(self, entity_ids: list[EntityId]) -> None: ...
+    def fit_selection(self) -> bool: ...
+    def set_construction_mode(self, enabled: bool) -> None: ...
 
 
 class CanvasService:

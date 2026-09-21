@@ -2,26 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 
 from simple_stipple.canvas.hit_testing import HitTestService
 from simple_stipple.canvas.objects import (
+    CanvasFrameState,
     CanvasModel,
     CanvasService,
+    CanvasViewportState,
 )
-
-
-@dataclass
-class _Entity:
-    id: str
-    points: list[tuple[float, float]]
-    hidden: bool = False
+from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 
 
 class _Host:
     def __init__(self) -> None:
-        entity = _Entity("square", [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)])
+        entity = EntityRecord(
+            id="square",
+            points=[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)],
+        )
         self._entities = [entity]
         self._entities_by_id = {entity.id: entity}
         self._scale = 1.0
@@ -30,6 +28,10 @@ class _Host:
         self._layer_service = SimpleNamespace(on_active=lambda _entity: False)
         self._ghost_visible = False
         self._ghost_polys: list[list[tuple[float, float]]] = []
+        self._frame = CanvasFrameState(
+            CanvasDocument(entities=self._entities),
+            CanvasViewportState(scale=1.0, origin_x=0.0, origin_y=0.0, width=100, height=100),
+        )
 
     @staticmethod
     def _w2c(x: float, y: float) -> tuple[float, float]:
@@ -47,6 +49,9 @@ class _Host:
 
     def _flattened_points_by_id(self, entity_id: str) -> list[tuple[float, float]]:
         return self._entities_by_id[entity_id].points
+
+    def frame_state(self) -> CanvasFrameState:
+        return self._frame
 
 
 def test_editor_document_bridge_paths_share_one_model() -> None:

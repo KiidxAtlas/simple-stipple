@@ -1,0 +1,67 @@
+
+<h2 id="troubleshooting" class="section-heading">
+    Troubleshooting &amp; Tips
+</h2>
+
+<h3 class="subheading">Common Issues</h3>
+
+<h4 class='panel-title'>Pattern generation is slow</h4>
+<p>Complex patterns (especially Voronoi with many cells) can take time. Try:</p>
+<ul>
+    <li>Reducing the cell count</li>
+    <li>Using a smaller outline area</li>
+</ul>
+
+<h4 class='panel-title'>Pattern doesn't fill the outline</h4>
+<p>This usually means your outline is too small for the pattern parameters. Try:</p>
+<ul>
+    <li>Increasing the outline size</li>
+    <li>Decreasing pattern parameters (size, spacing)</li>
+    <li>Using the Fit View command (<kbd>F</kbd>) to inspect your outline</li>
+</ul>
+
+<h4 class='panel-title'>DXF export has missing geometry</h4>
+<p>Ensure your outline is a valid closed polyline. Open or self-intersecting outlines may produce unexpected results.</p>
+
+<h4 class='panel-title'>Trace produces noisy output</h4>
+<p>Increase the <strong>minimum feature size</strong> parameter to filter out small artifacts. Use higher-contrast source images.</p>
+
+<h3 class="subheading">Pro Tips</h3>
+<ul>
+    <li><strong>Use Presets as starting points:</strong> Load a built-in preset, then tweak parameters to get your exact desired look.</li>
+    <li><strong>Combine patterns with zones:</strong> Use different patterns in different zones for complex multi-texture designs.</li>
+    <li><strong>Add fill on top:</strong> Apply a Lines or Crosshatch fill to add extra surface coverage over your main pattern.</li>
+    <li><strong>Preview before generating:</strong> Use the Preview toggle to quickly check results without waiting for full generation.</li>
+    <li><strong>Save custom presets:</strong> Once you find a combination you love, save it as a preset for one-click recall.</li>
+    <li><strong>Lettering:</strong> Give text outlines the <em>Cut only</em> treatment and the surrounding pattern flows around them.</li>
+    <li><strong>Command palette (⌘K):</strong> Search for any command by name, page, or shortcut — the fastest way to navigate.</li>
+    <li><strong>Workspace auto-save:</strong> The app saves named workspaces every 60 seconds and keeps rolling crash-recovery snapshots for unsaved work. Use <strong>File → Recover Unsaved Work…</strong> to restore or permanently delete snapshots; <strong>File → Workspaces and Recovery…</strong> opens the normal workspace library.</li>
+    <li><strong>Send between pages:</strong> Use the "Send to Pattern" button on Draft, or "Send to Draft" / "Send to Pattern" on Trace pages to move geometry between workflows.</li>
+</ul>
+
+<h3 class="subheading">Understanding Entity Properties</h3>
+<ul>
+    <li><strong>Hidden entities</strong> are invisible and excluded from exports — useful for reference geometry.</li>
+    <li><strong>Locked entities</strong> cannot be selected or moved — protects important geometry while you work around it.</li>
+    <li><strong>Construction entities</strong> are drawn as dashed lines and excluded from DXF export — perfect for alignment guides.</li>
+    <li><strong>Groups</strong> allow multiple entities to move as one — use Group (Ctrl+G) and Ungroup (Ctrl+Shift+G).</li>
+</ul>
+
+<h3 class="subheading">Selection Techniques</h3>
+<ul>
+    <li><strong>Click:</strong> Select a single entity.</li>
+    <li><strong>Shift+Click:</strong> Add to current selection.</li>
+    <li><strong>Drag (no Shift):</strong> Window select — only fully enclosed entities are selected.</li>
+    <li><strong>Shift+Drag:</strong> Crossing select — any entity touched by the selection box is selected.</li>
+    <li><strong>Groups:</strong> Clicking any entity in a group selects the entire group.</li>
+</ul>
+
+<h3 class="subheading">Snap Engine</h3>
+<p>The snap engine automatically snaps your cursor to:</p>
+<ul>
+    <li><strong>Vertices</strong> — corners and endpoints of shapes.</li>
+    <li><strong>Edges</strong> — points along shape edges.</li>
+    <li><strong>Guides</strong> — horizontal and vertical guide lines you create from rulers.</li>
+    <li><strong>Middle points</strong> — midpoints of line segments.</li>
+</ul>
+<p>Snap can be toggled on/off. When active, a snap indicator appears near your cursor.</p>

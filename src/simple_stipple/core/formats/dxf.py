@@ -105,13 +105,13 @@ def _entity_is_planar(entity: _DxfEntity, dxftype: str) -> bool:
         if dxftype in {"ARC", "CIRCLE", "ELLIPSE"}:
             if not _z_is_planar(dxf.center):
                 return False
+            if dxftype == "ELLIPSE" and not _z_is_planar(dxf.major_axis):
+                return False
         if dxftype == "SPLINE":
             spline = cast(Any, entity)
             for point in (*tuple(spline.control_points), *tuple(spline.fit_points)):
                 if not _z_is_planar(point):
                     return False
-            if dxftype == "ELLIPSE" and not _z_is_planar(dxf.major_axis):
-                return False
         extrusion = dxf.get("extrusion", None)
         if extrusion is not None:
             ex = float(getattr(extrusion, "x", 0.0))
@@ -623,9 +623,7 @@ def _load_dxf_polylines_by_layer_with_report(
                     group_labels.setdefault(group_id, group_label)
             object_name = _name_from_xdata(source)
             if object_name:
-                object_names.append(
-                    {"layer": layer, "index": len(bucket) - 1, "name": object_name}
-                )
+                object_names.append({"layer": layer, "index": len(bucket) - 1, "name": object_name})
 
     import_entities = _expand_insert_entities(msp, flattened_entities, invalid_polylines, path)
 

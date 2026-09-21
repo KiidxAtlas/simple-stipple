@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import platform as _platform
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -18,8 +17,6 @@ from PySide6.QtWidgets import (
 from simple_stipple.ui.style import (
     STATUS_ERR,
 )
-
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
 def announce_accessible(widget: QWidget, *, urgent: bool = False) -> None:
@@ -43,7 +40,22 @@ def show_error(
     box.setWindowTitle(title)
     box.setText(message or f"{title}. See details for what went wrong.")
     box.setDetailedText(str(exc))
+    announce_accessible(box, urgent=True)
     box.exec()
+
+
+def confirm(
+    parent: QWidget | None,
+    title: str,
+    message: str,
+    *,
+    buttons: QMessageBox.StandardButton = QMessageBox.StandardButton.Yes
+    | QMessageBox.StandardButton.Cancel,
+    default: QMessageBox.StandardButton = QMessageBox.StandardButton.Cancel,
+) -> bool:
+    """Ask a destructive confirmation while preserving button choices."""
+    answer = QMessageBox.question(parent, title, message, buttons, default)
+    return bool(answer & QMessageBox.StandardButton.Yes)
 
 
 def parse_float_field(

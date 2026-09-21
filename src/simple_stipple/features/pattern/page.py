@@ -1,8 +1,5 @@
 """Pattern Generator page."""
 
-# isort: skip_file
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportGeneralTypeIssues=false, reportOptionalMemberAccess=false, reportUndefinedVariable=false
-
 from __future__ import annotations
 
 import logging
@@ -10,13 +7,11 @@ import platform
 import threading
 from datetime import date
 from pathlib import Path
-
-from PIL import Image
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal, QUrl
+from PIL import Image
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QDesktopServices,
     QKeySequence,
     QShortcut,
 )
@@ -32,6 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.canvas.constants import DIM
+from simple_stipple.canvas.layers.logic import flatten_shape_keys
+from simple_stipple.core.cad.production import machine_profile_from_settings, order_for_cut
 from simple_stipple.core.formats.service import (
     load_dxf_polylines_with_report,
     read_fvi,
@@ -39,6 +37,7 @@ from simple_stipple.core.formats.service import (
     svg_to_dxf,
 )
 from simple_stipple.core.formats.svg import read_svg_images
+from simple_stipple.core.patterns.fill import NULL_PATTERN
 from simple_stipple.core.patterns.presets import SETTINGS_KEY as PRESET_SETTINGS_KEY
 from simple_stipple.core.patterns.presets import ensure_builtins_seeded
 from simple_stipple.core.patterns.processing import (
@@ -46,46 +45,17 @@ from simple_stipple.core.patterns.processing import (
     available_patterns,
     load_generator_entry_points,
 )
-from simple_stipple.core.cad.production import machine_profile_from_settings, order_for_cut
-from simple_stipple.canvas.constants import DIM
-from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.features.base import BasePage
-from simple_stipple.features.pattern.export import (
-    EXPORT_BUTTON_LABEL,
-    EXPORT_FORMAT_KEYS,
-    build_engraving_job,
-    export_document_file,
-    export_format_suffix,
-    export_laserstar_job,
-)
-from simple_stipple.ui.components.layout import CollapsibleSection
-from simple_stipple.ui.components.feedback import (
-    parse_float_field_with_feedback,
-    refresh_style,
-)
-from simple_stipple.ui.components.focus import EscapeBlurFilter
-from simple_stipple.ui.components.layout import (
-    content_splitter,
-    sidebar_panel,
-    surface_frame,
-)
-from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
-from simple_stipple.features.pattern.session import (
-    apply_pattern_workspace_state,
-    clear_pattern_workspace_state,
-    get_pattern_workspace_state,
-)
-from simple_stipple.ui.dialogs.laserstar_export_dialog import LaserStarExportDialog
-from simple_stipple.ui.dialogs.export_preflight import export_preflight
-from simple_stipple.features.pattern.form import (
-    PATTERN_SUMMARY_FIELDS,
-    collect_pattern_params,
-    fill_subtitle,
-    outline_subtitle,
-    pattern_subtitle,
-    restore_form_state,
-    zones_subtitle,
+from simple_stipple.features.pattern.custom_tiles import (
+    apply_custom_tile,
+    delete_tile_motif,
+    load_custom_tiles_from_disk,
+    locate_tile_asset,
+    open_custom_tiles_folder,
+    refresh_tile_motif_combo,
+    repair_tile_asset,
+    save_tile_motif,
+    update_custom_pattern_actions,
 )
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
@@ -97,22 +67,58 @@ from simple_stipple.features.pattern.defaults import (
     PREVIEW_DEBOUNCE_MS,
     SCALE_MIN_MM,
 )
+from simple_stipple.features.pattern.export import (
+    EXPORT_BUTTON_LABEL,
+    EXPORT_FORMAT_KEYS,
+    build_engraving_job,
+    export_document_file,
+    export_format_suffix,
+    export_laserstar_job,
+)
+from simple_stipple.features.pattern.form import (
+    PATTERN_SUMMARY_FIELDS,
+    collect_pattern_params,
+    fill_subtitle,
+    outline_subtitle,
+    pattern_subtitle,
+    restore_form_state,
+    zones_subtitle,
+)
 from simple_stipple.features.pattern.layout import (
     build_left,
     build_right,
     refresh_pattern_properties_panel,
 )
 from simple_stipple.features.pattern.model import PatternModel
-from simple_stipple.features.pattern.outline_state import read_outline_vector
 from simple_stipple.features.pattern.outline_state import (
     canvas_records,
     normalize_outline_items,
     outline_bounds,
+    read_outline_vector,
     reconcile_outline_ids,
     smallest_containing_outline,
 )
-from simple_stipple.features.pattern.session import build_preview_worker_call
-from simple_stipple.platform.settings import user_data_dir
+from simple_stipple.features.pattern.presets import (
+    apply_selected_preset,
+    delete_selected_preset,
+    open_preset_manager,
+    refresh_preset_combo,
+    save_preset,
+)
+from simple_stipple.features.pattern.regions.treatments import (
+    IMAGE_PATTERN,
+    engraving_mask_polys,
+    generation_polys,
+    redo_treatments,
+    region_engraving,
+    region_tree,
+    set_region_engraving,
+    undo_treatments,
+    update_region_engraving,
+)
+from simple_stipple.features.pattern.regions.treatments import (
+    zones as project_treatment_zones,
+)
 from simple_stipple.features.pattern.regions.zones import (
     assign_zone,
     clear_zones,
@@ -128,36 +134,11 @@ from simple_stipple.features.pattern.regions.zones import (
     sync_engraving_visibility,
     update_zone_actions,
 )
-from simple_stipple.core.patterns.fill import NULL_PATTERN
-from simple_stipple.features.pattern.regions.treatments import (
-    IMAGE_PATTERN,
-    engraving_mask_polys,
-    region_engraving,
-    set_region_engraving,
-    update_region_engraving,
-    generation_polys,
-    redo_treatments,
-    region_tree,
-    undo_treatments,
-    zones as project_treatment_zones,
-)
-from simple_stipple.features.pattern.custom_tiles import (
-    apply_custom_tile,
-    delete_tile_motif,
-    load_custom_tiles_from_disk,
-    locate_tile_asset,
-    open_custom_tiles_folder,
-    repair_tile_asset,
-    save_tile_motif,
-    update_custom_pattern_actions,
-    refresh_tile_motif_combo,
-)
-from simple_stipple.features.pattern.presets import (
-    apply_selected_preset,
-    delete_selected_preset,
-    open_preset_manager,
-    refresh_preset_combo,
-    save_preset,
+from simple_stipple.features.pattern.session import (
+    apply_pattern_workspace_state,
+    build_preview_worker_call,
+    clear_pattern_workspace_state,
+    get_pattern_workspace_state,
 )
 from simple_stipple.features.pattern.workers import CancellableTaskState
 
@@ -166,9 +147,29 @@ from simple_stipple.features.pattern.workers import CancellableTaskState
 # because tests monkeypatch "simple_stipple.features.pattern.page.save_settings" to
 # avoid touching disk. See domain/custom_tiles.py and domain/presets.py for
 # the module attributes tests must patch for those extracted call sites.
-from simple_stipple.platform.settings import custom_tiles_dir, save_settings  # noqa: F401
-from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
+from simple_stipple.platform.settings import (  # noqa: F401
+    custom_tiles_dir,
+    save_settings,
+    user_data_dir,
+)
+from simple_stipple.ui.components.feedback import (
+    parse_float_field_with_feedback,
+    refresh_style,
+    show_error,
+)
+from simple_stipple.ui.components.focus import EscapeBlurFilter, blocked_signals
+from simple_stipple.ui.components.layout import (
+    CollapsibleSection,
+    content_splitter,
+    sidebar_panel,
+    surface_frame,
+)
 from simple_stipple.ui.components.recent import KIND_DXF, KIND_IMAGE, record_recent
+from simple_stipple.ui.components.workflow import set_status_label
+from simple_stipple.ui.dialogs.export_preflight import export_preflight
+from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file, reveal_path
+from simple_stipple.ui.dialogs.laserstar_export_dialog import LaserStarExportDialog
+from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -220,21 +221,6 @@ class PatternPage(BasePage):
         "_engraving_image_path": "engraving_image_path",
     }
 
-    def __getattr__(self, name: str):
-        field = self._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            return getattr(model, field)
-        raise AttributeError(name)
-
-    def __setattr__(self, name: str, value) -> None:
-        field = self._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            setattr(model, field, value)
-            return
-        super().__setattr__(name, value)
-
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)  # BasePage sets _settings and _suspend_state
         self._model = PatternModel()
@@ -263,17 +249,6 @@ class PatternPage(BasePage):
         self._zones_section: CollapsibleSection
         self._zone_output_combo: QComboBox
         self._presets: dict[str, dict] = dict(self._settings.get("pattern_presets", {}))
-        # Seed factory starter presets once on first run; respects deletions.
-        seeded = ensure_builtins_seeded(self._settings, self._presets)
-        if seeded is not self._presets or self._settings.get("pattern_presets") != seeded:
-            self._presets = seeded
-            self._settings[PRESET_SETTINGS_KEY] = dict(self._presets)
-            try:
-                from simple_stipple.platform.settings import save_settings
-
-                save_settings(self._settings)
-            except OSError:
-                LOGGER.exception("Failed to persist seeded pattern presets")
         load_generator_entry_points()
         self._base_patterns: list[str] = list(available_patterns())
         self._load_state()
@@ -717,6 +692,10 @@ class PatternPage(BasePage):
         self._presets = {name: dict(payload) for name, payload in presets.items()}
         self._refresh_preset_combo()
 
+    def _cancel_pattern_workers(self) -> None:
+        self._preview_task.cancel()
+        self._generate_task.cancel()
+
     def shutdown(self) -> None:
         """Called by ``App.closeEvent`` before the window tears down.
 
@@ -726,15 +705,13 @@ class PatternPage(BasePage):
         Threads are daemon=True so the process can still exit even if a join
         times out — this is a best-effort head start, not a hard guarantee.
         """
-        self._shutting_down = True
         self._preview_timer.stop()
         self._preview_revision += 1
         self._generation_revision += 1
-        self._preview_task.cancel()
-        self._generate_task.cancel()
-        for thread in (self._preview_thread, self._generate_thread):
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=2.0)
+        self._shutdown_threads(
+            (self._preview_thread, self._generate_thread),
+            self._cancel_pattern_workers,
+        )
 
     def get_workspace_state(self) -> dict:
         return get_pattern_workspace_state(self)
@@ -1578,7 +1555,7 @@ class PatternPage(BasePage):
                 self._collect_engraving_job() if wants_engraving else (None, None, None)
             )
         except ValueError as exc:
-            QMessageBox.warning(self, "Export", str(exc))
+            show_error(self, "Export", exc, message="Could not prepare the pattern export.")
             return
         vectors = list(self._preview_polys_cache) if wants_vectors else []
         # Output order is a production choice, not a renderer detail.  Apply
@@ -1621,7 +1598,7 @@ class PatternPage(BasePage):
                 engraving_mask=raster_mask,
             )
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            show_error(self, "Export failed", exc, message="Could not write the pattern export.")
             return
         self._last_out_path = str(written[0])
         self._export_is_current = True
@@ -1683,7 +1660,7 @@ class PatternPage(BasePage):
                 STATUS_OK,
             )
         except (FileExistsError, OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Export Failed", str(exc))
+            show_error(self, "Export failed", exc, message="Could not write the pattern export.")
         self._update_preview_controls()
 
     def _copy_operator_notes(self) -> None:
@@ -2036,7 +2013,7 @@ class PatternPage(BasePage):
             if imported.images:
                 self._restore_imported_image(imported.images[0], Path(path).stem)
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Import Failed", str(exc))
+            show_error(self, "Import failed", exc, message="Could not import the selected artwork.")
 
     def _restore_imported_image(self, placement, stem: str) -> None:
         """Put an image carried by an imported SVG back on the part.
@@ -2209,23 +2186,19 @@ class PatternPage(BasePage):
             self._schedule_preview()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+            show_error(self, "Load failed", exc, message="Could not load the selected outline.")
 
     def _quick_load(self, path: str) -> None:
         self._show_outline_path(path)
         self._load_dxf(path)
 
     def _reveal_in_finder(self) -> None:
-        if self._last_out_path:
-            p = Path(self._last_out_path)
-            if not p.exists():
-                QMessageBox.warning(
-                    self,
-                    "File Not Found",
-                    f"The file no longer exists:\n{self._last_out_path}",
-                )
-                return
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
+        if self._last_out_path and not reveal_path(self, self._last_out_path):
+            QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"The file no longer exists:\n{self._last_out_path}",
+            )
 
     def _refresh_pattern_choices(self, current: str | None = None) -> None:
         if not hasattr(self, "_pattern_combo"):
@@ -2234,19 +2207,18 @@ class PatternPage(BasePage):
 
     def _populate_pattern_combo(self, combo: QComboBox, current: str | None = None) -> None:
         current = combo.currentText() if current is None else current
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(self._base_patterns)
-        # An image is one of the things a region can be, so it belongs in the
-        # same list as the generated patterns rather than in its own section.
-        combo.insertItem(1, IMAGE_PATTERN)
-        if self._tile_motifs:
-            combo.insertSeparator(combo.count())
-            for name in sorted(self._tile_motifs, key=str.casefold):
-                combo.addItem(f"Custom · {name}")
-        target = current if combo.findText(current) >= 0 else "— None —"
-        combo.setCurrentText(target)
-        combo.blockSignals(False)
+        with blocked_signals(combo):
+            combo.clear()
+            combo.addItems(self._base_patterns)
+            # An image is one of the things a region can be, so it belongs in the
+            # same list as the generated patterns rather than in its own section.
+            combo.insertItem(1, IMAGE_PATTERN)
+            if self._tile_motifs:
+                combo.insertSeparator(combo.count())
+                for name in sorted(self._tile_motifs, key=str.casefold):
+                    combo.addItem(f"Custom · {name}")
+            target = current if combo.findText(current) >= 0 else "— None —"
+            combo.setCurrentText(target)
         if combo is getattr(self, "_pattern_combo", None):
             self._update_custom_pattern_actions(target)
 

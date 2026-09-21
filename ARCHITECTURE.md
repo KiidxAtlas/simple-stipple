@@ -139,6 +139,31 @@ generates fills. `PatternPage` coordinates Qt controls, workers, preview,
 cancellation, and export. Trace follows the same division: `TracePage` owns
 interaction while `core.imaging` owns image processing.
 
+## UI navigation map
+
+The large Qt classes are composition surfaces, not the home for every
+behavior. Start here when changing the UI:
+
+| Need to change | Start here | Keep out of the page/view |
+|---|---|---|
+| Canvas construction, defaults, snap/grid settings | `canvas/view/config.py` | geometry mutation and painting |
+| Canvas mouse/key/dimension interactions | `canvas/view/interactions.py` | widget initialization |
+| Canvas context actions and view-state helpers | `canvas/view/helpers.py` and `canvas/view/commands.py` | renderer internals |
+| Canvas document replacement or public state access | `canvas/view/main.py` | pattern-specific workflow rules |
+| Canvas painting and preview layers | `canvas/renderer.py` | input event handling |
+| Pattern widget construction | `features/pattern/layout.py` | preview/export decisions |
+| Pattern form values and subtitles | `features/pattern/form.py` | worker lifecycle |
+| Pattern preview worker selection | `features/pattern/session.py` | Qt widget updates |
+| Pattern solve and generation computation | `features/pattern/workers.py` and `core/patterns/` | dialog/layout code |
+| Pattern zones and treatments | `features/pattern/regions/` | generic canvas behavior |
+| Pattern file export | `features/pattern/export.py` | page layout |
+
+`PatternPage` and `CanvasView` remain the public coordinators. Before adding
+another method to either class, first check whether the behavior belongs in
+one of these existing seams. The highest-friction preview path is deliberately
+split at `build_preview_worker_call()`: `PatternPage` prepares state,
+`session.py` chooses the worker contract, and `workers.py` performs the solve.
+
 ## Placement guide
 
 | Change | Start in | Primary surface |
@@ -169,6 +194,12 @@ interaction while `core.imaging` owns image processing.
 - `canvas.rendering.DensePreviewRenderer` — retained preview batching and raster cache.
 - `canvas.view.config` — CanvasView construction plus grid, snap, context-menu,
   and status settings.
+- `canvas.view.{commands,config,helpers,interactions}` — explicit CanvasView
+  binding mixins; keep behavior in its existing module while avoiding runtime
+  post-class monkey-patching.
+- `canvas.objects.CanvasViewPort` — stable public surface for shared canvas
+  consumers; migrate private host reads incrementally behind compatibility
+  adapters.
 - `core.cad.geometry` — CAD curve and outline geometry.
 - `features.trace.session` — traced-outline DXF export workflow.
 - `features.draft.session` — imported SVG reference-artwork lifecycle.

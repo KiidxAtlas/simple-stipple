@@ -21,7 +21,7 @@ from pathlib import Path
 PACKAGE = Path(__file__).resolve().parents[1] / "src" / "simple_stipple"
 
 # Baselines measured 2026-08-13. These may only ever go down.
-MAX_VIEW_PRIVATE_REACH_INS = 1681
+MAX_VIEW_PRIVATE_REACH_INS = 1659
 MAX_MODULE_LEVEL_SELF_FUNCTIONS = 75
 
 _REACH_IN = re.compile(r"\b_(?:host|view)\._[A-Za-z_]")

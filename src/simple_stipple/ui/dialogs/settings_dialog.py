@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QIntValidator, QValidator
@@ -54,8 +56,19 @@ from simple_stipple.ui.style import (
     SPACE_SM,
 )
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+
+@dataclass(frozen=True)
+class _ScalarField:
+    key: str
+    label: str
+    converter: Callable[[str], float | int]
+    minimum: float
+    maximum: float
+    default: float | int
+    suffix: str
+    width: int
+    decimals: int = 0
+    tooltip: str = ""
 
 
 class SettingsDialog(QDialog):
@@ -117,6 +130,57 @@ class SettingsDialog(QDialog):
         ("geometry_health_visible", "Show geometry-health warnings on canvas", False),
         ("curvature_visible", "Show curvature analysis while editing curves", False),
     ]
+
+    _SCALAR_FIELDS = (
+        _ScalarField(
+            "rotation_snap_increment",
+            "Rotation snap increment",
+            float,
+            0.1,
+            180.0,
+            15.0,
+            "°",
+            72,
+            2,
+            "Angle used by drawing and rotation snapping while Shift is held",
+        ),
+        _ScalarField(
+            "grid_spacing", "Default grid spacing", float, 0.001, 100000.0, 5.0, "mm", 90, 2
+        ),
+        _ScalarField(
+            "auto_fetch_interval_minutes",
+            "Repository fetch interval",
+            int,
+            1,
+            1440,
+            10,
+            "minutes",
+            72,
+        ),
+        _ScalarField(
+            "smooth_iterations",
+            "Smooth iterations",
+            int,
+            1,
+            50,
+            DEFAULT_SMOOTH_ITERATIONS,
+            "",
+            60,
+            tooltip="Default seeded into the Smooth command's HUD prompt",
+        ),
+        _ScalarField(
+            "simplify_tolerance",
+            "Simplify tolerance",
+            float,
+            0.001,
+            1000.0,
+            DEFAULT_SIMPLIFY_TOLERANCE,
+            "mm",
+            70,
+            3,
+            "Default seeded into the Simplify command's HUD prompt",
+        ),
+    )
 
     _MARGIN = SPACE_LG
     _GAP = SPACE_MD
@@ -196,6 +260,7 @@ class SettingsDialog(QDialog):
         self._smoothing_combo: QComboBox | None = None
         self._smooth_iterations_edit: QLineEdit | None = None
         self._simplify_tolerance_edit: QLineEdit | None = None
+        self._scalar_entries: dict[str, QLineEdit | None] = {}
         self._ui_scale_combo: QComboBox | None = None
         self._appearance_combo: QComboBox | None = None
         self._density_combo: QComboBox | None = None
@@ -315,60 +380,16 @@ class SettingsDialog(QDialog):
         _, form = self._form_card(content_layout, "Updates & Sync")
         for key, label, default in self._UPDATE_TOGGLES:
             self._add_toggle(form, key, label, default)
-        self._fetch_interval_edit = self._add_suffix_field(
-            form,
-            "Repository fetch interval",
-            str(self._settings.get("auto_fetch_interval_minutes", 10)),
-            "minutes",
-            QIntValidator(1, 1440, self),
-            width=72,
-        )
+        self._fetch_interval_edit = self._add_scalar_field(form, "auto_fetch_interval_minutes")
 
         _, form = self._form_card(content_layout, "Canvas & Snapping")
         for key, label, default in self._SNAP_TOGGLES:
             self._add_toggle(form, key, label, default)
-        self._grid_spacing_edit = self._add_suffix_field(
-            form,
-            "Default grid spacing",
-            str(self._settings.get("grid_spacing", 10.0)),
-            "mm",
-            QDoubleValidator(0.001, 100000.0, 2, self),
-            width=90,
-        )
-        self._rotation_snap_edit = self._add_suffix_field(
-            form,
-            "Rotation snap increment",
-            str(self._settings.get("rotation_snap_increment", 15.0)),
-            "°",
-            QDoubleValidator(0.1, 180.0, 2, self),
-            width=72,
-        )
-        self._rotation_snap_edit.setToolTip(
-            "Angle used by drawing and rotation snapping while Shift is held"
-        )
+        self._grid_spacing_edit = self._add_scalar_field(form, "grid_spacing")
+        self._rotation_snap_edit = self._add_scalar_field(form, "rotation_snap_increment")
         self._smoothing_combo = self._add_smoothing_combo(form)
-        self._smooth_iterations_edit = self._add_suffix_field(
-            form,
-            "Smooth iterations",
-            str(self._settings.get("smooth_iterations", DEFAULT_SMOOTH_ITERATIONS)),
-            "",
-            QIntValidator(1, 50),
-            width=60,
-        )
-        self._smooth_iterations_edit.setToolTip(
-            "Default seeded into the Smooth command's HUD prompt"
-        )
-        self._simplify_tolerance_edit = self._add_suffix_field(
-            form,
-            "Simplify tolerance",
-            str(self._settings.get("simplify_tolerance", DEFAULT_SIMPLIFY_TOLERANCE)),
-            "mm",
-            QDoubleValidator(0.001, 1000.0, 3),
-            width=70,
-        )
-        self._simplify_tolerance_edit.setToolTip(
-            "Default seeded into the Simplify command's HUD prompt"
-        )
+        self._smooth_iterations_edit = self._add_scalar_field(form, "smooth_iterations")
+        self._simplify_tolerance_edit = self._add_scalar_field(form, "simplify_tolerance")
         self._add_toggle(
             form,
             "draw_sidebar_always_visible",
@@ -630,6 +651,26 @@ class SettingsDialog(QDialog):
         form.addRow(label, field)
         return edit
 
+    def _add_scalar_field(self, form: QFormLayout, key: str) -> QLineEdit:
+        field = next(field for field in self._SCALAR_FIELDS if field.key == key)
+        validator: QValidator
+        if field.converter is int:
+            validator = QIntValidator(int(field.minimum), int(field.maximum), self)
+        else:
+            validator = QDoubleValidator(field.minimum, field.maximum, field.decimals, self)
+        edit = self._add_suffix_field(
+            form,
+            field.label,
+            str(self._settings.get(field.key, field.default)),
+            field.suffix,
+            validator,
+            width=field.width,
+        )
+        if field.tooltip:
+            edit.setToolTip(field.tooltip)
+        self._scalar_entries[field.key] = edit
+        return edit
+
     def _compact(self, widget: QWidget) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -694,8 +735,35 @@ class SettingsDialog(QDialog):
         if d:
             self._entries[key].setText(d)
 
+    def _validated_scalar_values(self) -> dict[str, float | int] | None:
+        values: dict[str, float | int] = {}
+        for field in self._SCALAR_FIELDS:
+            entry = self._scalar_entries.get(field.key)
+            if entry is None:
+                continue
+            try:
+                value = field.converter(entry.text().strip())
+                if not math.isfinite(float(value)) or not field.minimum <= value <= field.maximum:
+                    raise ValueError
+            except (TypeError, ValueError):
+                message = f"{field.label} must be between {field.minimum:g} and {field.maximum:g}."
+                entry.setProperty("error", True)
+                entry.setToolTip(message)
+                entry.style().unpolish(entry)
+                entry.style().polish(entry)
+                QMessageBox.warning(self, "Invalid setting", message)
+                entry.setFocus()
+                return None
+            entry.setProperty("error", False)
+            entry.setToolTip("")
+            values[field.key] = value
+        return values
+
     def _save(self, _checked: bool = False, *, close: bool = True) -> None:
         """Save all settings to disk."""
+        scalar_values = self._validated_scalar_values()
+        if scalar_values is None:
+            return
         for key, entry in self._entries.items():
             v = entry.text().strip()
             if v:
@@ -735,38 +803,10 @@ class SettingsDialog(QDialog):
             self._settings["appearance"] = self._appearance_combo.currentData()
         if self._density_combo is not None:
             self._settings["interface_density"] = self._density_combo.currentData()
-        if self._rotation_snap_edit is not None:
-            try:
-                self._settings["rotation_snap_increment"] = float(self._rotation_snap_edit.text())
-            except ValueError:
-                pass
-        if self._grid_spacing_edit is not None:
-            try:
-                self._settings["grid_spacing"] = float(self._grid_spacing_edit.text())
-            except ValueError:
-                pass
-        if self._fetch_interval_edit is not None:
-            try:
-                self._settings["auto_fetch_interval_minutes"] = int(
-                    self._fetch_interval_edit.text()
-                )
-            except ValueError:
-                pass
+        self._settings.update(scalar_values)
 
         if self._smoothing_combo is not None:
             self._settings["smoothing_method"] = self._smoothing_combo.currentData()
-
-        if self._smooth_iterations_edit is not None:
-            try:
-                self._settings["smooth_iterations"] = int(self._smooth_iterations_edit.text())
-            except ValueError:
-                pass
-
-        if self._simplify_tolerance_edit is not None:
-            try:
-                self._settings["simplify_tolerance"] = float(self._simplify_tolerance_edit.text())
-            except ValueError:
-                pass
 
         save_settings(self._settings)
         if close:
@@ -801,7 +841,7 @@ class SettingsDialog(QDialog):
             )
         if self._appearance_combo is not None:
             self._appearance_combo.setCurrentIndex(
-                max(0, self._appearance_combo.findData("system"))
+                max(0, self._appearance_combo.findData(defaults["appearance"]))
             )
         if self._density_combo is not None:
             self._density_combo.setCurrentIndex(
@@ -811,18 +851,10 @@ class SettingsDialog(QDialog):
             self._ui_scale_combo.setCurrentIndex(
                 max(0, self._ui_scale_combo.findData(defaults["ui_scale"]))
             )
-        # These six were missing despite the tooltip promising "all"
-        # settings fields — Reset silently left them untouched.
-        if self._fetch_interval_edit is not None:
-            self._fetch_interval_edit.setText(str(defaults["auto_fetch_interval_minutes"]))
-        if self._grid_spacing_edit is not None:
-            self._grid_spacing_edit.setText(str(defaults["grid_spacing"]))
-        if self._rotation_snap_edit is not None:
-            self._rotation_snap_edit.setText(str(defaults["rotation_snap_increment"]))
+        for field in self._SCALAR_FIELDS:
+            scalar_entry = self._scalar_entries.get(field.key)
+            if scalar_entry is not None:
+                scalar_entry.setText(str(defaults[field.key]))
         if self._smoothing_combo is not None:
             idx = self._smoothing_combo.findData(defaults["smoothing_method"])
             self._smoothing_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        if self._smooth_iterations_edit is not None:
-            self._smooth_iterations_edit.setText(str(defaults["smooth_iterations"]))
-        if self._simplify_tolerance_edit is not None:
-            self._simplify_tolerance_edit.setText(str(defaults["simplify_tolerance"]))

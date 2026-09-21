@@ -1,0 +1,89 @@
+
+<h2 id="pattern-types" class="section-heading">
+    Pattern Types — Complete Guide
+</h2>
+
+<p>Simple Stipple includes geometric, organic, and custom-tile pattern generators.</p>
+
+<h3 class="subheading">Geometric Patterns</h3>
+
+<h4 class="panel-title">Honeycomb</h4>
+<p>A classic hexagonal grid pattern, ideal for structural engraving and decorative surfaces.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Hex size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each hexagonal cell (default: 1.75 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between adjacent hexagons (default: 0.5 mm)</td></tr>
+</table>
+
+<h4 class="panel-title">Gradient Honeycomb</h4>
+<p>A hexagonal grid where cell sizes gradually change across the pattern, creating a flowing gradient effect.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Min size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Smallest hex cell (default: 0.8 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Max size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Largest hex cell (default: 2.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between hexagons (default: 0.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Direction (°)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gradient direction — 0° = left to right, 90° = vertical (default: 0°)</td></tr>
+</table>
+
+<h4 class="panel-title">Brick</h4>
+<p>A classic brickwork pattern with staggered rows, perfect for wall and floor engraving.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Brick width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each brick (default: 4.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Brick height (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Height of each brick (default: 2.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Mortar gap (default: 0.5 mm)</td></tr>
+</table>
+
+<h4 class="panel-title">Mesh</h4>
+<p>A grid of circles arranged in a regular pattern, creating an elegant mesh effect.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Circle radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each circle (default: 0.35 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Grid spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance (default: 1.2 mm)</td></tr>
+</table>
+
+<h3 class="subheading">Organic / Curved Patterns</h3>
+
+<h4 class="panel-title">Fish Scale</h4>
+<p>Overlapping arc segments that mimic the appearance of fish scales.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Horizontal span (default: 3.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale height (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Vertical height (default: 2.0 mm)</td></tr>
+</table>
+
+<h4 class="panel-title">Topographic</h4>
+<p>Inward-offset contour lines that simulate topographic map elevation lines.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Contour spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Distance between successive contours (default: 1.5 mm)</td></tr>
+</table>
+
+<h3 class="subheading">Mathematical / Fractal Patterns</h3>
+
+<h4 class="panel-title">Voronoi</h4>
+<p>A Voronoi diagram partitioning the outline into irregular polygonal cells.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell count</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Number of random cells (default: 60)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Inset distance between cells (default: 0.15 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed (default: 42)</td></tr>
+</table>
+
+<h3 class="subheading">Decorative / Woven Patterns</h3>
+
+<h4 class="panel-title">Basketweave</h4>
+<p>A woven pattern of horizontal and vertical strips, creating an interlaced basket effect.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each woven strip (default: 2.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip length (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Length of each strip (default: 8.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap between strips (default: 0.2 mm)</td></tr>
+</table>
+
+<h4 class="panel-title">Braid</h4>
+<p>Interlocking diagonal strips creating a braid or weave effect at ±45° angles.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each diagonal strip (default: 2.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap between parallel strips (default: 3.0 mm)</td></tr>
+</table>
+
+<h4 class="panel-title">Stipple Dots</h4>
+<p>Poisson-disk distributed circles creating a stippled, pointillist effect.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Dot radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each dot (default: 0.4 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance (default: 1.2 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Interlaced</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Use offset grid instead of Poisson-disk (checkbox)</td></tr>
+</table>

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from uuid import uuid4
 
-from PySide6.QtCore import QByteArray, Qt, QTimer
+from PySide6.QtCore import QByteArray, QMetaObject, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -113,18 +113,6 @@ class App(QMainWindow):
     def _autosave_path(self) -> Path:
         return user_data_dir() / "recovery" / f"{self._recovery_id}.workspace.json"
 
-    def _autosave_workspace(self) -> None:
-        """Compatibility entry point that waits for the delegated snapshot.
-
-        The periodic timer calls the controller directly and remains fully
-        asynchronous.  Explicit callers historically relied on this helper
-        returning only after the recovery file was durable.
-        """
-        self._autosave_controller._autosave_workspace()
-        thread = self._autosave_controller._recovery_write_thread
-        if thread is not None:
-            thread.join(timeout=10.0)
-
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._recovery_id = uuid4().hex
@@ -181,15 +169,8 @@ class App(QMainWindow):
             settings=self._settings,
             specs=self._page_specs,
         )
-        for index, tooltip in enumerate(
-            (
-                "Draft — create, import, and edit drawing geometry",
-                "Pattern — generate fills from a prepared outline",
-                "Trace — turn a raster image into editable vector outlines",
-                "Convert — convert or repair vector files",
-            )
-        ):
-            self._tabs.setTabToolTip(index, tooltip)
+        for index, spec in enumerate(self._page_specs):
+            self._tabs.setTabToolTip(index, spec.tab_tooltip)
         self._workspace_controller = WorkspaceController(self, self._page_runtime, self._tabs)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
 
@@ -209,7 +190,9 @@ class App(QMainWindow):
         self._settings_controller = SettingsController(
             self._settings, self._page_runtime, source=self
         )
-        settings_bus.changed.connect(self._on_external_setting_changed)
+        self._settings_bus_connection: QMetaObject.Connection | None = settings_bus.changed.connect(
+            self._on_external_setting_changed
+        )
         self._page_runtime.apply_all(self._settings)
         self._page_runtime.connect_echoes(self._on_setting_echo)
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
@@ -367,51 +350,35 @@ class App(QMainWindow):
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
 
-        self._page_runtime.connect_signal_if_present(
-            page_id="draft",
-            signal_name="sendSelectedToPatternRequested",
-            slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Draft"),
+        handoffs = (
+            (
+                "draft",
+                "sendSelectedToPatternRequested",
+                lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Draft"),
+            ),
+            ("pattern", "sendSelectedToDraftRequested", self._send_pattern_selection_to_draft),
+            ("pattern", "repairTileRequested", self._repair_pattern_tile),
+            ("trace", "sendSelectedToDraftRequested", self._send_pattern_selection_to_draft),
+            (
+                "trace",
+                "sendSelectedToPatternRequested",
+                lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Trace"),
+            ),
+            ("pattern", "openPageRequested", self._switch_to_page),
+            ("draft", "openPageRequested", self._switch_to_page),
+            ("convert", "openInDraftRequested", self._send_pattern_selection_to_draft),
+            (
+                "convert",
+                "openInPatternRequested",
+                lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Convert"),
+            ),
         )
-        self._page_runtime.connect_signal_if_present(
-            page_id="pattern",
-            signal_name="sendSelectedToDraftRequested",
-            slot=self._send_pattern_selection_to_draft,
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="pattern",
-            signal_name="repairTileRequested",
-            slot=self._repair_pattern_tile,
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="trace",
-            signal_name="sendSelectedToDraftRequested",
-            slot=self._send_pattern_selection_to_draft,
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="trace",
-            signal_name="sendSelectedToPatternRequested",
-            slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Trace"),
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="pattern",
-            signal_name="openPageRequested",
-            slot=self._switch_to_page,
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="draft",
-            signal_name="openPageRequested",
-            slot=self._switch_to_page,
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="convert",
-            signal_name="openInDraftRequested",
-            slot=self._send_pattern_selection_to_draft,
-        )
-        self._page_runtime.connect_signal_if_present(
-            page_id="convert",
-            signal_name="openInPatternRequested",
-            slot=lambda polys: self._send_shape_selection_to_pattern(polys, source_label="Convert"),
-        )
+        for page_id, signal_name, slot in handoffs:
+            self._page_runtime.connect_signal_if_present(
+                page_id=page_id,
+                signal_name=signal_name,
+                slot=slot,
+            )
         for page_id in ("draft", "trace"):
             self._page_runtime.connect_signal_if_present(
                 page_id=page_id,
@@ -461,13 +428,6 @@ class App(QMainWindow):
         self._draft_page.load_outline_polys(polys, source_label="Pattern selection")
         self._tabs.setCurrentWidget(self._draft_page)
         self._schedule_workspace_dirty_check()
-
-    def _on_draw_sidebar_width_changed(self, width: int) -> None:
-        """Persist a live sidebar-resize drag and echo the new width to
-        every other tab's sidebar so they stay consistent."""
-        self._settings["draw_sidebar_width"] = width
-        save_settings(self._settings)
-        self._page_runtime.apply_draw_sidebar_width(width)
 
     def _on_setting_echo(self, key: str, value: Any) -> None:
         self._settings_controller.update(key, value)
@@ -530,36 +490,6 @@ class App(QMainWindow):
         if app.styleSheet() != qss:
             app.setStyleSheet(qss)
 
-    def _on_draw_sidebar_height_changed(self, height: int) -> None:
-        """Persist a live sidebar-resize drag and echo the new height to
-        every other tab's sidebar so they stay consistent."""
-        self._settings["draw_sidebar_height"] = height
-        save_settings(self._settings)
-        self._page_runtime.apply_draw_sidebar_height(height)
-
-    def _on_smoothing_method_changed(self, method: str) -> None:
-        """Persist a sidebar-driven smoothing-method change and echo it to
-        every other tab, matching Settings dialog's own persistence."""
-        self._settings["smoothing_method"] = method
-        save_settings(self._settings)
-        self._page_runtime.apply_smoothing_method(method)
-
-    def _on_smooth_iterations_changed(self, iterations: int) -> None:
-        """Remember the last value typed into the Smooth HUD prompt so the
-        user doesn't have to retype it every time, and echo it to every
-        other tab."""
-        self._settings["smooth_iterations"] = iterations
-        save_settings(self._settings)
-        self._page_runtime.apply_smooth_iterations(iterations)
-
-    def _on_simplify_tolerance_changed(self, tolerance: float) -> None:
-        """Remember the last value typed into the Simplify HUD prompt so
-        the user doesn't have to retype it every time, and echo it to
-        every other tab."""
-        self._settings["simplify_tolerance"] = tolerance
-        save_settings(self._settings)
-        self._page_runtime.apply_simplify_tolerance(tolerance)
-
     def _new_window(self) -> None:
         """Open a second, fully independent window — its own workspace
         path/dirty state, its own PageRuntime — sharing only the on-disk
@@ -576,10 +506,9 @@ class App(QMainWindow):
             return
         # Stop timers before children destroyed to avoid late callbacks.
         self._task_controller.shutdown()
-        try:
-            settings_bus.changed.disconnect(self._on_external_setting_changed)
-        except (RuntimeError, TypeError):  # already disconnected (e.g. tests)
-            pass
+        if self._settings_bus_connection is not None:
+            cast(Any, settings_bus).disconnect(self._settings_bus_connection)
+            self._settings_bus_connection = None
         # Persist settings on exit so any in-memory changes survive.
         self._save_window_geometry()
         try:

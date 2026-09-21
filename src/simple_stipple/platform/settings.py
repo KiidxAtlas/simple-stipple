@@ -509,8 +509,8 @@ class SettingsSchema(BaseModel):
     draw_sidebar_height: Annotated[
         int | None, Field(ge=MIN_DRAW_SIDEBAR_HEIGHT, le=MAX_DRAW_SIDEBAR_HEIGHT)
     ] = None
-    trace_sidebar_width: Annotated[int, Field(ge=300, le=420)] = 320
-    convert_sidebar_width: Annotated[int, Field(ge=300, le=440)] = 380
+    trace_sidebar_width: Annotated[int, Field(ge=260, le=320)] = 320
+    convert_sidebar_width: Annotated[int, Field(ge=280, le=320)] = 320
     convert_selected_task: Annotated[int, Field(ge=0, le=3)] = 0
     draw_sidebar_always_visible: bool = DEFAULT_DRAW_SIDEBAR_ALWAYS_VISIBLE
     check_updates_on_startup: bool = False
@@ -520,6 +520,7 @@ class SettingsSchema(BaseModel):
     auto_commit_push: bool = False
     ui_scale: Annotated[float, Field(ge=0.5, le=3.0)] = 1.0
     interface_density: Literal["compact", "comfortable"] = "compact"
+    appearance: Literal["system", "dark", "light"] = "system"
     rotation_snap_increment: Annotated[float, Field(ge=0.1, le=180.0)] = 15.0
     custom_tiles_dir: str = Field(default_factory=lambda: str(custom_tiles_dir()))
     grid_visible: bool = True

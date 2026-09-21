@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform as _platform
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -122,9 +121,6 @@ def prune_missing(settings: dict, kinds: Iterable[str] = (KIND_DXF, KIND_IMAGE))
             changed = True
     if changed:
         save_settings(settings)
-
-
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
 class RecentFilesButton(QPushButton):

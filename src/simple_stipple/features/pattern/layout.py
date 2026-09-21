@@ -1,9 +1,7 @@
-# pyright: reportAttributeAccessIssue=false
+"""Widget construction for the Pattern page.
 
-"""Widget construction for the Pattern page — left/right panel layout and
-each collapsible section. Extracted from ``PatternPage`` (see plan.md
-Section 9.1); follows the same ``page: Any``-first free-function
-convention already used by ``domain/session.py`` and ``ui/params.py``.
+The page keeps workflow coordination while this module owns its layout
+composition and section builders.
 """
 
 from __future__ import annotations

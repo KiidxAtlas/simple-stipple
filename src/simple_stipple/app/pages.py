@@ -26,6 +26,7 @@ class PageSpec:
     command_keywords: str
     factory: PageFactory
     content_canvas_attrs: tuple[str, ...] = ()
+    tab_tooltip: str = ""
     visible_in_tabs: bool = True
 
     @property
@@ -46,6 +47,7 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             "page draft",
             lambda settings: DraftPage(settings=settings),
             ("_canvas",),
+            tab_tooltip="Draft — create, import, and edit drawing geometry",
         ),
         PageSpec(
             "pattern",
@@ -53,6 +55,7 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             "page pattern fill",
             lambda settings: PatternPage(settings=settings),
             ("_canvas",),
+            tab_tooltip="Pattern — generate fills from a prepared outline",
         ),
         PageSpec(
             "trace",
@@ -60,6 +63,7 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             "page trace",
             lambda settings: TracePage(settings=settings),
             ("_canvas",),
+            tab_tooltip="Trace — turn a raster image into editable vector outlines",
         ),
         PageSpec(
             "convert",
@@ -67,12 +71,14 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             "page convert utilities",
             lambda settings: ConvertPage(settings=settings),
             ("_preview_canvas",),
+            tab_tooltip="Convert — convert or repair vector files",
         ),
         PageSpec(
             "repository",
             "Repository",
             "page repository git sync pull push commit",
             lambda settings: RepoPage(settings=settings),
+            tab_tooltip="Repository — synchronize workspace files with Git",
         ),
     )
 
@@ -297,27 +303,3 @@ class PageRuntime:
                 signal = getattr(canvas, sync.signal, None)
                 if signal is not None:
                     signal.connect(lambda value, key=sync.key: handler(key, value))
-
-    def apply_smoothing_method(self, method: str) -> None:
-        """Push the chosen path-smoothing algorithm to every page's canvas(es)."""
-        self._apply_to_canvases("set_smoothing_method", method)
-
-    def apply_smooth_iterations(self, iterations: int) -> None:
-        """Push the remembered Smooth-prompt iteration count to every
-        page's canvas(es)."""
-        self._apply_to_canvases("set_smooth_iterations", iterations)
-
-    def apply_simplify_tolerance(self, tolerance: float) -> None:
-        """Push the remembered Simplify-prompt tolerance to every page's
-        canvas(es)."""
-        self._apply_to_canvases("set_simplify_tolerance", tolerance)
-
-    def apply_draw_sidebar_width(self, width: int) -> None:
-        """Push the draw sidebar's width to every page's canvas(es), so
-        resizing it on one tab keeps every tab's sidebar consistent."""
-        self._apply_to_canvases("set_draw_sidebar_width", width)
-
-    def apply_draw_sidebar_height(self, height: int | None) -> None:
-        """Push the draw sidebar's height to every page's canvas(es), so
-        resizing it on one tab keeps every tab's sidebar consistent."""
-        self._apply_to_canvases("set_draw_sidebar_height", height)

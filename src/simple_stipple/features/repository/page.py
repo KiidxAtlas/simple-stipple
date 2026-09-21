@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.features.base import BasePage
 from simple_stipple.platform.settings import save_settings
+from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.layout import (
     content_splitter,
     sidebar_panel,
@@ -39,8 +40,7 @@ class RepoPage(BasePage):
     _git_op_done = Signal(object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
-        super().__init__(parent)
-        self._settings: dict = settings or {}
+        super().__init__(parent, settings)
         self._git_busy = False
         self._shutting_down = False
         self._git_cancel = threading.Event()
@@ -106,7 +106,7 @@ class RepoPage(BasePage):
         self._pull_btn.setToolTip("Pull latest changes from remote")
         self._pull_btn.clicked.connect(self._git_pull)
         pull_card_layout.addWidget(self._pull_btn)
-        self._force_pull_btn = QPushButton("Force Pull / Reset")
+        self._force_pull_btn = QPushButton("Reset to Remote…")
         self._force_pull_btn.setMinimumHeight(34)
         self._force_pull_btn.setProperty("role", "danger")
         self._force_pull_btn.setToolTip(
@@ -397,7 +397,7 @@ class RepoPage(BasePage):
             return
         answer = QMessageBox.warning(
             self,
-            "Force Pull — discard local changes?",
+            "Reset to Remote — discard local changes?",
             "This will fetch the remote, reset the current branch to its upstream HEAD, "
             "and permanently delete local tracked and untracked changes.\n\n"
             f"Repository: {repo}\n\nContinue?",
@@ -445,7 +445,9 @@ class RepoPage(BasePage):
                 for key in ("user.name", "user.email")
             }
         except (OSError, subprocess.TimeoutExpired) as exc:
-            QMessageBox.warning(self, "Commit", f"Could not read Git identity:\n{exc}")
+            show_error(
+                self, "Commit setup failed", exc, message="Could not read the Git author identity."
+            )
             return
         setup_commands: list[list[str]] = []
         if not identity["user.name"]:
@@ -471,7 +473,7 @@ class RepoPage(BasePage):
                 check=False,
             ).stdout.strip()
         except (OSError, subprocess.TimeoutExpired) as exc:
-            QMessageBox.warning(self, "Commit", f"Could not inspect changed files:\n{exc}")
+            show_error(self, "Commit setup failed", exc, message="Could not inspect changed files.")
             return
         if not status:
             QMessageBox.information(self, "Commit", "Nothing to commit.")
@@ -566,13 +568,11 @@ class RepoPage(BasePage):
         self._set_step_status(self._repo_status, "Cancelling…", STATUS_ERR)
         self._cancel_btn.setEnabled(False)
 
-    def shutdown(self) -> None:
-        self._shutting_down = True
+    def _terminate_git_process(self) -> None:
         self._git_cancel.set()
-        self.blockSignals(True)
         process = self._git_process
         if process is not None and process.poll() is None:
             process.terminate()
-        thread = self._git_thread
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
+
+    def shutdown(self) -> None:
+        self._shutdown_thread(self._git_thread, self._terminate_git_process)

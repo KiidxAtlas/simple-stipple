@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Image to Outline page."""
 
 from __future__ import annotations
@@ -9,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -79,7 +78,12 @@ from simple_stipple.ui.components.layout import (
 )
 from simple_stipple.ui.components.recent import KIND_IMAGE, RecentFilesButton, record_recent
 from simple_stipple.ui.components.workflow import set_status_label
-from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file, reveal_label
+from simple_stipple.ui.dialogs.files import (
+    pick_open_file,
+    pick_save_file,
+    reveal_label,
+    reveal_path,
+)
 from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 
 TRACE_BG_COLOR = (0x16, 0x21, 0x3E)
@@ -130,21 +134,6 @@ class TracePage(BasePage):
         "_needs_view_fit": "needs_view_fit",
         "_trace_result_stale": "trace_result_stale",
     }
-
-    def __getattr__(self, name: str) -> Any:
-        field = self._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            return getattr(model, field)
-        raise AttributeError(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        field = self._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            setattr(model, field, value)
-            return
-        super().__setattr__(name, value)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
@@ -949,8 +938,9 @@ class TracePage(BasePage):
             self._img_path = None
             self._img_edit.setText("")
             self._img_info_lbl.setText("")
+            self._set_status("Could not load image", STATUS_ERR)
             self._update_trace_action_states()
-            QMessageBox.warning(self, "Image Error", f"Could not load image:\n{exc}")
+            show_error(self, "Image load failed", exc, message="Could not load the selected image.")
 
     def _update_height_from_width(self) -> None:
         if self._img_aspect <= 0:
@@ -1518,16 +1508,12 @@ class TracePage(BasePage):
             show_error(self, "Raster Export Error", exc)
 
     def _reveal_in_finder(self) -> None:
-        if self._last_out:
-            p = Path(self._last_out)
-            if not p.exists():
-                QMessageBox.warning(
-                    self,
-                    "File Not Found",
-                    f"The file no longer exists:\n{self._last_out}",
-                )
-                return
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
+        if self._last_out and not reveal_path(self, self._last_out):
+            QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"The file no longer exists:\n{self._last_out}",
+            )
 
     def _restore_background_from_path(self, path: str) -> None:
         try:
@@ -1552,13 +1538,9 @@ class TracePage(BasePage):
         short window to actually exit, instead of leaving it to run to
         completion (or crash) against a page that's already being destroyed.
         """
-        self._shutting_down = True
         self._preview_timer.stop()
         self._trace_revision += 1
-        self._cancel_event.set()
-        self.blockSignals(True)
-        if self._trace_thread is not None and self._trace_thread.is_alive():
-            self._trace_thread.join(timeout=2.0)
+        self._shutdown_thread(self._trace_thread, self._cancel_event.set)
 
     def get_workspace_state(self) -> dict:
         return get_trace_workspace_state(self)
@@ -1569,9 +1551,7 @@ class TracePage(BasePage):
     def clear_workspace_state(self) -> None:
         clear_trace_workspace_state(self)
 
-
-# Keep TracePage's established private action methods as the UI connection and
-# test patch surface; DXF workflow implementation lives with the Trace feature.
-TracePage._get_save_path = _get_save_path
-TracePage._export_all = _export_all
-TracePage._export_selected = _export_selected
+    # DXF export workflow callbacks, owned by ``trace.session``.
+    _get_save_path = _get_save_path
+    _export_all = _export_all
+    _export_selected = _export_selected

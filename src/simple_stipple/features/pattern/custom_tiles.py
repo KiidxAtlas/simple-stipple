@@ -1,8 +1,7 @@
-"""Custom-tile library management for the Pattern page — save, load, delete,
-locate, and repair user-managed vector tiles used as the "Custom Tile"
-pattern source. Extracted from ``PatternPage`` (see plan.md Section 9.1);
-follows the same ``page: Any``-first free-function convention already used
-by ``domain/session.py``.
+"""Custom-tile library management for the Pattern page.
+
+This module owns persistence, loading, deletion, location, and repair of
+user-managed vector tiles used by the Custom Tile pattern.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QMessageBox
 
 from simple_stipple.core.formats.service import (
     load_dxf_polylines_with_report,
@@ -24,6 +22,7 @@ from simple_stipple.core.formats.service import (
 )
 from simple_stipple.features.pattern.form import collect_form_state
 from simple_stipple.platform.settings import custom_tiles_dir, save_settings
+from simple_stipple.ui.components.feedback import confirm
 from simple_stipple.ui.dialogs.files import pick_open_file
 from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 
@@ -183,14 +182,11 @@ def delete_tile_motif(page: Any) -> None:
     name = page._custom_pattern_name(page._pattern_combo.currentText()) or ""
     if not name or name not in page._tile_motifs:
         return
-    answer = QMessageBox.question(
+    if not confirm(
         page,
         "Delete custom pattern?",
         f'Delete the custom pattern "{name}"? This cannot be undone.',
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-        QMessageBox.StandardButton.Cancel,
-    )
-    if answer != QMessageBox.StandardButton.Yes:
+    ):
         return
     del page._tile_motifs[name]
     page._tile_settings.pop(name, None)

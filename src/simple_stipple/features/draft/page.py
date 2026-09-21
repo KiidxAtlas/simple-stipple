@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Draft page — interaction-first 2D drafting.
 
 Design goals:
@@ -61,7 +60,7 @@ from simple_stipple.features.draft.session import (
 from simple_stipple.features.draft.session import (
     show_imported_svg_image as _show_imported_svg_image,
 )
-from simple_stipple.ui.components.feedback import show_error
+from simple_stipple.ui.components.feedback import confirm, show_error
 from simple_stipple.ui.components.layout import (
     content_splitter,
     surface_frame,
@@ -102,21 +101,6 @@ class DraftPage(BasePage):
         "_last_in_path": "last_input_path",
         "_import_note": "import_note",
     }
-
-    def __getattr__(self, name: str) -> Any:
-        field = self._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            return getattr(model, field)
-        raise AttributeError(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        field = self._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            setattr(model, field, value)
-            return
-        super().__setattr__(name, value)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
@@ -488,14 +472,13 @@ class DraftPage(BasePage):
         self._emit_state_changed()
 
     def _on_layer_deleted(self, layer: str) -> None:
-        reply = QMessageBox.question(
+        if not confirm(
             self,
             "Delete Layer",
             f"Delete layer '{layer}' and all of its contents?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default=QMessageBox.StandardButton.No,
+        ):
             return
         self._rt().layer_deleted(layer)
         self._refresh_status()
@@ -510,16 +493,15 @@ class DraftPage(BasePage):
         if len(names) == 1:
             self._on_layer_deleted(names[0])
             return
-        reply = QMessageBox.question(
+        if not confirm(
             self,
             "Delete Layers",
             "Delete {} layers and all of their contents?\n\n{}".format(
                 len(names), ", ".join(names)
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default=QMessageBox.StandardButton.No,
+        ):
             return
         rt = self._rt()
         for name in names:
@@ -533,16 +515,15 @@ class DraftPage(BasePage):
         sources = [str(n) for n in source_layers if n and n != target_layer]
         if not sources:
             return
-        reply = QMessageBox.question(
+        if not confirm(
             self,
             "Consolidate Layers",
             "Move all shapes from {} layer(s) into '{}' and remove the empty layers?\n\n{}".format(
                 len(sources), target_layer, ", ".join(sources)
             ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default=QMessageBox.StandardButton.No,
+        ):
             return
         moved = self._canvas.consolidate_layers(sources, target_layer)
         self._canvas._show_flash(
@@ -588,7 +569,6 @@ class DraftPage(BasePage):
             self._emit_state_changed()
 
     def _on_canvas_edit(self) -> None:
-        self._rt().on_canvas_edit()
         if hasattr(self, "_props_panel"):
             self._props_panel.refresh()
         self._refresh_status()
@@ -1203,9 +1183,7 @@ class DraftPage(BasePage):
     def apply_preset_state(self, state: dict | None) -> None:
         pass
 
-
-# Preserve DraftPage's existing canvas callback and import patch surfaces;
-# implementation is owned by the SVG imported-artwork workflow module.
-DraftPage._show_imported_svg_image = _show_imported_svg_image
-DraftPage._on_backdrop_transform = _on_backdrop_transform
-DraftPage._on_backdrop_key = _on_backdrop_key
+    # SVG imported-artwork workflow callbacks, owned by ``draft.session``.
+    _show_imported_svg_image = _show_imported_svg_image
+    _on_backdrop_transform = _on_backdrop_transform
+    _on_backdrop_key = _on_backdrop_key

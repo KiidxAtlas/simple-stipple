@@ -33,6 +33,7 @@ from simple_stipple.features.pattern.regions.treatments import (
     set_treatment,
     treatment_kind,
 )
+from simple_stipple.ui.components.feedback import confirm
 from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 
 # ── Row ↔ region ↔ engine-zone index ──────────────────────────────────────
@@ -384,14 +385,11 @@ def remove_selected_zone(page: Any) -> None:
 def clear_zones(page: Any) -> None:
     if not page._treatments:
         return
-    reply = QMessageBox.question(
+    if not confirm(
         page,
         "Clear All Treatments?",
         "This removes every region treatment. Continue?",
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-        QMessageBox.StandardButton.Cancel,
-    )
-    if reply != QMessageBox.StandardButton.Yes:
+    ):
         return
     before = begin_treatment_change(page)
     page._treatments = {}

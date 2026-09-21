@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """DxfCanvas — extended polyline view with quick shape tools and radial menu."""
 
 from __future__ import annotations

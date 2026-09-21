@@ -6,7 +6,8 @@ import platform as _platform
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -51,6 +52,14 @@ def reveal_label() -> str:
     if system == "Windows":
         return "Show in Explorer"
     return "Show in Files"
+
+
+def reveal_path(parent: QWidget | None, path: str | Path) -> bool:
+    """Open the containing folder for *path* in the platform file manager."""
+    candidate = Path(path).expanduser()
+    if not candidate.exists():
+        return False
+    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(candidate.parent))))
 
 
 def remembered_dir(settings: dict, slot: str, *, fallback: str = "") -> str:

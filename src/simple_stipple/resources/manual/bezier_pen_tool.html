@@ -1,0 +1,13 @@
+
+<h2 id="bezier-pen-tool" class="section-heading">
+    Bezier Pen Tool
+</h2>
+
+<p>The Pen tool (the "Bezier Pen" entry in the Draw tool picker) draws true cubic-bezier curves with draggable tangent handles — a different, more powerful tool than the Spline primitive (which fits a curve through plain points with no direct handle control).</p>
+<ul>
+    <li><strong>Click:</strong> places a corner anchor (a sharp point — zero-length tangent handles).</li>
+    <li><strong>Click and drag:</strong> places a smooth anchor with a symmetric pair of tangent handles extending from the drag direction — drag further for a rounder curve.</li>
+    <li><strong>Double-click, or press Enter:</strong> finishes the curve.</li>
+    <li><strong>Esc:</strong> cancels the curve in progress.</li>
+</ul>
+<p>Pen curves snap to existing vertices, edges, and guides while placing anchors, same as the Draw tool. Once finished, a curve is a normal selectable/editable entity — Simplify, Smooth, Boolean operations, and Move/Rotate/Scale all work on it, and it exports as a native DXF entity where possible (falling back to a smooth tessellated polyline otherwise) rather than a jagged approximation.</p>

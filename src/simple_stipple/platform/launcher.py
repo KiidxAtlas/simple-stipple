@@ -1,17 +1,8 @@
 """Application bootstrap: logging setup, single-instance locking, and the
-generic (app-agnostic) launcher entry point.
+generic application-agnostic launcher entry point.
 
-Three previously-separate modules merged here — ``logging_config.py`` and
-``single_instance.py`` each had exactly one caller (this module), and all
-three are genuinely "how the process starts up," not independently reusable
-pieces.
-
-``main()`` deliberately takes ``run_app`` as a required, injected callable
-rather than importing ``simple_stipple.app`` itself — ``core`` must not depend on
-``app``/``ui`` (see plan.md Section 9.4 / Phase 3.4). The actual GUI
-bootstrap (QApplication, main window, event loop) lives in
-``simple_stipple.app.launcher.run_app``; ``main.py`` at the repo root wires the two
-together.
+The platform layer owns process setup without importing the application layer.
+``main()`` receives the GUI callback from ``simple_stipple.app.launcher``.
 """
 
 from __future__ import annotations

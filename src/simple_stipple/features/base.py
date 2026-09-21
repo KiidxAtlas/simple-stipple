@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
 
@@ -17,6 +19,60 @@ class BasePage(QWidget):
     """
 
     stateChanged = Signal()
+    _MODEL_STATE_FIELDS: dict[str, str] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        field = type(self)._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            return getattr(model, field)
+        raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        field = type(self)._MODEL_STATE_FIELDS.get(name)
+        model = self.__dict__.get("_model")
+        if field is not None and model is not None:
+            setattr(model, field, value)
+            return
+        super().__setattr__(name, value)
+
+    def run(self) -> None:
+        """Start the page's primary operation."""
+        self._run()
+
+    def _run(self) -> None:
+        raise NotImplementedError
+
+    def _shutdown_thread(
+        self,
+        thread,
+        cancel=None,
+        *,
+        timeout: float = 2.0,
+    ) -> None:
+        """Cancel and join one feature worker before widget teardown."""
+        self._shutting_down = True
+        if cancel is not None:
+            cancel()
+        self.blockSignals(True)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+
+    def _shutdown_threads(
+        self,
+        threads,
+        cancel=None,
+        *,
+        timeout: float = 2.0,
+    ) -> None:
+        """Cancel and join a group of feature workers before teardown."""
+        self._shutting_down = True
+        if cancel is not None:
+            cancel()
+        self.blockSignals(True)
+        for thread in threads:
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=timeout)
 
     def __init__(
         self,

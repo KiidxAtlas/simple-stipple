@@ -38,10 +38,10 @@ from simple_stipple.ui.components.units import (
     parse_numeric_expression as _parse_expression,
 )
 from simple_stipple.ui.components.units import (
-    suffix as _unit_suffix,
+    to_display as _to_display,
 )
 from simple_stipple.ui.components.units import (
-    to_display as _to_display,
+    unit_suffix as _unit_suffix,
 )
 
 LOGGER = logging.getLogger(__name__)

@@ -17,7 +17,6 @@ from simple_stipple.canvas.runtime import CanvasPageRuntimeBase
 LOGGER = logging.getLogger(__name__)
 
 
-
 class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
     """Present Pattern outlines and generated results in the canvas sidebar."""
 
@@ -37,6 +36,7 @@ class PatternCanvasPageRuntime(CanvasPageRuntimeBase):
         | None = None,
     ) -> None:
         super().__init__(canvas=canvas, toolbar_module=toolbar_module)
+        self._canvas: Any = canvas
         self._layer_sidebar, self._canvas_status, self._precision_bar = (
             layer_sidebar,
             canvas_status,
@@ -187,6 +187,7 @@ class TraceCanvasPageRuntime(CanvasPageRuntimeBase):
         has_image: Callable[[], bool],
     ) -> None:
         super().__init__(canvas=canvas, toolbar_module=toolbar_module)
+        self._canvas: Any = canvas
         self._layer_sidebar = layer_sidebar
         self._canvas_status = canvas_status
         self._precision_bar = precision_bar

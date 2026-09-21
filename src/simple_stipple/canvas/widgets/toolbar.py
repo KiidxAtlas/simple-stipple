@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.layout import info_chip
-from simple_stipple.ui.components.units import suffix as _unit_suffix
 from simple_stipple.ui.components.units import to_display as _to_display
+from simple_stipple.ui.components.units import unit_suffix as _unit_suffix
 from simple_stipple.ui.style import icon_path
 
 # Platform modifier for human-readable shortcut hints

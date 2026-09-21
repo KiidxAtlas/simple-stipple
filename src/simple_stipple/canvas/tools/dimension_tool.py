@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Coherent target → preview → placement workflow for sketch dimensions."""
 
 from __future__ import annotations

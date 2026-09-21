@@ -1,5 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
-
 """Associative dimension backend for sketch-dimension workflows.
 
 The subclass in :mod:`dimension_tool` owns staged target selection and

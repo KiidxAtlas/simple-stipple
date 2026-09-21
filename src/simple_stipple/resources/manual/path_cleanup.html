@@ -1,0 +1,15 @@
+
+<h2 id="path-cleanup" class="section-heading">
+    Path Cleanup Tools
+</h2>
+
+<p>Right-click a selected polyline for these — useful for cleaning up traced or hand-drawn geometry:</p>
+<table style="width:100%;border-collapse:collapse;margin:8px 0;">
+    <tr style="background-color:#1c2e4a;">
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Operation</th>
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">What it does</th>
+    </tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Simplify…</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Reduces vertex count with Douglas-Peucker simplification, staying within a tolerance (mm) of the original shape. Stays a straight-segment polyline.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Smooth</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Rounds sharp vertices using Chaikin's corner-cutting algorithm. Also stays a polyline — more points, softer corners.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Fit to Curve…</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Converts a dense/jagged polyline (e.g. Trace output) into a genuine editable bezier curve — far fewer control points, with real corners (sharp turns) automatically detected and kept sharp instead of rounded off.</td></tr>
+</table>

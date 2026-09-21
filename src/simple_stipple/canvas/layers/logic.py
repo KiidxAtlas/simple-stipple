@@ -190,50 +190,36 @@ class CanvasLayerSidebarController:
         self._layers_tree.layerVisibilityChanged.connect(self.on_layer_visibility_changed)
         self._layers_tree.shapeVisibilityChanged.connect(self.on_shape_visibility_changed)
         self._connect_mutation_signals()
-        # New optional signals — guarded with hasattr so older trees still work.
-        if hasattr(self._layers_tree, "bulkVisibilityRequested"):
-            self._layers_tree.bulkVisibilityRequested.connect(self.on_bulk_visibility_requested)
-        if hasattr(self._layers_tree, "layerSoloRequested"):
-            self._layers_tree.layerSoloRequested.connect(self.on_solo_requested)
-        # Shape operation signals — group, ungroup, merge, copy.
-        if hasattr(self._layers_tree, "shapesGroupRequested"):
-            self._layers_tree.shapesGroupRequested.connect(
-                lambda layer, keys: self._handle_shape_operation("group", layer, keys)
-            )
-        if hasattr(self._layers_tree, "shapesUngroupRequested"):
-            self._layers_tree.shapesUngroupRequested.connect(
-                lambda layer, keys: self._handle_shape_operation("ungroup", layer, keys)
-            )
-        if hasattr(self._layers_tree, "shapesMergeRequested"):
-            self._layers_tree.shapesMergeRequested.connect(
-                lambda layer, keys: self._handle_shape_operation("merge", layer, keys)
-            )
-        if hasattr(self._layers_tree, "shapesCopyRequested"):
-            self._layers_tree.shapesCopyRequested.connect(
-                lambda layer, keys: self._handle_shape_operation("copy", layer, keys)
-            )
+        self._layers_tree.bulkVisibilityRequested.connect(self.on_bulk_visibility_requested)
+        self._layers_tree.layerSoloRequested.connect(self.on_solo_requested)
+        self._layers_tree.shapesGroupRequested.connect(
+            lambda layer, keys: self._handle_shape_operation("group", layer, keys)
+        )
+        self._layers_tree.shapesUngroupRequested.connect(
+            lambda layer, keys: self._handle_shape_operation("ungroup", layer, keys)
+        )
+        self._layers_tree.shapesMergeRequested.connect(
+            lambda layer, keys: self._handle_shape_operation("merge", layer, keys)
+        )
+        self._layers_tree.shapesCopyRequested.connect(
+            lambda layer, keys: self._handle_shape_operation("copy", layer, keys)
+        )
 
     def _connect_mutation_signals(self) -> None:
-        """Connect optional tree mutation signals to document operations."""
+        """Connect concrete layer-tree signals to document operations."""
         tree = self._layers_tree
-        connections = {
-            "shapesDeleteRequested": self.on_shapes_delete_requested,
-            "layersDeleteRequested": self.on_layers_delete_requested,
-            "layerDeleted": self.on_layer_deleted,
-            "layerActivated": self.on_layer_activated,
-            "layerRenamed": self.on_layer_renamed,
-            "layerMoved": self.on_layer_moved,
-            "shapeMoveRequested": self.on_shape_move_requested,
-            "shapesMoveRequested": self.on_shapes_move_requested,
-            "moveSelectedRequested": self.on_move_selected_requested,
-            "shapeRenamed": self.on_shape_renamed,
-            "layerColorChangeRequested": self.on_layer_color_changed,
-            "layersConsolidateRequested": self.on_layers_consolidate,
-        }
-        for signal_name, handler in connections.items():
-            signal = getattr(tree, signal_name, None)
-            if signal is not None:
-                signal.connect(handler)
+        tree.shapesDeleteRequested.connect(self.on_shapes_delete_requested)
+        tree.layersDeleteRequested.connect(self.on_layers_delete_requested)
+        tree.layerDeleted.connect(self.on_layer_deleted)
+        tree.layerActivated.connect(self.on_layer_activated)
+        tree.layerRenamed.connect(self.on_layer_renamed)
+        tree.layerMoved.connect(self.on_layer_moved)
+        tree.shapeMoveRequested.connect(self.on_shape_move_requested)
+        tree.shapesMoveRequested.connect(self.on_shapes_move_requested)
+        tree.moveSelectedRequested.connect(self.on_move_selected_requested)
+        tree.shapeRenamed.connect(self.on_shape_renamed)
+        tree.layerColorChangeRequested.connect(self.on_layer_color_changed)
+        tree.layersConsolidateRequested.connect(self.on_layers_consolidate)
 
     def _handle_shape_operation(self, op: str, layer: str, keys: list) -> None:
         """Dispatch shape operations from the layer tree to the canvas."""

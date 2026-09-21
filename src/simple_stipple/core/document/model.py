@@ -123,7 +123,13 @@ class Document:
     # what made them impossible to see from Draw or Trace.
     images: list[PlacedImage] = field(default_factory=list)
     treatments: dict[EntityId, dict[str, Any]] = field(default_factory=dict)
-    _validate_on_mutate: bool = field(default=True)
+    _validate_on_mutate: bool = field(default=True, repr=False, compare=False)
+    _entity_cache_key: tuple[int, int] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _entity_cache: dict[EntityId, EntityRecord] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def image_for_id(self, image_id: EntityId) -> PlacedImage | None:
         return next((image for image in self.images if image.id == image_id), None)
@@ -151,9 +157,14 @@ class Document:
             if not entity.id or entity.id in seen:
                 entity.id = new_entity_id()
             seen.add(entity.id)
+        self._entity_cache_key = None
 
     def _by_id_map(self) -> dict[EntityId, EntityRecord]:
-        return {entity.id: entity for entity in self.entities}
+        key = (id(self.entities), len(self.entities))
+        if key != self._entity_cache_key:
+            self._entity_cache = {entity.id: entity for entity in self.entities}
+            self._entity_cache_key = key
+        return self._entity_cache
 
     def entity_for_id(self, entity_id: EntityId) -> EntityRecord | None:
         return self._by_id_map().get(entity_id)
@@ -188,6 +199,23 @@ class Document:
         # not a selection filter. Visible geometry remains selectable across
         # layers, while hidden layers remain protected from interaction.
         return not entity.hidden
+
+    def selected_entities(self) -> list[EntityRecord]:
+        """Return selected entities in document order."""
+        selected = self.selection
+        return [entity for entity in self.entities if entity.id in selected]
+
+    def entities_in_group(self, group_id: int, *, visible_only: bool = False) -> list[EntityRecord]:
+        """Return entities belonging to *group_id* in document order."""
+        return [
+            entity
+            for entity in self.entities
+            if entity.group == group_id and (not visible_only or not entity.hidden)
+        ]
+
+    def selectable_entities(self) -> list[EntityRecord]:
+        """Return entities currently eligible for interaction."""
+        return [entity for entity in self.entities if not entity.hidden]
 
     def drop_inactive_selection(self) -> bool:
         """Discard only hidden or deleted entities from selection.

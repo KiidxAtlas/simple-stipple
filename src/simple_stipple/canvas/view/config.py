@@ -669,3 +669,39 @@ def _emit_cursor_position_update(self) -> None:
     self._cursor_position_update_queued = False
     if position := self.get_cursor_world_pos():
         self.cursorPositionChanged.emit(*position)
+
+
+class CanvasViewConfigBindings:
+    """CanvasView configuration callbacks grouped by their owning module."""
+
+    set_grid_visible = set_grid_visible
+    set_context_menu_sections = set_context_menu_sections
+    set_context_menu_overflow_sections = set_context_menu_overflow_sections
+    set_context_menu_profile = set_context_menu_profile
+    set_context_menu_profiles = set_context_menu_profiles
+    _context_menu_section_enabled = _context_menu_section_enabled
+    set_grid_snap = set_grid_snap
+    set_grid_spacing = set_grid_spacing
+    set_snap_master = set_snap_master
+    set_snap_vertex = set_snap_vertex
+    set_snap_midpoint = set_snap_midpoint
+    set_snap_intersection = set_snap_intersection
+    set_snap_edge = set_snap_edge
+    set_snap_tangent = set_snap_tangent
+    set_snap_extension = set_snap_extension
+    set_snap_angle = set_snap_angle
+    set_snap_parallel = set_snap_parallel
+    set_snap_perpendicular = set_snap_perpendicular
+    set_snap_equal_length = set_snap_equal_length
+    set_snap_strength = set_snap_strength
+    set_snap_axis_alignment = set_snap_axis_alignment
+    set_snap_align_x = set_snap_align_x
+    set_snap_align_y = set_snap_align_y
+    set_construction_mode = set_construction_mode
+    set_rotation_snap_increment = set_rotation_snap_increment
+    set_aspect_ratio_locked = set_aspect_ratio_locked
+    set_property_highlight = set_property_highlight
+    get_zoom_percent = get_zoom_percent
+    get_cursor_world_pos = get_cursor_world_pos
+    _queue_cursor_position_update = _queue_cursor_position_update
+    _emit_cursor_position_update = _emit_cursor_position_update

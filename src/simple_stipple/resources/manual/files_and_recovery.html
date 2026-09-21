@@ -1,0 +1,25 @@
+
+<h2 id="files-recovery" class="section-heading">Files, Workspaces &amp; Recovery</h2>
+<h3 class="subheading">Workspace or export file?</h3>
+<ul>
+  <li><strong>Workspace:</strong> preserves pages, editable geometry, parameters, and app state so you can continue later.</li>
+  <li><strong>DXF/SVG/FVI export:</strong> creates an interchange or production file. It is not a complete editable workspace.</li>
+</ul>
+<h3 class="subheading">Safe working routine</h3>
+<ol>
+  <li>Use <strong>File → Save Workspace</strong> early and give the job a recognizable name.</li>
+  <li>Use <strong>File → Workspaces and Recovery…</strong> to browse and reopen named jobs.</li>
+  <li>Export only after fitting the view, checking layers, closed outlines, region treatments, and dimensions.</li>
+  <li>Open the exported file in your machine software and verify scale, units, layers, and operation order.</li>
+</ol>
+<h3 class="subheading">Autosave and crash recovery</h3>
+<p>Named workspaces autosave periodically. Unsaved work receives rolling recovery
+snapshots. Choose <strong>File → Recover Unsaved Work…</strong> after a crash or accidental
+close; inspect a snapshot before restoring or permanently deleting it.</p>
+<h3 class="subheading">Importing and moving work</h3>
+<p>Draft accepts vector geometry for editing. Trace accepts bitmap images. Use
+<strong>Send to Draft</strong> or <strong>Send to Pattern</strong> when the next step is in
+another page; this keeps the geometry inside the current workspace.</p>
+<p>StarFX FVI conversion supports geometry commands including <code>MOVEDIST</code>,
+<code>DRAWLINE</code>, and <code>DRAWARC</code>. Machine-control commands are reported
+as unsupported rather than silently converted.</p>

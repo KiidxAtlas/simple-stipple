@@ -36,6 +36,9 @@ from simple_stipple.core.patterns.geometry import (
     _coords_to_polyline,
     _extract_polys,
 )
+from simple_stipple.core.patterns.geometry import (
+    repair_overlay_geometry as _repair_fill_geometry,
+)
 
 # The pattern combo entry that means "no pattern" — outline only.
 # Reuses the existing UI label so we don't have to migrate state.
@@ -210,28 +213,6 @@ def apply_fill(
     if spec.mode == "concentric":
         return _fill_concentric(region_geom, spec.spacing, spec.preview_max_rows)
     return []
-
-
-def _repair_fill_geometry(geometry: Any) -> Any | None:
-    """Return a valid overlay-safe geometry, or ``None`` if it cannot heal."""
-    try:
-        if geometry.is_empty or geometry.is_valid:
-            return geometry
-    except (AttributeError, TypeError):
-        return None
-    try:
-        from shapely import make_valid  # type: ignore[import-untyped]
-
-        repaired = make_valid(geometry)
-        if not repaired.is_empty:
-            return repaired
-    except Exception:
-        pass
-    try:
-        repaired = geometry.buffer(0)
-        return None if repaired.is_empty else repaired
-    except Exception:
-        return None
 
 
 def _fill_lines(

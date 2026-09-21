@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QFormLayout, QSpinBox, QVBoxLayout
 
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
-from simple_stipple.ui.components.units import from_display, suffix, to_display
+from simple_stipple.ui.components.units import from_display, to_display, unit_suffix
 from simple_stipple.ui.dialogs.base import BaseDialog
 
 
@@ -19,7 +19,7 @@ class MultiPasteDialog(BaseDialog):
         self.distance_input = QDoubleSpinBox()
         self.distance_input.setRange(0.001, 1_000_000.0)
         self.distance_input.setDecimals(3)
-        self.distance_input.setSuffix(f" {suffix(self._unit)}")
+        self.distance_input.setSuffix(f" {unit_suffix(self._unit)}")
         self.distance_input.setValue(to_display(5.0, self._unit))
         self.count_input = QSpinBox()
         self.count_input.setRange(1, 10_000)

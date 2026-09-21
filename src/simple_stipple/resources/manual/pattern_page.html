@@ -1,0 +1,55 @@
+
+<h2 id="pattern-page" class="section-heading">
+    Pattern Page — Full Reference
+</h2>
+
+<h3 class="subheading">Overview</h3>
+<p>The Pattern page is the heart of Simple Stipple. It provides a split-view interface: parameter controls on the left, an interactive canvas with your pattern preview on the right.</p>
+
+<h3 class="subheading">Left Panel — Controls</h3>
+<ul>
+    <li><strong>DXF File Picker:</strong> Load an existing DXF file containing your outline geometry.</li>
+    <li><strong>Pattern Type Dropdown:</strong> Choose from 20+ built-in pattern generators.</li>
+    <li><strong>Parameter Controls:</strong> Dynamic widgets that change based on the selected pattern (size, gap, spacing, etc.).</li>
+    <li><strong>Fill Mode:</strong> Choose how to fill the pattern area — None, Lines (parallel hatch), or Crosshatch (crossed ±45° lines).</li>
+    <li><strong>Presets Manager:</strong> Save, load, and manage pattern presets for quick recall.</li>
+    <li><strong>Generate / Preview Buttons:</strong> Generate the full pattern or show a live preview.</li>
+    <li><strong>Export Button:</strong> Save the result as a DXF file.</li>
+</ul>
+
+<h3 class="subheading">Adjusting Pattern Values</h3>
+<p>Drag a parameter slider for quick adjustment, or type an exact value in its field. Slider-driven decimal values are rounded to <strong>two decimal places</strong>, so a drag produces readable values such as <code>1.05</code> rather than long floating-point numbers. Integer controls, such as a seed or cell count, remain whole numbers.</p>
+
+<h3 class="subheading">Right Panel — Canvas</h3>
+<ul>
+    <li><strong>Interactive View:</strong> Zoom, pan, and inspect your pattern in real time.</li>
+    <li><strong>Layer Tree:</strong> Toggle visibility of outline, pattern, and fill layers.</li>
+    <li><strong>Grid:</strong> Toggle a measurement grid for precision work.</li>
+    <li><strong>Status Strip:</strong> Shows current dimensions, pattern count, and tool status.</li>
+</ul>
+
+<h3 class="subheading">Zones &amp; Exclusions</h3>
+<p><strong>Zones</strong> allow you to assign different patterns to different regions within the same outline. Each zone is a snapshot containing:</p>
+<ul>
+    <li>A set of outline IDs (the region boundaries)</li>
+    <li>A pattern type</li>
+    <li>Pattern parameters</li>
+    <li>An optional scale (width, height)</li>
+    <li>A label for identification</li>
+</ul>
+<p>A region with a treatment of its own is <em>automatically</em> subtracted from the region containing it, so a pattern always flows around inner shapes. Use <strong>Cut only</strong> for lettering, logos, or mechanical holes that should be cut but not filled.</p>
+
+<h3 class="subheading">Fill Modes</h3>
+<table style="width:100%;border-collapse:collapse;margin:8px 0;">
+    <tr style="background-color:#1c2e4a;">
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Mode</th>
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Description</th>
+    </tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>None</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">No fill pattern. Only the main pattern is generated.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Lines</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Parallel hatch lines across the fill region. Configurable spacing and angle.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Crosshatch</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Two sets of parallel lines at ±45° angles, creating a crossed-hatch grid.</td></tr>
+</table>
+
+<h3 class="subheading">Presets System</h3>
+<p><strong>Built-in presets:</strong> Honeycomb (Fine/Standard/Bold), Stipple (Dense/Open), Brick, Mesh, and Voronoi.</p>
+<p><strong>Custom presets:</strong> Save your current pattern + all parameters as a named preset. Export/import presets as JSON files (<code>simple-stipple-presets/v1</code> format).</p>

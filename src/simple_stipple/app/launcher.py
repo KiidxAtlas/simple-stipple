@@ -1,10 +1,7 @@
 """GUI bootstrap: constructs and runs the main application window.
 
-Split out of ``core.launcher`` so ``core`` never imports ``app`` (see
-plan.md Section 9.4 / Phase 3.4) — ``core.launcher.main()`` is generic
-bootstrap (arg parsing, logging, cache-dir setup) and calls back into
-``run_app`` here via dependency injection, keeping the composition root's
-app-specific wiring in this layer instead.
+The platform launcher owns process-level setup and injects ``run_app`` here.
+The root ``main.py`` remains a packaging compatibility shim.
 """
 
 from __future__ import annotations
@@ -118,13 +115,7 @@ def run_app(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Packaging entry point (``pyproject.toml``'s ``[project.scripts]``).
-
-    ``core.launcher.main()`` needs ``run_app`` injected (see its docstring
-    for why) — a bare ``module:function`` entry point can't pass keyword
-    arguments, so this composes the two exactly like ``main.py`` at the
-    repo root does, just as an importable function instead of a script.
-    """
+    """Packaging entry point for the ``simple-stipple`` console script."""
     command_args = list(argv) if argv is not None else sys.argv[1:]
     if command_args and command_args[0] in {"pattern", "trace"}:
         from simple_stipple.app.cli import main as cli_main

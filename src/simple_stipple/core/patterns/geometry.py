@@ -23,6 +23,31 @@ OUTLINE_WELD_TOL = 0.01
 LOGGER = logging.getLogger(__name__)
 
 
+def repair_overlay_geometry(geometry: Any) -> Any | None:
+    """Return a valid geometry for Shapely overlay operations."""
+    if geometry is None:
+        return None
+    try:
+        if geometry.is_empty or geometry.is_valid:
+            return geometry
+    except (AttributeError, TypeError):
+        return None
+    try:
+        from shapely import make_valid  # type: ignore[import-untyped]
+
+        repaired = make_valid(geometry)
+        if not repaired.is_empty:
+            return repaired
+    except Exception:
+        LOGGER.exception("Shapely make_valid failed while repairing overlay geometry")
+    try:
+        repaired = geometry.buffer(0)
+        return None if repaired.is_empty else repaired
+    except Exception:
+        LOGGER.exception("Shapely buffer repair failed for overlay geometry")
+        return None
+
+
 # clipping
 
 

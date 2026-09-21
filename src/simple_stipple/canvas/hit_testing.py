@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from simple_stipple.canvas.constants import EDGE_HIT, SNAP_DIST, VERT_HIT
-from simple_stipple.core.document.model import EntityId
+from simple_stipple.canvas.objects import CanvasFrameState
+from simple_stipple.core.document.model import EntityId, EntityRecord
 from simple_stipple.core.geometry import (
     VertexIndex,
     build_vertex_index,
@@ -16,8 +17,28 @@ from simple_stipple.core.geometry import (
 Point = tuple[float, float]
 
 
+class _LayerPort(Protocol):
+    def on_active(self, entity: EntityRecord) -> bool: ...
+
+
+class HitTestHost(Protocol):
+    _active_layer: str | None
+    _entities: list[EntityRecord]
+    _entities_by_id: dict[EntityId, EntityRecord]
+    _guides: list[tuple[str, float]]
+    _layer_service: _LayerPort
+    _scale: float
+
+    def _c2w(self, x: float, y: float) -> Point: ...
+    def _w2c(self, x: float, y: float) -> Point: ...
+    def _entity_selectable(self, entity_id: EntityId) -> bool: ...
+    def _entity_selectable_by_id(self, entity_id: EntityId) -> bool: ...
+    def _flattened_points_by_id(self, entity_id: EntityId) -> list[Point]: ...
+    def frame_state(self) -> CanvasFrameState: ...
+
+
 class HitTestService:
-    def __init__(self, host) -> None:
+    def __init__(self, host: HitTestHost) -> None:
         self._host = host
         # Cached KD-tree over all vertices, plus the identity of the entity
         # list it was built from. ``_document`` is replaced with a fresh object
@@ -85,7 +106,7 @@ class HitTestService:
 
     def _current_vertex_index(self) -> VertexIndex | None:
         """Return a KD-tree over all vertices, rebuilt only when entities change."""
-        entities = self._host._entities
+        entities = self._host.frame_state().document.entities
         key = (id(entities), len(entities))
         if key != self._vertex_index_key or self._vertex_index is None:
             self._vertex_index = build_vertex_index([entity.points for entity in entities])
@@ -102,10 +123,11 @@ class HitTestService:
                 candidates = query_within_radius(index, (wx, wy), VERT_HIT / scale)
                 best_distance: float = VERT_HIT
                 best: tuple[EntityId, int] | None = None
+                entities = host.frame_state().document.entities
                 for i in candidates:
                     path_idx, vertex_index = index.owners[i]
-                    if 0 <= path_idx < len(host._entities):
-                        entity = host._entities[path_idx]
+                    if 0 <= path_idx < len(entities):
+                        entity = entities[path_idx]
                         entity_id = entity.id
                     else:
                         continue

@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, ClassVar, Literal, TypeVar
 
 from PySide6.QtCore import QCoreApplication, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices
@@ -28,9 +28,10 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.core.formats.service import DxfService, FviNoGeometryError, fix_dxf
-from simple_stipple.ui.components.feedback import refresh_style
+from simple_stipple.ui.components.feedback import refresh_style, show_error
 from simple_stipple.ui.components.inputs import browse_row
 from simple_stipple.ui.components.workflow import set_status_label
+from simple_stipple.ui.dialogs.files import reveal_path
 from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 
 __all__ = [
@@ -66,8 +67,18 @@ class ConversionResult:
     operation: Callable[[], Any] = field(repr=False, compare=False)
 
 
+@dataclass(frozen=True)
+class ConversionSpec:
+    """Format-specific values shared by conversion workflow orchestration."""
+
+    source_extension: str
+    output_extension: str
+
+
 class _ConversionSubTab(QWidget):
     """Shared cancellation, status, and file-picker behavior for conversion tools."""
+
+    spec: ClassVar[ConversionSpec]
 
     results_changed = Signal()
     _result_ready = Signal(int, object)
@@ -78,6 +89,9 @@ class _ConversionSubTab(QWidget):
         self._job_revision = 0
         self._results: dict[Path, ConversionResult] = {}
         self._result_ready.connect(self._receive_result)
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._cancel_event = threading.Event()
 
     @Slot(int, object)
     def _receive_result(self, revision: int, result: ConversionResult) -> None:
@@ -145,7 +159,9 @@ class _ConversionSubTab(QWidget):
         self.results_changed.emit()
 
     log_line = Signal(str)
+    preview_path = Signal(str)
     _btn_state = Signal(bool)
+    _reveal_state = Signal(bool)
     _status_sig = Signal(str, str)
     _readiness_requested = Signal()
     _source_changed = Signal()
@@ -307,8 +323,20 @@ class _ConversionSubTab(QWidget):
         self._include_subfolders.setVisible(batch)
         self._on_mode_switch(mode)
 
+    def run(self) -> None:
+        """Public entry point called by the page-level footer CTA."""
+        self._run()
+
     def _on_mode_switch(self, mode: str) -> None:
         """Override in subclasses to handle mode-specific UI changes."""
+
+    def _is_batch(self) -> bool:
+        return self._mode_batch.property("active") is True
+
+    def _start_worker(self, target: Callable[..., None], *args: object) -> None:
+        """Run one conversion worker with the shared daemon lifecycle."""
+        self._thread = threading.Thread(target=target, args=args, daemon=True)
+        self._thread.start()
 
     def _build_output_row(
         self,
@@ -398,31 +426,23 @@ class _ConversionSubTab(QWidget):
     # ── _reveal / _last_out  (lifted into base class) ──────────────────
 
     def _reveal(self) -> None:
-        if self._last_out:
-            p = Path(self._last_out)
-            if not p.exists():
-                QMessageBox.warning(
-                    self,
-                    "File Not Found",
-                    f"The file no longer exists:\n{self._last_out}",
-                )
-                return
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(p.parent)))
+        if self._last_out and not reveal_path(self, self._last_out):
+            QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"The file no longer exists:\n{self._last_out}",
+            )
 
 
 class FviSubTab(_ConversionSubTab):
-    log_line = Signal(str)
-    preview_path = Signal(str)
-    _btn_state = Signal(bool)
+    spec = ConversionSpec(".fvi", ".dxf")
+
     _out_dir_sig = Signal(str)
-    _status_sig = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self._settings: dict = settings or {}
         self._last_out_dir: str | None = None
-        self._running = False
-        self._thread: threading.Thread | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -455,15 +475,8 @@ class FviSubTab(_ConversionSubTab):
         # that appear after conversions complete.
         self._bind_readiness()
 
-    def run(self) -> None:
-        """Public entry point called by the page-level footer CTA."""
-        self._run()
-
     def _on_mode_switch(self, mode: str) -> None:
         pass
-
-    def _is_batch(self) -> bool:
-        return self._mode_batch.property("active") is True
 
     def _browse_src(self) -> None:
         idir = self._settings.get("fvi_source_dir", "")
@@ -522,24 +535,25 @@ class FviSubTab(_ConversionSubTab):
                 )
                 return
         out_dir = self._out_edit.text().strip() or None
-        source_files = self._collect_files(src, ".fvi", self._include_subfolders.isChecked())
+        source_files = self._collect_files(
+            src, self.spec.source_extension, self._include_subfolders.isChecked()
+        )
         destinations = []
         for source in source_files:
             if out_dir:
                 relative = source.relative_to(src_path) if src_path.is_dir() else Path(source.name)
-                destinations.append(Path(out_dir) / relative.with_suffix(".dxf"))
+                destinations.append(
+                    Path(out_dir) / relative.with_suffix(self.spec.output_extension)
+                )
             else:
-                destinations.append(source.with_suffix(".dxf"))
+                destinations.append(source.with_suffix(self.spec.output_extension))
         if not self._confirm_replace(destinations):
             return
         cancel_event = self._start_job()
         self._btn.setEnabled(False)
-        self._thread = threading.Thread(
-            target=self._convert,
-            args=(src, out_dir, cancel_event, self._include_subfolders.isChecked()),
-            daemon=True,
+        self._start_worker(
+            self._convert, src, out_dir, cancel_event, self._include_subfolders.isChecked()
         )
-        self._thread.start()
 
     def _convert(
         self,
@@ -548,7 +562,7 @@ class FviSubTab(_ConversionSubTab):
         cancel_event: threading.Event,
         include_subfolders: bool = True,
     ) -> None:
-        files = self._collect_files(src, ".fvi", include_subfolders)
+        files = self._collect_files(src, self.spec.source_extension, include_subfolders)
 
         if not files:
             self.log_line.emit("No .fvi files found.")
@@ -569,9 +583,9 @@ class FviSubTab(_ConversionSubTab):
             if out_dir:
                 src_path = Path(src)
                 relative = fvi.relative_to(src_path) if src_path.is_dir() else Path(fvi.name)
-                dest = Path(out_dir) / relative.with_suffix(".dxf")
+                dest = Path(out_dir) / relative.with_suffix(self.spec.output_extension)
             else:
-                dest = fvi.with_suffix(".dxf")
+                dest = fvi.with_suffix(self.spec.output_extension)
             try:
                 report = self._execute_conversion(
                     fvi, dest, partial(DxfService.convert_fvi_to_dxf, fvi, dest)
@@ -625,18 +639,11 @@ class FviSubTab(_ConversionSubTab):
 
 
 class FixerSubTab(_ConversionSubTab):
-    log_line = Signal(str)
-
-    preview_path = Signal(str)
-    _btn_state = Signal(bool)
-    _reveal_state = Signal(bool)
-    _status_sig = Signal(str, str)
+    spec = ConversionSpec(".dxf", ".dxf")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self._settings: dict = settings or {}
-        self._running = False
-        self._thread: threading.Thread | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -679,10 +686,6 @@ class FixerSubTab(_ConversionSubTab):
         # that appear after repairs complete.
         self._bind_readiness()
 
-    def run(self) -> None:
-        """Public entry point called by the page-level footer CTA."""
-        self._run()
-
     def _on_mode_switch(self, mode: str) -> None:
         batch = mode == "batch"
         self._set_src_text("")
@@ -692,9 +695,6 @@ class FixerSubTab(_ConversionSubTab):
             if batch
             else "Optional (blank = name-fixed.dxf)…"
         )
-
-    def _is_batch(self) -> bool:
-        return self._mode_batch.property("active") is True
 
     def _browse_src(self) -> None:
         if self._is_batch():
@@ -762,10 +762,17 @@ class FixerSubTab(_ConversionSubTab):
                     )
                     return
             except OSError as exc:
-                QMessageBox.warning(self, "Output Folder Error", str(exc))
+                show_error(
+                    self,
+                    "Output folder error",
+                    exc,
+                    message="Could not prepare the selected output folder.",
+                )
                 return
         if self._is_batch():
-            files = self._collect_files(src, ".dxf", self._include_subfolders.isChecked())
+            files = self._collect_files(
+                src, self.spec.source_extension, self._include_subfolders.isChecked()
+            )
             root = source_path
             destinations = [Path(out) / file.relative_to(root) for file in files]
         else:
@@ -776,24 +783,18 @@ class FixerSubTab(_ConversionSubTab):
         self._btn.setEnabled(False)
         self._set_status("Fixing…")
         if self._is_batch():
-            self._thread = threading.Thread(
-                target=self._fix_batch,
-                args=(
-                    src,
-                    out,
-                    cancel_event,
-                    self._include_subfolders.isChecked(),
-                    str(self._repair_mode.currentData()),
-                ),
-                daemon=True,
+            self._start_worker(
+                self._fix_batch,
+                src,
+                out,
+                cancel_event,
+                self._include_subfolders.isChecked(),
+                str(self._repair_mode.currentData()),
             )
         else:
-            self._thread = threading.Thread(
-                target=self._fix,
-                args=(src, out, cancel_event, str(self._repair_mode.currentData())),
-                daemon=True,
+            self._start_worker(
+                self._fix, src, out, cancel_event, str(self._repair_mode.currentData())
             )
-        self._thread.start()
 
     def _fix_batch(
         self,
@@ -803,7 +804,7 @@ class FixerSubTab(_ConversionSubTab):
         include_subfolders: bool = True,
         repair_mode: Literal["safe", "flatten"] = "safe",
     ) -> None:
-        files = self._collect_files(src, ".dxf", include_subfolders)
+        files = self._collect_files(src, self.spec.source_extension, include_subfolders)
         if not files:
             self._running = False
             self._refresh_readiness()
@@ -933,17 +934,11 @@ class FixerSubTab(_ConversionSubTab):
 
 
 class SvgSubTab(_ConversionSubTab):
-    log_line = Signal(str)
-    preview_path = Signal(str)
-    _btn_state = Signal(bool)
-    _reveal_state = Signal(bool)
-    _status_sig = Signal(str, str)
+    spec = ConversionSpec(".dxf", ".svg")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self._settings: dict = settings or {}
-        self._running = False
-        self._thread: threading.Thread | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -975,10 +970,6 @@ class SvgSubTab(_ConversionSubTab):
         # that appear after conversions complete.
         self._bind_readiness()
 
-    def run(self) -> None:
-        """Public entry point called by the page-level footer CTA."""
-        self._run()
-
     def _on_mode_switch(self, mode: str) -> None:
         batch = mode == "batch"
         self._set_src_text("")
@@ -988,9 +979,6 @@ class SvgSubTab(_ConversionSubTab):
             if batch
             else "Leave blank to auto-name…"
         )
-
-    def _is_batch(self) -> bool:
-        return self._mode_batch.property("active") is True
 
     def _browse_src(self) -> None:
         if self._is_batch():
@@ -1005,7 +993,7 @@ class SvgSubTab(_ConversionSubTab):
         if path:
             self._set_src_text(path)
             if not self._is_batch() and not self._out_edit.text().strip():
-                self._out_edit.setText(str(Path(path).with_suffix(".svg")))
+                self._out_edit.setText(str(Path(path).with_suffix(self.spec.output_extension)))
 
     def _browse_out(self) -> None:
         if self._is_batch():
@@ -1046,22 +1034,20 @@ class SvgSubTab(_ConversionSubTab):
                 )
                 return
             include_subfolders = self._include_subfolders.isChecked()
-            files = self._collect_files(src, ".dxf", include_subfolders)
+            files = self._collect_files(src, self.spec.source_extension, include_subfolders)
             destinations = [
-                Path(out_dir) / file.relative_to(source_path).with_suffix(".svg") for file in files
+                Path(out_dir)
+                / file.relative_to(source_path).with_suffix(self.spec.output_extension)
+                for file in files
             ]
             if not self._confirm_replace(destinations):
                 return
             cancel_event = self._start_job()
-            self._thread = threading.Thread(
-                target=self._convert_batch,
-                args=(src, out_dir, cancel_event, include_subfolders),
-                daemon=True,
-            )
+            self._start_worker(self._convert_batch, src, out_dir, cancel_event, include_subfolders)
         else:
             out = self._out_edit.text().strip()
             if not out:
-                out = str(Path(src).with_suffix(".svg"))
+                out = str(Path(src).with_suffix(self.spec.output_extension))
                 self._out_edit.setText(out)
             if Path(src).resolve() == Path(out).resolve():
                 QMessageBox.warning(
@@ -1071,12 +1057,10 @@ class SvgSubTab(_ConversionSubTab):
             if not self._confirm_replace([Path(out)]):
                 return
             cancel_event = self._start_job()
-            self._thread = threading.Thread(
-                target=self._convert, args=(src, out, cancel_event), daemon=True
-            )
+            self._start_worker(self._convert, src, out, cancel_event)
         self._btn.setEnabled(False)
         self._set_status("Converting…")
-        self._thread.start()
+        # _start_worker owns thread startup.
 
     def _convert(self, src: str, out: str, cancel_event: threading.Event) -> None:
         try:
@@ -1110,7 +1094,7 @@ class SvgSubTab(_ConversionSubTab):
         cancel_event: threading.Event,
         include_subfolders: bool = True,
     ) -> None:
-        files = self._collect_files(src, ".dxf", include_subfolders)
+        files = self._collect_files(src, self.spec.source_extension, include_subfolders)
         if not files:
             self._running = False
             self._refresh_readiness()
@@ -1126,7 +1110,7 @@ class SvgSubTab(_ConversionSubTab):
                 self._finish_cancelled()
                 return
             relative = dxf.relative_to(root)
-            svg = Path(out_dir) / relative.with_suffix(".svg")
+            svg = Path(out_dir) / relative.with_suffix(self.spec.output_extension)
             self._report_batch_progress(index, "Converting", dxf.name)
             try:
                 stats = self._execute_conversion(dxf, svg, partial(DxfService.dxf_to_svg, dxf, svg))
@@ -1154,17 +1138,11 @@ class SvgSubTab(_ConversionSubTab):
 
 
 class SvgToDxfSubTab(_ConversionSubTab):
-    log_line = Signal(str)
-    preview_path = Signal(str)
-    _btn_state = Signal(bool)
-    _reveal_state = Signal(bool)
-    _status_sig = Signal(str, str)
+    spec = ConversionSpec(".svg", ".dxf")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent)
         self._settings: dict = settings or {}
-        self._running = False
-        self._thread: threading.Thread | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -1194,10 +1172,6 @@ class SvgToDxfSubTab(_ConversionSubTab):
         # that appear after conversions complete.
         self._bind_readiness()
 
-    def run(self) -> None:
-        """Public entry point called by the page-level footer CTA."""
-        self._run()
-
     def _on_mode_switch(self, mode: str) -> None:
         batch = mode == "batch"
         self._set_src_text("")
@@ -1207,9 +1181,6 @@ class SvgToDxfSubTab(_ConversionSubTab):
             if batch
             else "Leave blank to auto-name…"
         )
-
-    def _is_batch(self) -> bool:
-        return self._mode_batch.property("active") is True
 
     def _browse_src(self) -> None:
         if self._is_batch():
@@ -1224,7 +1195,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
         if path:
             self._set_src_text(path)
             if not self._is_batch() and not self._out_edit.text().strip():
-                self._out_edit.setText(str(Path(path).with_suffix(".dxf")))
+                self._out_edit.setText(str(Path(path).with_suffix(self.spec.output_extension)))
 
     def _browse_out(self) -> None:
         if self._is_batch():
@@ -1265,22 +1236,20 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 )
                 return
             include_subfolders = self._include_subfolders.isChecked()
-            files = self._collect_files(src, ".svg", include_subfolders)
+            files = self._collect_files(src, self.spec.source_extension, include_subfolders)
             destinations = [
-                Path(out_dir) / file.relative_to(source_path).with_suffix(".dxf") for file in files
+                Path(out_dir)
+                / file.relative_to(source_path).with_suffix(self.spec.output_extension)
+                for file in files
             ]
             if not self._confirm_replace(destinations):
                 return
             cancel_event = self._start_job()
-            self._thread = threading.Thread(
-                target=self._convert_batch,
-                args=(src, out_dir, cancel_event, include_subfolders),
-                daemon=True,
-            )
+            self._start_worker(self._convert_batch, src, out_dir, cancel_event, include_subfolders)
         else:
             out = self._out_edit.text().strip()
             if not out:
-                out = str(Path(src).with_suffix(".dxf"))
+                out = str(Path(src).with_suffix(self.spec.output_extension))
                 self._out_edit.setText(out)
             if Path(src).resolve() == Path(out).resolve():
                 QMessageBox.warning(
@@ -1290,12 +1259,10 @@ class SvgToDxfSubTab(_ConversionSubTab):
             if not self._confirm_replace([Path(out)]):
                 return
             cancel_event = self._start_job()
-            self._thread = threading.Thread(
-                target=self._convert, args=(src, out, cancel_event), daemon=True
-            )
+            self._start_worker(self._convert, src, out, cancel_event)
         self._btn.setEnabled(False)
         self._set_status("Converting…")
-        self._thread.start()
+        # _start_worker owns thread startup.
 
     def _convert(self, src: str, out: str, cancel_event: threading.Event) -> None:
         try:
@@ -1339,7 +1306,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
         cancel_event: threading.Event,
         include_subfolders: bool = True,
     ) -> None:
-        files = self._collect_files(src, ".svg", include_subfolders)
+        files = self._collect_files(src, self.spec.source_extension, include_subfolders)
         if not files:
             self._running = False
             self._refresh_readiness()
@@ -1355,7 +1322,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
                 self._finish_cancelled()
                 return
             relative = svg.relative_to(root)
-            dxf = Path(out_dir) / relative.with_suffix(".dxf")
+            dxf = Path(out_dir) / relative.with_suffix(self.spec.output_extension)
             self._report_batch_progress(index, "Converting", svg.name)
             try:
                 stats = self._execute_conversion(svg, dxf, partial(DxfService.svg_to_dxf, svg, dxf))

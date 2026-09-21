@@ -152,8 +152,12 @@ def test_renderer_scene_and_selection_passes_keep_internal_layer_order() -> None
             raise AttributeError(name)
 
     renderer = Renderer()
+    frame = SimpleNamespace(
+        selection=frozenset({"one"}),
+        interaction=SimpleNamespace(mode="select"),
+    )
     CanvasRenderer._paint_document_scene(renderer, object(), 400, 300, object())
-    CanvasRenderer._paint_selection_overlay(renderer, object(), object())
+    CanvasRenderer._paint_selection_overlay(renderer, object(), object(), frame)
     CanvasRenderer._paint_chrome_rulers(renderer, object())
 
     assert events == [

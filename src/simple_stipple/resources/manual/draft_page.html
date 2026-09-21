@@ -1,0 +1,73 @@
+
+<h2 id="draft-page" class="section-heading">
+    Draft Page — Full Reference
+</h2>
+
+<h3 class="subheading">Overview</h3>
+<p>The Draft page is your 2D drafting canvas. It provides a full-featured vector editing environment for creating, importing, and exporting geometry.</p>
+
+<h3 class="subheading">Toolbar</h3>
+<ul>
+    <li><strong>Import Vector:</strong> Open DXF, SVG, or FVI geometry (replaces the current drawing). Use the dropdown arrow to add it without replacing, or drop a supported file onto the page.</li>
+    <li><strong>Recent Vectors:</strong> Quick access to recently imported DXF, SVG, and FVI files.</li>
+    <li><strong>Explode:</strong> Break selected grouped shapes into individual segments.</li>
+    <li><strong>Merge:</strong> Combine selected connected segments into single objects.</li>
+    <li><strong>Export DXF:</strong> Save as grouped DXF (shapes sharing a layer are treated as one group by the laser). Use the adjacent <strong>⋯</strong> menu for FVI or SVG export.</li>
+    <li><strong>Drawing Modes:</strong> Select (S), Draw (D), Edit (E) — also accessible via single-letter keys.</li>
+    <li><strong>Fit:</strong> Zoom to fit all content (F).</li>
+</ul>
+
+<h3 class="subheading">Drawing Primitives</h3>
+<p>In Draw mode, pick a primitive from the "+" tool picker in the Draw sidebar, or from the <kbd>Q</kbd> radial menu (Polyline, Rectangle, Circle, Polygon, Line, Arc, Pen are included by default). Once picked:</p>
+<ul>
+    <li><strong>Rectangle, Circle, Ellipse, Polygon, Arc:</strong> click-drag to size the shape.</li>
+    <li><strong>Polyline / Line:</strong> click to place vertices, double-click or <kbd>Enter</kbd> to finish, <kbd>Esc</kbd> to cancel.</li>
+    <li><strong>Spline:</strong> click to place points; a smooth curve is fit through them (Catmull-Rom). For direct handle control, use the Pen tool instead (see below).</li>
+</ul>
+
+<h3 class="subheading">Quick-Shape Drag (Select Mode)</h3>
+<p>A faster way to drop a shape without leaving Select mode: press one of these to arm "quick shape" drag-to-create, then drag anywhere on the canvas.</p>
+<ul>
+    <li><strong>Shift+R:</strong> Rectangle</li>
+    <li><strong>Shift+C:</strong> Circle</li>
+    <li><strong>Shift+S:</strong> Slot (rounded oblong)</li>
+    <li><strong>Shift+P:</strong> Hexagon</li>
+</ul>
+<p>Holding <kbd>Alt</kbd> while dragging switches to Circle for that drag; holding <kbd>Ctrl</kbd> switches to Slot. Press <kbd>Esc</kbd> to turn quick-shape mode back off.</p>
+
+<h3 class="subheading">Editing Features</h3>
+<ul>
+    <li><strong>Vertex Editing:</strong> In Edit mode, click on shape vertices to move them individually.</li>
+    <li><strong>8-Handle Resize:</strong> Select a shape to see 8 resize handles (corners + edges). Rotated parametric shapes use their local axes. Corners resize both dimensions, edges resize one; hold <kbd>Shift</kbd> to lock aspect ratio or <kbd>Alt</kbd> to resize from center.</li>
+    <li><strong>Properties &amp; Expressions:</strong> edit position, local size, rotation, and shape parameters without leaving the selection. Arithmetic and mixed units are accepted. Hover/focus a field to identify the geometry it controls.</li>
+    <li><strong>Contextual Actions:</strong> Edit Vertices, Duplicate, Open/Close Path, and Delete appear in Properties when valid for the current selection.</li>
+    <li><strong>Rounding Corners:</strong> In Edit mode, hover a corner and press <kbd>R</kbd> to round it with a configurable radius.</li>
+    <li><strong>Offset:</strong> Create an offset copy of selected shapes (O). Specify distance in mm.</li>
+    <li><strong>Text:</strong> Add parametric text at cursor position (T) — see Text &amp; Typography for multi-line and text-on-path.</li>
+    <li><strong>Array Duplication:</strong> "Array — Grid…" and "Array — Radial…" (command palette or right-click menu) repeat a selection in a grid or around a circle, each in a single undo step.</li>
+</ul>
+
+<h3 class="subheading">Boolean Operations</h3>
+<table style="width:100%;border-collapse:collapse;margin:8px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Union (Weld)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Merge overlapping shapes into one (Ctrl+U)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Subtract</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Cut one shape from another (Ctrl+Shift+U)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Intersect</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Keep only the overlapping region (Ctrl+Alt+U)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Divide</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Split shapes at intersection points (Ctrl+Alt+Shift+U)</td></tr>
+</table>
+
+<h3 class="subheading">Path Operations</h3>
+<ul>
+    <li><strong>Close Polyline:</strong> Close an open path by connecting the last vertex to the first (Shift+C).</li>
+    <li><strong>Open Polyline:</strong> Open a closed path by removing the closing segment (Shift+O).</li>
+    <li><strong>Construction Mode:</strong> Draw construction lines (dashed) that don't appear in export. Toggle with <kbd>X</kbd>.</li>
+    <li><strong>Simplify, Smooth, Fit to Curve:</strong> see the dedicated Path Cleanup Tools section.</li>
+</ul>
+
+<h3 class="subheading">Trim &amp; Extend Tools</h3>
+<ul>
+    <li><strong>Trim (K):</strong> Hover to preview the exact part that will be removed, then click to commit. The tool stays active until <kbd>Esc</kbd>.</li>
+    <li><strong>Extend (L):</strong> Hover an open endpoint to preview its extension to the next intersection, then click to commit.</li>
+</ul>
+
+<h3 class="subheading">Rulers &amp; Guides</h3>
+<p>Show rulers with <kbd>Ctrl+R</kbd>. Drag from the top ruler to create horizontal guides, or from the left ruler for vertical guides. Guides participate in snapping. Drag a guide back onto its ruler to delete it.</p>
