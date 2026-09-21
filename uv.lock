@@ -1540,7 +1540,7 @@ wheels = [
 
 [[package]]
 name = "simple-stipple"
-version = "0.3.23"
+version = "0.3.24"
 source = { editable = "." }
 dependencies = [
     { name = "ezdxf" },
@@ -1571,6 +1571,7 @@ dev = [
     { name = "pytest-benchmark" },
     { name = "pytest-qt" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 dist = [
     { name = "pyarmor" },
@@ -1604,6 +1605,7 @@ requires-dist = [
     { name = "sentry-sdk", marker = "extra == 'telemetry'", specifier = ">=2.0" },
     { name = "shapely", specifier = ">=2.1.2" },
     { name = "svgelements", specifier = ">=1.9.6" },
+    { name = "tomli", marker = "python_full_version < '3.11' and extra == 'dev'", specifier = ">=2.0" },
 ]
 provides-extras = ["dev", "build", "telemetry", "cad", "dist"]
 

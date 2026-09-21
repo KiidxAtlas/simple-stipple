@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.24 — 2026-09-21
+
+### Fixed
+
+- **Python 3.10 CI compatibility** — release-readiness tests use the standard
+  `tomli` backport where Python does not provide `tomllib`, restoring the
+  supported CI matrix and desktop release builds.
+
 ## 0.3.23 — 2026-09-21
 
 ### Changed
