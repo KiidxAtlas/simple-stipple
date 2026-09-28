@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.26 — 2026-09-28
+
+### Fixed
+
+- **Windows app showed version 0.0.0** — the installed version now comes from
+  a constant in the application package instead of packaging metadata that
+  the Windows build does not carry, so every install form reports the real
+  version and the updater compares against it.
+
 ## 0.3.25 — 2026-09-28
 
 ### Fixed

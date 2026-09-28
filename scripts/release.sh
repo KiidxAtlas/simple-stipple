@@ -41,6 +41,13 @@ if tag_version != package_version:
         f"Tag {tag!r} does not match pyproject.toml version {package_version!r}."
     )
 
+init_file = Path("src/simple_stipple/__init__.py").read_text(encoding="utf-8")
+runtime = re.search(r'^__version__ = "([^"]+)"$', init_file, flags=re.MULTILINE)
+if runtime is None or runtime.group(1) != package_version:
+    raise SystemExit(
+        f"src/simple_stipple/__init__.py __version__ does not match pyproject.toml "
+        f"version {package_version!r}."
+    )
 changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
 release_heading = rf"^## {re.escape(package_version)} — \d{{4}}-\d{{2}}-\d{{2}}$"
 if re.search(release_heading, changelog, flags=re.MULTILINE) is None:

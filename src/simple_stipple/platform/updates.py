@@ -5,101 +5,22 @@ from __future__ import annotations
 import json
 import logging
 import platform
-import plistlib
 import re
 import subprocess
 import sys
 import tempfile
 import urllib.error
 import urllib.request
-from importlib import metadata
 from pathlib import Path
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
+
+from simple_stipple import __version__
 
 _LOG = logging.getLogger(__name__)
 
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 _SHA256_PATTERN = re.compile(r"\A([0-9a-fA-F]{64})(?:\s+[*]?(\S+))?\s*\Z")
-
-
-def _read_version_from_pyproject() -> str:
-    """Read version directly from pyproject.toml as a source fallback."""
-    try:
-        repo_root = Path(__file__).resolve().parents[3]
-        pyproject = repo_root / "pyproject.toml"
-        text = pyproject.read_text(encoding="utf-8")
-        match = re.search(r'^version\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
-        if match:
-            return match.group(1).strip()
-    except (OSError, ValueError):
-        pass
-    return "0.0.0"
-
-
-def _detect_current_version() -> str:
-    """Resolve current app version from package metadata or project source."""
-    # In a source checkout (including editable installs), distribution
-    # metadata can lag behind pyproject.toml after a version bump. Prefer the
-    # checked-out project declaration so the updater does not offer the
-    # version that was installed before the current release. Frozen builds do
-    # not ship the repository file, so they fall back to package metadata.
-    source_version = _read_version_from_pyproject()
-    if source_version != "0.0.0":
-        return source_version
-    # macOS app bundles do not necessarily retain Python distribution
-    # metadata. Their signed Info.plist is the authoritative release value.
-    try:
-        info = Path(sys.executable).resolve().parents[1] / "Info.plist"
-        if info.is_file():
-            value = plistlib.loads(info.read_bytes()).get("CFBundleShortVersionString")
-            if isinstance(value, str) and value.strip() and value.strip() != "0.0.0":
-                return value.strip()
-    except (OSError, ValueError, plistlib.InvalidFileException):
-        pass
-    # Windows frozen apps carry the release version in the executable's
-    # VersionInfo resource, not in an Info.plist or importlib metadata.
-    windows_version = _read_windows_executable_version(Path(sys.executable))
-    if windows_version:
-        return windows_version
-    try:
-        return metadata.version(_REPO_NAME)
-    except Exception:  # metadata missing or unreadable: version unknown
-        return "0.0.0"
-
-
-def _read_windows_executable_version(executable: Path) -> str | None:
-    """Read ``FileVersion`` from a Windows EXE without a third-party module."""
-    if platform.system() != "Windows" or executable.suffix.casefold() != ".exe":
-        return None
-    try:
-        import ctypes
-
-        winapi: Any = cast(Any, ctypes).windll
-        size = winapi.version.GetFileVersionInfoSizeW(str(executable), None)
-        if not size:
-            return None
-        data = ctypes.create_string_buffer(size)
-        if not winapi.version.GetFileVersionInfoW(str(executable), 0, size, data):
-            return None
-        value = ctypes.c_void_p()
-        value_len = ctypes.c_uint()
-        if not winapi.version.VerQueryValueW(
-            data,
-            "\\StringFileInfo\\040904B0\\FileVersion",
-            ctypes.byref(value),
-            ctypes.byref(value_len),
-        ):
-            return None
-        if value.value is None:
-            return None
-        text = ctypes.wstring_at(value.value, value_len.value).strip().rstrip("\x00")
-        return text if text and text != "0.0.0" else None
-    except (AttributeError, OSError, ValueError):
-        return None
-
-
-_CURRENT_VERSION = _detect_current_version()
 
 
 class UpdateInfo(NamedTuple):
@@ -114,7 +35,7 @@ class UpdateInfo(NamedTuple):
 
 def get_current_version() -> str:
     """Get the currently installed app version."""
-    return _CURRENT_VERSION
+    return __version__
 
 
 def get_releases_page_url() -> str:
@@ -211,7 +132,7 @@ def check_for_updates(timeout: int = 10) -> UpdateInfo | None:
             _LOG.warning("No tag_name in release response")
             return None
 
-        is_newer = _compare_versions(latest_version, _CURRENT_VERSION) > 0
+        is_newer = _compare_versions(latest_version, __version__) > 0
 
         # Determine download URL based on platform
         assets = data.get("assets", [])
