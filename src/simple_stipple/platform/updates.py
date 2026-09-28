@@ -21,7 +21,6 @@ _LOG = logging.getLogger(__name__)
 _REPO_OWNER = "KiidxAtlas"
 _REPO_NAME = "simple-stipple"
 _SHA256_PATTERN = re.compile(r"\A([0-9a-fA-F]{64})(?:\s+[*]?(\S+))?\s*\Z")
-_PACKAGED_FALLBACK_VERSION = "0.3.20"
 
 
 def _read_version_from_pyproject() -> str:
@@ -65,10 +64,8 @@ def _detect_current_version() -> str:
         return windows_version
     try:
         return metadata.version(_REPO_NAME)
-    except metadata.PackageNotFoundError:
-        return _PACKAGED_FALLBACK_VERSION
-    except Exception:  # defensive fallback
-        return _PACKAGED_FALLBACK_VERSION
+    except Exception:  # metadata missing or unreadable: version unknown
+        return "0.0.0"
 
 
 def _read_windows_executable_version(executable: Path) -> str | None:

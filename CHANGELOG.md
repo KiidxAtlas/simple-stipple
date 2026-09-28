@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.25 — 2026-09-28
+
+### Fixed
+
+- **Windows app reported version 0.3.20 forever** — the PyInstaller build now
+  bundles the package metadata, so installed builds show their real version
+  and the updater stops offering the release that is already installed.
+- **Commit failed with "Could not read the Git author identity"** — the
+  Repository page now finds Git in standard install locations when it is
+  missing from the app's PATH, and stops giving up on slow first-time Git
+  launches after 3 seconds.
+
 ## 0.3.24 — 2026-09-21
 
 ### Fixed

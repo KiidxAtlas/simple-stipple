@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import threading
 from html import escape
@@ -34,6 +36,41 @@ from simple_stipple.ui.components.layout import (
 from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs.files import reveal_label
 from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
+
+# Local git probes (config, status) run on the GUI thread; the first git
+# launch on a fresh account can be slow (macOS xcrun shim, Windows AV scans),
+# so keep this generous enough to not misreport a working install.
+_GIT_PROBE_TIMEOUT_S = 15
+_GIT_NOT_FOUND = (
+    "Git was not found. Install Git, or add it to PATH for this user account, "
+    "then restart Simple Stipple."
+)
+
+
+def _find_git() -> str | None:
+    """Locate the git executable.
+
+    Apps launched from Finder/Dock/Start menu do not inherit the shell PATH a
+    terminal gets, so a git that works in the terminal can be invisible here.
+    Fall back to the standard install locations before giving up.
+    """
+    found = shutil.which("git")
+    if found:
+        return found
+    if os.name == "nt":
+        candidates = [
+            Path(base) / "Git" / "cmd" / "git.exe"
+            for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"))
+            if base
+        ]
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            candidates.append(Path(local) / "Programs" / "Git" / "cmd" / "git.exe")
+    else:
+        candidates = [
+            Path(p) for p in ("/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git")
+        ]
+    return next((str(c) for c in candidates if c.is_file()), None)
 
 
 class RepoPage(BasePage):
@@ -315,6 +352,11 @@ class RepoPage(BasePage):
         repo = self._repo_dir(show_dialogs=show_dialogs)
         if repo is None:
             return False
+        git = _find_git()
+        if git is None:
+            if show_dialogs:
+                QMessageBox.warning(self, "Repository", _GIT_NOT_FOUND)
+            return False
         if self._git_busy:
             return False
         self._git_busy = True
@@ -329,7 +371,7 @@ class RepoPage(BasePage):
                     break
                 try:
                     proc = subprocess.Popen(
-                        ["git", *args],
+                        [git, *args],
                         cwd=str(repo),
                         text=True,
                         stdout=subprocess.PIPE,
@@ -432,14 +474,18 @@ class RepoPage(BasePage):
         repo = self._repo_dir(show_dialogs=True)
         if repo is None:
             return
+        git = _find_git()
+        if git is None:
+            QMessageBox.warning(self, "Commit", _GIT_NOT_FOUND)
+            return
         try:
             identity = {
                 key: subprocess.run(
-                    ["git", "config", "--get", key],
+                    [git, "config", "--get", key],
                     cwd=str(repo),
                     text=True,
                     capture_output=True,
-                    timeout=3,
+                    timeout=_GIT_PROBE_TIMEOUT_S,
                     check=False,
                 ).stdout.strip()
                 for key in ("user.name", "user.email")
@@ -465,11 +511,11 @@ class RepoPage(BasePage):
             setup_commands.append(["config", "user.email", email.strip()])
         try:
             status = subprocess.run(
-                ["git", "status", "--short"],
+                [git, "status", "--short"],
                 cwd=str(repo),
                 text=True,
                 capture_output=True,
-                timeout=3,
+                timeout=_GIT_PROBE_TIMEOUT_S,
                 check=False,
             ).stdout.strip()
         except (OSError, subprocess.TimeoutExpired) as exc:

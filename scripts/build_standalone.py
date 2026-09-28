@@ -41,6 +41,9 @@ def build_command(system: str | None = None) -> list[str]:
         "--hidden-import=scipy.spatial.distance",
         "--hidden-import=scipy.special",
         "--collect-all=scipy",
+        # Frozen apps read their version via importlib.metadata; without the
+        # dist-info the updater cannot tell which release is installed.
+        "--copy-metadata=simple-stipple",
     ]
 
     for source, destination in DATA_FILES:
