@@ -157,8 +157,8 @@ def run_generate(
             extra["fill"] = fill_polys
         # Always emit the outline as its own layer so the DXF reliably ships
         # with the documented three-layer split (outline / pattern / fill).
-        # This holds regardless of the include_border checkbox or whether the
-        # polygonize step produced any fill strokes.
+        # This holds whether or not the caller supplied border polylines and
+        # whether the polygonize step produced any fill strokes.
         effective_border = border_polys
         if not effective_border:
             effective_border = pattern_service.apply_scale(

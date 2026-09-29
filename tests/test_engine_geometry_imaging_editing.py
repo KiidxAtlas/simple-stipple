@@ -8,6 +8,7 @@ import pytest
 from PIL import Image
 from shapely.geometry import Polygon
 
+from simple_stipple.core.cad.geometry import shape_slot_for_bounds
 from simple_stipple.core.editing.boolean import (
     boolean_polylines,
     clipper_difference,
@@ -141,3 +142,12 @@ def test_merge_paths_nodes_crossing_open_paths_keeps_simple_branches() -> None:
     assert len(merged) == 4
     assert all((1.0, 1.0) in path.points for path in merged)
     assert all(len(set(path.points)) == len(path.points) for path in merged)
+
+
+def test_slot_profile_follows_drag_bounds_in_both_orientations() -> None:
+    for width, height in ((96.0, 24.0), (24.0, 96.0)):
+        points = shape_slot_for_bounds(width, height)
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
+        assert max(xs) - min(xs) == pytest.approx(width)
+        assert max(ys) - min(ys) == pytest.approx(height)

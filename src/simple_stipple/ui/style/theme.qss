@@ -1,6 +1,6 @@
 /* Simple Stipple visual system.
  *
- * Written against the semantic names in ``ui/style/tokens.py``: each dollar-
+ * Written against semantic names in `ui/style/__init__.py`: each dollar-
  * prefixed name is substituted at load time. There are no raw colors here, so
  * dark, light, and high-contrast all render from this one file and cannot
  * drift apart.
@@ -113,7 +113,7 @@ QFrame[surface="canvas"] {
     border-radius: $radius_lg;
 }
 QFrame[role="collapsible"], QFrame[role="callout"], QFrame[role="object-browser"],
-QFrame[role="status-strip"], QFrame[role="draw-section"], QFrame[role="precision-bar"] {
+QFrame[role="status-strip"], QFrame[role="precision-bar"] {
     background: $bg_surface_alt;
     border: 1px solid $border;
     border-radius: $radius_md;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.resources as _resources
 import re
+from collections.abc import Sequence
 from html import escape as _html_escape
 from html import unescape as _html_unescape
 
@@ -40,14 +41,20 @@ class HelpDialog(QDialog):
     - Content is generated dynamically from the command registry
     """
 
-    def __init__(self, parent: QWidget | None = None, main_window: QMainWindow | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        main_window: QMainWindow | None = None,
+        *,
+        shell_shortcuts: Sequence[tuple[str, str]] = (),
+    ):
         super().__init__(parent, Qt.WindowType.Window)
         self._main_window = main_window
         self.setWindowTitle("Simple Stipple — User Manual")
         self.setMinimumSize(950, 700)
 
         # Build content dynamically
-        self._html_content = build_help_html()
+        self._html_content = build_help_html(shell_shortcuts)
         self._toc_entries = list(TOC_ENTRIES)
         self._last_find_query: str | None = None
 
@@ -349,10 +356,14 @@ class HelpDialog(QDialog):
 
     @classmethod
     def show_help(
-        cls, parent: QWidget | None = None, main_window: QMainWindow | None = None
+        cls,
+        parent: QWidget | None = None,
+        main_window: QMainWindow | None = None,
+        *,
+        shell_shortcuts: Sequence[tuple[str, str]] = (),
     ) -> HelpDialog:
         """Show the help dialog. Returns the dialog instance."""
-        dialog = cls(parent, main_window)
+        dialog = cls(parent, main_window, shell_shortcuts=shell_shortcuts)
         dialog.exec()
         return dialog
 
@@ -362,8 +373,12 @@ def _toc_entry(section_id: str, label: str) -> tuple[str, str]:
     return section_id, label
 
 
-def build_help_html() -> str:
-    """Build the complete help HTML from all sections."""
+def build_help_html(shell_shortcuts: Sequence[tuple[str, str]] = ()) -> str:
+    """Build the complete help HTML from all sections.
+
+    ``shell_shortcuts`` are the app's live (label, keys) rows for workspace,
+    application, and page shortcuts; they fill the Keyboard Shortcuts section.
+    """
     sections = [
         _build_getting_started(),
         _build_common_tasks(),
@@ -383,7 +398,7 @@ def build_help_html() -> str:
         _build_convert_page(),
         _build_repo_page(),
         _build_canvas_commands(),
-        _build_shortcuts(),
+        _build_shortcuts(shell_shortcuts),
         _build_troubleshooting(),
         _build_settings_updates(),
         _build_support(),
@@ -479,7 +494,14 @@ TOC_ENTRIES: list[tuple[str, str]] = [
 # intentionally map common goals and CAD terms to the section that explains
 # how to complete them.
 TOC_SEARCH_TERMS: dict[str, tuple[str, ...]] = {
-    "getting-started": ("begin", "first project", "new user", "overview", "workflow"),
+    "getting-started": (
+        "begin",
+        "first project",
+        "new user",
+        "overview",
+        "workflow",
+        "welcome",
+    ),
     "common-tasks": ("how do i", "what can i do", "workflow", "quick start", "goal"),
     "production-workflows": (
         "laser",
@@ -639,9 +661,29 @@ def _build_canvas_commands() -> str:
     return ""
 
 
-def _build_shortcuts() -> str:
-    """Keyboard shortcuts reference."""
-    return _load_manual_section("shortcuts.html")
+def _build_shortcuts(shell_shortcuts: Sequence[tuple[str, str]]) -> str:
+    """Keyboard shortcuts reference; app and page keys come from live bindings."""
+    rows = ""
+    for label, keys in shell_shortcuts:
+        if not keys:
+            rows += (
+                f"<tr><td colspan='2' style='padding:6px 4px 2px;'>"
+                f"<strong>{_esc(label)}</strong></td></tr>"
+            )
+        else:
+            rows += (
+                f"<tr><td style='padding:6px;border-bottom:1px solid #30363d;'>{_esc(label)}</td>"
+                f"<td style='padding:6px;border-bottom:1px solid #30363d;'>"
+                f"<strong>{_esc(keys)}</strong></td></tr>"
+            )
+    table = (
+        "<h3 class='subheading'>Workspace, Application &amp; Pages (your current keys)</h3>"
+        "<p>These work anywhere in the window except while typing in a text field.</p>"
+        f"<table style='width:100%;border-collapse:collapse;margin:8px 0;'>{rows}</table>"
+        if rows
+        else ""
+    )
+    return _load_manual_section("shortcuts.html").replace("<!-- shell-shortcuts -->", table)
 
 
 def _build_troubleshooting() -> str:

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.layers.logic import (
     CanvasLayerSidebarController,
     LayerRowsBuilder,
@@ -37,7 +38,7 @@ from simple_stipple.canvas.layers.logic import (
 from simple_stipple.canvas.layers.widget import DxfLayersTree
 from simple_stipple.canvas.objects import CanvasViewPort
 from simple_stipple.canvas.widgets.precision_bar import CanvasPrecisionBar
-from simple_stipple.canvas.widgets.toolbar import canvas_toolbar
+from simple_stipple.canvas.widgets.toolbar import apply_mode_shortcut_hints, canvas_toolbar
 from simple_stipple.ui.components.feedback import refresh_style
 
 LOGGER = logging.getLogger(__name__)
@@ -462,16 +463,16 @@ class CanvasToolbarModule(QWidget):
         toolbar_layout = toolbar.layout()
         self.state_buttons: dict[str, QPushButton] = {}
         if isinstance(toolbar_layout, QHBoxLayout) and canvas is not None:
-            for text, shortcut, method_name, state_name in (
-                ("Scale", "M", "toggle_measure", "_measure_mode"),
-                ("Dimension", "Shift+M", "toggle_dimension_mode", "_dimension_mode"),
+            for text, command_id, method_name, state_name in (
+                ("Scale", "measure.toggle", "toggle_measure", "_measure_mode"),
+                ("Dimension", "mode.dimension", "toggle_dimension_mode", "_dimension_mode"),
             ):
                 if not hasattr(canvas, method_name):
                     continue
                 button = QPushButton(text)
                 button.setCheckable(True)
                 button.setMinimumHeight(28)
-                button.setToolTip(f"Toggle {text.lower()} tool ({shortcut})")
+                button.setProperty("shortcut-command", command_id)
                 button.setAccessibleName(f"{text} tool")
                 self.state_buttons[state_name] = button
 
@@ -539,7 +540,19 @@ class CanvasToolbarModule(QWidget):
         self.selection_label.setProperty("active", count > 0)
         refresh_style(self.selection_label)
 
+    def _apply_shortcut_hints(self) -> None:
+        """Tooltips show the live shortcut, so a rebind shows up on next sync."""
+        apply_mode_shortcut_hints(self.mode_buttons)
+        for button in self.state_buttons.values():
+            button.setToolTip(
+                canvas_commands.tooltip_text(
+                    str(button.property("shortcut-command")),
+                    f"Toggle the {button.text().lower()} tool",
+                )
+            )
+
     def sync_from_canvas(self) -> None:
+        self._apply_shortcut_hints()
         if self._canvas is None:
             return
         if hasattr(self._canvas, "get_mode"):

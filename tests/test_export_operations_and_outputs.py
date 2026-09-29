@@ -270,7 +270,7 @@ def test_every_single_file_format_exports(
     page.load_outline_polys([OUTER])
     page._treatments[page._outline_ids[0]] = {"kind": "cut", "pattern": "— None —", "params": {}}
     page._select_export_format(export_format)
-    assert page._gen_btn.text() == f"Export {export_format.upper()}"
+    assert page._gen_btn.text() == f"Export {export_format.upper()}…"
 
     target = tmp_path / f"part{suffix}"
     monkeypatch.setattr(page_module, "pick_save_file", lambda *a, **k: str(target))

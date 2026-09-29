@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDoubleValidator, QIcon, QIntValidator
+from PySide6.QtGui import QDoubleValidator, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -54,6 +53,7 @@ from simple_stipple.features.pattern.defaults import (
     DEFAULT_MIN_SEGMENT,
     DEFAULT_PATTERN_ROTATION,
     DEFAULT_PREVIEW_QUALITY,
+    FILL_SPACING_FLOOR_MM,
     SCALE_MAX_MM,
     SCALE_MIN_MM,
 )
@@ -62,7 +62,11 @@ from simple_stipple.features.pattern.export import (
     EXPORT_FORMAT_KEYS,
     EXPORT_FORMATS,
 )
-from simple_stipple.features.pattern.form import PARAM_SPECS, build_param_widget
+from simple_stipple.features.pattern.form import (
+    PARAM_SPECS,
+    bind_numeric_commit,
+    build_param_widget,
+)
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.inputs import make_resettable_line_edit, primary_button
 from simple_stipple.ui.components.layout import (
@@ -220,11 +224,8 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._details_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     page._details_scroll.setWidget(details_content)
     side_layout.addWidget(page._details_scroll, stretch=1)
-    # Compatibility alias: the Zone Manager is mounted in the left workflow
-    # panel, so the right inspector no longer spends space on a second copy.
+    # Region editing belongs to the workflow rail; this inspector is for layers.
     page._zone_scroll = page._zones_section
-    page._zone_layers_splitter = QSplitter(Qt.Orientation.Vertical)
-    page._zone_layers_splitter.setChildrenCollapsible(False)
 
     page._layer_module = CanvasLayerTreeModule(
         canvas=page._canvas,
@@ -242,10 +243,13 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._layers_tree.shapeRenamed.connect(page._on_shape_renamed)
     page._layers_tree.layerSettingsRequested.connect(page._open_pattern_layer_settings)
     page._layers_tree.layerVisibilityChanged.connect(page._on_pattern_layer_visibility_changed)
-    page._zone_layers_splitter.addWidget(page._layer_module)
-    page._zone_layers_splitter.setStretchFactor(0, 1)
-    details_layout.addWidget(page._zone_layers_splitter, stretch=1)
-    build_export_section(page, side_layout, options_layout=details_layout)
+    details_layout.addWidget(page._layer_module, stretch=1)
+    footer = QWidget(side_panel)
+    page._export_footer_layout = QVBoxLayout(footer)
+    page._export_footer_layout.setContentsMargins(0, 4, 0, 0)
+    page._export_footer_layout.setSpacing(4)
+    side_layout.addWidget(footer)
+    build_export_section(page, page._export_footer_layout, options_layout=details_layout)
 
     page._canvas_runtime = PatternCanvasPageRuntime(
         canvas=page._canvas,
@@ -262,9 +266,9 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
 
     splitter = content_splitter(canvas_shell, side_panel, sizes=(780, 340))
     # Preserve the canvas at compact widths; the standard drawer toggle keeps
-    # layers, zones, and export controls available without squeezing content.
+    # layers, output, and export controls available without squeezing content.
     splitter.setCollapsible(1, True)
-    splitter.set_responsive_secondary(1, "Pattern details")
+    splitter.set_responsive_secondary(1, "Inspector")
     splitter.setStretchFactor(0, 1)
     splitter.setStretchFactor(1, 0)
     page._canvas_splitter = splitter
@@ -292,10 +296,19 @@ def refresh_pattern_properties_panel(page: Any) -> None:
 
 
 def build_left(page: Any, layout: QVBoxLayout) -> None:
-    page._advanced_mode_cb = QCheckBox("Advanced controls")
+    page._workflow_content = QWidget()
+    page._workflow_layout = QVBoxLayout(page._workflow_content)
+    page._workflow_layout.setContentsMargins(0, 0, 0, 0)
+    page._workflow_layout.setSpacing(8)
+    page._workflow_scroll = QScrollArea()
+    page._workflow_scroll.setWidgetResizable(True)
+    page._workflow_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    page._workflow_scroll.setWidget(page._workflow_content)
+    layout.addWidget(page._workflow_scroll, stretch=1)
+    layout = page._workflow_layout
+    page._advanced_mode_cb = QCheckBox("Laser process")
     page._advanced_mode_cb.setChecked(bool(page._settings.get("pattern_advanced_mode", False)))
-    page._advanced_mode_cb.setToolTip("Show laser power, speed, and passes controls")
-    layout.addWidget(page._advanced_mode_cb)
+    page._advanced_mode_cb.setToolTip("Show laser power, speed, and passes for image engraving")
     build_shape_section(page, layout)
     # Put the everyday flow first: load an outline, choose a pattern, then
     # refine regions only when needed. Region management before pattern choice
@@ -309,7 +322,6 @@ def build_left(page: Any, layout: QVBoxLayout) -> None:
     build_image_engraving_section(page, page._zone_editor_layout)
     page._engraving_section.setVisible(False)
     page._advanced_mode_cb.toggled.connect(page._set_advanced_mode)
-    layout.addStretch()
     page._install_pattern_shortcuts()
     page._refresh_section_subtitles()
 
@@ -371,7 +383,7 @@ def build_zones_section(page: Any, layout: QVBoxLayout) -> None:
     # sit with the region that carries the image.
     page._zone_editor_layout = zones_layout
     page._zones_section = CollapsibleSection(
-        "Regions", zones_content, expanded=False, subtitle="Optional"
+        "3. Regions & treatment", zones_content, expanded=False, subtitle="Optional"
     )
     layout.addWidget(page._zones_section)
 
@@ -405,12 +417,7 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
 
     file_actions = QHBoxLayout()
     file_actions.setSpacing(6)
-    page._recent_btn = RecentFilesButton(
-        page._settings,
-        KIND_DXF,
-        empty_message="No recent vector files.",
-    )
-    page._recent_btn.setToolTip("Pick from recently opened vector files")
+    page._recent_btn = RecentFilesButton(page._settings, KIND_DXF)
     page._recent_btn.fileSelected.connect(page._quick_load)
     file_actions.addWidget(page._recent_btn, stretch=1)
     browse_btn = QPushButton("Browse…")
@@ -507,21 +514,25 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     page._lattice_origin_x = QLineEdit("0")
     page._lattice_origin_y = QLineEdit("0")
     for field in (page._lattice_origin_x, page._lattice_origin_y):
-        field.setValidator(QDoubleValidator(-1e9, 1e9, 6, field))
         field.setFixedWidth(80)
-        field.textChanged.connect(page._on_document_lattice_changed)
+        bind_numeric_commit(field, page._on_document_lattice_changed, length=True)
     grid_row.addWidget(page._lattice_origin_x, 0, 1)
     grid_row.addWidget(QLabel("Origin Y (mm)"), 1, 0)
     grid_row.addWidget(page._lattice_origin_y, 1, 1)
     grid_row.addWidget(QLabel("Seed"), 2, 0)
     page._lattice_seed = QLineEdit("1")
-    page._lattice_seed.setValidator(QIntValidator(0, 2_147_483_647, page._lattice_seed))
-    page._lattice_seed.setFixedWidth(80)
     page._lattice_seed.setToolTip(
         "Fixes the random generators (Voronoi, Truchet, Stipple) so re-solving "
         "reproduces the same result instead of reshuffling it"
     )
-    page._lattice_seed.textChanged.connect(page._on_document_lattice_changed)
+    page._lattice_seed.setFixedWidth(80)
+    bind_numeric_commit(
+        page._lattice_seed,
+        page._on_document_lattice_changed,
+        minimum=0,
+        maximum=2_147_483_647,
+        integer=True,
+    )
     grid_row.addWidget(page._lattice_seed, 2, 1)
     grid_layout.addLayout(grid_row)
     page._lattice_snap_btn = QPushButton("Snap grid to selection")
@@ -581,35 +592,31 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     tile_library_layout.addLayout(tile_asset_actions)
     pattern_layout.addWidget(page._tile_library_widget)
     page._tile_library_widget.hide()
-    page._modifiers_label = section_label(pattern_layout, "Modifiers")
     page._modifiers_widget = QWidget()
     rot_row = QGridLayout(page._modifiers_widget)
     rot_row.setContentsMargins(0, 0, 0, 0)
     rot_row.addWidget(QLabel("Rotation (°)"), 0, 0)
     page._pattern_rotation = QLineEdit(DEFAULT_PATTERN_ROTATION)
     make_resettable_line_edit(page._pattern_rotation, DEFAULT_PATTERN_ROTATION)
-    page._pattern_rotation.setValidator(QDoubleValidator(-36000, 36000, 4, page._pattern_rotation))
+    bind_numeric_commit(page._pattern_rotation, page._on_inspector_edit)
     page._pattern_rotation.setFixedWidth(80)
     page._pattern_rotation.setToolTip("Rotate generated pattern around the outline center")
-    page._pattern_rotation.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._pattern_rotation, 0, 1)
     rot_row.addWidget(QLabel("Pattern size (%)"), 1, 0)
     page._pattern_size_percent = QLineEdit("100")
-    page._pattern_size_percent.setValidator(
-        QDoubleValidator(1, 10000, 3, page._pattern_size_percent)
+    bind_numeric_commit(
+        page._pattern_size_percent, page._on_inspector_edit, minimum=1, maximum=10000
     )
     page._pattern_size_percent.setToolTip(
         "Scale pattern elements and spacing without resizing the outline"
     )
-    page._pattern_size_percent.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._pattern_size_percent, 1, 1)
     rot_row.addWidget(QLabel("Fade (mm)"), 2, 0)
     page._border_fade = QLineEdit(DEFAULT_BORDER_FADE)
     make_resettable_line_edit(page._border_fade, DEFAULT_BORDER_FADE)
-    page._border_fade.setValidator(QDoubleValidator(0, 1e9, 6, page._border_fade))
+    bind_numeric_commit(page._border_fade, page._on_inspector_edit, minimum=0, length=True)
     page._border_fade.setFixedWidth(80)
     page._border_fade.setToolTip("Thin the pattern near the outline edge. 0 = off.")
-    page._border_fade.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._border_fade, 2, 1)
     rot_row.addWidget(QLabel("Density field"), 3, 0)
     page._density_mode_combo = QComboBox()
@@ -620,24 +627,27 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     rot_row.addWidget(QLabel("Density strength"), 4, 0)
     page._density_strength = QLineEdit(DEFAULT_DENSITY_STRENGTH)
     make_resettable_line_edit(page._density_strength, DEFAULT_DENSITY_STRENGTH)
-    page._density_strength.setValidator(QDoubleValidator(0, 1, 4, page._density_strength))
+    bind_numeric_commit(page._density_strength, page._on_inspector_edit, minimum=0, maximum=1)
     page._density_strength.setToolTip("0 = uniform; 1 = strongest thinning")
-    page._density_strength.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_strength, 4, 1)
     rot_row.addWidget(QLabel("Density angle (°)"), 5, 0)
     page._density_angle = QLineEdit(DEFAULT_DENSITY_ANGLE)
     make_resettable_line_edit(page._density_angle, DEFAULT_DENSITY_ANGLE)
-    page._density_angle.setValidator(QDoubleValidator(-36000, 36000, 4, page._density_angle))
+    bind_numeric_commit(page._density_angle, page._on_inspector_edit)
     page._density_angle.setToolTip("Direction of the linear density gradient")
-    page._density_angle.textChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_angle, 5, 1)
     page._density_reverse = QCheckBox("Reverse density")
     page._density_reverse.setToolTip("Swap the dense and sparse sides of the field")
     page._density_reverse.stateChanged.connect(page._on_inspector_edit)
     rot_row.addWidget(page._density_reverse, 6, 0, 1, 2)
-    pattern_layout.addWidget(page._modifiers_widget)
-    page._modifiers_label.hide()
-    page._modifiers_widget.hide()
+    page._modifiers_section = CollapsibleSection(
+        "Pattern modifiers",
+        page._modifiers_widget,
+        expanded=False,
+        subtitle="Rotation, size, fade, and density",
+    )
+    page._modifiers_section.hide()
+    pattern_layout.addWidget(page._modifiers_section)
     page._presets_section = CollapsibleSection("Presets", preset_content, expanded=False)
     pattern_layout.addWidget(page._presets_section)
     page._pattern_grid_section = CollapsibleSection(
@@ -645,7 +655,7 @@ def build_pattern_section(page: Any, layout: QVBoxLayout) -> None:
     )
     pattern_layout.addWidget(page._pattern_grid_section)
     page._pattern_section = CollapsibleSection(
-        "2. Pattern", pattern_content, expanded=True, subtitle="Choose a pattern"
+        "2. Pattern & Fill", pattern_content, expanded=True, subtitle="Choose a pattern or fill"
     )
     layout.addWidget(page._pattern_section)
 
@@ -673,15 +683,19 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
     page._fill_spacing = QLineEdit(DEFAULT_FILL_SPACING)
     make_resettable_line_edit(page._fill_spacing, DEFAULT_FILL_SPACING)
     page._fill_spacing.setFixedWidth(80)
-    page._fill_spacing.setToolTip("Distance between adjacent infill lines")
-    page._fill_spacing.textChanged.connect(page._on_inspector_edit)
+    page._fill_spacing.setToolTip(
+        f"Distance between adjacent infill lines (at least {FILL_SPACING_FLOOR_MM:g} mm)"
+    )
+    bind_numeric_commit(
+        page._fill_spacing, page._on_inspector_edit, minimum=FILL_SPACING_FLOOR_MM, length=True
+    )
     params_row.addWidget(page._fill_spacing, 0, 1)
     params_row.addWidget(QLabel("Angle (°)"), 1, 0)
     page._fill_angle = QLineEdit(DEFAULT_FILL_ANGLE)
     make_resettable_line_edit(page._fill_angle, DEFAULT_FILL_ANGLE)
     page._fill_angle.setFixedWidth(80)
     page._fill_angle.setToolTip("Angle of the infill direction")
-    page._fill_angle.textChanged.connect(page._on_inspector_edit)
+    bind_numeric_commit(page._fill_angle, page._on_inspector_edit)
     params_row.addWidget(page._fill_angle, 1, 1)
     params_row.addWidget(QLabel("Boundary inset (mm)"), 2, 0)
     page._fill_inset = QLineEdit(DEFAULT_FILL_INSET)
@@ -690,7 +704,7 @@ def build_fill_section(page: Any, layout: QVBoxLayout) -> None:
     page._fill_inset.setToolTip(
         "Keep engraving this far inside each target boundary; useful for kerf and edge clearance"
     )
-    page._fill_inset.textChanged.connect(page._on_inspector_edit)
+    bind_numeric_commit(page._fill_inset, page._on_inspector_edit, minimum=0, length=True)
     params_row.addWidget(page._fill_inset, 2, 1)
     target_row = QHBoxLayout()
     target_row.setSpacing(8)
@@ -891,6 +905,7 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     page._engraving_process_section = CollapsibleSection(
         "Laser settings", process_content, expanded=False, subtitle="Custom · 80% · 100 mm/s"
     )
+    form.addWidget(page._advanced_mode_cb)
     form.addWidget(page._engraving_process_section)
     # Export has one terminal control in the persistent Export area.  This
     # contextual button only chooses its format, so users do not have to
@@ -927,27 +942,21 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
 
 
 def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBoxLayout) -> None:
-    # Export options live in a card matching Shape/Pattern/Fill/Zones —
-    # previously a bare caption label, the odd one out on this sidebar.
-    # The action button/progress/status stay outside and unwrapped
-    # below it, since a primary CTA should never be hidden behind a
+    # Export options live in a card matching Outline/Pattern/Fill/Regions.
+    # The action button, its summary, progress, and status stay outside and
+    # unwrapped below it, since a primary CTA should never be hidden behind a
     # collapsible header.
     card_content = QWidget()
     card_layout = QVBoxLayout(card_content)
     card_layout.setContentsMargins(0, 0, 0, 0)
     card_layout.setSpacing(4)
-    page._include_border_cb = QCheckBox("Border on separate layer")
-    page._include_border_cb.setToolTip(
-        "Writes the pattern fill to a 'pattern' layer and every\noutline to a shared 'outline' layer (CAM-friendly)."
-    )
-    page._include_border_cb.setChecked(True)
-    page._include_border_cb.stateChanged.connect(page._schedule_preview)
-    card_layout.addWidget(page._include_border_cb)
     page._export_open_paths_cb = QCheckBox("Export as Open Paths")
     page._export_open_paths_cb.setToolTip(
         "Write pattern strokes as open polylines (no forced closure)."
     )
     page._export_open_paths_cb.setChecked(False)
+    # Open paths change what preflight counts as a finding.
+    page._export_open_paths_cb.toggled.connect(page._refresh_preflight_markers)
     card_layout.addWidget(page._export_open_paths_cb)
     quality_row = QHBoxLayout()
     quality_row.addWidget(QLabel("Preview quality"))
@@ -958,6 +967,9 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._preview_quality_combo.setCurrentIndex(
         max(0, page._preview_quality_combo.findData(DEFAULT_PREVIEW_QUALITY))
     )
+    page._preview_quality_combo.setToolTip(
+        "Detail of the on-screen preview. Export always re-solves at full quality."
+    )
     page._preview_quality_combo.currentIndexChanged.connect(page._schedule_preview)
     quality_row.addWidget(page._preview_quality_combo)
     card_layout.addLayout(quality_row)
@@ -966,6 +978,9 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._minimum_segment_edit = QLineEdit(DEFAULT_MIN_SEGMENT)
     make_resettable_line_edit(page._minimum_segment_edit, DEFAULT_MIN_SEGMENT)
     page._minimum_segment_edit.setToolTip("Remove vertices closer than this at export; 0 disables")
+    bind_numeric_commit(
+        page._minimum_segment_edit, page._emit_state_changed, minimum=0, length=True
+    )
     cleanup_grid.addWidget(page._minimum_segment_edit, 0, 1)
     cleanup_grid.addWidget(QLabel("Min island (mm²)"), 1, 0)
     page._minimum_area_edit = QLineEdit(DEFAULT_MIN_ISLAND_AREA)
@@ -973,6 +988,7 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._minimum_area_edit.setToolTip(
         "Discard closed pattern islands smaller than this; 0 disables"
     )
+    bind_numeric_commit(page._minimum_area_edit, page._emit_state_changed, minimum=0)
     cleanup_grid.addWidget(page._minimum_area_edit, 1, 1)
     card_layout.addLayout(cleanup_grid)
     page._optimize_paths_cb = QCheckBox("Optimize path order")
@@ -984,13 +1000,14 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     density_row = QHBoxLayout()
     density_row.addWidget(QLabel("Min fill spacing (mm)"))
     page._min_density_edit = QLineEdit("0")
-    page._min_density_edit.setValidator(QDoubleValidator(0, 1e6, 4, page._min_density_edit))
     page._min_density_edit.setFixedWidth(80)
     page._min_density_edit.setToolTip(
         "Warn on the canvas when a region's solved spacing falls below what the "
         "machine can resolve. 0 disables the check."
     )
-    page._min_density_edit.textChanged.connect(page._refresh_preflight_markers)
+    bind_numeric_commit(
+        page._min_density_edit, page._refresh_preflight_markers, minimum=0, length=True
+    )
     density_row.addWidget(page._min_density_edit)
     density_row.addStretch()
     card_layout.addLayout(density_row)
@@ -1039,7 +1056,7 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._geometry_findings.setVisible(False)
     page._geometry_findings.currentItemChanged.connect(page._select_geometry_finding)
     output_layout.addWidget(page._geometry_findings)
-    page._output_section = CollapsibleSection("Output", output_content, expanded=True)
+    page._output_section = CollapsibleSection("Output details", output_content, expanded=False)
     options_layout.addWidget(page._output_section)
 
     # Primary action plus a format picker beside it. The format changes what
@@ -1063,9 +1080,7 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._export_more = QToolButton()
     page._export_more.setText("Format")
     page._export_more.setMinimumSize(72, 38)
-    page._export_more.setToolTip(
-        "Choose the file format; exporting starts only from the Export button"
-    )
+    page._export_more.setToolTip("Choose export format")
     page._export_more.setAccessibleName("Choose export format")
     page._export_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     page._export_menu = QMenu(page._export_more)
@@ -1086,6 +1101,16 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._cancel_generate_btn.setVisible(False)
     page._cancel_generate_btn.clicked.connect(page._cancel_generation)
     export_action_row.addWidget(page._cancel_generate_btn)
+    # Always visible beside the action: what Export will write, in what order,
+    # and whether preflight has anything to say — the detail stays collapsible.
+    page._export_summary = QLabel("")
+    page._export_summary.setWordWrap(True)
+    page._export_summary.setProperty("role", "hint")
+    page._export_summary.setAccessibleName("Export summary")
+    page._export_summary.setToolTip(
+        "Operations and their order are set in Output; cleanup options in Export options"
+    )
+    layout.addWidget(page._export_summary)
     layout.addLayout(export_action_row)
     page._progress = QProgressBar()
     page._progress.setRange(0, 100)

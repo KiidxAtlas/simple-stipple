@@ -147,12 +147,7 @@ class DraftPage(BasePage):
         open_menu.addAction("Import vector into drawing (add)…", self._browse_vector_add)
         open_btn.setMenu(open_menu)
 
-        self._recent_btn = RecentFilesButton(
-            self._settings,
-            KIND_VECTOR,
-            empty_message="No recent vector files.",
-        )
-        self._recent_btn.setToolTip("Pick from recently imported DXF, FVI, or SVG files")
+        self._recent_btn = RecentFilesButton(self._settings, KIND_VECTOR)
         self._recent_btn.fileSelected.connect(self._load_vector)
 
         self._segment_buttons = ExplodeMergeButtons(self._canvas, self._refresh_status)
@@ -228,7 +223,7 @@ class DraftPage(BasePage):
         side_layout = QVBoxLayout(side_panel)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(8)
-        # Wide enough for the export row ("Export Drawing DXF…" + the "Format"
+        # Wide enough for the export row ("Export DXF…" + the "Format"
         # overflow button) so neither button clips against the window edge,
         # matching the ~320px rail convention used by the Trace/Pattern pages.
         side_panel.setMinimumWidth(320)
@@ -289,7 +284,7 @@ class DraftPage(BasePage):
         row = QHBoxLayout(container)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        self._export_btn = QPushButton("Export Drawing DXF…")
+        self._export_btn = QPushButton("Export DXF…")
         self._export_btn.setProperty("role", "primary")
         self._export_btn.setToolTip(
             "Export as DXF; grouped shapes share a layer so a laser runs each group as one job"
@@ -300,7 +295,8 @@ class DraftPage(BasePage):
         overflow.setText("Format")
         overflow.setProperty("role", "overflow")
         overflow.setMinimumWidth(72)
-        overflow.setToolTip("Choose an export format")
+        overflow.setToolTip("Choose export format")
+        overflow.setAccessibleName("Choose export format")
         overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(overflow)
         menu.addAction("Export StarFX FVI…", self._export_fvi)
@@ -586,6 +582,7 @@ class DraftPage(BasePage):
                 "The canvas is empty — draw or drag-create shapes first.",
             )
             return
+        flagged: list[int] = []
         proceed, _report = export_preflight(
             self,
             [list(record["polyline"]) for record in export_plan.records],
@@ -595,9 +592,14 @@ class DraftPage(BasePage):
             profile=machine_profile_from_settings(self._settings),
             operations=tuple(self._canvas.layer_names()),
             show_review=bool(self._settings.get("export_review_enabled", False)),
+            on_show_issues=flagged.extend,
         )
         if not proceed:
-            self._canvas.set_geometry_health_visible(True, announce=True)
+            # "Show Issues" gets its own status message instead of the
+            # overlay announcement.
+            self._canvas.set_geometry_health_visible(True, announce=not flagged)
+            if flagged:
+                self._show_export_issues(export_plan.records, flagged)
             return
 
         out_path = pick_save_file(
@@ -646,6 +648,25 @@ class DraftPage(BasePage):
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Export Failed", exc)
+
+    def _show_export_issues(self, records: list[dict[str, Any]], indices: list[int]) -> None:
+        """Select and frame the shapes behind the preflight's flagged paths.
+
+        Indices address ``records``; dimension records carry no entity.
+        """
+        entity_ids = list(
+            dict.fromkeys(
+                str(records[index]["entity_id"])
+                for index in indices
+                if 0 <= index < len(records) and records[index].get("entity_id")
+            )
+        )
+        if not entity_ids:
+            return
+        self._canvas.set_selection(entity_ids)
+        self._canvas.fit_selection()
+        self._canvas._show_flash(f"{len(entity_ids)} path(s) need attention", 2000)
+        self._refresh_status()
 
     # ── Status ────────────────────────────────────────────────────────────
 

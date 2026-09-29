@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QIntValidator
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from simple_stipple.core.patterns.fill import NULL_PATTERN
 from simple_stipple.core.patterns.geometry import NO_REPEAT, REPEAT_MODES
+from simple_stipple.core.patterns.processing import RETIRED_PATTERNS
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
     DEFAULT_DENSITY_ANGLE,
@@ -34,23 +37,24 @@ from simple_stipple.features.pattern.defaults import (
     DEFAULT_PATTERN_ROTATION,
     DEFAULT_PREVIEW_QUALITY,
 )
+from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input
+from simple_stipple.ui.components.focus import blocked_signals
 from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
+from simple_stipple.ui.components.units import parse_numeric_expression
 
 MAX_PATTERN_DIMENSION_MM = 20.0
 
 PATTERN_SUMMARY_FIELDS: dict[str, tuple[str, str]] = {
-    "Honeycomb": ("_hex_r", "mm"),
-    "Flow Lines": ("_flow_spacing", "mm"),
-    "Gradient Honeycomb": ("_grad_r_max", "mm"),
-    "Stipple Dots": ("_stip_spacing", "mm"),
-    "Grip Stipple": ("_grip_spacing", "mm"),
+    "Basketweave": ("_basket_strip_w", "mm"),
     "Brick": ("_brick_w", "mm"),
+    "Grip Stipple": ("_grip_spacing", "mm"),
+    "Honeycomb": ("_hex_r", "mm"),
+    "Knurling": ("_knurl_pitch", "mm"),
     "Mesh": ("_mesh_spacing", "mm"),
-    "Basketweave": ("_basket_gap", "mm"),
-    "Braid": ("_braid_spacing", "mm"),
-    "Fish Scale": ("_fish_w", "mm"),
+    "Seigaiha": ("_seigaiha_r", "mm"),
+    "Stipple Dots": ("_stip_spacing", "mm"),
+    "Truchet": ("_truchet_tile", "mm"),
     "Voronoi": ("_vor_cells", "cells"),
-    "Topographic": ("_topo_spacing", "mm"),
 }
 
 
@@ -101,11 +105,26 @@ def fill_subtitle(
     return f"{label} · {spacing.strip() or '?'} mm · {target_text}{count_text}", False
 
 
-def zones_subtitle(count: int) -> tuple[str, bool]:
-    """Keep an empty zone group explanatory and populated groups countable."""
+def regions_subtitle(count: int) -> tuple[str, bool]:
+    """Keep an empty Regions group explanatory and treated regions countable."""
     if count == 0:
-        return "Optional · different pattern for a selection", True
-    return f"{count} zone{'s' if count != 1 else ''} assigned", False
+        return "Optional · a different treatment per region", True
+    return f"{count} region{'s' if count != 1 else ''} with a treatment", False
+
+
+def retired_pattern_notice(names: Iterable[object]) -> str | None:
+    """Name the substitution when a preset or workspace uses a retired generator."""
+    swaps = sorted(
+        {
+            (str(name), RETIRED_PATTERNS[str(name)])
+            for name in names
+            if str(name) in RETIRED_PATTERNS
+        }
+    )
+    if not swaps:
+        return None
+    detail = "; ".join(f"{old} → {new}" for old, new in swaps)
+    return f"Retired pattern replaced: {detail}"
 
 
 @dataclass
@@ -546,12 +565,173 @@ def _hint(text: str) -> QLabel:
     return label
 
 
+def _plain_number(value: float, *, integer: bool) -> str:
+    if integer:
+        return str(int(value))
+    return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def numeric_input_error(
+    text: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    integer: bool = False,
+    length: bool = False,
+) -> tuple[float | None, str | None]:
+    """Evaluate a committed numeric entry; return ``(value, None)`` or ``(None, reason)``."""
+    try:
+        value = parse_numeric_expression(text, "mm", is_length=length)
+    except ValueError:
+        return None, "Enter a number or expression, e.g. 25/2"
+    suffix = " mm" if length else ""
+    if integer and value != int(value):
+        return None, "Enter a whole number"
+    if minimum is not None and value < minimum:
+        return None, f"Must be at least {minimum:g}{suffix}"
+    if maximum is not None and value > maximum:
+        return None, f"Must be at most {maximum:g}{suffix}"
+    return value, None
+
+
+def bind_numeric_commit(
+    field: QLineEdit,
+    commit: Callable[[], None],
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    integer: bool = False,
+    length: bool = False,
+) -> None:
+    """Commit a numeric field on ``editingFinished`` (Enter or focus-out) only.
+
+    An invalid entry is rejected in place with a specific reason and never
+    reaches *commit*; an expression such as ``25/2`` is evaluated and written
+    back as the number it produces. The trailing reset button restores the
+    default without focusing the field, so it commits on its own.
+    """
+
+    def finish() -> None:
+        text = field.text()
+        value, reason = numeric_input_error(
+            text, minimum=minimum, maximum=maximum, integer=integer, length=length
+        )
+        if reason is not None:
+            reject_input(field, reason)
+            return
+        clear_line_edit_error(field)
+        try:
+            float(text)
+        except ValueError:
+            assert value is not None
+            field.setText(_plain_number(value, integer=integer))
+        commit()
+
+    field.editingFinished.connect(finish)
+    reset = next(iter(field.findChildren(QToolButton)), None)
+    if reset is not None:
+        # The reset helper restores the default on the next event-loop turn.
+        reset.clicked.connect(lambda: QTimer.singleShot(0, finish))
+
+
+SLIDER_STEPS = 1000
+# Ranges wider than this many decades get a logarithmic slider track.
+_LOG_SLIDER_DECADES = 2.0
+
+
+def _decimals(value: float | str | None) -> int:
+    if value is None:
+        return 0
+    return len(f"{float(value):.6f}".rstrip("0").partition(".")[2])
+
+
+@dataclass(frozen=True)
+class SliderScale:
+    """Map a numeric field onto an integer slider without inventing precision.
+
+    Ranges spanning more than two decades use a logarithmic track so the fine
+    end stays draggable. Slider values round to the coarser of the field's own
+    precision and the slider's step, so a drag never produces noise digits.
+    Text entry is unaffected and stays exact.
+    """
+
+    low: float
+    high: float
+    decimals: int
+    integer: bool = False
+
+    @classmethod
+    def for_field(cls, spec: ParamField) -> SliderScale:
+        default = float(spec.default)
+        low = float(spec.minimum if spec.minimum is not None else min(-360.0, default))
+        high = float(spec.maximum if spec.maximum is not None else max(360.0, default))
+        decimals = max(2, _decimals(spec.default), _decimals(spec.minimum))
+        return cls(low, high, decimals, integer=spec.kind == "int")
+
+    @property
+    def logarithmic(self) -> bool:
+        return self.low > 0 and math.log10(self.high / self.low) > _LOG_SLIDER_DECADES
+
+    @property
+    def steps(self) -> int:
+        span = self.high - self.low
+        if self.integer and not self.logarithmic and span < SLIDER_STEPS:
+            return max(1, round(span))
+        return SLIDER_STEPS
+
+    def position(self, value: float) -> int:
+        value = min(self.high, max(self.low, value))
+        if self.logarithmic:
+            fraction = math.log(value / self.low) / math.log(self.high / self.low)
+        else:
+            fraction = (value - self.low) / max(self.high - self.low, 1e-12)
+        return round(fraction * self.steps)
+
+    def _places(self, value: float) -> int:
+        if self.logarithmic:
+            # Three significant figures, never finer than the field itself.
+            magnitude = math.floor(math.log10(value)) if value > 0 else 0
+            return max(0, min(self.decimals, 2 - magnitude))
+        step = (self.high - self.low) / self.steps
+        return max(0, min(self.decimals, math.ceil(-math.log10(step))))
+
+    def value(self, position: int) -> float:
+        fraction = min(1.0, max(0.0, position / self.steps))
+        if self.logarithmic:
+            raw = self.low * (self.high / self.low) ** fraction
+        else:
+            raw = self.low + (self.high - self.low) * fraction
+        if self.integer:
+            return float(round(raw))
+        return round(raw, self._places(raw))
+
+    def text(self, position: int) -> str:
+        return _plain_number(self.value(position), integer=self.integer)
+
+
+def _range_tooltip(spec: ParamField) -> str:
+    unit = " mm" if "(mm)" in spec.label else "°" if "(°)" in spec.label else ""
+    if spec.minimum is not None and spec.maximum is not None:
+        bounds = f"Range {spec.minimum:g}–{spec.maximum:g}{unit}"
+    elif spec.minimum is not None:
+        bounds = f"Minimum {spec.minimum:g}{unit}"
+    elif spec.maximum is not None:
+        bounds = f"Maximum {spec.maximum:g}{unit}"
+    else:
+        return spec.tooltip
+    return f"{spec.tooltip}\n{bounds}" if spec.tooltip else bounds
+
+
 def build_param_widget(
     page: Any,
     pattern_name: str,
     schedule_preview: Callable[..., None],
 ) -> QWidget:
-    """Build fields from ``PARAM_SPECS`` and bind them to their page attributes."""
+    """Build fields from ``PARAM_SPECS`` and bind them to their page attributes.
+
+    Numeric text commits on Enter or focus-out, so typing never re-solves per
+    keystroke; sliders, checkboxes and combos stay live (the page debounces).
+    """
     widget = QWidget()
     layout = QVBoxLayout(widget)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -559,82 +739,57 @@ def build_param_widget(
 
     for spec in PARAM_SPECS.get(pattern_name, []):
         field: QWidget
+        tooltip = spec.tooltip
         if spec.kind in {"float", "int"}:
+            tooltip = _range_tooltip(spec)
             control = QWidget()
             control_layout = QVBoxLayout(control)
             control_layout.setContentsMargins(0, 0, 0, 0)
             control_layout.setSpacing(4)
             label = QLabel(spec.label)
-            label.setToolTip(spec.tooltip)
+            label.setToolTip(tooltip)
             control_layout.addWidget(label)
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(8)
             field = _numeric_field(spec.default)
             field.setAccessibleName(spec.label)
-            if spec.kind == "int":
-                field.setValidator(
-                    QIntValidator(
-                        int(spec.minimum if spec.minimum is not None else -2_147_483_648),
-                        int(spec.maximum if spec.maximum is not None else 2_147_483_647),
-                        field,
-                    )
-                )
-            else:
-                validator = QDoubleValidator(
-                    float(spec.minimum if spec.minimum is not None else -1e12),
-                    float(spec.maximum if spec.maximum is not None else 1e12),
-                    6,
-                    field,
-                )
-                validator.setNotation(QDoubleValidator.Notation.StandardNotation)
-                field.setValidator(validator)
-            field.textChanged.connect(schedule_preview)
+            bind_numeric_commit(
+                field,
+                schedule_preview,
+                minimum=spec.minimum,
+                maximum=spec.maximum,
+                integer=spec.kind == "int",
+                length="(mm)" in spec.label,
+            )
             row.addWidget(field)
-            # Keep the precise field and a drag-friendly live control in sync.
-            # The page's existing 100 ms preview timer performs the debounce.
+            scale = SliderScale.for_field(spec)
             slider = NoWheelSlider(Qt.Orientation.Horizontal)
             slider.setObjectName(f"{spec.attr.removeprefix('_')}_slider")
             slider.setAccessibleName(f"{spec.label} slider")
-            slider.setRange(0, 1000)
-            default = float(spec.default)
-            low = float(spec.minimum if spec.minimum is not None else min(-360.0, default))
-            high = float(spec.maximum if spec.maximum is not None else max(360.0, default))
-
-            def slider_value(value: float, lo: float = low, hi: float = high) -> int:
-                return round(1000.0 * (max(lo, min(hi, value)) - lo) / max(hi - lo, 1e-12))
-
-            slider.setValue(slider_value(default))
+            slider.setToolTip(tooltip)
+            slider.setRange(0, scale.steps)
+            slider.setValue(scale.position(float(spec.default)))
 
             def from_slider(
-                value: int,
-                target: QLineEdit = field,
-                lo: float = low,
-                hi: float = high,
-                integer: bool = spec.kind == "int",
+                position: int, target: QLineEdit = field, scale: SliderScale = scale
             ) -> None:
-                number = lo + (hi - lo) * value / 1000.0
-                # Sliders are for quick, predictable adjustment. Keep float
-                # values at the same two-decimal precision shown throughout
-                # the Pattern workspace instead of exposing interpolation
-                # artifacts such as ``1.0494274624``.
-                target.setText(str(round(number)) if integer else f"{number:.2f}")
+                target.setText(scale.text(position))
+                clear_line_edit_error(target)
+                schedule_preview()
 
             def from_text(
-                text: str,
-                target: NoWheelSlider = slider,
-                lo: float = low,
-                hi: float = high,
+                text: str, target: NoWheelSlider = slider, scale: SliderScale = scale
             ) -> None:
                 try:
-                    position = round(1000.0 * (float(text) - lo) / max(hi - lo, 1e-12))
+                    value = float(text)
                 except ValueError:
                     return
-                target.blockSignals(True)
-                target.setValue(max(0, min(1000, position)))
-                target.blockSignals(False)
+                with blocked_signals(target):
+                    target.setValue(scale.position(value))
 
             slider.valueChanged.connect(from_slider)
+            # Position sync only; the preview is scheduled by the commit above.
             field.textChanged.connect(from_text)
             slider.setMinimumWidth(90)
             row.addWidget(slider, stretch=1)
@@ -661,7 +816,7 @@ def build_param_widget(
             layout.addWidget(control)
             field = combo
 
-        field.setToolTip(spec.tooltip)
+        field.setToolTip(tooltip)
         setattr(page, spec.attr, field)
         if spec.hint is not None:
             layout.addWidget(_hint(spec.hint))
@@ -731,7 +886,6 @@ def collect_form_state(page: Any) -> dict:
         "scale_w": page._scale_w.text(),
         "scale_h": page._scale_h.text(),
         "ar_locked": page._ar_lock_btn.isChecked(),
-        "include_border": page._include_border_cb.isChecked(),
         "border_fade": page._border_fade.text(),
         "density_mode": page._density_mode_combo.currentText(),
         "density_strength": page._density_strength.text(),
@@ -779,20 +933,22 @@ def restore_form_state(page: Any, payload: dict, *, restore_document_lattice: bo
     (e.g. presets that predate a new field) apply safely.
     Region selection preserves the document lattice even when an older
     region or custom-tile snapshot contains its own origin and seed.
+    A retired generator name opens as its replacement (see
+    :func:`retired_pattern_notice` for telling the user).
     """
     # Merge: current state supplies defaults for any missing keys
     values = collect_form_state(page)
     values.update(payload or {})
 
-    page._refresh_pattern_choices(current=str(values.get("pattern", "— None —")))
-    pattern = str(values.get("pattern", "— None —"))
+    pattern = str(values.get("pattern", NULL_PATTERN))
+    pattern = RETIRED_PATTERNS.get(pattern, pattern)
+    page._refresh_pattern_choices(current=pattern)
     page._pattern_combo.setCurrentText(pattern)
     page._pattern_rotation.setText(str(values.get("rotation", DEFAULT_PATTERN_ROTATION)))
     page._pattern_size_percent.setText(str(values.get("size_percent", "100")))
     page._scale_w.setText(str(values.get("scale_w", "")))
     page._scale_h.setText(str(values.get("scale_h", "")))
     page._ar_lock_btn.setChecked(bool(values.get("ar_locked", True)))
-    page._include_border_cb.setChecked(bool(values.get("include_border", True)))
     page._border_fade.setText(str(values.get("border_fade", DEFAULT_BORDER_FADE)))
     page._density_mode_combo.setCurrentText(str(values.get("density_mode", DEFAULT_DENSITY_MODE)))
     page._density_strength.setText(str(values.get("density_strength", DEFAULT_DENSITY_STRENGTH)))
@@ -843,3 +999,21 @@ def restore_form_state(page: Any, payload: dict, *, restore_document_lattice: bo
                 w.setCurrentText(str(values.get(key, spec.default)))
             else:
                 w.setText(str(values.get(key, spec.default)))
+                clear_line_edit_error(w)
+    # Restored values replace whatever was rejected before, so drop stale marks.
+    for edit in (
+        page._pattern_rotation,
+        page._pattern_size_percent,
+        page._border_fade,
+        page._density_strength,
+        page._density_angle,
+        page._fill_spacing,
+        page._fill_angle,
+        page._fill_inset,
+        page._minimum_segment_edit,
+        page._minimum_area_edit,
+        page._lattice_origin_x,
+        page._lattice_origin_y,
+        page._lattice_seed,
+    ):
+        clear_line_edit_error(edit)

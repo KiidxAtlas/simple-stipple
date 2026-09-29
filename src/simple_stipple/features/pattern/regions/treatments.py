@@ -19,7 +19,7 @@ from copy import deepcopy
 from typing import Any
 
 from simple_stipple.core.patterns.fill import NULL_PATTERN
-from simple_stipple.core.patterns.processing import migrate_pattern_name
+from simple_stipple.core.patterns.processing import RETIRED_PATTERNS, migrate_pattern_name
 from simple_stipple.core.patterns.tiling import Region, build_region_tree
 
 TREATMENT_KINDS = ("none", "pattern", "fill", "pattern_fill", "engrave", "cut")
@@ -190,7 +190,8 @@ def zone_label(page: Any, region_id: str, index: int) -> str:
     detail = TREATMENT_LABELS[kind]
     if kind in {"pattern", "pattern_fill"}:
         treatment = page._treatments.get(region_id) or {}
-        detail = f"{detail}: {treatment.get('pattern_label') or treatment.get('pattern') or NULL_PATTERN}"
+        label = str(treatment.get("pattern_label") or treatment.get("pattern") or NULL_PATTERN)
+        detail = f"{detail}: {RETIRED_PATTERNS.get(label, label)}"
     return f"Region {index + 1} · {detail}"
 
 

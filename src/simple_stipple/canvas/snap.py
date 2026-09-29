@@ -48,7 +48,46 @@ if TYPE_CHECKING:
 
 SnapResult = tuple[float, float, str]
 RelationshipReference = tuple[str, int, tuple[float, float], tuple[float, float]]
+Segment = tuple[tuple[float, float], tuple[float, float]]
 _ACTIVE_DRAW_REFERENCE = "__active_draw__"
+
+
+class _SegmentIndex:
+    """Uniform-grid buckets of edge segments for near-pointer snap queries.
+
+    Cells are at least twice the snap radius, so a query touches at most
+    2×2 cells instead of scanning every edge per dragged point. Segments
+    spanning too many cells go to a small always-checked list.
+    """
+
+    _MAX_CELLS_PER_SEGMENT = 64
+
+    def __init__(self, cell: float) -> None:
+        self._cell = cell
+        self._cells: dict[tuple[int, int], list[Segment]] = {}
+        self._long: list[Segment] = []
+
+    def add(self, seg: Segment) -> None:
+        (ax, ay), (bx, by) = seg
+        c = self._cell
+        x0, x1 = math.floor(min(ax, bx) / c), math.floor(max(ax, bx) / c)
+        y0, y1 = math.floor(min(ay, by) / c), math.floor(max(ay, by) / c)
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > self._MAX_CELLS_PER_SEGMENT:
+            self._long.append(seg)
+            return
+        for ix in range(x0, x1 + 1):
+            for iy in range(y0, y1 + 1):
+                self._cells.setdefault((ix, iy), []).append(seg)
+
+    def near(self, x: float, y: float, radius: float) -> list[Segment]:
+        """Segments whose cells meet the square of *radius* around (x, y);
+        a segment spanning several of those cells may appear more than once."""
+        c = self._cell
+        found = list(self._long)
+        for ix in range(math.floor((x - radius) / c), math.floor((x + radius) / c) + 1):
+            for iy in range(math.floor((y - radius) / c), math.floor((y + radius) / c) + 1):
+                found.extend(self._cells.get((ix, iy), ()))
+        return found
 
 
 class _DragSnapResolver:
@@ -58,39 +97,53 @@ class _DragSnapResolver:
         self._host = host
 
     def _static_snap_geometry(
-        self, *, exclude: set[str] | None = None
-    ) -> tuple[
-        list[tuple[float, float]],
-        list[tuple[tuple[float, float], tuple[float, float]]],
-        list[tuple[float, float]],
-    ]:
-        """Vertices, edge segments, and shape centers of every entity NOT
-        excluded — the universal snap-target set for drag/resize. Centers
-        use the exact meta-defined center for circle/arc/ellipse shapes
-        (so an open arc's center is still a valid target, not just closed
-        polygons) or the centroid for other closed polygons. Shapes on
-        non-active layers are included; only the excluded (usually the
-        selection being manipulated) and hidden entities are skipped.
+        self,
+        region: tuple[float, float, float, float],
+        world_r: float,
+        *,
+        exclude: set[str] | None = None,
+    ) -> tuple[list[tuple[float, float]], _SegmentIndex, list[tuple[float, float]]]:
+        """Vertices, an edge-segment index, and shape centers of every
+        entity NOT excluded that lie within *region* (x0, y0, x1, y1, already
+        grown by the snap radius) — the snap-target set for drag/resize.
+        Only local targets are kept, so edge snapping keeps working on huge
+        documents without scoring every edge per mouse move. Centers use the
+        exact meta-defined center for circle/arc/ellipse shapes (so an open
+        arc's center is still a valid target, not just closed polygons) or
+        the centroid for other closed polygons. Shapes on non-active layers
+        are included; only the excluded (usually the selection being
+        manipulated) and hidden entities are skipped.
         """
         excluded = exclude or set()
+        rx0, ry0, rx1, ry1 = region
         pts: list[tuple[float, float]] = []
-        segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+        segs = _SegmentIndex(max(2.0 * world_r, 1e-9))
         centers: list[tuple[float, float]] = []
         for e in self._host._entities:
             if e.id in excluded or e.hidden:
                 continue
             poly = e.points
-            pts.extend(poly)
             n = len(poly)
             closed = self._host._is_poly_closed(poly)
             seg_count = n if closed else n - 1
-            for k in range(seg_count):
-                segs.append((poly[k], poly[(k + 1) % n]))
+            for k in range(n):
+                ax, ay = poly[k]
+                if rx0 <= ax <= rx1 and ry0 <= ay <= ry1:
+                    pts.append(poly[k])
+                if k >= seg_count:
+                    continue
+                b = poly[(k + 1) % n]
+                bx, by = b
+                if (
+                    max(ax, bx) >= rx0
+                    and min(ax, bx) <= rx1
+                    and max(ay, by) >= ry0
+                    and min(ay, by) <= ry1
+                ):
+                    segs.add((poly[k], b))
             center = entity_center(e)
-            if center is not None:
+            if center is not None and rx0 <= center[0] <= rx1 and ry0 <= center[1] <= ry1:
                 centers.append(center)
-        if len(segs) > 4000:
-            segs = []  # keep drags/resizes responsive on huge documents
         return pts, segs, centers
 
     _EDGE_AXIS_EPS = 1e-6
@@ -120,7 +173,7 @@ class _DragSnapResolver:
         mx: float,
         my: float,
         pts: list[tuple[float, float]],
-        segs: list[tuple[tuple[float, float], tuple[float, float]]],
+        segs: list[Segment],
         centers: list[tuple[float, float]],
         *,
         world_r: float,
@@ -233,8 +286,17 @@ class _DragSnapResolver:
         thresh = _DRAG_SNAP_DIST
         world_r = thresh / scale
 
+        moved_xs = [px + dx for px, _ in pts]
+        moved_ys = [py + dy for _, py in pts]
         static_pts, static_segs, static_centers = self._static_snap_geometry(
-            exclude=self._host._sel
+            (
+                min(moved_xs) - world_r,
+                min(moved_ys) - world_r,
+                max(moved_xs) + world_r,
+                max(moved_ys) + world_r,
+            ),
+            world_r,
+            exclude=self._host._sel,
         )
 
         # Every entry is a genuinely-nearby (real 2D distance <= thresh)
@@ -287,7 +349,7 @@ class _DragSnapResolver:
                 mx,
                 my,
                 static_pts,
-                static_segs,
+                static_segs.near(mx, my, world_r),
                 static_centers,
                 world_r=world_r,
                 scale=scale,
@@ -392,13 +454,15 @@ class _DragSnapResolver:
         thresh = _DRAG_SNAP_DIST
         world_r = thresh / scale
         static_pts, static_segs, static_centers = self._static_snap_geometry(
-            exclude=self._host._sel
+            (wx - world_r, wy - world_r, wx + world_r, wy + world_r),
+            world_r,
+            exclude=self._host._sel,
         )
         candidate = self._nearest_snap_candidate(
             wx,
             wy,
             static_pts,
-            static_segs,
+            static_segs.near(wx, wy, world_r),
             static_centers,
             world_r=world_r,
             scale=scale,

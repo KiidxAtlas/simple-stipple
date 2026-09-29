@@ -4,42 +4,51 @@
 </h2>
 
 <h3 class="subheading">Overview</h3>
-<p>The Convert page provides a suite of file conversion and repair utilities for working with DXF, SVG, and FVI (Fiverr Vector Interface) files.</p>
+<p>The Convert page converts and repairs DXF, SVG, and FVI files. Choose a task in the left <strong>Settings</strong> pane, set the input in the <strong>INPUT</strong> bar at the top (type a path, choose <strong>Browse…</strong>, drop a file or folder, or pick from <strong>Recent files</strong>), then run the task with the button at the bottom of the pane. In a narrow window the Settings pane folds into a drawer with a Show/Hide button.</p>
 
-<h3 class="subheading">Sub-tabs</h3>
+<h3 class="subheading">Tasks</h3>
 
-<h4 class='panel-title'>FVI Converter</h4>
-<p>Convert FIV (Fiverr Vector Interface) files to DXF format for laser cutting.</p>
+<h4 class='panel-title'>FVI to DXF</h4>
 <ul>
-    <li><strong>Single file mode:</strong> Convert one FVI file at a time.</li>
-    <li><strong>Folder (batch) mode:</strong> Convert all FVI files in a folder at once.</li>
-    <li><strong>Output path:</strong> Optional — blank means output alongside source files.</li>
+    <li><strong>FVI</strong> is the FiberStar/StarFX laser vector format.</li>
+    <li><strong>Single file</strong> or <strong>Folder (batch)</strong> mode.</li>
+    <li><strong>Output:</strong> optional folder — blank writes each DXF beside its source.</li>
 </ul>
 
-<h4 class='panel-title'>SVG ↔ DXF Converter</h4>
-<p>Convert between SVG and DXF formats.</p>
+<h4 class='panel-title'>Repair DXF</h4>
 <ul>
-    <li><strong>SVG to DXF:</strong> Convert SVG vector paths to DXF polylines.</li>
-    <li><strong>DXF to SVG:</strong> Convert DXF polylines to SVG paths.</li>
+    <li><strong>Safe repair</strong> fixes only damaged polylines and keeps layers and native entities. <strong>Flatten for laser</strong> rebuilds supported geometry as polylines on layer 0.</li>
+    <li>Repairs close near-open paths, simplify redundant vertices, and discard degenerate geometry.</li>
+    <li><strong>Output:</strong> optional — blank writes a non-destructive <code>-fixed</code> copy (a sibling <code>-fixed</code> folder in batch mode). A batch output folder must be outside the source folder.</li>
 </ul>
 
-<h4 class='panel-title'>DXF Repair</h4>
-<p>Repair and fix common DXF issues:</p>
+<h4 class='panel-title'>DXF to SVG / SVG to DXF</h4>
 <ul>
-    <li><strong>Single or batch:</strong> Repair one file or every DXF directly inside a selected folder.</li>
-    <li><strong>Fix open polylines:</strong> Attempt to close unclosed paths.</li>
-    <li><strong>Remove duplicates:</strong> Eliminate duplicate vertices and overlapping segments.</li>
-    <li><strong>Simplify geometry:</strong> Reduce unnecessary vertices while preserving shape.</li>
-    <li><strong>Important:</strong> Repair is a normalized export: supported entities are flattened to polylines and written on layer 0.</li>
+    <li><strong>DXF to SVG</strong> exports DXF polylines as an SVG graphic; <strong>SVG to DXF</strong> converts SVG paths to DXF polylines. Unsupported curved paths or SVG features are listed in the result.</li>
+    <li>Batch mode needs an output folder.</li>
 </ul>
 
-<h3 class="subheading">Status Messages</h3>
-<p>Each sub-tab displays status messages with color coding:</p>
+<h3 class="subheading">Folder (batch) mode</h3>
 <ul>
-    <li><strong style="color:#3fb950;">Green:</strong> Operation completed successfully.</li>
-    <li><strong style="color:#f85149;">Red:</strong> Operation failed — check the message for details.</li>
-    <li><strong style="color:#8b949e;">Gray:</strong> Neutral status information.</li>
+    <li><strong>Include subfolders</strong> is shown under the mode buttons for every task and takes effect in Folder (batch) mode. When on (the default) files are found in all nested folders and the folder structure is kept in the output; when off only the top folder is used. The status line states the choice when you switch to batch mode or toggle it, and the log and final summary repeat it.</li>
+    <li>If any outputs already exist, a confirmation says how many will be replaced; <strong>Show Details</strong> lists every file.</li>
+    <li>The progress bar under the run button fills file by file (a single file shows a moving bar), and the status line shows the current file and elapsed time. <strong>Options ▸ Cancel Active Job</strong> stops after the current file and keeps finished outputs.</li>
+    <li>When the run ends the status line under the run button reads <strong>N converted, M failed</strong>, with warnings or skips. If a file failed, the <strong>File results</strong> list opens with the first failure selected and its message shown in the status line.</li>
+</ul>
+
+<h3 class="subheading">Results</h3>
+<ul>
+    <li><strong>File results</strong> keeps the file list beside the selected output preview and full <strong>LOG</strong>. Selecting a row shows its status, paths, and message, and loads its preview when it has geometry. <strong>Open output</strong> opens the selected successful file; <strong>Open in Draft</strong> and <strong>Use in Pattern</strong> send that selected geometry to the chosen page. <strong>Retry failed</strong> reruns failed files only.</li>
+    <li>The <strong>LOG</strong> panel records each file, warnings, and the batch summary.</li>
+</ul>
+
+<h3 class="subheading">Status Colors</h3>
+<ul>
+    <li><strong style="color:#3fb950;">Green:</strong> completed without problems.</li>
+    <li><strong style="color:#e3b341;">Amber:</strong> completed with warnings, skips, or some failed files.</li>
+    <li><strong style="color:#f85149;">Red:</strong> the operation failed — the message says why.</li>
+    <li><strong style="color:#8b949e;">Gray:</strong> progress and neutral information.</li>
 </ul>
 
 <h3 class="subheading">Ignored Entities</h3>
-<p>When converting, some DXF entities may be ignored (unsupported types). The status message shows a count and summary of ignored entities.</p>
+<p>Unsupported DXF entities are skipped during conversion; the result shows how many were ignored and of which types.</p>

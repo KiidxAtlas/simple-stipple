@@ -20,7 +20,7 @@ from PySide6.QtGui import (
     QPolygonF,
     QTransform,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 from simple_stipple.canvas.constants import (
     BADGE_BG as _BADGE_BG,
@@ -35,7 +35,6 @@ from simple_stipple.canvas.constants import (
     DIM,
     POLY,
     Q_BG,
-    SEL,
 )
 from simple_stipple.canvas.constants import (
     DRAW_COLOR as _DRAW_COLOR,
@@ -94,7 +93,7 @@ from simple_stipple.core.cad.geometry import (
     build_rounded_rect_poly,
     build_spline_poly,
     build_star_poly,
-    shape_slot,
+    shape_slot_for_bounds,
 )
 from simple_stipple.core.document.geometry import angle_between_rays, polyline_is_closed
 from simple_stipple.ui.components.units import (
@@ -131,6 +130,18 @@ class CanvasRenderer:
     def __init__(self, host) -> None:
         self._host = host
         self._dense_preview = DensePreviewRenderer(host)
+
+    @staticmethod
+    def _theme_tokens() -> dict[str, str]:
+        """Resolve semantic accents from the active application theme."""
+        from simple_stipple.ui.style import resolve_tokens
+
+        app = QApplication.instance()
+        appearance = app.property("appearance") if app is not None else "dark"
+        high_contrast = app.property("highContrast") if app is not None else False
+        return resolve_tokens(
+            appearance=str(appearance or "dark"), high_contrast=bool(high_contrast)
+        )
 
     # These properties preserve the established renderer cache inspection
     # seam while the cache's implementation has a focused render-only home.
@@ -312,6 +323,7 @@ class CanvasRenderer:
         if self._host._dense_preview_render and len(self._host._entities) >= 500:
             self._paint_dense_preview_polys(painter, visible)
             return
+        tokens = self._theme_tokens()
         for ent in self._host._entities:
             poly = ent.points
             if ent.hidden:
@@ -352,7 +364,7 @@ class CanvasRenderer:
             is_locked = ent.locked
             layer_color = self._host._layer_colors.get(ent.layer) if ent.layer is not None else None
             if sel:
-                color = QColor(SEL)
+                color = QColor(tokens["accent"])
             elif ent.id in self._host._accent_polys:
                 color = QColor(self._host._accent_polys[ent.id])
             elif is_construction:
@@ -365,7 +377,7 @@ class CanvasRenderer:
                 color = QColor("#8b949e")
             hovered = not sel and ent.id == self._host._hover_poly and self._host._mode == "select"
             if hovered:
-                color = QColor("#79c0ff")
+                color = QColor(tokens["accent_hover"])
             lw = 2.0 if sel or hovered else (1.2 if is_construction else 1.5)
             pen = QPen(color, lw)
             if is_construction or is_locked:
@@ -704,6 +716,7 @@ class CanvasRenderer:
             y += spacing
 
     def _paint_edit_handles(self, painter: QPainter) -> None:
+        tokens = self._theme_tokens()
         for entity in self._host._entities:
             eid = entity.id
             if not self._host._entity_shows_point_handles_by_id(eid):
@@ -724,7 +737,7 @@ class CanvasRenderer:
                     color = _HANDLE_HOVER
                     r = _HANDLE_R + 1
                 elif is_selected:
-                    color = QColor("#79c0ff")
+                    color = QColor(tokens["accent_hover"])
                     r = _HANDLE_R + 1
                 else:
                     color = _HANDLE
@@ -947,7 +960,7 @@ class CanvasRenderer:
             radius = math.hypot(ex - sx, ey - sy)
             poly = build_star_poly(sx, sy, radius, self._host._draw_star_points)
         elif self._host._draw_primitive == "slot":
-            poly = [(px + cx, py + cy) for px, py in shape_slot(w, h)]
+            poly = [(px + cx, py + cy) for px, py in shape_slot_for_bounds(w, h)]
         elif self._host._draw_primitive in getattr(self._host, "_PROCEDURAL_QUICK_SHAPES", set()):
             preview_paths = self._host._build_drag_procedural_shapes(
                 self._host._draw_primitive, w, h, cx, cy
@@ -1358,7 +1371,13 @@ class CanvasRenderer:
             )
         else:
             rotate_center = QPointF(mid_x, max(18.0, top - 42.0))
-
+        margin = 24.0
+        rotate_center.setX(
+            min(max(rotate_center.x(), margin), max(margin, self._host.width() - margin))
+        )
+        rotate_center.setY(
+            min(max(rotate_center.y(), margin), max(margin, self._host.height() - margin))
+        )
         self._host._gizmo_scale_rect = None
         rotate_visual_rect = QRectF(
             rotate_center.x() - 10,
@@ -1369,7 +1388,8 @@ class CanvasRenderer:
         self._host._gizmo_rotate_rect = rotate_visual_rect.adjusted(-11, -11, 11, 11)
 
         # Selection frame with improved styling.
-        frame_pen = QPen(QColor("#58a6ff"), 1.2)
+        tokens = self._theme_tokens()
+        frame_pen = QPen(QColor(tokens["accent"]), 1.2)
         painter.setPen(frame_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         if not self._host._selection_follows_geometry:
@@ -1400,8 +1420,8 @@ class CanvasRenderer:
 
         # Familiar transform handles: square corners resize both axes;
         # compact edge handles resize one axis. Hit targets remain generous.
-        handle_pen = QPen(QColor("#79c0ff"), 1.5)
-        handle_brush = QBrush(QColor("#1f6feb"))
+        handle_pen = QPen(QColor(tokens["accent"]), 1.5)
+        handle_brush = QBrush(QColor(tokens["accent_soft"]))
         painter.setPen(handle_pen)
         painter.setBrush(handle_brush)
 
@@ -1409,6 +1429,11 @@ class CanvasRenderer:
             rect = QRectF(hx - hs, hy - hs, hs * 2, hs * 2)
             # 28px interaction target around a compact 12px visual handle.
             self._host._gizmo_handle_rects.append((name, rect.adjusted(-8, -8, 8, 8)))
+            hovered = getattr(self._host, "_gizmo_hover", None) == f"scale-{name}"
+            painter.setPen(
+                QPen(QColor(tokens["accent_hover"] if hovered else tokens["accent"]), 1.5)
+            )
+            painter.setBrush(QBrush(QColor(tokens["accent"] if hovered else tokens["accent_soft"])))
             if len(name) == 2:
                 painter.drawEllipse(rect)
             elif name in ("n", "s"):
@@ -1416,54 +1441,47 @@ class CanvasRenderer:
             else:
                 painter.drawRoundedRect(rect.adjusted(2, -2, -2, 2), 2, 2)
 
-        # Rotate handle: orange circle with rotation icon.
-        rotate_pen = QPen(QColor("#f5a623"), 1.5)
-        rotate_brush = QBrush(QColor("#3a2b16"))
+        # Rotate handle uses the focus token to distinguish it from resize.
+        rotate_hovered = getattr(self._host, "_gizmo_hover", None) == "rotate"
+        rotate_pen = QPen(
+            QColor(tokens["accent_hover"] if rotate_hovered else tokens["focus"]), 1.5
+        )
+        rotate_brush = QBrush(QColor(tokens["bg_surface"]))
         painter.setPen(rotate_pen)
         painter.setBrush(rotate_brush)
         painter.drawEllipse(rotate_visual_rect)
         painter.setFont(_FONT_HEL_9)
-        painter.setPen(QColor("#ffd28a"))
+        painter.setPen(QColor(tokens["text"]))
         painter.drawText(rotate_visual_rect, Qt.AlignmentFlag.AlignCenter, "↻")
 
         # Dashed line from selection top-center to rotate handle.
-        painter.setPen(QPen(QColor("#4a9eff"), 1.0, Qt.PenStyle.DashLine))
+        painter.setPen(QPen(QColor(tokens["accent"]), 1.0, Qt.PenStyle.DashLine))
         rotate_link = QPointF(*(local_points["n"] if local_points is not None else (mid_x, top)))
         painter.drawLine(rotate_link, QPointF(rotate_center.x(), rotate_center.y()))
 
-        # Move handle: a small 4-way arrow icon at the selection's center,
-        # offering an unambiguous "grab here to drag" target distinct from
-        # clicking the shape body (useful for thin/overlapping shapes).
-        move_size = 14.0
-        self._host._gizmo_move_rect = QRectF(mid_x - 20, mid_y - 20, 40, 40)
-        move_pen = QPen(QColor("#79c0ff"), 1.5)
-        move_brush = QBrush(QColor(13, 17, 23, 235))
-        painter.setPen(move_pen)
-        painter.setBrush(move_brush)
-        painter.drawEllipse(QPointF(mid_x, mid_y), move_size, move_size)
-        painter.setPen(QPen(QColor("#79c0ff"), 1.6))
-        arm = move_size * 0.62
-        head = move_size * 0.3
-        # Four short arrow arms pointing N/E/S/W from the center.
-        for ddx, ddy in ((0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)):
-            tip_x, tip_y = mid_x + ddx * arm, mid_y + ddy * arm
-            painter.drawLine(QPointF(mid_x, mid_y), QPointF(tip_x, tip_y))
-            # Perpendicular arrowhead ticks.
-            perp_x, perp_y = -ddy, ddx
-            painter.drawLine(
-                QPointF(tip_x, tip_y),
-                QPointF(
-                    tip_x - ddx * head + perp_x * head,
-                    tip_y - ddy * head + perp_y * head,
-                ),
-            )
-            painter.drawLine(
-                QPointF(tip_x, tip_y),
-                QPointF(
-                    tip_x - ddx * head - perp_x * head,
-                    tip_y - ddy * head - perp_y * head,
-                ),
-            )
+        # Retain a generous center hit target, but keep its visual quiet until
+        # hover so it does not mask geometry.
+        move_size = 8.0
+        self._host._gizmo_move_rect = QRectF(mid_x - 18, mid_y - 18, 36, 36)
+        if getattr(self._host, "_gizmo_hover", None) == "move":
+            painter.setPen(QPen(QColor(tokens["accent"]), 1.5))
+            painter.setBrush(QBrush(QColor(tokens["bg_surface"])))
+            painter.drawEllipse(QPointF(mid_x, mid_y), move_size, move_size)
+            painter.setPen(QPen(QColor(tokens["text"]), 1.4))
+            arm = move_size * 0.62
+            head = move_size * 0.3
+            for ddx, ddy in ((0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)):
+                tip_x, tip_y = mid_x + ddx * arm, mid_y + ddy * arm
+                painter.drawLine(QPointF(mid_x, mid_y), QPointF(tip_x, tip_y))
+                perp_x, perp_y = -ddy, ddx
+                for sign in (-1, 1):
+                    painter.drawLine(
+                        QPointF(tip_x, tip_y),
+                        QPointF(
+                            tip_x - ddx * head + sign * perp_x * head,
+                            tip_y - ddy * head + sign * perp_y * head,
+                        ),
+                    )
 
     def _rotated_gizmo_frame(
         self, sel_pts: list[tuple[float, float]]
@@ -1547,7 +1565,7 @@ class CanvasRenderer:
         bx1, by1 = self._host._w2c(max(xs), min(ys))
         if self._host._show_selection_bbox:
             pad = 4
-            pen = QPen(QColor(SEL), 1.0, Qt.PenStyle.DashLine)
+            pen = QPen(QColor(self._theme_tokens()["accent"]), 1.0, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(
@@ -2031,10 +2049,10 @@ class CanvasRenderer:
                 midpoint_x - 42,
                 badge_y,
                 f"L {_fmt_len(length, self._host._unit_system)}",
-                10,
+                9,
             )
             self._host._sel_badge_a_rect = self._draw_badge(
-                painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 10
+                painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 9
             )
             return
         self._host._sel_badge_w_rect = self._draw_badge(
@@ -2042,14 +2060,14 @@ class CanvasRenderer:
             midpoint_x,
             min(canvas_y0, canvas_y1) - 18,
             f"W {_fmt_len(x1 - x0, self._host._unit_system)}",
-            10,
+            9,
         )
         self._host._sel_badge_h_rect = self._draw_badge(
             painter,
             max(canvas_x0, canvas_x1) + 34,
             midpoint_y,
             f"H {_fmt_len(y1 - y0, self._host._unit_system)}",
-            10,
+            9,
         )
 
     def paintEvent(self, event, /):

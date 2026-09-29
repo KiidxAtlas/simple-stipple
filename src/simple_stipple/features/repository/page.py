@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 from datetime import datetime
 from html import escape
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -37,12 +38,90 @@ from simple_stipple.ui.components.layout import (
 )
 from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs.files import reveal_label
-from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
+from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK, STATUS_WARN
 
 # Local git probes (config, status) run on the GUI thread; the first git
 # launch on a fresh account can be slow (macOS xcrun shim, Windows AV scans),
 # so keep this generous enough to not misreport a working install.
 _GIT_PROBE_TIMEOUT_S = 15
+_GIT_STEP_TIMEOUT_S = 30
+
+# (output fragments, plain-language cause) checked in order against a failed
+# git step's output; the first match names the problem in the step status.
+_GIT_FAILURE_CAUSES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("cancelled",), "cancelled"),
+    (("timed out",), f"timed out after {_GIT_STEP_TIMEOUT_S} s — check the network connection"),
+    (
+        (
+            "authentication failed",
+            "permission denied (publickey",
+            "could not read username",
+            "invalid username or password",
+            "access denied",
+            "the requested url returned error: 403",
+        ),
+        "authentication failed — check your Git credentials",
+    ),
+    (
+        ("no configured push destination", "does not appear to be a git repository"),
+        "no remote configured — add one with git remote add origin URL",
+    ),
+    (
+        ("no upstream", "no tracking information"),
+        "no upstream branch — set one with git push -u origin BRANCH",
+    ),
+    (
+        ("conflict", "unmerged", "would be overwritten"),
+        "conflicting changes — resolve them, then commit",
+    ),
+    (
+        ("[rejected]", "non-fast-forward", "fetch first"),
+        "the remote has newer commits — pull first",
+    ),
+    (
+        (
+            "could not resolve host",
+            "unable to access",
+            "connection refused",
+            "connection timed out",
+            "network is unreachable",
+            "could not read from remote repository",
+        ),
+        "network error — the remote could not be reached",
+    ),
+)
+
+
+def git_failure_summary(results: list[tuple[list[str], bool, str]]) -> str:
+    """Name why a git run failed, quoting the key line of its output."""
+    failed = next((result for result in results if not result[1]), None)
+    if failed is None:
+        return "unknown error"
+    args, _ok, output = failed
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    lowered = [line.lower() for line in lines]
+    match = next(
+        (
+            (label, index)
+            for needles, label in _GIT_FAILURE_CAUSES
+            for index, line in enumerate(lowered)
+            if any(needle in line for needle in needles)
+        ),
+        None,
+    )
+    if match is not None and match[0] == "cancelled":
+        return "cancelled"
+    if match is not None:
+        key_line = lines[match[1]]
+    else:
+        key_line = next(
+            (line for line in lines if line.lower().startswith(("fatal:", "error:", "!"))),
+            lines[-1] if lines else f"git {args[0] if args else ''} failed",
+        )
+    key_line = key_line.rstrip(".")
+    if len(key_line) > 160:
+        key_line = key_line[:159] + "…"
+    return key_line if match is None else f"{match[0]} ({key_line})"
 
 
 class RepoPage(BasePage):
@@ -102,12 +181,11 @@ class RepoPage(BasePage):
         )
         self._auto_sync_check.toggled.connect(self.autoSyncToggled)
         left.addWidget(self._auto_sync_check)
-        self._auto_sync_status = QLabel(
-            "Commits and pushes local changes once edits pause, and pulls remote changes."
-        )
+        self._auto_sync_status = QLabel()
         self._auto_sync_status.setProperty("role", "hint")
         self._auto_sync_status.setWordWrap(True)
         left.addWidget(self._auto_sync_status)
+        self.set_auto_sync_status("Off")
 
         workflow_title = QLabel("Repository workflow")
         workflow_title.setProperty("role", "section-label")
@@ -125,18 +203,14 @@ class RepoPage(BasePage):
         pull_card_lbl.setProperty("role", "eyebrow")
         pull_card_layout.addWidget(pull_card_lbl)
         self._pull_btn = QPushButton("Pull")
+        pull_hint = QLabel("Start here to bring remote changes into this workspace.")
+        pull_hint.setProperty("role", "hint")
+        pull_hint.setWordWrap(True)
+        pull_card_layout.addWidget(pull_hint)
         self._pull_btn.setMinimumHeight(34)
         self._pull_btn.setToolTip("Pull latest changes from remote")
         self._pull_btn.clicked.connect(self._git_pull)
         pull_card_layout.addWidget(self._pull_btn)
-        self._force_pull_btn = QPushButton("Reset to Remote…")
-        self._force_pull_btn.setMinimumHeight(34)
-        self._force_pull_btn.setProperty("role", "danger")
-        self._force_pull_btn.setToolTip(
-            "Discard local tracked and untracked changes and match the remote tracking branch"
-        )
-        self._force_pull_btn.clicked.connect(self._git_force_pull)
-        pull_card_layout.addWidget(self._force_pull_btn)
         self._pull_status = QLabel("")
         self._pull_status.setWordWrap(True)
         pull_card_layout.addWidget(self._pull_status)
@@ -151,6 +225,10 @@ class RepoPage(BasePage):
         commit_card_lbl = QLabel("2  REVIEW AND COMMIT")
         commit_card_lbl.setProperty("role", "eyebrow")
         commit_card_layout.addWidget(commit_card_lbl)
+        commit_hint = QLabel("Review your changes, enter a commit message, then commit.")
+        commit_hint.setProperty("role", "hint")
+        commit_hint.setWordWrap(True)
+        commit_card_layout.addWidget(commit_hint)
         self._commit_msg = QLineEdit("Update project files")
         self._commit_msg.setPlaceholderText("Commit message…")
         self._commit_msg.textChanged.connect(self._emit_state_changed)
@@ -174,6 +252,10 @@ class RepoPage(BasePage):
         push_card_lbl = QLabel("3  PUSH TO REMOTE")
         push_card_lbl.setProperty("role", "eyebrow")
         push_card_layout.addWidget(push_card_lbl)
+        push_hint = QLabel("Push after committing; the branch needs a configured upstream remote.")
+        push_hint.setProperty("role", "hint")
+        push_hint.setWordWrap(True)
+        push_card_layout.addWidget(push_hint)
         self._push_btn = QPushButton("Push")
         self._push_btn.setMinimumHeight(34)
         self._push_btn.setProperty("role", "primary")
@@ -186,6 +268,29 @@ class RepoPage(BasePage):
         cards_layout.addWidget(push_card)
 
         left.addLayout(cards_layout)
+
+        danger_card = surface_frame("panel")
+        danger_layout = QVBoxLayout(danger_card)
+        danger_layout.setContentsMargins(8, 8, 8, 8)
+        danger_layout.setSpacing(6)
+        danger_label = QLabel("DESTRUCTIVE ACTIONS")
+        danger_label.setProperty("role", "section-label")
+        danger_layout.addWidget(danger_label)
+        danger_hint = QLabel(
+            "Reset discards local changes and replaces them with the remote state."
+        )
+        danger_hint.setProperty("role", "hint")
+        danger_hint.setWordWrap(True)
+        danger_layout.addWidget(danger_hint)
+        self._force_pull_btn = QPushButton("Reset to Remote…")
+        self._force_pull_btn.setMinimumHeight(34)
+        self._force_pull_btn.setProperty("role", "danger")
+        self._force_pull_btn.setToolTip(
+            "Discard local tracked and untracked changes and match the remote tracking branch"
+        )
+        self._force_pull_btn.clicked.connect(self._git_force_pull)
+        danger_layout.addWidget(self._force_pull_btn)
+        left.addWidget(danger_card)
 
         # Secondary actions
         secondary = QHBoxLayout()
@@ -236,6 +341,11 @@ class RepoPage(BasePage):
         right.addWidget(self._log, stretch=1)
 
         self._splitter = content_splitter(self._left_panel, right_w, sizes=(380, 720))
+        self._splitter.setCollapsible(0, True)
+        self._splitter.set_responsive_secondary(0, "Settings")
+        self._splitter.add_drawer_toggle_to(log_header)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
         root.addWidget(self._splitter, stretch=1)
         self._refresh_repo_state()
 
@@ -249,24 +359,41 @@ class RepoPage(BasePage):
         save_settings(self._settings)
         self._emit_state_changed()
 
-    def _repo_dir(self, *, show_dialogs: bool = True) -> Path | None:
+    def _repo_problem(self) -> str | None:
+        """Why the selected folder cannot be used, or None when it is a git checkout."""
         text = self._dir_edit.text().strip()
         if not text:
-            if show_dialogs:
-                QMessageBox.information(self, "Repository", "Select a repository directory first.")
-            return None
-        p = Path(text)
-        if not p.exists() or not p.is_dir():
-            if show_dialogs:
-                QMessageBox.warning(self, "Repository", "Directory does not exist.")
-            return None
-        if not (p / ".git").exists():
-            if show_dialogs:
-                QMessageBox.warning(
-                    self, "Repository", "Selected directory is not a git repository."
-                )
-            return None
-        return p
+            return "Choose a repository folder to enable git actions."
+        path = Path(text).expanduser()
+        try:
+            if not path.exists():
+                return f"Folder not found: {path}. Check the path or choose Browse…"
+            if not path.is_dir():
+                return f"{path.name} is a file, not a folder. Choose the folder that holds it."
+            if not os.access(path, os.R_OK | os.X_OK):
+                return f"No permission to open {path}. Check the folder's access rights."
+            if (path / ".git").exists():
+                return None
+            root = next((parent for parent in path.parents if (parent / ".git").exists()), None)
+        except PermissionError:
+            return f"No permission to open {path}. Check the folder's access rights."
+        if root is not None:
+            return (
+                f"{path.name} is inside a Git repository but is not its root. "
+                f"Choose {root} instead."
+            )
+        return (
+            f"{path.name} is not a Git repository (it has no .git folder). "
+            "Choose the repository's root folder."
+        )
+
+    def _repo_dir(self, *, show_dialogs: bool = True) -> Path | None:
+        problem = self._repo_problem()
+        if problem is None:
+            return Path(self._dir_edit.text().strip()).expanduser()
+        if show_dialogs:
+            QMessageBox.warning(self, "Repository", problem)
+        return None
 
     def _refresh_repo_state(self) -> None:
         repo = self._repo_dir(show_dialogs=False)
@@ -274,15 +401,12 @@ class RepoPage(BasePage):
         repo_key = str(repo.resolve()) if repo is not None else None
         if repo_key != self._workflow_repo_key:
             self._workflow_repo_key = repo_key
-        if not self._dir_edit.text().strip():
-            message = "Choose a repository folder to enable git actions."
-            color = STATUS_NEUTRAL
-        elif repo is not None:
+        if repo is not None:
             message = f"Ready — {repo.name} is a valid git repository."
             color = STATUS_OK
         else:
-            message = "Selected folder is missing or is not a git repository."
-            color = STATUS_ERR
+            message = self._repo_problem() or ""
+            color = STATUS_NEUTRAL if not self._dir_edit.text().strip() else STATUS_ERR
         self._set_step_status(self._repo_status, message, color)
         self._open_btn.setEnabled(ready)
         # Git-action buttons stay disabled while a background pull/commit/
@@ -300,7 +424,16 @@ class RepoPage(BasePage):
 
     @staticmethod
     def _set_step_status(label: QLabel, text: str, color: str) -> None:
+        # Git output can contain <placeholders> that Qt would parse as markup.
+        label.setTextFormat(Qt.TextFormat.PlainText)
         set_status_label(label, text, color)
+
+    def _set_step_failure(
+        self, label: QLabel, step: str, results: list[tuple[list[str], bool, str]]
+    ) -> None:
+        summary = git_failure_summary(results)
+        tone = STATUS_WARN if summary == "cancelled" else STATUS_ERR
+        self._set_step_status(label, f"{step} failed: {summary}. Details in Git output.", tone)
 
     def _append_log_line(self, text: str) -> None:
         lower = text.lower()
@@ -365,9 +498,11 @@ class RepoPage(BasePage):
                         creationflags=NO_CONSOLE_WINDOW,
                     )
                     self._git_process = proc
-                    stdout, stderr = proc.communicate(timeout=30)
+                    stdout, stderr = proc.communicate(timeout=_GIT_STEP_TIMEOUT_S)
                     out = (stdout or "") + ("\n" + stderr if stderr else "")
                     ok = proc.returncode == 0 and not self._git_cancel.is_set()
+                    if self._git_cancel.is_set():
+                        out += "\nCancelled"
                 except subprocess.TimeoutExpired:
                     proc.kill()
                     stdout, stderr = proc.communicate()
@@ -417,10 +552,12 @@ class RepoPage(BasePage):
     def _git_pull(self) -> None:
         def done(results: list[tuple[list[str], bool, str]]) -> None:
             ok = results[-1][1] if results else False
-            if ok:
+            if not ok:
+                self._set_step_failure(self._pull_status, "Pull", results)
+            elif "already up to date" in results[-1][2].lower():
                 self._set_step_status(self._pull_status, "Up to date", STATUS_OK)
             else:
-                self._set_step_status(self._pull_status, "Pull failed — check log", STATUS_ERR)
+                self._set_step_status(self._pull_status, "Pulled remote changes", STATUS_OK)
 
         self._run_git_async([["pull"]], done)
 
@@ -451,11 +588,7 @@ class RepoPage(BasePage):
             if ok:
                 self._set_step_status(self._pull_status, "Reset to remote HEAD", STATUS_OK)
             else:
-                self._set_step_status(
-                    self._pull_status,
-                    "Force pull failed — check log",
-                    STATUS_ERR,
-                )
+                self._set_step_failure(self._pull_status, "Reset to remote", results)
 
         self._run_git_async(
             [
@@ -533,16 +666,17 @@ class RepoPage(BasePage):
             return
 
         def done(results: list[tuple[list[str], bool, str]]) -> None:
-            if len(results) < len(setup_commands) + 2:
-                return  # "git add" itself failed; already logged
             _, ok, out = results[-1]
-            if not ok and "nothing to commit" in out.lower():
+            if len(results) < len(setup_commands) + 2:
+                # Author setup or "git add" failed before the commit ran.
+                self._set_step_failure(self._commit_status, "Commit", results)
+            elif not ok and "nothing to commit" in out.lower():
                 self._set_step_status(self._commit_status, "Nothing to commit", STATUS_NEUTRAL)
                 QMessageBox.information(self, "Commit", "Nothing to commit.")
             elif ok:
                 self._set_step_status(self._commit_status, "Committed", STATUS_OK)
             else:
-                self._set_step_status(self._commit_status, "Commit failed — check log", STATUS_ERR)
+                self._set_step_failure(self._commit_status, "Commit", results)
 
         self._run_git_async([*setup_commands, ["add", "-A"], ["commit", "-m", msg]], done)
 
@@ -552,7 +686,7 @@ class RepoPage(BasePage):
             if ok:
                 self._set_step_status(self._push_status, "Pushed", STATUS_OK)
             else:
-                self._set_step_status(self._push_status, "Push failed — check log", STATUS_ERR)
+                self._set_step_failure(self._push_status, "Push", results)
 
         self._run_git_async([["push"]], done)
 
@@ -609,9 +743,15 @@ class RepoPage(BasePage):
         """Mirror the Auto sync setting without re-emitting ``autoSyncToggled``."""
         with blocked_signals(self._auto_sync_check):
             self._auto_sync_check.setChecked(enabled)
+        if not enabled:
+            self.set_auto_sync_status("Off")
+        elif self._auto_sync_state == "Off":
+            self.set_auto_sync_status("On — waiting for edits")
 
     def set_auto_sync_status(self, text: str) -> None:
-        self._auto_sync_status.setText(text)
+        """Show the auto-sync state: Off, On — waiting…, Syncing…, or the last result."""
+        self._auto_sync_state = text
+        self._auto_sync_status.setText(f"Auto sync: {text}")
 
     def _cancel_git_op(self) -> None:
         if not self._git_busy:
@@ -626,7 +766,7 @@ class RepoPage(BasePage):
                 process.terminate()
             except OSError:
                 pass
-        self._set_step_status(self._repo_status, "Cancelling…", STATUS_ERR)
+        self._set_step_status(self._repo_status, "Cancelling…", STATUS_WARN)
         self._cancel_btn.setEnabled(False)
 
     def _terminate_git_process(self) -> None:

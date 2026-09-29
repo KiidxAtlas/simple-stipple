@@ -23,6 +23,8 @@ from simple_stipple.platform.settings import (
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
     DEFAULT_RADIAL_MENU_TOOLS,
 )
+from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input
+from simple_stipple.ui.components.units import parse_numeric_expression, to_display, unit_suffix
 
 _CONTEXT_STATIC_ACTION_IDS = {
     "Rectangle (drag)": "context.create.rectangle",
@@ -865,8 +867,6 @@ class DxfCanvas(CanvasView):
             return
 
         self._dismiss_size_hud()
-        cur_w = max(bounds[2] - bounds[0], 0.0)
-        cur_h = max(bounds[3] - bounds[1], 0.0)
         cx_w = (bounds[0] + bounds[2]) / 2.0
         cy_w = (bounds[1] + bounds[3]) / 2.0
         cx, cy = self._w2c(cx_w, cy_w)
@@ -878,37 +878,35 @@ class DxfCanvas(CanvasView):
             offset_x=-98,
             offset_y=-30,
         )
-        self._size_w_edit = QLineEdit(self)
-        self._size_w_edit.setFixedWidth(90)
-        self._size_w_edit.setFixedHeight(24)
-        self._size_w_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._size_w_edit.setText(f"{cur_w:.2f}")
-        self._size_w_edit.setPlaceholderText("W")
-        self._size_w_edit.setProperty("role", "canvas-hud-input")
-        self._size_w_edit.setAccessibleName("Selected width")
-        self._size_w_edit.setToolTip("Enter the selected shape width")
-        self._size_w_edit.move(hud_x, hud_y)
-        self._size_w_edit.returnPressed.connect(self._apply_size_hud)
-        self._size_w_edit.editingFinished.connect(self._apply_size_hud)
-        self._size_w_edit.textEdited.connect(self._clear_size_hud_error)
-        self._size_w_edit.show()
-
-        self._size_h_edit = QLineEdit(self)
-        self._size_h_edit.setFixedWidth(90)
-        self._size_h_edit.setFixedHeight(24)
-        self._size_h_edit.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._size_h_edit.setText(f"{cur_h:.2f}")
-        self._size_h_edit.setPlaceholderText("H")
-        self._size_h_edit.setProperty("role", "canvas-hud-input")
-        self._size_h_edit.setAccessibleName("Selected height")
-        self._size_h_edit.setToolTip("Enter the selected shape height")
-        self._size_h_edit.move(hud_x + 106, hud_y)
-        self._size_h_edit.returnPressed.connect(self._apply_size_hud)
-        self._size_h_edit.editingFinished.connect(self._apply_size_hud)
-        self._size_h_edit.textEdited.connect(self._clear_size_hud_error)
-        self._size_h_edit.show()
+        suffix = unit_suffix(self._unit_system)
+        edits: list[QLineEdit] = []
+        for offset, placeholder, name in ((0, "W", "width"), (106, "H", "height")):
+            edit = QLineEdit(self)
+            edit.setFixedWidth(90)
+            edit.setFixedHeight(24)
+            edit.setAlignment(Qt.AlignmentFlag.AlignRight)
+            edit.setPlaceholderText(placeholder)
+            edit.setProperty("role", "canvas-hud-input")
+            edit.setAccessibleName(f"Selected {name}")
+            edit.setToolTip(f"Selected shape {name} ({suffix}) — accepts expressions like 25/2")
+            edit.move(hud_x + offset, hud_y)
+            # editingFinished covers both Enter and focus-out.
+            edit.editingFinished.connect(self._apply_size_hud)
+            edit.show()
+            edits.append(edit)
+        self._size_w_edit, self._size_h_edit = edits
+        self._show_size_hud_values(bounds)
         self._size_w_edit.setFocus()
         self._size_w_edit.selectAll()
+
+    def _show_size_hud_values(self, bounds: tuple[float, float, float, float]) -> None:
+        for edit, value in (
+            (self._size_w_edit, bounds[2] - bounds[0]),
+            (self._size_h_edit, bounds[3] - bounds[1]),
+        ):
+            if edit is not None:
+                clear_line_edit_error(edit)
+                edit.setText(f"{to_display(max(value, 0.0), self._unit_system):.2f}")
 
     def _dismiss_size_hud(self) -> None:
         if self._size_w_edit is not None:
@@ -920,59 +918,56 @@ class DxfCanvas(CanvasView):
             self._size_h_edit.deleteLater()
             self._size_h_edit = None
 
-    def _clear_size_hud_error(self, _text: str) -> None:
-        """Remove stale validation styling as soon as either dimension is edited."""
-        for edit in (self._size_w_edit, self._size_h_edit):
-            if edit is not None and edit.property("error"):
-                edit.setProperty("error", None)
-                edit.style().unpolish(edit)
-                edit.style().polish(edit)
-
-    @staticmethod
-    def _show_size_hud_error(*edits: QLineEdit) -> None:
-        for edit in edits:
-            edit.setProperty("error", "true")
-            edit.style().unpolish(edit)
-            edit.style().polish(edit)
-
     def _apply_size_hud(self) -> None:
         if self._size_w_edit is None or self._size_h_edit is None:
             return
-        try:
-            new_w = float(self._size_w_edit.text().strip())
-            new_h = float(self._size_h_edit.text().strip())
-        except ValueError:
-            self._show_size_hud_error(self._size_w_edit, self._size_h_edit)
-            self._show_flash("Invalid size", 900)
-            return
-        invalid_edits = tuple(
-            edit
-            for value, edit in ((new_w, self._size_w_edit), (new_h, self._size_h_edit))
-            if value <= 0
-        )
-        if invalid_edits:
-            self._show_size_hud_error(*invalid_edits)
-            self._show_flash("Dimensions must be greater than zero", 1200)
+        values: dict[str, float] = {}
+        for axis, name, edit in (
+            ("w", "Width", self._size_w_edit),
+            ("h", "Height", self._size_h_edit),
+        ):
+            try:
+                value = parse_numeric_expression(edit.text(), self._unit_system)
+            except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                reject_input(edit, "Enter a number or expression, e.g. 25/2")
+                continue
+            if value <= 0:
+                reject_input(edit, f"{name} must be greater than zero")
+                continue
+            values[axis] = value
+        if len(values) < 2:
             return
         indices = self._selected_ids()
         bounds = self._selection_bounds(indices)
         if not indices or bounds is None:
             self._dismiss_size_hud()
             return
+        if not self._mutable_selected_ids():
+            reject_input(self._size_w_edit, "Selection is locked")
+            reject_input(self._size_h_edit, "Selection is locked")
+            return
 
-        cur_w = max(bounds[2] - bounds[0], 0.0)
-        cur_h = max(bounds[3] - bounds[1], 0.0)
-        changed_w = abs(new_w - cur_w) > 1e-9
-        changed_h = abs(new_h - cur_h) > 1e-9
-        if changed_w:
-            self._set_selected_width(new_w)
-        if changed_h:
-            self._set_selected_height(new_h)
-        if changed_w or changed_h:
+        # Compare against the displayed (2-decimal) values so an untouched
+        # field does not re-apply its rounded text.
+        unit = self._unit_system
+        changed = False
+        for axis, name, edit, current, resize in (
+            ("w", "width", self._size_w_edit, bounds[2] - bounds[0], self._set_selected_width),
+            ("h", "height", self._size_h_edit, bounds[3] - bounds[1], self._set_selected_height),
+        ):
+            shown = parse_numeric_expression(f"{to_display(max(current, 0.0), unit):.2f}", unit)
+            if abs(values[axis] - shown) <= 1e-9:
+                continue
+            if not resize(values[axis]):
+                reject_input(edit, f"This selection can't be resized to that {name}")
+                return
+            changed = True
+        if changed:
             self._show_flash("Dimensions updated", 900)
             # Keep HUD open with committed values for iterative edits.
-            self._size_w_edit.setText(f"{new_w:.2f}")
-            self._size_h_edit.setText(f"{new_h:.2f}")
+            new_bounds = self._selection_bounds(self._selected_ids())
+            if new_bounds is not None:
+                self._show_size_hud_values(new_bounds)
 
     def _shape_mode_from_modifiers(self, mods) -> str:
         return drawing.mode_from_modifiers(self, mods)

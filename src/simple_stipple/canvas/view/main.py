@@ -274,6 +274,7 @@ class CanvasView(
     _edit_poly: Any
     _edit_vert: Any
     _gizmo_handle_rects: list[Any]
+    _gizmo_hover: str | None
     _gizmo_move_rect: Any
     _gizmo_rotate_rect: Any
     _gizmo_scale_rect: Any

@@ -26,7 +26,7 @@ from simple_stipple.features.trace.form import trace_default
 from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.dialogs.export_preflight import export_preflight
 from simple_stipple.ui.dialogs.files import pick_save_file
-from simple_stipple.ui.style import STATUS_OK
+from simple_stipple.ui.style import STATUS_OK, STATUS_WARN
 
 
 def _coerce_to_trace_state(state: dict | None) -> TraceTabState:
@@ -56,8 +56,8 @@ def get_trace_workspace_state(page: Any) -> dict:
         "min_area": page._min_area.text(),
         "max_area": page._max_area.text(),
         "close_r": page._close_r.text(),
-        "width_mm": page._width_mm.text(),
-        "height_mm": page._height_mm.text(),
+        "width_mm": page._size_state(page._width_mm),
+        "height_mm": page._size_state(page._height_mm),
         "max_res": page._max_res.text(),
         "aspect_locked": page._lock_cb.isChecked(),
         "bg_visible": page._bg_visible_cb.isChecked(),
@@ -96,8 +96,12 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
     page._min_area.setText(str(trace_state.min_area or trace_default(settings, "min_area")))
     page._max_area.setText(str(trace_state.max_area or trace_default(settings, "max_area")))
     page._close_r.setText(str(trace_state.close_r or trace_default(settings, "close_r")))
-    page._width_mm.setText(str(trace_state.width_mm or trace_default(settings, "width_mm")))
-    page._height_mm.setText(str(trace_state.height_mm or trace_default(settings, "height_mm")))
+    page._restore_size(
+        page._width_mm, str(trace_state.width_mm or trace_default(settings, "width_mm"))
+    )
+    page._restore_size(
+        page._height_mm, str(trace_state.height_mm or trace_default(settings, "height_mm"))
+    )
     page._max_res.setText(str(trace_state.max_res or trace_default(settings, "max_res")))
     page._lock_cb.setChecked(trace_state.aspect_locked)
     page._bg_visible_cb.setChecked(trace_state.bg_visible)
@@ -221,6 +225,17 @@ def _export_records(self, records: list[dict], *, title: str, selected: bool) ->
         return
     action = "Export Selected" if selected else "Export"
     settings = getattr(self, "_settings", {})
+
+    def show_issues(indices: list[int]) -> None:
+        entity_ids = [
+            str(records[index]["entity_id"])
+            for index in indices
+            if 0 <= index < len(records) and records[index].get("entity_id")
+        ]
+        self._canvas.set_selection(entity_ids)
+        self._canvas.fit_selection()
+        self._set_status(f"{len(entity_ids)} path(s) need attention", STATUS_WARN)
+
     proceed, _report = export_preflight(
         self,
         [list(record["polyline"]) for record in records],
@@ -230,6 +245,7 @@ def _export_records(self, records: list[dict], *, title: str, selected: bool) ->
         profile=machine_profile_from_settings(settings),
         operations=("Traced outlines",),
         show_review=bool(settings.get("export_review_enabled", False)),
+        on_show_issues=show_issues,
     )
     if not proceed:
         self._canvas.set_geometry_health_visible(True, announce=True)

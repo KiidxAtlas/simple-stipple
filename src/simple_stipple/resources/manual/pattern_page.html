@@ -4,40 +4,54 @@
 </h2>
 
 <h3 class="subheading">Overview</h3>
-<p>The Pattern page is the heart of Simple Stipple. It provides a split-view interface: parameter controls on the left, an interactive canvas with your pattern preview on the right.</p>
+<p>The Pattern page fills closed outlines with engraving patterns. One workflow rail runs down the
+left in task order, the canvas and live preview stay centered, and the Inspector on the right is
+reserved for layers and selection. The rail scrolls through setup and treatment controls while its
+export action stays fixed at the bottom. On a narrow window, use the <strong>Settings</strong> and
+<strong>Inspector</strong> drawer buttons above the canvas.</p>
 
-<h3 class="subheading">Left Panel — Controls</h3>
+<h3 class="subheading">Workflow rail</h3>
 <ul>
-    <li><strong>DXF File Picker:</strong> Load an existing DXF file containing your outline geometry.</li>
-    <li><strong>Pattern Type Dropdown:</strong> Choose from 20+ built-in pattern generators.</li>
-    <li><strong>Parameter Controls:</strong> Dynamic widgets that change based on the selected pattern (size, gap, spacing, etc.).</li>
-    <li><strong>Fill Mode:</strong> Choose how to fill the pattern area — None, Lines (parallel hatch), or Crosshatch (crossed ±45° lines).</li>
-    <li><strong>Presets Manager:</strong> Save, load, and manage pattern presets for quick recall.</li>
-    <li><strong>Generate / Preview Buttons:</strong> Generate the full pattern or show a live preview.</li>
-    <li><strong>Export Button:</strong> Save the result as a DXF file.</li>
+    <li><strong>1. Outline:</strong> load a DXF, FVI, or SVG outline (Browse…, Recent, drag-and-drop, or reload from disk).</li>
+    <li><strong>2. Pattern &amp; Fill:</strong> choose a built-in generator, custom tile, or <em>Image</em> (see <a href="#pattern-types">Pattern Types</a>); adjust pattern parameters, <strong>Pattern modifiers</strong>, presets, the document <strong>Pattern grid</strong>, and optional laser fill.</li>
+    <li><strong>3. Regions &amp; treatment:</strong> optionally assign a treatment to individual regions. Pattern and fill settings above apply to the selected region.</li>
+    <li><strong>Export:</strong> choose a format and export. The compact summary shows the format, enabled operations, and preflight warnings. Open <strong>Output details</strong> for operation selection, ordering, geometry checks, and findings; <strong>Export options</strong> holds cleanup and preview settings.</li>
+    <li><strong>Laser process:</strong> this disclosure controls only image-engraving power, speed, and passes. Image placement and removal remain available with the image controls.</li>
 </ul>
+
+<h3 class="subheading">Preview</h3>
+<p>There is no Generate step: the preview re-solves automatically whenever a setting changes.
+Typed values apply when you press Enter or leave the field; sliders, checkboxes, and lists apply
+as you change them. <strong>Preview quality</strong> (Export options) trades preview detail for
+speed only — it never changes what is exported. The <strong>Pattern</strong> button on the canvas
+toolbar hides the solved pattern (and pauses re-solving) while you edit heavy outlines;
+<strong>Rebuild preview</strong> forces a fresh solve.</p>
 
 <h3 class="subheading">Adjusting Pattern Values</h3>
-<p>Drag a parameter slider for quick adjustment, or type an exact value in its field. Slider-driven decimal values are rounded to <strong>two decimal places</strong>, so a drag produces readable values such as <code>1.05</code> rather than long floating-point numbers. Integer controls, such as a seed or cell count, remain whole numbers.</p>
+<p>Type an exact value in a field, or drag its slider for quick adjustment. Fields accept simple
+arithmetic such as <code>25/2</code>; the result replaces the expression when you press Enter.
+Hover a field or slider to see its allowed range. A value that is not a number or is outside the
+range is not applied: the field turns red, keeps what you typed, and its tooltip says why
+(for example <em>Must be at least 0.001 mm</em>) until you edit it again.</p>
+<p>Sliders cover each field's full range. Ranges that span more than two orders of magnitude
+(such as Hex size, 0.001–20 mm) use a logarithmic track so small values stay easy to reach, and
+slider values are rounded to the field's precision so a drag never produces long decimals.
+Typed values are kept exactly. Integer controls, such as a seed or cell count, remain whole numbers.</p>
 
-<h3 class="subheading">Right Panel — Canvas</h3>
+<h3 class="subheading">Regions &amp; Treatments</h3>
+<p>Every closed shape is a <strong>region</strong>. Click inside one on the canvas (or pick it in the
+Regions list), set the Pattern and Fill sections, and choose its <strong>Treatment</strong>:</p>
 <ul>
-    <li><strong>Interactive View:</strong> Zoom, pan, and inspect your pattern in real time.</li>
-    <li><strong>Layer Tree:</strong> Toggle visibility of outline, pattern, and fill layers.</li>
-    <li><strong>Grid:</strong> Toggle a measurement grid for precision work.</li>
-    <li><strong>Status Strip:</strong> Shows current dimensions, pattern count, and tool status.</li>
+    <li><strong>Pattern + Fill</strong>, <strong>Pattern only</strong>, or <strong>Fill only</strong></li>
+    <li><strong>Engrave image</strong> — the region carries an image (the same as choosing <em>Image</em> as the pattern)</li>
+    <li><strong>Cut only</strong> — the outline is cut but not filled; use it for lettering, logos, and holes</li>
+    <li><strong>None</strong> — no treatment of its own</li>
 </ul>
-
-<h3 class="subheading">Zones &amp; Exclusions</h3>
-<p><strong>Zones</strong> allow you to assign different patterns to different regions within the same outline. Each zone is a snapshot containing:</p>
-<ul>
-    <li>A set of outline IDs (the region boundaries)</li>
-    <li>A pattern type</li>
-    <li>Pattern parameters</li>
-    <li>An optional scale (width, height)</li>
-    <li>A label for identification</li>
-</ul>
-<p>A region with a treatment of its own is <em>automatically</em> subtracted from the region containing it, so a pattern always flows around inner shapes. Use <strong>Cut only</strong> for lettering, logos, or mechanical holes that should be cut but not filled.</p>
+<p>The line above the Treatment list names what you are editing: <em>Region N · treatment</em> with a
+region selected, or <em>All regions · default treatment</em> with nothing selected. Select several
+regions to edit them together; <strong>Apply to Selection</strong> copies the current settings to
+the selected regions. A region with a treatment of its own is <em>automatically</em> subtracted
+from the region containing it, so a pattern always flows around inner shapes.</p>
 
 <h3 class="subheading">Fill Modes</h3>
 <table style="width:100%;border-collapse:collapse;margin:8px 0;">
@@ -45,11 +59,36 @@
         <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Mode</th>
         <th style="padding:8px;text-align:left;border-bottom:2px solid #2f81f7;">Description</th>
     </tr>
-    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>None</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">No fill pattern. Only the main pattern is generated.</td></tr>
-    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Lines</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Parallel hatch lines across the fill region. Configurable spacing and angle.</td></tr>
-    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Crosshatch</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Two sets of parallel lines at ±45° angles, creating a crossed-hatch grid.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>None</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">No fill. Only the pattern is generated.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Lines</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Separate parallel hatch strokes at the chosen spacing and angle.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Zigzag</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Hatch lines joined end to end for fewer travel moves.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Crosshatch</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Two angled hatch passes.</td></tr>
+    <tr><td style="padding:8px;border-bottom:1px solid #30363d;"><strong>Concentric</strong></td><td style="padding:8px;border-bottom:1px solid #30363d;">Inward contour passes (angle does not apply).</td></tr>
 </table>
+<p>Spacing must be at least 0.05 mm. <strong>Targets</strong> choose whether the fill covers the
+outline's open space, the closed pattern cells, or both; <strong>Keep pattern strokes alongside
+fill</strong> exports both, and unticking it gives fill-only output.</p>
 
-<h3 class="subheading">Presets System</h3>
-<p><strong>Built-in presets:</strong> Honeycomb (Fine/Standard/Bold), Stipple (Dense/Open), Brick, Mesh, and Voronoi.</p>
-<p><strong>Custom presets:</strong> Save your current pattern + all parameters as a named preset. Export/import presets as JSON files (<code>simple-stipple-presets/v1</code> format).</p>
+<h3 class="subheading">Presets</h3>
+<p><strong>Apply</strong> loads the selected preset, <strong>Save</strong> stores the current pattern and
+parameters under the typed name, and <strong>More</strong> offers Delete and <strong>Manage presets…</strong>
+(rename, duplicate, import, export, and restore built-ins). Presets are exchanged as JSON
+(<code>simple-stipple-presets/v1</code>).</p>
+<p><strong>Built-in presets:</strong> Truchet (Arcs), Honeycomb (Fine/Standard/Bold), Stipple (Dense/Open),
+Brick, Mesh, and Voronoi. A preset saved with a retired pattern opens with its replacement, and the
+status line names the substitution.</p>
+
+<h3 class="subheading">Inspector (right) — Layers</h3>
+<ul>
+    <li><strong>Inspector (right):</strong> show, hide, select, and configure document layers. Region treatments remain in the left workflow rail and follow the selected region.</li>
+</ul>
+<p>The fixed Export footer always shows the chosen format, enabled operations in machine order, and preflight warning count. Operation selection and ordering, geometry checks and findings, cleanup, and preview-quality controls stay in the secondary <strong>Output details</strong> and <strong>Export options</strong> sections above it.</p>
+
+<h3 class="subheading">Exporting</h3>
+<p>The primary button names the chosen format (<strong>Export DXF…</strong>, <strong>Export SVG…</strong>,
+<strong>Export FVI…</strong>, or <strong>Export Package…</strong> for a LaserStar folder); change it with
+<strong>Format</strong>. Export writes every enabled Output operation. It first runs preflight: if
+there are problems you can export anyway, cancel, or choose <strong>Show Issues</strong> to select and
+frame the affected outlines. It then re-solves the pattern at full quality, regardless of the
+preview quality — the status reads <em>Solving at full quality for export…</em> while that runs — and
+writes the file.</p>

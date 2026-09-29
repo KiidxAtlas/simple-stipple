@@ -140,13 +140,15 @@ EXPORT_FORMATS: tuple[tuple[str, str, str], ...] = (
 
 EXPORT_FORMAT_KEYS = tuple(key for key, _label, _suffix in EXPORT_FORMATS)
 
-# Short label for the primary button.
+# Short label for the primary button; it names the format it will write.
 EXPORT_BUTTON_LABEL = {
-    "dxf": "Export DXF",
-    "svg": "Export SVG",
-    "fvi": "Export FVI",
-    "laserstar": "Export package",
+    "dxf": "Export DXF…",
+    "svg": "Export SVG…",
+    "fvi": "Export FVI…",
+    "laserstar": "Export Package…",
 }
+
+_FORMAT_NAME = {"dxf": "DXF", "svg": "SVG", "fvi": "FVI", "laserstar": "LaserStar package"}
 
 _SUFFIX = {key: suffix for key, _label, suffix in EXPORT_FORMATS}
 
@@ -319,6 +321,33 @@ class Operation:
         if self.detail:
             parts.append(self.detail)
         return "      ".join(parts)
+
+
+def export_summary(
+    export_format: str, operations: list[Operation], enabled: list[Operation], findings: int
+) -> str:
+    """One line saying what Export will write: format, operations in run order,
+    and how many preflight findings are outstanding."""
+    name = _FORMAT_NAME.get(export_format, export_format.upper())
+    if not operations:
+        return f"{name} · nothing to export yet"
+    runs: list[list] = []
+    for operation in enabled:
+        if runs and runs[-1][0] == operation.kind:
+            runs[-1][1] += 1
+        else:
+            runs.append([operation.kind, 1])
+    order = " → ".join(
+        f"{_KIND_LABEL[kind]}{f' ×{count}' if count > 1 else ''}" for kind, count in runs
+    )
+    count = (
+        f"{len(enabled)} operation{'s' if len(enabled) != 1 else ''}"
+        if len(enabled) == len(operations)
+        else f"{len(enabled)} of {len(operations)} operations"
+    )
+    parts = [name, f"{count}: {order}" if order else count]
+    parts.append(f"{findings} warning{'s' if findings != 1 else ''}" if findings else "No warnings")
+    return " · ".join(parts)
 
 
 def _region_name(page, region_id: str) -> str:

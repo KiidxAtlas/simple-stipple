@@ -437,6 +437,7 @@ def _initialize_view(
     self._sel_dim_snapshot = None  # live-typing preview transaction
 
     # Transform gizmo (select mode)
+    self._gizmo_hover = None
     self._gizmo_scale_rect = None
     self._gizmo_rotate_rect = None
     self._gizmo_move_rect = None

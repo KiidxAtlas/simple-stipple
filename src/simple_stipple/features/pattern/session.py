@@ -18,9 +18,14 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from simple_stipple.core.document.model import PatternTabState
-from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
+from simple_stipple.features.pattern.form import (
+    collect_form_state,
+    restore_form_state,
+    retired_pattern_notice,
+)
 from simple_stipple.features.pattern.outline_state import smallest_containing_outline
 from simple_stipple.features.pattern.regions.treatments import migrate_workspace_zones
+from simple_stipple.ui.style import STATUS_WARN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -164,9 +169,7 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
         page._engrave_gamma.setValue(float(engraving.get("gamma", 1)))
         page._engrave_passes.setValue(int(engraving.get("passes", 1)))
         page._engrave_invert.setChecked(bool(engraving.get("invert", False)))
-        dither_index = page._engrave_dither.findData(
-            str(engraving.get("dither", "continuous"))
-        )
+        dither_index = page._engrave_dither.findData(str(engraving.get("dither", "continuous")))
         page._engrave_dither.setCurrentIndex(max(0, dither_index))
         material_index = page._engrave_material.findData(str(engraving.get("material", "custom")))
         page._engrave_material.blockSignals(True)
@@ -177,6 +180,22 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     else:
         page._canvas.clear_background_image()
     page._refresh_engraving_ui()
+    notice = retired_pattern_notice(_stored_pattern_names(pattern_state))
+    if notice:
+        page._set_status(f"{notice}. Save the workspace to keep the replacement.", STATUS_WARN)
+
+
+def _stored_pattern_names(pattern_state: Any) -> list[object]:
+    """Every generator name the workspace file refers to, before migration."""
+    names: list[object] = [pattern_state.params.get("pattern")]
+    names.extend(zone.get("pattern") for zone in pattern_state.zones if isinstance(zone, dict))
+    for treatment in pattern_state.treatments.values():
+        if isinstance(treatment, dict):
+            names.append(treatment.get("pattern"))
+            form_state = treatment.get("form_state")
+            if isinstance(form_state, dict):
+                names.append(form_state.get("pattern"))
+    return names
 
 
 def _region_under_image(page: Any, options: dict) -> str | None:
@@ -248,7 +267,6 @@ def build_preview_worker_call(
     pattern: str,
     params: dict[str, Any],
     scale: tuple[float, float],
-    border_polys: list[list[tuple[float, float]]] | None,
     border_fade: float,
     preview_token: int,
     cancel_event: threading.Event,
@@ -293,7 +311,7 @@ def build_preview_worker_call(
             pattern,
             params,
             scale,
-            border_polys,
+            None,  # border_polys: the worker supplies the scaled outline itself
             False,  # interlace
             False,  # invert_fill
             False,  # mirror_v

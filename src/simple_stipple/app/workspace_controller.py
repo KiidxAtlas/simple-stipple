@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMenu, QMessageBox
 
 from simple_stipple.core.document.model import WORKSPACE_FILE_SUFFIX, normalize_workspace_path
 from simple_stipple.core.document.workspace import (
@@ -104,46 +105,40 @@ class WorkspaceController(_WorkspaceStateController):
             QKeySequence(self._app._shortcut("workspace.new"))
         )
         self._app._new_workspace_action.triggered.connect(self._new_workspace)
-        self._app._workspace_menu.addAction(self._app._new_workspace_action)
 
         self._app._new_window_action = QAction("New Window", self._app)
         self._app._new_window_action.setShortcut(
             QKeySequence(self._app._shortcut("workspace.new_window"))
         )
         self._app._new_window_action.triggered.connect(self._app._new_window)
-        self._app._workspace_menu.addAction(self._app._new_window_action)
 
         self._app._open_workspace_action = QAction("Open Workspace…", self._app)
         self._app._open_workspace_action.setShortcut(
             QKeySequence(self._app._shortcut("workspace.open"))
         )
         self._app._open_workspace_action.triggered.connect(self._open_workspace)
-        self._app._workspace_menu.addAction(self._app._open_workspace_action)
 
-        self._app._saved_workspaces_action = QAction("Workspaces and Recovery…", self._app)
+        self._app._saved_workspaces_action = QAction("Browse Workspaces…", self._app)
         self._app._saved_workspaces_action.triggered.connect(self._open_saved_workspaces)
-        self._app._workspace_menu.addAction(self._app._saved_workspaces_action)
 
         self._app._save_workspace_action = QAction("Save Workspace", self._app)
         self._app._save_workspace_action.setShortcut(
             QKeySequence(self._app._shortcut("workspace.save"))
         )
         self._app._save_workspace_action.triggered.connect(self._save_workspace)
-        self._app._workspace_menu.addAction(self._app._save_workspace_action)
 
         self._app._save_workspace_as_action = QAction("Save Workspace As…", self._app)
         self._app._save_workspace_as_action.setShortcut(
             QKeySequence(self._app._shortcut("workspace.save_as"))
         )
         self._app._save_workspace_as_action.triggered.connect(self._save_workspace_as)
-        self._app._workspace_menu.addAction(self._app._save_workspace_as_action)
 
         self._app._recover_workspace_action = QAction("Recover Unsaved Work…", self._app)
         self._app._recover_workspace_action.triggered.connect(
             lambda: self._open_saved_workspaces(initial_source="recovery")
         )
-        self._app._workspace_menu.addAction(self._app._recover_workspace_action)
 
+        self._populate_workspace_menu(self._app._workspace_menu)
         self._app._workspace_menu.addSeparator()
 
         self._app._repo_dialog_action = QAction("Open Repository", self._app)
@@ -161,7 +156,25 @@ class WorkspaceController(_WorkspaceStateController):
         auto_sync.enabledChanged.connect(self._app._auto_sync_action.setChecked)
         self._app._workspace_menu.addAction(self._app._auto_sync_action)
 
-        self._app._workspace_menu.addSeparator()
+    def _populate_workspace_menu(self, menu: QMenu) -> None:
+        """Add the canonical workspace actions, grouped, to ``menu``.
+
+        The File menu and the header Workspace menu both use this, so their
+        labels, order, and shortcuts are one set of QActions. Each menu gets
+        its own "Open Recent" submenu because a QMenu has a single parent.
+        """
+        menu.addAction(self._app._new_workspace_action)
+        menu.addAction(self._app._new_window_action)
+        menu.addSeparator()
+        menu.addAction(self._app._open_workspace_action)
+        self._app._recent_workspaces_menus.append(menu.addMenu("Open Recent"))
+        menu.addAction(self._app._saved_workspaces_action)
+        menu.addSeparator()
+        menu.addAction(self._app._save_workspace_action)
+        menu.addAction(self._app._save_workspace_as_action)
+        menu.addSeparator()
+        menu.addAction(self._app._recover_workspace_action)
+        self._rebuild_recent_workspaces_menu()
 
     def _collect_workspace_document(self) -> dict:
         self._app._workspace_controller.path = self._app._workspace_path
@@ -201,12 +214,13 @@ class WorkspaceController(_WorkspaceStateController):
             return False
         self._app._workspace_path = candidate
         self._app._last_saved_document = self._collect_workspace_document()
+        self._app._last_workspace_save_at = datetime.now().astimezone()
         self._app._workspace_dirty = False
         self._app._has_unsaved_changes = False
         self._remember_workspace_path(candidate)
-        self._update_title()
         self._app._autosave_controller._discard_autosave()
         self._app._autosave_controller._discard_restored_snapshot()
+        self._update_title()
         return True
 
     def _update_title(self) -> None:
@@ -222,25 +236,41 @@ class WorkspaceController(_WorkspaceStateController):
         # page reports canvas content.
         if not self._app._workspace_dirty:
             return True
-        message = (
+        snapshot_at = self._app._last_recovery_snapshot_at
+        if snapshot_at is None:
+            recovery_note = (
+                "No recovery snapshot has been taken yet, so discarded changes cannot be recovered."
+            )
+        elif quitting:
+            recovery_note = (
+                f"Discarding keeps the recovery snapshot from {snapshot_at:%H:%M}: it is offered "
+                "the next time Simple Stipple starts and stays in File → Recover Unsaved Work… "
+                f"until you restore or delete it. Changes after {snapshot_at:%H:%M} are lost."
+            )
+        else:
+            recovery_note = (
+                f"Discarding keeps the recovery snapshot from {snapshot_at:%H:%M} in "
+                "File → Recover Unsaved Work… until this window saves a workspace or closes "
+                f"without unsaved changes. Changes after {snapshot_at:%H:%M} are lost."
+            )
+        box = QMessageBox(self._app)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Unsaved Workspace")
+        box.setText(
             "The current workspace has unsaved changes. Save before quitting?"
             if quitting
             else "The current workspace has unsaved changes. Save before continuing?"
         )
-        choice = QMessageBox.question(
-            self._app,
-            "Unsaved Workspace",
-            message,
-            QMessageBox.StandardButton.Save
-            | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save,
-        )
-        if choice == QMessageBox.StandardButton.Cancel:
-            return False
-        if choice == QMessageBox.StandardButton.Save:
+        box.setInformativeText(recovery_note)
+        save_button = box.addButton("Save Workspace", QMessageBox.ButtonRole.AcceptRole)
+        discard_button = box.addButton("Discard Changes", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(save_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_button:
             return self._save_workspace()
-        return True
+        return clicked is discard_button
 
     def _update_workspace_dirty(self) -> None:
         if not self._app._has_unsaved_changes:
@@ -257,21 +287,22 @@ class WorkspaceController(_WorkspaceStateController):
         self._update_title()
 
     def _rebuild_recent_workspaces_menu(self) -> None:
-        self._app._recent_workspaces_menu.clear()
         recent = recent_workspace_paths(self._app._settings)
-        if not recent:
-            action = QAction("No recent workspaces", self._app._recent_workspaces_menu)
-            action.setEnabled(False)
-            self._app._recent_workspaces_menu.addAction(action)
-            return
-        for path in recent:
-            action = QAction(path.name, self._app._recent_workspaces_menu)
-            action.setData(str(path))
-            action.setToolTip(str(path))
-            action.triggered.connect(
-                lambda _checked=False, recent_path=path: self._load_workspace_file(recent_path)
-            )
-            self._app._recent_workspaces_menu.addAction(action)
+        for menu in self._app._recent_workspaces_menus:
+            menu.clear()
+            if not recent:
+                action = QAction("No recent workspaces", menu)
+                action.setEnabled(False)
+                menu.addAction(action)
+                continue
+            for path in recent:
+                action = QAction(path.name, menu)
+                action.setData(str(path))
+                action.setToolTip(str(path))
+                action.triggered.connect(
+                    lambda _checked=False, recent_path=path: self._load_workspace_file(recent_path)
+                )
+                menu.addAction(action)
 
     def _load_workspace_file(self, path: Path, check_dirty: bool = True) -> None:
         if check_dirty and not self._confirm_discard_if_dirty():
@@ -287,6 +318,7 @@ class WorkspaceController(_WorkspaceStateController):
             self._apply_workspace_document(data)
             self._app._workspace_path = path
             self._app._last_saved_document = self._collect_workspace_document()
+            self._app._last_workspace_save_at = None
             self._app._workspace_dirty = False
             self._app._has_unsaved_changes = False
             self._remember_workspace_path(path)
@@ -375,12 +407,13 @@ class WorkspaceController(_WorkspaceStateController):
             document = self._collect_workspace_document()
             write_json_file_atomic(self._app._workspace_path, document)
             self._app._last_saved_document = document
+            self._app._last_workspace_save_at = datetime.now().astimezone()
             self._app._workspace_dirty = False
             self._app._has_unsaved_changes = False
             self._remember_workspace_path(self._app._workspace_path)
-            self._update_title()
             self._app._autosave_controller._discard_autosave()
             self._app._autosave_controller._discard_restored_snapshot()
+            self._update_title()
             return True
         except (OSError, TypeError, ValueError) as exc:
             show_error(self._app, "Workspace Error", exc)

@@ -28,10 +28,13 @@ class PageSpec:
     content_canvas_attrs: tuple[str, ...] = ()
     tab_tooltip: str = ""
     visible_in_tabs: bool = True
+    # Keybinding id when it differs from ``tab.<page_id>`` (kept for
+    # compatibility with bindings users have already customized).
+    binding_id: str = ""
 
     @property
     def shortcut_id(self) -> str:
-        return f"tab.{self.page_id}"
+        return self.binding_id or f"tab.{self.page_id}"
 
     @property
     def command_title(self) -> str:
@@ -79,6 +82,7 @@ def default_page_specs() -> tuple[PageSpec, ...]:
             "page repository git sync pull push commit",
             lambda settings: RepoPage(settings=settings),
             tab_tooltip="Repository — synchronize workspace files with Git",
+            binding_id="tab.repo",
         ),
     )
 

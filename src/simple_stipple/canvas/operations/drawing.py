@@ -29,11 +29,11 @@ from simple_stipple.core.cad.geometry import (
     shape_circle,
     shape_polygon,
     shape_rect,
-    shape_slot,
+    shape_slot_for_bounds,
 )
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import normalize_draw_sidebar_shape_tools, user_data_dir
-from simple_stipple.ui.components.feedback import refresh_style
+from simple_stipple.ui.components.feedback import refresh_style, reject_input
 from simple_stipple.ui.components.units import (
     parse_numeric_expression as _parse_expression,
 )
@@ -275,9 +275,14 @@ class DrawOpsService:
             kind = "ellipse"
             meta = {"center": (cx, cy), "rx": w / 2.0, "ry": h / 2.0, "rotation": 0.0}
         elif self._host._draw_primitive == "slot":
-            poly = [(px + cx, py + cy) for px, py in shape_slot(w, h)]
+            poly = [(px + cx, py + cy) for px, py in shape_slot_for_bounds(w, h)]
             kind = "slot"
-            meta = {"center": (cx, cy), "length": w, "width": h, "rotation": 0.0}
+            meta = {
+                "center": (cx, cy),
+                "length": max(w, h),
+                "width": min(w, h),
+                "rotation": 90.0 if h > w else 0.0,
+            }
         elif self._host._draw_primitive == "polygon":
             # Center-first, matching circle: first click is center, drag
             # sets the radius directly (was previously bounding-box corner
@@ -514,7 +519,7 @@ def build_shapes(
     if mode == "circle":
         return [translate(shape_circle(min(width, height) / 2.0, 64), cx, cy)]
     if mode == "slot":
-        return [translate(shape_slot(max(width, height), min(width, height)), cx, cy)]
+        return [translate(shape_slot_for_bounds(width, height), cx, cy)]
     if mode == "hexagon":
         return [translate(shape_polygon(6, min(width, height) / 2.0), cx, cy)]
     if mode in host._PROCEDURAL_QUICK_SHAPES:
@@ -985,36 +990,38 @@ class HudTextService:
     def _apply_sel_dim_editor(self) -> None:
         if self._host._sel_dim_edit is None or self._host._sel_dim_axis is None:
             return
-        text = self._host._sel_dim_edit.text().strip()
+        edit = self._host._sel_dim_edit
+        text = edit.text().strip()
         axis = self._host._sel_dim_axis
         snapshot = self._host._sel_dim_snapshot
-        # Disconnect editingFinished before dismissing to avoid double-trigger
         try:
-            self._host._sel_dim_edit.editingFinished.disconnect()
+            val = _parse_expression(text, self._host._unit_system, is_length=axis != "a")
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            if snapshot is not None:
+                self._host._canvas_service.cancel_preview(snapshot)
+                self._host._sel_dim_snapshot = self._host._canvas_service.begin_preview()
+                self._host._redraw()
+            reject_input(edit, "Enter a number or expression, e.g. 25/2")
+            return
+        if axis != "a" and val <= 0:
+            if snapshot is not None:
+                self._host._canvas_service.cancel_preview(snapshot)
+                self._host._sel_dim_snapshot = self._host._canvas_service.begin_preview()
+                self._host._redraw()
+            noun = {"w": "Width", "h": "Height", "l": "Length"}.get(axis, "Value")
+            reject_input(edit, f"{noun} must be greater than zero")
+            return
+        try:
+            edit.editingFinished.disconnect()
         except RuntimeError as exc:
-            # Qt raises when the editor was already disconnected during
-            # teardown; dismissal is still safe and must continue.
             LOGGER.debug("Selection editor was already disconnected: %s", exc)
         self._dismiss_sel_dim_editor()
         if snapshot is not None:
-            # Wipe the transient live preview; the real commit below re-applies
-            # the final value as one undoable command.
             self._host._canvas_service.cancel_preview(snapshot)
             self._host._redraw()
-        if not text:
-            return
-        try:
-            val = _parse_expression(text, self._host._unit_system, is_length=axis != "a")
-        except ValueError:
-            self._host._show_flash("Enter a valid number or expression", 1200)
-            return
         if axis == "a":
-            # Absolute angle: any value is valid (normalized by trig)
             self._host._set_selected_line_angle(val)
             self._host._show_flash("Angle updated", 900)
-            return
-        if val <= 0:
-            self._host._show_flash("Value must be greater than zero", 1200)
             return
         if axis == "w":
             self._host._set_selected_width(val)

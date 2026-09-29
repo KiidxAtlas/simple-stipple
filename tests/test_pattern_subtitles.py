@@ -6,7 +6,7 @@ from simple_stipple.features.pattern.form import (
     fill_subtitle,
     outline_subtitle,
     pattern_subtitle,
-    zones_subtitle,
+    regions_subtitle,
 )
 
 
@@ -53,10 +53,10 @@ def test_fill_summary_retains_targets_and_result_count_during_spacing_edits(
 @pytest.mark.parametrize(
     "count,text,dim",
     [
-        (0, "Optional · different pattern for a selection", True),
-        (1, "1 zone assigned", False),
-        (3, "3 zones assigned", False),
+        (0, "Optional · a different treatment per region", True),
+        (1, "1 region with a treatment", False),
+        (3, "3 regions with a treatment", False),
     ],
 )
-def test_zone_summary_distinguishes_empty_single_and_multiple(count, text, dim):
-    assert zones_subtitle(count) == (text, dim)
+def test_region_summary_distinguishes_empty_single_and_multiple(count, text, dim):
+    assert regions_subtitle(count) == (text, dim)

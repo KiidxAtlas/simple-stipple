@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from PIL import Image
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -45,6 +45,7 @@ from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job, 
 from simple_stipple.features.base import BasePage
 from simple_stipple.features.canvas_runtime import TraceCanvasPageRuntime
 from simple_stipple.features.trace.form import (
+    TRACE_FIELD_LIMITS,
     PathField,
     SliderField,
     TextField,
@@ -71,8 +72,8 @@ from simple_stipple.features.trace.session import (
     get_save_path as _get_save_path,
 )
 from simple_stipple.platform.settings import save_settings
-from simple_stipple.ui.components.feedback import parse_float_field_with_feedback, show_error
-from simple_stipple.ui.components.inputs import NoWheelSlider, make_resettable_line_edit
+from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input, show_error
+from simple_stipple.ui.components.inputs import make_resettable_line_edit
 from simple_stipple.ui.components.layout import (
     CollapsibleSection,
     content_splitter,
@@ -80,6 +81,7 @@ from simple_stipple.ui.components.layout import (
     surface_frame,
 )
 from simple_stipple.ui.components.recent import KIND_IMAGE, RecentFilesButton, record_recent
+from simple_stipple.ui.components.units import parse_numeric_expression, to_display, unit_suffix
 from simple_stipple.ui.components.workflow import set_status_label
 from simple_stipple.ui.dialogs.files import (
     pick_open_file,
@@ -97,11 +99,28 @@ TRACE_BG_BLEND_ALPHA = 0.7
 # ``simple_stipple.features.trace.form.TRACE_DEFAULTS`` and are user-editable in
 # Settings — only the widgets' mechanical config is defined here.
 TRACE_DEBOUNCE_MS = 220  # retrace delay after a control changes
-BLUR_SLIDER_MAX = 50  # slider is 0..50 = 0.0..5.0 (×10 fixed-point)
-BLUR_SLIDER_SCALE = 10
-THRESHOLD_SLIDER_MAX = 255
 DEFAULT_GRID_VISIBLE = True
 DEFAULT_GRID_SPACING_MM = 1.0
+_EXPRESSION_HINT = "enter a number or expression, e.g. 25/2"
+
+#: Next-step destinations: (primary button label, what it does).
+_NEXT_ACTIONS: dict[str, tuple[str, str]] = {
+    "draft": (
+        "Next — Edit in Draft",
+        "Send the traced outlines (or the current selection) to Draft for editing",
+    ),
+    "pattern": (
+        "Next — Use in Pattern",
+        "Send the closed traced outlines (or the current selection) to Pattern; "
+        "open contours are reported and can go to Draft instead",
+    ),
+    "export": ("Next — Export DXF…", "Export all traced outlines as a DXF file"),
+}
+
+
+def _is_closed(poly: list[tuple[float, float]]) -> bool:
+    return len(poly) >= 4 and poly[0] == poly[-1]
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -174,6 +193,12 @@ class TracePage(BasePage):
         # must leave the user's current zoom/pan alone.
         self._needs_view_fit: bool = True
         self._trace_result_stale: bool = False
+        # Contour count of the last completed trace of the current image, so
+        # a retrace can report what a settings change did.
+        self._last_contour_count: int | None = None
+        # Unit the output Width/Height fields are shown and typed in; follows
+        # the canvas display unit (see _sync_size_unit).
+        self._size_unit = "mm"
         # While the picture is being dragged: its placement when the drag
         # began and the outlines expressed in that placement's frame.
         self._image_edit_base: tuple[ImagePlacement, list[list[tuple[float, float]]]] | None = None
@@ -199,7 +224,7 @@ class TracePage(BasePage):
             sizes=(sidebar_width, 950),
         )
         self._splitter.setCollapsible(0, True)
-        self._splitter.set_responsive_secondary(0, "Trace controls")
+        self._splitter.set_responsive_secondary(0, "Settings")
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
         self._splitter.splitterMoved.connect(self._remember_sidebar_width)
@@ -215,6 +240,12 @@ class TracePage(BasePage):
         """Prefer a width that fits the smallest supported application window."""
         hint = super().sizeHint()
         return QSize(min(900, hint.width()), hint.height())
+
+    def showEvent(self, event) -> None:
+        # The canvas display unit can change in Settings while this page is
+        # hidden; bring the output-size fields along before they are seen.
+        self._sync_size_unit()
+        super().showEvent(event)
 
     def _remember_sidebar_width(self, position: int, _index: int) -> None:
         if position <= 0:
@@ -284,9 +315,9 @@ class TracePage(BasePage):
         self._recent_btn = RecentFilesButton(
             self._settings,
             KIND_IMAGE,
-            empty_message="No recent images.",
+            empty_message="No recent files",
         )
-        self._recent_btn.setToolTip("Pick from recently opened images")
+        self._recent_btn.setToolTip("Recent files")
         self._recent_btn.fileSelected.connect(self._load_image_from_recent)
         # File path, Browse, and Recent previously competed for one 260 px
         # row, producing the clipped controls in the Trace inspector. Keep
@@ -375,8 +406,8 @@ class TracePage(BasePage):
         self._export_overflow_btn.setText("Format")
         self._export_overflow_btn.setProperty("role", "overflow")
         self._export_overflow_btn.setMinimumWidth(72)
-        self._export_overflow_btn.setToolTip("Choose an export format")
-        self._export_overflow_btn.setAccessibleName("Choose an export format")
+        self._export_overflow_btn.setToolTip("Choose export format")
+        self._export_overflow_btn.setAccessibleName("Choose export format")
         self._export_overflow_btn.setEnabled(False)
         self._export_overflow_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         _overflow_menu = QMenu(self._export_overflow_btn)
@@ -398,40 +429,39 @@ class TracePage(BasePage):
         export_row.addWidget(self._export_all_btn, stretch=1)
         export_row.addWidget(self._export_overflow_btn)
         export_layout.addLayout(export_row)
-        self._next_btn = QPushButton("Next — Edit in Draft")
+        self._next_btn = QPushButton()
         self._next_btn.setProperty("role", "primary")
         self._next_btn.setEnabled(False)
         self._next_btn.clicked.connect(self._run_remembered_next)
         self._next_more = QToolButton()
         self._next_more.setText("Next step")
         self._next_more.setProperty("role", "overflow")
-        self._next_more.setToolTip("Choose what to do next with the traced outlines")
+        self._next_more.setToolTip("Choose where the Next button sends the traced outlines")
         self._next_more.setAccessibleName("Choose trace next action")
         self._next_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         next_menu = QMenu(self._next_more)
+        next_group = QActionGroup(next_menu)
+        next_group.setExclusive(True)
+        self._next_actions: dict[str, QAction] = {}
         for key, label in (
             ("draft", "Edit in Draft"),
             ("pattern", "Use in Pattern"),
-            ("export", "Export DXF"),
+            ("export", "Export DXF…"),
         ):
             action = next_menu.addAction(label)
+            action.setCheckable(True)
+            next_group.addAction(action)
             action.triggered.connect(
                 lambda _checked=False, choice=key: self._select_next_action(choice)
             )
+            self._next_actions[key] = action
         self._next_more.setMenu(next_menu)
         next_row = QHBoxLayout()
         next_row.setSpacing(4)
         next_row.addWidget(self._next_btn, 1)
         next_row.addWidget(self._next_more)
         export_layout.addLayout(next_row)
-        remembered_next = str(self._settings.get("trace_next_action", "draft"))
-        self._next_btn.setText(
-            {
-                "draft": "Next — Edit in Draft",
-                "pattern": "Next — Use in Pattern",
-                "export": "Next — Export DXF",
-            }.get(remembered_next, "Next — Edit in Draft")
-        )
+        self._show_next_action(str(self._settings.get("trace_next_action", "draft")))
         # _build_right reparents this into the bottom of the right inspector.
         self._export_footer = export_content
 
@@ -439,58 +469,58 @@ class TracePage(BasePage):
 
     def _init_trace_form_fields(self) -> None:
         self._blur = self._mk_entry(
-            trace_default(self._settings, "blur"),
-            "Gaussian blur radius applied before thresholding / edge detection",
-            on_change=self._on_blur_text,
+            "blur", "Gaussian blur applied before thresholding / edge detection", unit="px"
         )
         self._thresh_entry = self._mk_entry(
-            trace_default(self._settings, "threshold"),
-            "Brightness cutoff: pixels darker than this become outlines",
-            on_change=self._on_thresh_text,
+            "threshold", "Brightness cutoff: pixels darker than this become outlines"
         )
         self._canny_low = self._mk_entry(
-            trace_default(self._settings, "canny_low"),
-            "Lower hysteresis threshold for Canny edge detection.\nEdges below this value are discarded.",
+            "canny_low",
+            "Lower hysteresis threshold for Canny edge detection.\n"
+            "Edges below this value are discarded.",
         )
         self._canny_high = self._mk_entry(
-            trace_default(self._settings, "canny_high"),
-            "Upper hysteresis threshold for Canny edge detection.\nEdges above this value are always kept.",
+            "canny_high",
+            "Upper hysteresis threshold for Canny edge detection.\n"
+            "Edges above this value are always kept.",
         )
         self._simplify = self._mk_entry(
-            trace_default(self._settings, "simplify"),
-            "Tolerance for polygon simplification (higher = fewer points)",
+            "simplify", "Polygon simplification tolerance (higher = fewer points)", unit="px"
         )
         self._min_area = self._mk_entry(
-            trace_default(self._settings, "min_area"),
-            "Discard contours smaller than this area",
+            "min_area", "Discard contours smaller than this area", unit="px²"
         )
         self._max_area = self._mk_entry(
-            trace_default(self._settings, "max_area"),
-            "Discard contours larger than this area (leave empty for no limit)",
-            placeholder="none",
+            "max_area",
+            "Discard contours larger than this area",
+            unit="px²",
+            placeholder="no limit",
         )
         self._close_r = self._mk_entry(
-            trace_default(self._settings, "close_r"),
-            "Morphological closing to fill small gaps in edges",
+            "close_r", "Morphological closing radius that fills small gaps in edges", unit="px"
         )
-        self._width_mm = self._mk_entry(
+        self._max_res = self._mk_entry(
+            "max_res",
+            "Maximum pixel dimension when loading the image.\n"
+            "Higher values give finer detail but are slower.",
+            unit="px",
+        )
+        self._width_mm = self._mk_size_entry(
             trace_default(self._settings, "width_mm"),
-            "Target output width in millimetres",
-            on_change=self._on_width_changed,
+            "Target output width",
+            self._commit_width,
+            placeholder="greater than 0",
         )
-        self._height_mm = self._mk_entry(
+        self._height_mm = self._mk_size_entry(
             "",
-            "Target output height in millimetres",
-            on_change=self._on_height_changed,
+            "Target output height; with Lock aspect ratio on, the width follows",
+            self._commit_height,
             placeholder="auto",
         )
-        self._width_mm.blockSignals(True)
-        self._width_mm.setText(f"{float(self._width_mm.text() or 50.0):.2f}")
-        self._width_mm.blockSignals(False)
-        self._max_res = self._mk_entry(
-            trace_default(self._settings, "max_res"),
-            "Maximum pixel dimension when loading the image.\nHigher values give finer detail but are slower.",
-        )
+        try:
+            self._set_size_mm(self._width_mm, float(self._width_mm.text() or 50.0))
+        except ValueError:
+            pass
 
         self._edge_mode_cb = QCheckBox("Edge mode  (line art / Canny)")
         self._edge_mode_cb.setToolTip(
@@ -525,76 +555,96 @@ class TracePage(BasePage):
         self._lock_cb.setToolTip("Keep width and height proportional when resizing")
         self._lock_cb.stateChanged.connect(self._on_aspect_lock_changed)
 
-        self._blur_slider = NoWheelSlider(Qt.Orientation.Horizontal)
-        self._blur_slider.setRange(0, BLUR_SLIDER_MAX)
-        # Initial position derives from the field default (TRACE_DEFAULTS or
-        # the user's Settings override) so slider and text never start out
-        # of sync.
-        try:
-            blur_default = float(trace_default(self._settings, "blur"))
-        except ValueError:
-            blur_default = 0.0
-        self._blur_slider.setValue(int(blur_default * BLUR_SLIDER_SCALE))
-        self._blur_slider.setToolTip("Drag to adjust the blur radius (0.0 – 5.0)")
-        self._blur_slider.valueChanged.connect(self._on_blur_slider)
-
-        self._thresh_slider = NoWheelSlider(Qt.Orientation.Horizontal)
-        self._thresh_slider.setRange(0, THRESHOLD_SLIDER_MAX)
-        try:
-            thresh_default = int(float(trace_default(self._settings, "threshold")))
-        except ValueError:
-            thresh_default = THRESHOLD_SLIDER_MAX // 2
-        self._thresh_slider.setValue(thresh_default)
-        self._thresh_slider.setToolTip("Drag to adjust the brightness threshold")
-        self._thresh_slider.valueChanged.connect(self._on_thresh_slider)
-
-    def _on_blur_text(self, text: str) -> None:
-        try:
-            val = float(text)
-            if 0.0 <= val <= BLUR_SLIDER_MAX / BLUR_SLIDER_SCALE:
-                self._blur_slider.blockSignals(True)
-                self._blur_slider.setValue(int(val * BLUR_SLIDER_SCALE))
-                self._blur_slider.blockSignals(False)
-        except ValueError:
-            pass
-        self._schedule_trace()
-
-    def _on_blur_slider(self, value: int) -> None:
-        self._blur.blockSignals(True)
-        self._blur.setText(f"{value / BLUR_SLIDER_SCALE:.1f}")
-        self._blur.blockSignals(False)
-        self._schedule_trace()
-
     def _mk_entry(
         self,
-        default: str,
-        tooltip: str,
+        key: str,
+        description: str,
         *,
-        placeholder: str = "",
-        on_change=None,
+        unit: str = "",
+        placeholder: str | None = None,
     ) -> QLineEdit:
+        """A detection field validated by ``TRACE_FIELD_LIMITS[key]``."""
+        limits = TRACE_FIELD_LIMITS[key]
+        valid = (
+            f"{limits.minimum:g}–{limits.maximum:g}"
+            if limits.maximum is not None
+            else f"{limits.minimum:g} or more"
+        )
+        if unit:
+            valid += f" {unit}"
+        empty_note = "; leave empty for no limit" if limits.allow_empty else ""
+        default = trace_default(self._settings, key)
         entry = QLineEdit(default)
         make_resettable_line_edit(entry, default)
-        entry.setToolTip(tooltip)
-        entry.setPlaceholderText(placeholder)
-        if on_change is None:
-            entry.textChanged.connect(self._schedule_trace)
-        else:
-            entry.textChanged.connect(on_change)
+        entry.setToolTip(f"{description}\nValid: {valid}{empty_note}")
+        entry.setPlaceholderText(valid if placeholder is None else placeholder)
+        self._bind_commit(entry, lambda: self._commit_field(entry, key))
         return entry
+
+    def _mk_size_entry(
+        self, default: str, description: str, commit, *, placeholder: str
+    ) -> QLineEdit:
+        """An output-size field in the canvas display unit."""
+        entry = QLineEdit(default)
+        make_resettable_line_edit(entry, default)
+        entry.setToolTip(
+            f"{description}. Must be greater than zero.\n"
+            "Accepts arithmetic and units, e.g. 25/2 or 1in + 3mm."
+        )
+        entry.setPlaceholderText(placeholder)
+        self._bind_commit(entry, commit)
+        return entry
+
+    @staticmethod
+    def _bind_commit(entry: QLineEdit, commit) -> None:
+        """Commit a typed value on Enter/focus-out, and after the reset button."""
+        entry.editingFinished.connect(commit)
+        reset = next(iter(entry.findChildren(QToolButton)), None)
+        if reset is None:
+            return
+
+        def commit_reset() -> None:
+            entry.setModified(True)
+            commit()
+
+        # The reset button restores the default on the next event-loop turn;
+        # this timer is queued after it, so it commits the restored value.
+        reset.clicked.connect(lambda: QTimer.singleShot(0, commit_reset))
+
+    def _slider_field(
+        self,
+        label: str,
+        entry: QLineEdit,
+        key: str,
+        *,
+        maximum: float,
+        step: float = 1.0,
+        empty_at_minimum: bool = False,
+    ) -> SliderField:
+        """Entry + slider; the slider retraces live, the entry on commit."""
+        field = SliderField(
+            label,
+            entry=entry,
+            minimum=TRACE_FIELD_LIMITS[key].minimum,
+            maximum=maximum,
+            step=step,
+            empty_at_minimum=empty_at_minimum,
+            tooltip=entry.toolTip(),
+        )
+        field.slider.valueChanged.connect(lambda _value: self._on_slider_moved(entry))
+        return field
+
+    def _on_slider_moved(self, entry: QLineEdit) -> None:
+        clear_line_edit_error(entry)
+        self._schedule_trace()
 
     def _build_essential_fields(self, layout: QVBoxLayout) -> None:
         detection_label = QLabel("Detection")
         detection_label.setProperty("role", "section-label")
         layout.addWidget(detection_label)
         layout.addWidget(
-            TextField(
-                "Blur radius",
-                entry=self._blur,
-                tooltip=self._blur.toolTip(),
-            )
+            self._slider_field("Blur radius (px)", self._blur, "blur", maximum=5, step=0.1)
         )
-        layout.addWidget(self._blur_slider)
         layout.addWidget(self._edge_mode_cb)
 
         self._thresh_widget = QWidget()
@@ -602,14 +652,11 @@ class TracePage(BasePage):
         tw_layout.setContentsMargins(0, 0, 0, 0)
         tw_layout.setSpacing(4)
         tw_layout.addWidget(self._auto_thresh_cb)
-        tw_layout.addWidget(
-            TextField(
-                "Threshold (0-255)",
-                entry=self._thresh_entry,
-                tooltip=self._thresh_entry.toolTip(),
-            )
+        thresh_field = self._slider_field(
+            "Threshold (0–255)", self._thresh_entry, "threshold", maximum=255
         )
-        tw_layout.addWidget(self._thresh_slider)
+        self._thresh_slider = thresh_field.slider
+        tw_layout.addWidget(thresh_field)
         tw_layout.addWidget(self._invert_cb)
         layout.addWidget(self._thresh_widget)
 
@@ -619,32 +666,31 @@ class TracePage(BasePage):
         cw_layout.setContentsMargins(0, 0, 0, 0)
         cw_layout.setSpacing(4)
         cw_layout.addWidget(
-            TextField("Canny low", entry=self._canny_low, tooltip=self._canny_low.toolTip())
+            self._slider_field("Canny low (1–255)", self._canny_low, "canny_low", maximum=255)
         )
         cw_layout.addWidget(
-            TextField(
-                "Canny high",
-                entry=self._canny_high,
-                tooltip=self._canny_high.toolTip(),
-            )
+            self._slider_field("Canny high (1–255)", self._canny_high, "canny_high", maximum=255)
         )
         layout.addWidget(self._canny_widget)
 
         size_label = QLabel("Output size")
         size_label.setProperty("role", "section-label")
         layout.addWidget(size_label)
-        layout.addWidget(
-            TextField("Width (mm)", entry=self._width_mm, tooltip=self._width_mm.toolTip())
-        )
-        layout.addWidget(
-            TextField(
-                "Height (mm)",
-                entry=self._height_mm,
-                required=False,
-                tooltip=self._height_mm.toolTip(),
-            )
-        )
+        suffix = unit_suffix(self._size_unit)
+        self._width_field = TextField(f"Width ({suffix})", entry=self._width_mm)
+        self._height_field = TextField(f"Height ({suffix})", entry=self._height_mm, required=False)
+        layout.addWidget(self._width_field)
+        layout.addWidget(self._height_field)
         layout.addWidget(self._lock_cb)
+        units_hint = QLabel(
+            f"Image-cleanup controls use source-image px; output dimensions use {suffix}. "
+            "With aspect lock on, Height is derived from Width (editing Height updates Width); "
+            "the line below shows source pixels and current output size. Use ✕ on either "
+            "field to restore its default."
+        )
+        units_hint.setProperty("role", "hint-sm")
+        units_hint.setWordWrap(True)
+        layout.addWidget(units_hint)
         self._size_info_lbl = QLabel("")
         self._size_info_lbl.setProperty("role", "hint-sm")
         self._size_info_lbl.setWordWrap(True)
@@ -653,53 +699,28 @@ class TracePage(BasePage):
 
     def _build_advanced_fields(self, layout: QVBoxLayout) -> None:
         layout.addWidget(
-            SliderField(
-                "Simplify (px)",
-                entry=self._simplify,
-                minimum=0,
-                maximum=10,
-                step=0.1,
-                tooltip=self._simplify.toolTip(),
-            )
+            self._slider_field("Simplify (px)", self._simplify, "simplify", maximum=10, step=0.1)
         )
         layout.addWidget(
-            SliderField(
-                "Min area (px²)",
-                entry=self._min_area,
-                minimum=0,
-                maximum=1000,
-                tooltip=self._min_area.toolTip(),
-            )
+            self._slider_field("Min area (px²)", self._min_area, "min_area", maximum=1000)
         )
         layout.addWidget(
-            SliderField(
+            self._slider_field(
                 "Max area (px²)",
-                entry=self._max_area,
-                minimum=0,
+                self._max_area,
+                "max_area",
                 maximum=1_000_000,
                 step=100,
                 empty_at_minimum=True,
-                tooltip=self._max_area.toolTip(),
             )
         )
         layout.addWidget(
-            SliderField(
-                "Closing radius",
-                entry=self._close_r,
-                minimum=0,
-                maximum=20,
-                tooltip=self._close_r.toolTip(),
-            )
+            self._slider_field("Closing radius (px)", self._close_r, "close_r", maximum=20)
         )
         layout.addWidget(self._outer_only_cb)
         layout.addWidget(
-            SliderField(
-                "Max resolution",
-                entry=self._max_res,
-                minimum=64,
-                maximum=8000,
-                step=16,
-                tooltip=self._max_res.toolTip(),
+            self._slider_field(
+                "Max resolution (px)", self._max_res, "max_res", maximum=8000, step=16
             )
         )
 
@@ -806,6 +827,8 @@ class TracePage(BasePage):
             unit=lambda: getattr(self._canvas, "_unit_system", "mm")
         )
         self._image_panel.placementEdited.connect(self._apply_image_placement)
+        self._image_panel.centerOnBedRequested.connect(lambda: self._place_image_on_bed(fit=False))
+        self._image_panel.fitToBedRequested.connect(lambda: self._place_image_on_bed(fit=True))
         # Same inspector anatomy as Draft: numeric panel above, layers below.
         inspector_splitter = QSplitter(Qt.Orientation.Vertical)
         inspector_splitter.setChildrenCollapsible(False)
@@ -860,6 +883,7 @@ class TracePage(BasePage):
         self._img_w_px = 0
         self._img_h_px = 0
         self._img_aspect = 1.0
+        self._last_contour_count = None
         if hasattr(self, "_img_info_lbl"):
             self._img_info_lbl.setText("")
         if hasattr(self, "_thumb_lbl"):
@@ -872,10 +896,13 @@ class TracePage(BasePage):
             self._progress.setVisible(False)
 
     def _update_trace_action_states(self) -> None:
+        self._sync_size_unit()
         has_image = bool(self._img_path or self._last_display_img is not None)
         has_polys = bool(self._canvas.poly_count) if hasattr(self, "_canvas") else False
         has_selection = bool(self._canvas.sel_count) if hasattr(self, "_canvas") else False
         self._bg_visible_cb.setEnabled(has_image)
+        # Dragging the picture needs it visible; the numeric Image panel
+        # stays usable while the background is hidden.
         shows_image = has_image and self._bg_visible_cb.isChecked()
         if not shows_image:
             self._adjust_image_btn.setChecked(False)
@@ -894,13 +921,101 @@ class TracePage(BasePage):
         self._next_btn.setEnabled(has_polys)
         self._next_more.setEnabled(has_polys)
 
-    def _parse_float_field(
-        self,
-        entry: QLineEdit,
-        label: str,
-        **kw,
-    ) -> float | None:
-        return parse_float_field_with_feedback(entry, label, self._set_status, **kw)
+    # ── Field validation ──────────────────────────────────────────────────────
+
+    def _reject(self, entry: QLineEdit, message: str) -> NoReturn:
+        """Mark *entry* invalid, report why, and abort the caller's commit."""
+        reject_input(entry, message)
+        self._set_status(message, STATUS_ERR)
+        raise ValueError(message)
+
+    def _parse_field(self, entry: QLineEdit, key: str) -> float | None:
+        """Validate a detection field against ``TRACE_FIELD_LIMITS[key]``."""
+        limits = TRACE_FIELD_LIMITS[key]
+        text = entry.text().strip()
+        if not text:
+            if limits.allow_empty:
+                clear_line_edit_error(entry)
+                return None
+            self._reject(entry, f"{limits.label} is required")
+        try:
+            value = parse_numeric_expression(text, is_length=False)
+        except ValueError:
+            self._reject(entry, f"{limits.label}: {_EXPRESSION_HINT}")
+        if value < limits.minimum:
+            self._reject(entry, f"{limits.label} must be at least {limits.minimum:g}")
+        if limits.maximum is not None and value > limits.maximum:
+            self._reject(entry, f"{limits.label} must be at most {limits.maximum:g}")
+        clear_line_edit_error(entry)
+        return value
+
+    def _commit_field(self, entry: QLineEdit, key: str) -> None:
+        if not entry.isModified():
+            return
+        entry.setModified(False)
+        try:
+            self._parse_field(entry, key)
+        except ValueError:
+            return
+        self._schedule_trace()
+
+    # ── Output size (canvas display unit) ─────────────────────────────────────
+
+    def _sync_size_unit(self) -> None:
+        """Re-express Width/Height when the canvas display unit has changed."""
+        if not hasattr(self, "_canvas"):
+            return
+        unit = str(getattr(self._canvas, "_unit_system", "mm"))
+        if unit == self._size_unit:
+            return
+        old_unit, self._size_unit = self._size_unit, unit
+        for entry in (self._width_mm, self._height_mm):
+            try:
+                value_mm = parse_numeric_expression(entry.text(), old_unit)
+            except ValueError:
+                continue  # blank or invalid: leave the text for the user
+            self._set_size_mm(entry, value_mm)
+        suffix = unit_suffix(unit)
+        self._width_field.set_label(f"Width ({suffix})")
+        self._height_field.set_label(f"Height ({suffix})")
+        self._update_height_from_width()
+
+    def _set_size_mm(self, entry: QLineEdit, value_mm: float) -> None:
+        decimals = 4 if self._size_unit == "in" else 2
+        entry.setText(f"{to_display(value_mm, self._size_unit):.{decimals}f}")
+        clear_line_edit_error(entry)
+
+    def _size_mm(self, entry: QLineEdit) -> float | None:
+        """The field's length in mm, or None when blank/invalid (no feedback)."""
+        self._sync_size_unit()
+        try:
+            value = parse_numeric_expression(entry.text(), self._size_unit)
+        except ValueError:
+            return None
+        return value if value > 0 else None
+
+    def _parse_size(self, entry: QLineEdit, label: str) -> float:
+        """The field's length in mm; rejects the entry when invalid."""
+        self._sync_size_unit()
+        try:
+            value = parse_numeric_expression(entry.text(), self._size_unit)
+        except ValueError:
+            self._reject(entry, f"{label}: {_EXPRESSION_HINT} or 1in + 3mm")
+        if value <= 0:
+            self._reject(entry, f"{label} must be greater than zero")
+        clear_line_edit_error(entry)
+        return value
+
+    def _size_state(self, entry: QLineEdit) -> str:
+        """Workspace form of an output-size field: mm, or the raw text if invalid."""
+        value_mm = self._size_mm(entry)
+        return entry.text() if value_mm is None else f"{value_mm:.2f}"
+
+    def _restore_size(self, entry: QLineEdit, text_mm: str) -> None:
+        try:
+            self._set_size_mm(entry, float(text_mm))
+        except ValueError:
+            entry.setText(text_mm)
 
     def _on_sel_change(self, count: int) -> None:
         if hasattr(self, "_canvas_runtime"):
@@ -975,8 +1090,10 @@ class TracePage(BasePage):
                 )
             )
             self._thumb_lbl.setVisible(True)
-            # A newly chosen picture starts unmoved and unrotated.
+            # A newly chosen picture starts unmoved and unrotated, with no
+            # earlier trace to compare against.
             self._image_x_mm = self._image_y_mm = self._image_rotation_deg = 0.0
+            self._last_contour_count = None
             self._img_info_lbl.setText(
                 f"{Path(path).name}  ·  {self._img_w_px}×{self._img_h_px} px"
             )
@@ -995,40 +1112,52 @@ class TracePage(BasePage):
     def _update_height_from_width(self) -> None:
         if self._img_aspect <= 0:
             return
-        try:
-            w = float(self._width_mm.text() or "50.0")
-            h = w / self._img_aspect
-            self._height_mm.blockSignals(True)
-            self._height_mm.setText(f"{h:.2f}")
-            self._height_mm.blockSignals(False)
-            if self._img_w_px and self._img_h_px:
-                self._size_info_lbl.setText(
-                    f"{self._img_w_px}×{self._img_h_px} px → {w:.2f}×{h:.2f} mm"
-                )
-        except ValueError:
-            pass
+        w = self._size_mm(self._width_mm)
+        if w is None:
+            return
+        h = w / self._img_aspect
+        self._set_size_mm(self._height_mm, h)
+        if self._img_w_px and self._img_h_px:
+            unit = self._size_unit
+            self._size_info_lbl.setText(
+                f"{self._img_w_px}×{self._img_h_px} px → "
+                f"{to_display(w, unit):.2f}×{to_display(h, unit):.2f} {unit_suffix(unit)}"
+            )
 
     def _on_aspect_lock_changed(self, state: int) -> None:
         self._aspect_locked = bool(state)
         if self._aspect_locked:
             self._update_height_from_width()
 
-    def _on_width_changed(self, *_) -> None:
+    def _commit_width(self) -> None:
+        if not self._width_mm.isModified():
+            return
+        self._width_mm.setModified(False)
+        try:
+            width = self._parse_size(self._width_mm, "Width")
+        except ValueError:
+            return
+        self._set_size_mm(self._width_mm, width)
         if self._aspect_locked:
             self._update_height_from_width()
         self._schedule_trace()
 
-    def _on_height_changed(self, *_) -> None:
+    def _commit_height(self) -> None:
+        if not self._height_mm.isModified():
+            return
+        self._height_mm.setModified(False)
+        try:
+            height = self._parse_size(self._height_mm, "Height")
+        except ValueError:
+            return
+        # The trace is sized by width; height drives it only through the
+        # locked aspect ratio.
         if self._aspect_locked and self._img_aspect > 0:
-            try:
-                h = float(self._height_mm.text() or "0")
-                w = h * self._img_aspect
-                self._width_mm.blockSignals(True)
-                self._width_mm.setText(f"{w:.2f}")
-                self._width_mm.blockSignals(False)
-            except ValueError:
-                pass
-        self._schedule_trace()
+            self._set_size_mm(self._width_mm, height * self._img_aspect)
+            self._update_height_from_width()
+            self._schedule_trace()
+        else:
+            self._set_size_mm(self._height_mm, height)
 
     # ── Tracing ───────────────────────────────────────────────────────────────
 
@@ -1055,6 +1184,7 @@ class TracePage(BasePage):
             return
         self._trace_revision += 1
         self._trace_pending = False
+        self._trace_result_stale = bool(self._canvas.poly_count)
         self._preview_timer.stop()
         self._cancel_event.set()
         # The old worker keeps its own cancellation event reference. Mark this
@@ -1113,7 +1243,6 @@ class TracePage(BasePage):
             min_area=self._min_area,
             max_area=self._max_area,
             close_r=self._close_r,
-            width_mm=self._width_mm,
             max_res=self._max_res,
             threshold=self._thresh_entry,
             canny_low=self._canny_low,
@@ -1126,18 +1255,13 @@ class TracePage(BasePage):
         try:
             kwargs = build_trace_kwargs(
                 fields,
-                parse_float_field=self._parse_float_field,
+                width_mm=self._parse_size(self._width_mm, "Width"),
+                parse_field=self._parse_field,
                 on_progress=lambda pct, lbl: self._trace_progress.emit(trace_token, pct, lbl),
             )
         except ValueError:
-            # _parse_float_field (like every other page's) raises on an
-            # invalid/empty field rather than returning None — a field can
-            # go transiently empty mid-edit (e.g. select-all then retype)
-            # right when the debounce timer fires. The status bar already
-            # got the error message from parse_float_field_with_feedback;
-            # just skip this retrace instead of crashing the app.
-            return
-        if kwargs is None:
+            # The invalid field is already marked and the reason is in the
+            # status line; keep the last preview instead of tracing.
             return
 
         self._running = True
@@ -1152,7 +1276,10 @@ class TracePage(BasePage):
         self._active_trace_token = trace_token
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
-        self._set_status("Tracing…")
+        self._set_status(
+            "Preview out of date — tracing…" if self._trace_result_stale else "Tracing…",
+            STATUS_WARN if self._trace_result_stale else STATUS_NEUTRAL,
+        )
         self._reload_btn.setText("Restart Trace")
         self._reload_btn.setToolTip("Abandon the current trace and start a fresh one")
         self._trace_thread = threading.Thread(
@@ -1212,10 +1339,13 @@ class TracePage(BasePage):
         self._last_display_img = _display_img
         self._last_width_mm = width_mm_val
         self._last_height_mm = height_mm_val
+        unit = self._size_unit
+        size_text = (
+            f"{to_display(width_mm_val, unit):.2f}×{to_display(height_mm_val, unit):.2f} "
+            f"{unit_suffix(unit)}"
+        )
         if hasattr(self, "_trace_settings_section"):
-            self._trace_settings_section.set_subtitle(
-                f"{count} contour(s) · {width_mm_val:.0f}×{height_mm_val:.0f} mm"
-            )
+            self._trace_settings_section.set_subtitle(f"{count} contour(s) · {size_text}")
         if _display_img is not None and self._bg_visible_cb.isChecked():
             self._show_background()
         if polys:
@@ -1227,10 +1357,16 @@ class TracePage(BasePage):
             self._needs_view_fit = False
             self._source_section.set_expanded(False)
             self._thumb_lbl.setMaximumHeight(64)
+            previous, self._last_contour_count = self._last_contour_count, count
+            if previous is None:
+                change = ""
+            elif previous == count:
+                change = " (unchanged)"
+            else:
+                change = f" ({count - previous:+d} vs previous)"
             self._set_status(
-                f"{count} contour(s) extracted  ·  "
-                f"{img_w_px}×{img_h_px} px → "
-                f"{width_mm_val:.2f}×{height_mm_val:.2f} mm · "
+                f"{count} contour(s){change} extracted  ·  "
+                f"{img_w_px}×{img_h_px} px → {size_text} · "
                 f"{sum(len(poly) for poly in polys)} vertices · "
                 f"{diagnostics.closed} closed/{diagnostics.open} open · "
                 f"{diagnostics.tiny_paths} tiny",
@@ -1282,16 +1418,25 @@ class TracePage(BasePage):
             remedy = "Review Trace Settings and choose Refresh Preview to retry."
         return f"Trace failed; the previous result is retained. {remedy} Details: {message}"
 
+    def _show_next_action(self, choice: str) -> None:
+        """Show the active destination on the primary button and in the menu."""
+        if choice not in _NEXT_ACTIONS:
+            choice = "draft"
+        label, description = _NEXT_ACTIONS[choice]
+        self._next_btn.setText(label)
+        self._next_btn.setToolTip(
+            f"{description}.\nChange the destination with the Next step menu beside it."
+        )
+        self._next_actions[choice].setChecked(True)
+
     def _select_next_action(self, choice: str) -> None:
         """Remember the destination without unexpectedly leaving the page."""
         self._settings["trace_next_action"] = choice
-        labels = {
-            "draft": "Next — Edit in Draft",
-            "pattern": "Next — Use in Pattern",
-            "export": "Next — Export DXF",
-        }
-        self._next_btn.setText(labels.get(choice, labels["draft"]))
-        self._set_status("Next step updated. Select Continue when the trace is ready.", STATUS_OK)
+        self._show_next_action(choice)
+        self._set_status(
+            f"Next step set: {self._next_btn.text()} — choose it when the trace is ready.",
+            STATUS_OK,
+        )
 
     def _run_remembered_next(self) -> None:
         choice = str(self._settings.get("trace_next_action", "draft"))
@@ -1303,13 +1448,60 @@ class TracePage(BasePage):
             self._set_status("Trace an image before continuing.", STATUS_WARN)
             return
         if choice == "pattern":
-            closed = [poly for poly in polys if len(poly) >= 4 and poly[0] == poly[-1]]
-            if not closed:
-                self._set_status("Pattern needs one or more closed trace outlines.", STATUS_WARN)
-                return
-            self.sendSelectedToPatternRequested.emit(closed)
+            self._send_to_pattern(polys)
         else:
             self.sendSelectedToDraftRequested.emit(polys)
+
+    def _send_to_pattern(self, polys: list[list[tuple[float, float]]]) -> None:
+        """Hand closed outlines to Pattern; explain and offer Draft for open ones."""
+        closed = [poly for poly in polys if _is_closed(poly)]
+        open_polys = [poly for poly in polys if not _is_closed(poly)]
+        if not open_polys:
+            self.sendSelectedToPatternRequested.emit(closed)
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Open contours")
+        pattern_btn = None
+        if closed:
+            box.setText(
+                f"{len(open_polys)} open contour(s) can't be used in Pattern and will be excluded."
+            )
+            box.setInformativeText(
+                f"{len(closed)} closed outline(s) will be sent to Pattern. Send the open "
+                "contours to Draft to close or repair them."
+            )
+            pattern_btn = box.addButton(
+                f"Send {len(closed)} to Pattern", QMessageBox.ButtonRole.AcceptRole
+            )
+            draft_btn = box.addButton("Send Open to Draft", QMessageBox.ButtonRole.ActionRole)
+        else:
+            box.setText(
+                f"None of the {len(open_polys)} traced contour(s) are closed, so Pattern "
+                "can't use them."
+            )
+            box.setInformativeText(
+                "Increase Closing radius or turn off Edge mode and retrace, or send the "
+                "contours to Draft to close them."
+            )
+            draft_btn = box.addButton("Send to Draft", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if pattern_btn is not None and clicked is pattern_btn:
+            self._set_status(
+                f"Sent {len(closed)} closed outline(s) to Pattern; "
+                f"{len(open_polys)} open contour(s) excluded.",
+                STATUS_WARN,
+            )
+            self.sendSelectedToPatternRequested.emit(closed)
+        elif clicked is draft_btn:
+            self.sendSelectedToDraftRequested.emit(open_polys)
+        else:
+            self._set_status(
+                f"Nothing sent — {len(open_polys)} open contour(s) need closing for Pattern.",
+                STATUS_WARN,
+            )
 
     def _handle_trace_cancelled(self, trace_token: int) -> None:
         """Reset the UI only for the currently active worker's cancellation."""
@@ -1355,26 +1547,10 @@ class TracePage(BasePage):
         self._progress.setRange(0, 100)
         self._progress.setValue(percent)
         if percent < 100:
-            self._set_status(label)
-
-    def _on_thresh_text(self, text: str) -> None:
-        """Sync the slider to match the text field value, then retrace."""
-        try:
-            val = int(text)
-        except (ValueError, TypeError):
-            self._schedule_trace()
-            return
-        val = max(0, min(255, val))
-        self._thresh_slider.blockSignals(True)
-        self._thresh_slider.setValue(val)
-        self._thresh_slider.blockSignals(False)
-        self._schedule_trace()
-
-    def _on_thresh_slider(self, value: int) -> None:
-        self._thresh_entry.blockSignals(True)
-        self._thresh_entry.setText(str(value))
-        self._thresh_entry.blockSignals(False)
-        self._schedule_trace()
+            self._set_status(
+                f"Preview out of date — {label}" if self._trace_result_stale else label,
+                STATUS_WARN if self._trace_result_stale else STATUS_NEUTRAL,
+            )
 
     def _on_bg_visible_changed(self, state: int) -> None:
         if state and self._last_display_img is not None:
@@ -1449,9 +1625,7 @@ class TracePage(BasePage):
             moved.place(local_polys, (start.width_mm, start.height_mm))
         )
         if abs(w - start.width_mm) > 1e-6:
-            self._width_mm.blockSignals(True)
-            self._width_mm.setText(f"{w:.2f}")
-            self._width_mm.blockSignals(False)
+            self._set_size_mm(self._width_mm, w)
             self._update_height_from_width()
         self._refresh_image_panel()
 
@@ -1460,11 +1634,42 @@ class TracePage(BasePage):
     ) -> None:
         """A typed placement: one complete edit through the same path as a drag."""
         self._on_image_transform(x, y, w, h, rotation)
-        self._show_background()
+        if self._bg_visible_cb.isChecked():
+            self._show_background()
         self._on_image_edit_finished()
 
+    def _place_image_on_bed(self, *, fit: bool) -> None:
+        """Centre (or fit, keeping proportions) the picture on the machine bed."""
+        profile = machine_profile_from_settings(self._settings)
+        if not profile.has_bed():
+            self._set_status(
+                "Set the machine bed size in Settings to centre or fit the image on it.",
+                STATUS_WARN,
+            )
+            return
+        assert profile.bed_width_mm is not None and profile.bed_height_mm is not None
+        current = self._image_placement()
+        target = (
+            current.fitted_to(profile.bed_width_mm, profile.bed_height_mm)
+            if fit
+            else current.centered_on(profile.bed_width_mm, profile.bed_height_mm)
+        )
+        self._apply_image_placement(
+            target.x_mm, target.y_mm, target.width_mm, target.height_mm, target.rotation_deg
+        )
+        unit = self._size_unit
+        suffix = unit_suffix(unit)
+        self._set_status(
+            f"Image {'fitted to' if fit else 'centred on'} the bed — X "
+            f"{to_display(target.x_mm, unit):.2f}, Y {to_display(target.y_mm, unit):.2f}, "
+            f"{to_display(target.width_mm, unit):.2f}×{to_display(target.height_mm, unit):.2f} "
+            f"{suffix}",
+            STATUS_OK,
+        )
+
     def _refresh_image_panel(self) -> None:
-        shown = self._last_display_img is not None and self._bg_visible_cb.isChecked()
+        # Numeric placement works whether or not the background is shown.
+        loaded = bool(self._img_path or self._last_display_img is not None)
         placement = self._image_placement()
         self._image_panel.set_placement(
             (
@@ -1474,7 +1679,7 @@ class TracePage(BasePage):
                 placement.height_mm,
                 placement.rotation_deg,
             )
-            if shown and placement.width_mm > 0
+            if loaded and placement.width_mm > 0
             else None
         )
 
@@ -1551,7 +1756,7 @@ class TracePage(BasePage):
         polys: list[list[tuple[float, float]]],
     ) -> None:
         if polys:
-            self.sendSelectedToPatternRequested.emit(polys)
+            self._send_to_pattern(polys)
 
     def _fit_selection(self) -> None:
         if self._canvas_runtime.fit_selection():

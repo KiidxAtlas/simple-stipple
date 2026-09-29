@@ -753,6 +753,14 @@ COMMANDS: tuple[Command, ...] = (
         settings_key="canvas.fit",
     ),
     Command(
+        "view.fit_selection",
+        "Fit Selection",
+        lambda v: v.fit_selection(),
+        "Shift+F",
+        category="View",
+        when=lambda v: bool(v._sel),
+    ),
+    Command(
         "view.zoom_in",
         "Zoom In",
         lambda v: v._zoom_by(1.15),
@@ -911,6 +919,21 @@ def native_shortcut(cmd_id: str) -> str:
     if not sc:
         return ""
     return QKeySequence(sc).toString(QKeySequence.SequenceFormat.NativeText)
+
+
+def native_binding(keybinding_id: str, default: str) -> str:
+    """Native display text for an app-level binding with no canvas Command
+    (e.g. Select mode): the user's override if set, else *default*."""
+    spec = _OVERRIDES.get(keybinding_id, default)
+    if not spec:
+        return ""
+    return QKeySequence(spec).toString(QKeySequence.SequenceFormat.NativeText)
+
+
+def tooltip_text(cmd_id: str, description: str) -> str:
+    """Tooltip text: description plus the command's live native shortcut."""
+    sc = native_shortcut(cmd_id)
+    return f"{description} ({sc})" if sc else description
 
 
 def menu_text(cmd_id: str, label: str | None = None) -> str:

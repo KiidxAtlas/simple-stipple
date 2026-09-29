@@ -148,12 +148,6 @@ class ConvertPage(BasePage):
         self._task_combo.setVisible(False)
         left.addWidget(self._task_combo)
 
-        # FVI is the default task and the first format newcomers meet, but the
-        # acronym is opaque — gloss it once, right under the chooser.
-        fvi_gloss = QLabel("FVI is the FiberStar/StarFX laser format")
-        fvi_gloss.setProperty("role", "hint")
-        left.addWidget(fvi_gloss)
-
         left.addSpacing(4)
 
         self._subtab_desc = QLabel(self._TOOLS[0].description)
@@ -311,7 +305,7 @@ class ConvertPage(BasePage):
         _ev.addStretch()
         self._right_stack.addWidget(_empty_w)
 
-        # Page 1 — canvas + log
+        # Shared result area: selected file list on the left, preview and log on the right.
         _canvas_w = QWidget()
         _cl = QVBoxLayout(_canvas_w)
         _cl.setContentsMargins(0, 0, 0, 0)
@@ -346,8 +340,13 @@ class ConvertPage(BasePage):
         _cl.addWidget(self._log)
 
         self._results_panel = surface_frame("panel")
-        results_layout = QVBoxLayout(self._results_panel)
+        results_layout = QHBoxLayout(self._results_panel)
         results_layout.setContentsMargins(8, 8, 8, 8)
+        result_list_panel = QWidget()
+        result_list_layout = QVBoxLayout(result_list_panel)
+        result_list_layout.setContentsMargins(0, 0, 0, 0)
+        result_list_layout.setSpacing(6)
+        results_layout.addWidget(result_list_panel, stretch=1)
         result_controls = QHBoxLayout()
         result_controls.addWidget(QLabel("File results"), stretch=1)
         self._retry_failed_btn = QPushButton("Retry failed")
@@ -356,16 +355,16 @@ class ConvertPage(BasePage):
         self._open_result_btn = QPushButton("Open output")
         self._open_result_btn.clicked.connect(self._open_result_output)
         result_controls.addWidget(self._open_result_btn)
-        results_layout.addLayout(result_controls)
+        result_list_layout.addLayout(result_controls)
         self._file_results = QListWidget()
         self._file_results.setAccessibleName("Conversion file results")
         self._file_results.currentItemChanged.connect(self._update_result_actions)
-        results_layout.addWidget(self._file_results, stretch=1)
-        self._show_preview_btn = QPushButton("Preview / log")
-        self._show_preview_btn.clicked.connect(lambda: self._right_stack.setCurrentIndex(1))
-        result_controls.addWidget(self._show_preview_btn)
+        result_list_layout.addWidget(self._file_results, stretch=1)
+        self._result_detail = QLabel("Select a file to inspect its status and preview.")
+        self._result_detail.setProperty("role", "hint")
+        self._result_detail.setWordWrap(True)
+        result_list_layout.addWidget(self._result_detail)
 
-        self._right_stack.addWidget(_canvas_w)
         self._right_stack.addWidget(self._results_panel)
         self._right_stack.setCurrentIndex(0)
         right.addWidget(self._footer_widget)
@@ -377,11 +376,14 @@ class ConvertPage(BasePage):
         self._open_pattern_btn.setEnabled(False)
         self._open_draft_btn.clicked.connect(self._open_preview_in_draft)
         self._open_pattern_btn.clicked.connect(self._open_preview_in_pattern)
-        result_actions.addWidget(self._open_draft_btn)
-        result_actions.addWidget(self._open_pattern_btn)
+        handoff_actions = QHBoxLayout()
+        handoff_actions.addWidget(self._open_draft_btn)
+        handoff_actions.addWidget(self._open_pattern_btn)
+        result_list_layout.addLayout(handoff_actions)
+        results_layout.addWidget(_canvas_w, stretch=2)
         self._show_results_btn = QPushButton("File results")
         self._show_results_btn.setEnabled(False)
-        self._show_results_btn.clicked.connect(lambda: self._right_stack.setCurrentIndex(2))
+        self._show_results_btn.clicked.connect(lambda: self._right_stack.setCurrentIndex(1))
         result_actions.addWidget(self._show_results_btn)
         right.addLayout(result_actions)
 
@@ -392,7 +394,7 @@ class ConvertPage(BasePage):
         sidebar_width = max(280, min(320, int(self._settings.get("convert_sidebar_width", 320))))
         self._splitter = content_splitter(self._left_panel, right_w, sizes=(sidebar_width, 860))
         self._splitter.setCollapsible(0, True)
-        self._splitter.set_responsive_secondary(0, "Task controls")
+        self._splitter.set_responsive_secondary(0, "Settings")
         self._splitter.add_drawer_toggle_to(result_actions)
         self._splitter.setStretchFactor(0, 0)
         self._splitter.setStretchFactor(1, 1)
@@ -409,6 +411,8 @@ class ConvertPage(BasePage):
             tab.results_changed.connect(self._refresh_file_results)
             tab.log_line.connect(self._append_log_line)
             tab.preview_path.connect(self._load_preview)
+            tab.batch_progress.connect(self._on_batch_progress)
+            tab.job_finished.connect(self._on_job_finished)
 
         # Secondary overflow action enabled state (guarded by current tab)
         self._fvi_subtab._out_dir_sig.connect(lambda _: self._update_sec_action_if_active(0, True))
@@ -490,9 +494,8 @@ class ConvertPage(BasePage):
         self._shared_input_edit.setAccessibleName("Current conversion input")
         self._shared_input_edit.editingFinished.connect(self._commit_shared_input)
         layout.addWidget(self._shared_input_edit, 1)
-        recent = RecentFilesButton(
-            self._settings, KIND_VECTOR, empty_message="No recent conversion inputs."
-        )
+        recent = RecentFilesButton(self._settings, KIND_VECTOR, empty_message="No recent files")
+        recent.setToolTip("Recent files")
         recent.fileSelected.connect(self._set_shared_source)
         layout.addWidget(recent)
         browse = QPushButton("Browse…")
@@ -633,6 +636,7 @@ class ConvertPage(BasePage):
         still_running = bool(getattr(subtab, "_running", False))
         self._footer_btn.setEnabled(subtab.is_ready())
         self._footer_progress.setVisible(still_running)
+        self._show_progress(subtab._job_completed, subtab._job_total)
         if still_running:
             self._set_footer_status("Working…", STATUS_NEUTRAL)
         else:
@@ -673,11 +677,13 @@ class ConvertPage(BasePage):
             self._file_results.addItem(item)
             if result.source == selected_source:
                 self._file_results.setCurrentItem(item)
+        if self._file_results.currentRow() < 0 and self._file_results.count():
+            self._file_results.setCurrentRow(0)
         self._file_results.blockSignals(False)
         self._show_results_btn.setEnabled(bool(subtab._results))
         if subtab._results:
-            self._right_stack.setCurrentIndex(2)
-        elif self._right_stack.currentIndex() == 2:
+            self._right_stack.setCurrentIndex(1)
+        elif self._right_stack.currentIndex() == 1:
             self._right_stack.setCurrentIndex(1 if self._preview_canvas.poly_count else 0)
         self._update_result_actions()
 
@@ -691,7 +697,23 @@ class ConvertPage(BasePage):
         )
         item = self._file_results.currentItem()
         result = item.data(Qt.ItemDataRole.UserRole) if item else None
-        self._open_result_btn.setEnabled(bool(result and result.status == "Done"))
+        succeeded = bool(result and result.status == "Done")
+        self._open_result_btn.setEnabled(succeeded)
+        if result is None:
+            self._result_detail.setText("Select a file to inspect its status and preview.")
+            self._preview_canvas.set_polylines_state([])
+        else:
+            detail = f"{result.status}  ·  {result.source} → {result.output}"
+            if result.message:
+                detail += f"\n{result.message}"
+            self._result_detail.setText(detail)
+            if succeeded:
+                self._load_preview(str(result.output))
+            else:
+                self._preview_canvas.set_polylines_state([])
+        has_preview = succeeded and bool(self._preview_canvas.poly_count)
+        self._open_draft_btn.setEnabled(has_preview)
+        self._open_pattern_btn.setEnabled(has_preview)
 
     def _retry_failed_results(self) -> None:
         subtab = self._tool_stack.currentWidget()
@@ -750,6 +772,44 @@ class ConvertPage(BasePage):
         if not bool(getattr(subtab, "_running", False)):
             self._footer_progress.setVisible(False)
 
+    def _show_progress(self, completed: int, total: int) -> None:
+        """Determinate for a known multi-file total; indeterminate otherwise."""
+        if total > 1:
+            self._footer_progress.setRange(0, total)
+            self._footer_progress.setValue(completed)
+        else:
+            self._footer_progress.setRange(0, 0)
+
+    @Slot(int, int)
+    def _on_batch_progress(self, completed: int, total: int) -> None:
+        if self.sender() is self._active_conversion_tab():
+            self._show_progress(completed, total)
+
+    @Slot(str, str)
+    def _on_job_finished(self, summary: str, tone: str) -> None:
+        """Report "N converted, M failed" at the action and surface the first failure."""
+        subtab = self.sender()
+        if not isinstance(subtab, _ConversionSubTab) or subtab is not self._active_conversion_tab():
+            return
+        first_failed = next(
+            (result for result in subtab._results.values() if result.status == "Failed"),
+            None,
+        )
+        if first_failed is None:
+            self._set_footer_status(summary, tone)
+            return
+        for row in range(self._file_results.count()):
+            item = self._file_results.item(row)
+            if item.data(Qt.ItemDataRole.UserRole).source == first_failed.source:
+                self._file_results.setCurrentItem(item)
+                self._file_results.scrollToItem(item)
+                break
+        self._right_stack.setCurrentIndex(1)
+        self._set_footer_status(
+            f"{summary}\nFirst failure — {first_failed.source.name}: {first_failed.message}",
+            tone,
+        )
+
     def _update_sec_action_if_active(self, tab_idx: int, enabled: bool) -> None:
         """Update the secondary overflow action when its tab is active."""
         if self._tool_stack.currentIndex() == tab_idx:
@@ -763,7 +823,9 @@ class ConvertPage(BasePage):
     def _append_log_line(self, text: str) -> None:
         """Reveal conversion results even when a batch has no single preview file."""
         subtab = self._tool_stack.currentWidget()
-        self._right_stack.setCurrentIndex(2 if getattr(subtab, "_results", {}) else 1)
+        self._right_stack.setCurrentIndex(
+            1 if getattr(subtab, "_results", {}) or self._preview_canvas.poly_count else 0
+        )
         self._log.appendPlainText(text)
         scrollbar = self._log.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
@@ -878,9 +940,7 @@ class ConvertPage(BasePage):
         preview_polys = [list(poly) for poly in state.get("preview_polys", [])]
         self._preview_canvas.set_polylines_state(preview_polys, fit=bool(preview_polys))
         if preview_polys:
-            self._right_stack.setCurrentIndex(
-                2 if getattr(self._tool_stack.currentWidget(), "_results", {}) else 1
-            )
+            self._right_stack.setCurrentIndex(1)
             if state.get("preview_view"):
                 self._preview_canvas.set_view_state(state["preview_view"])
         self._suspend_state = False
@@ -915,9 +975,7 @@ class ConvertPage(BasePage):
         try:
             polys = DxfService.load_dxf_polylines(dxf_path)
             if polys:
-                self._right_stack.setCurrentIndex(
-                    2 if getattr(self._tool_stack.currentWidget(), "_results", {}) else 1
-                )
+                self._right_stack.setCurrentIndex(1)
                 self._preview_canvas.load(polys)
                 self._refresh_preview_ui()
             else:

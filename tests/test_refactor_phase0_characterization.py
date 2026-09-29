@@ -482,7 +482,6 @@ def test_pattern_preview_worker_call_selects_zone_worker() -> None:
         pattern="Grid",
         params={},
         scale=(1.0, 1.0),
-        border_polys=None,
         border_fade=0.2,
         preview_token=7,
         cancel_event=threading.Event(),

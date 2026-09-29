@@ -473,6 +473,50 @@ class SelectTool(CanvasTool):
                 v._lmb_prev = pos
                 v._redraw()
             return True
+        # Preview transform semantics before drag; handle hit areas intentionally
+        # keep the same priority as press_overlays().
+        gizmo_hover = None
+        hover_tip = ""
+        pt = QPointF(pos.x(), pos.y())
+        for axis, rect in v._sel_badge_axes():
+            if rect.contains(pt):
+                gizmo_hover = f"badge-{axis}"
+                hover_tip = "Quick-edit badge · Tab cycles size/angle values"
+                break
+        for name, rect in () if gizmo_hover is not None else v._gizmo_handle_rects:
+            if rect.contains(pos):
+                gizmo_hover = f"scale-{name}"
+                if len(name) == 2:
+                    hover_tip = "Corner resize · Shift keeps proportions · Alt scales from center"
+                else:
+                    axis = "width" if name in ("e", "w") else "height"
+                    hover_tip = f"Edge resize · {axis} only · Shift keeps proportions · Alt scales from center"
+                break
+        if (
+            gizmo_hover is None
+            and v._gizmo_rotate_rect is not None
+            and v._gizmo_rotate_rect.contains(pos)
+        ):
+            gizmo_hover = "rotate"
+            hover_tip = "Rotate · Shift snaps angle"
+        if (
+            gizmo_hover is None
+            and v._gizmo_scale_rect is not None
+            and v._gizmo_scale_rect.contains(pos)
+        ):
+            gizmo_hover = "scale"
+            hover_tip = "Scale selection · Shift keeps proportions · Alt scales from center"
+        if (
+            gizmo_hover is None
+            and v._gizmo_move_rect is not None
+            and v._gizmo_move_rect.contains(pos)
+        ):
+            gizmo_hover = "move"
+            hover_tip = "Move selection · Alt temporarily disables snapping"
+        if gizmo_hover != getattr(v, "_gizmo_hover", None):
+            v._gizmo_hover = gizmo_hover
+            v.setToolTip(hover_tip)
+            v._redraw()
         # Passive hover: pre-highlight the polyline a click would select.
         hover = v._hit_test.entity_at(pos.x(), pos.y()) if v._selectable else None
         if hover != v._hover_poly:

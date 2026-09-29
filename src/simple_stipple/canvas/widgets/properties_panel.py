@@ -22,9 +22,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.canvas import commands as canvas_commands
+from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input
 from simple_stipple.ui.components.layout import CollapsibleSection, container_with_layout
 from simple_stipple.ui.components.units import parse_numeric_expression, to_display
 from simple_stipple.ui.components.units import unit_suffix as unit_suffix
+
+_NUMBER_ERROR = "Enter a number or expression, e.g. 25/2"
+_ANGLE_ERROR = "Enter an angle in degrees, e.g. 45 or 90/2"
+_LOCKED_ERROR = "Selection is locked"
+# Keys whose values are not lengths (degrees or plain counts/ratios).
+_UNITLESS_KEYS = frozenset({"rotation", "angle", "sides", "points", "inner_ratio"})
 
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]
@@ -41,6 +49,18 @@ _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     "ellipse": [("rx", "Radius X"), ("ry", "Radius Y")],
     "arc": [("radius", "Radius")],
 }
+
+
+def _unchanged(value: float, current: float) -> bool:
+    """True when a committed value only re-states the displayed one (the
+    fields show ~6 significant digits), so a failed no-op isn't a rejection."""
+    return abs(value - current) <= 1e-5 * max(1.0, abs(current))
+
+
+def _show_value(edit: QLineEdit, text: str) -> None:
+    """Display a model value; replacing the text also retires any error mark."""
+    clear_line_edit_error(edit)
+    edit.setText(text)
 
 
 def _num_edit(on_commit) -> QLineEdit:
@@ -81,6 +101,10 @@ class CanvasPropertiesPanel(QWidget):
         self._summary = QLabel("No selection")
         self._summary.setProperty("role", "hint")
         body_root.addWidget(self._summary)
+        self._context = QLabel()
+        self._context.setProperty("role", "hint-sm")
+        self._context.setWordWrap(True)
+        body_root.addWidget(self._context)
 
         self._metrics = QLabel()
         self._metrics.setProperty("role", "hint-sm")
@@ -110,6 +134,30 @@ class CanvasPropertiesPanel(QWidget):
         body_root.addWidget(self._constraints_dimension_section)
 
         self._fields_container, fields_root = container_with_layout(None, QVBoxLayout, spacing=4)
+        # Frequent selection actions stay visible (not in the collapsed
+        # Actions section); tooltips carry the live registry shortcut.
+        selection_actions, selection_actions_layout = container_with_layout(
+            None, QHBoxLayout, spacing=6
+        )
+        self._selection_action_buttons: dict[str, tuple[QPushButton, str]] = {}
+        for command_id, text, description, callback in (
+            ("edit.duplicate", "Duplicate", "Duplicate the selection", canvas.duplicate_selected),
+            ("edit.delete", "Delete", "Delete the selection", canvas.delete_selected),
+            (
+                "view.fit_selection",
+                "Fit Selection",
+                "Zoom the view to the selection",
+                canvas.fit_selection,
+            ),
+        ):
+            button = QPushButton(text)
+            button.setMinimumHeight(30)
+            button.setAccessibleName(text)
+            button.clicked.connect(callback)
+            selection_actions_layout.addWidget(button, stretch=1)
+            self._selection_action_buttons[command_id] = (button, description)
+        fields_root.addWidget(selection_actions)
+
         body_root.addWidget(self._fields_container)
         body_root.addStretch()
 
@@ -118,10 +166,10 @@ class CanvasPropertiesPanel(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(6)
         grid.setVerticalSpacing(3)
-        self._x = _num_edit(lambda: self._commit_pos())
-        self._y = _num_edit(lambda: self._commit_pos())
-        self._w = _num_edit(lambda: self._commit_size("w"))
-        self._h = _num_edit(lambda: self._commit_size("h"))
+        self._x: QLineEdit = _num_edit(lambda: self._commit_pos(self._x))
+        self._y: QLineEdit = _num_edit(lambda: self._commit_pos(self._y))
+        self._w: QLineEdit = _num_edit(lambda: self._commit_size("w"))
+        self._h: QLineEdit = _num_edit(lambda: self._commit_size("h"))
         for key, edit in (("x", self._x), ("y", self._y), ("w", self._w), ("h", self._h)):
             edit.setProperty("geometry-key", key)
             edit.installEventFilter(self)
@@ -155,6 +203,12 @@ class CanvasPropertiesPanel(QWidget):
         self._aspect_lock_btn.setProperty("role", "secondary")
         self._aspect_lock_btn.toggled.connect(self._on_aspect_lock_toggled)
         grid.addWidget(self._aspect_lock_btn, 1, 4)
+        self._edit_hint = QLabel(
+            "Inspector values are exact and persistent; canvas badges are quick edits (Tab)."
+        )
+        self._edit_hint.setProperty("role", "hint-sm")
+        self._edit_hint.setWordWrap(True)
+        geometry_layout.addWidget(self._edit_hint)
         geometry_layout.addLayout(grid)
         self._geometry_section = CollapsibleSection("Geometry", geometry_content, expanded=True)
         fields_root.addWidget(self._geometry_section)
@@ -206,12 +260,6 @@ class CanvasPropertiesPanel(QWidget):
         self._context_buttons: dict[str, QPushButton] = {}
         for key, text, tip, callback in (
             (
-                "duplicate",
-                "Duplicate",
-                "Duplicate the current selection",
-                canvas.duplicate_selected,
-            ),
-            (
                 "constraints",
                 "Remove Constraints",
                 "Remove geometric constraints attached to the selection",
@@ -222,12 +270,6 @@ class CanvasPropertiesPanel(QWidget):
                 "Close path",
                 "Close selected open paths",
                 canvas.close_selected_polylines,
-            ),
-            (
-                "delete",
-                "Delete",
-                "Delete selected geometry",
-                canvas.delete_selected,
             ),
             (
                 "offset",
@@ -283,12 +325,10 @@ class CanvasPropertiesPanel(QWidget):
         constraints_layout.addWidget(self._context_buttons["parallel"], 1, 0)
         constraints_layout.addWidget(self._context_buttons["perpendicular"], 1, 1)
         constraints_layout.addWidget(self._context_buttons["equal_length"], 2, 0, 1, 2)
-        actions_layout.addWidget(self._context_buttons["duplicate"], 0, 0)
-        actions_layout.addWidget(self._context_buttons["delete"], 0, 1)
-        actions_layout.addWidget(self._context_buttons["offset"], 1, 0, 1, 2)
-        actions_layout.addWidget(self._context_buttons["union"], 2, 0)
-        actions_layout.addWidget(self._context_buttons["subtract"], 2, 1)
-        actions_layout.addWidget(self._context_buttons["intersect"], 3, 0, 1, 2)
+        actions_layout.addWidget(self._context_buttons["offset"], 0, 0, 1, 2)
+        actions_layout.addWidget(self._context_buttons["union"], 1, 0)
+        actions_layout.addWidget(self._context_buttons["subtract"], 1, 1)
+        actions_layout.addWidget(self._context_buttons["intersect"], 2, 0, 1, 2)
         for column, (text, tip, callback) in enumerate(
             (
                 ("Smooth", "Smooth jagged corners (Chaikin)", self._smooth),
@@ -299,7 +339,7 @@ class CanvasPropertiesPanel(QWidget):
             button.setMinimumHeight(30)
             button.setToolTip(tip)
             button.clicked.connect(callback)
-            actions_layout.addWidget(button, 4, column)
+            actions_layout.addWidget(button, 3, column)
 
         # Shape-parameter rows (built per selection kind)
         self._param_grid = QGridLayout()
@@ -318,6 +358,9 @@ class CanvasPropertiesPanel(QWidget):
         self._actions_section = CollapsibleSection("Actions", actions_content, expanded=False)
         fields_root.addWidget(self._actions_section)
         self._param_edits: dict[str, QLineEdit] = {}
+        self._param_labels: dict[str, str] = {}
+        # Current model value per parameter (mm or degrees) for no-op checks.
+        self._param_values: dict[str, float] = {}
         self._param_entity_id: str | None = None
         self._param_kind: str | None = None
 
@@ -333,6 +376,7 @@ class CanvasPropertiesPanel(QWidget):
 
     def refresh(self) -> None:
         self._updating = True
+        self._context.clear()
         try:
             unit = self._unit()
             self._geometry_section.set_subtitle(f"Values in {unit_suffix(unit)}")
@@ -366,7 +410,7 @@ class CanvasPropertiesPanel(QWidget):
                     else "Reference measurement"
                 )
                 shown = value if angular else to_display(value, unit)
-                self._dimension_value.setText(f"{shown:g}")
+                _show_value(self._dimension_value, f"{shown:g}")
                 self._dimension_value.setEnabled(driving)
                 if driving:
                     self._dimension_value.setToolTip(
@@ -389,7 +433,7 @@ class CanvasPropertiesPanel(QWidget):
                 self._summary.setText("No selection")
                 self._metrics.clear()
                 for edit in (self._x, self._y, self._w, self._h, self._rot):
-                    edit.clear()
+                    _show_value(edit, "")
                 self._set_param_rows(None, None, {})
                 return
             count = info["count"]
@@ -415,14 +459,13 @@ class CanvasPropertiesPanel(QWidget):
                     f"{unit_suffix(unit)}"
                 )
             self._metrics.setText(" · ".join(metric_parts))
-            self._x.setText(f"{to_display(info['x'], unit):.2f}")
-            self._y.setText(f"{to_display(info['y'], unit):.2f}")
-            self._w.setText(f"{to_display(info['w'], unit):.2f}")
-            self._h.setText(f"{to_display(info['h'], unit):.2f}")
-            self._rot.setText(f"{float(info.get('rotation', 0.0)):.1f}")
+            _show_value(self._x, f"{to_display(info['x'], unit):.2f}")
+            _show_value(self._y, f"{to_display(info['y'], unit):.2f}")
+            _show_value(self._w, f"{to_display(info['w'], unit):.2f}")
+            _show_value(self._h, f"{to_display(info['h'], unit):.2f}")
+            _show_value(self._rot, f"{float(info.get('rotation', 0.0)):.1f}")
             self._set_param_rows(info.get("entity_id"), kind, info.get("meta") or {})
-            self._context_buttons["duplicate"].setVisible(count > 0)
-            self._context_buttons["delete"].setVisible(count > 0)
+            self._refresh_selection_action_tooltips()
             self._actions_section.setVisible(count > 0)
             selected = []
             for item in getattr(self._canvas, "_sel", set()):
@@ -434,6 +477,25 @@ class CanvasPropertiesPanel(QWidget):
                     if entity is not None:
                         selected.append(entity)
             selected_ids = {entity.id for entity in selected}
+            group_ids = {entity.group for entity in selected if entity.group is not None}
+            group_labels = getattr(self._canvas, "_group_labels", {})
+            context_parts = []
+            if group_ids:
+                labels = [
+                    str(group_labels.get(gid) or f"Group {gid}")
+                    for gid in sorted(group_ids, key=str)
+                ]
+                context_parts.append(
+                    "Group: " + (", ".join(labels) if len(labels) <= 2 else f"{len(labels)} groups")
+                )
+            layers = sorted(
+                {str(entity.layer) for entity in selected if entity.layer}, key=str.casefold
+            )
+            if layers:
+                context_parts.append(
+                    "Layer: " + (", ".join(layers) if len(layers) <= 2 else f"{len(layers)} layers")
+                )
+            self._context.setText(" · ".join(context_parts))
             constraint_count = sum(
                 1
                 for constraint in getattr(self._canvas, "_constraints", [])
@@ -475,6 +537,11 @@ class CanvasPropertiesPanel(QWidget):
         finally:
             self._updating = False
 
+    def _refresh_selection_action_tooltips(self) -> None:
+        """Tooltips carry the live shortcut, so a rebind shows on next refresh."""
+        for command_id, (button, description) in self._selection_action_buttons.items():
+            button.setToolTip(canvas_commands.tooltip_text(command_id, description))
+
     def _set_param_rows(self, entity_id: str | None, kind: str | None, meta: dict) -> None:
         wanted = _PARAM_FIELDS.get(kind or "", [])
         if kind == "line":
@@ -489,6 +556,7 @@ class CanvasPropertiesPanel(QWidget):
                 if w is not None:
                     w.deleteLater()
             self._param_edits = {}
+            self._param_labels = dict(wanted)
             for row, (key, label) in enumerate(wanted):
                 lbl = QLabel(label)
                 lbl.setProperty("role", "field-label")
@@ -500,6 +568,7 @@ class CanvasPropertiesPanel(QWidget):
                 self._param_edits[key] = edit
             self._param_kind = kind
         self._param_entity_id = entity_id
+        self._param_values = {}
         if not wanted:
             return
         # Fill values in display units — _value() parses these back through
@@ -515,21 +584,27 @@ class CanvasPropertiesPanel(QWidget):
 
                 dx = pts[-1][0] - pts[0][0]
                 dy = pts[-1][1] - pts[0][1]
+                self._param_values = {
+                    "length": math.hypot(dx, dy),
+                    "angle": math.degrees(math.atan2(dy, dx)),
+                }
                 if "length" in self._param_edits:
-                    self._param_edits["length"].setText(
-                        f"{to_display(math.hypot(dx, dy), unit):.2f}"
+                    _show_value(
+                        self._param_edits["length"],
+                        f"{to_display(self._param_values['length'], unit):.2f}",
                     )
                 if "angle" in self._param_edits:
-                    self._param_edits["angle"].setText(f"{math.degrees(math.atan2(dy, dx)):.1f}")
+                    _show_value(self._param_edits["angle"], f"{self._param_values['angle']:.1f}")
             return
         for key, edit in self._param_edits.items():
             value = meta.get(key)
             if value is None:
                 continue
-            if key in {"rotation", "angle", "sides", "points", "inner_ratio"}:
-                edit.setText(f"{float(value):g}")
+            self._param_values[key] = float(value)
+            if key in _UNITLESS_KEYS:
+                _show_value(edit, f"{float(value):g}")
             else:
-                edit.setText(f"{to_display(float(value), unit):g}")
+                _show_value(edit, f"{to_display(float(value), unit):g}")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -554,26 +629,32 @@ class CanvasPropertiesPanel(QWidget):
 
     def _value(self, edit: QLineEdit) -> float | None:
         key = str(edit.property("geometry-key") or "")
-        is_length = key not in {"rotation", "angle", "sides", "points", "inner_ratio"}
         try:
-            return parse_numeric_expression(edit.text(), self._unit(), is_length=is_length)
+            return parse_numeric_expression(
+                edit.text(), self._unit(), is_length=key not in _UNITLESS_KEYS
+            )
         except (TypeError, ValueError, ZeroDivisionError, OverflowError):
             return None
 
-    def _commit_pos(self) -> None:
+    def _selection_locked(self) -> bool:
+        return bool(self._canvas._selected_ids()) and not self._canvas._mutable_selected_ids()
+
+    def _commit_pos(self, edit: QLineEdit) -> None:
         if self._updating:
             return
-        x = self._value(self._x)
-        y = self._value(self._y)
-        if x is None and y is None:
-            self._canvas._show_flash("Enter a valid number or expression", 1200)
-            self.refresh()
+        value = self._value(edit)
+        if value is None:
+            reject_input(edit, _NUMBER_ERROR)
             return
-        moved = self._canvas.move_selection_to(x, y)
-        if not moved and self._canvas._selected_ids() and not self._canvas._mutable_selected_ids():
-            self._canvas._show_flash("Selection is locked", 1200)
-        # Always refresh so a failed move can't leave phantom coordinates
-        # in the fields.
+        if self._selection_locked():
+            reject_input(edit, _LOCKED_ERROR)
+            return
+        # Only the committed axis moves; re-sending the other field's
+        # 2-decimal display text would round that coordinate as a side effect.
+        if edit is self._x:
+            self._canvas.move_selection_to(value, None)
+        else:
+            self._canvas.move_selection_to(None, value)
         self.refresh()
 
     def _commit_dimension_value(self) -> None:
@@ -582,31 +663,48 @@ class CanvasPropertiesPanel(QWidget):
         index = getattr(self._canvas, "_selected_dimension", None)
         if not isinstance(index, int) or not 0 <= index < len(self._canvas._dimensions):
             return
+        edit = self._dimension_value
         dimension = self._canvas._dimensions[index]
         angular = dimension.get("type") == "angle"
         try:
-            value = parse_numeric_expression(
-                self._dimension_value.text(),
-                self._unit(),
-                is_length=not angular,
-            )
+            value = parse_numeric_expression(edit.text(), self._unit(), is_length=not angular)
         except (TypeError, ValueError, ZeroDivisionError, OverflowError):
-            self.refresh()
+            reject_input(edit, _ANGLE_ERROR if angular else _NUMBER_ERROR)
             return
-        if value <= 0 or not self._canvas._dimension_tool.set_value(index, value):
-            self.refresh()
+        if value <= 0:
+            noun = "Angle" if angular else "Value"
+            reject_input(edit, f"{noun} must be greater than zero")
+            return
+        current = self._canvas._dimension_tool.value(dimension)
+        if not _unchanged(value, current) and not self._canvas._dimension_tool.set_value(
+            index, value
+        ):
+            reject_input(edit, "The constrained geometry can't reach this value")
+            return
+        self.refresh()
 
     def _commit_size(self, axis: str) -> None:
         if self._updating:
             return
-        value = self._value(self._w if axis == "w" else self._h)
-        if value is None or value <= 0:
-            self.refresh()
+        edit = self._w if axis == "w" else self._h
+        name = "Width" if axis == "w" else "Height"
+        value = self._value(edit)
+        if value is None:
+            reject_input(edit, _NUMBER_ERROR)
             return
-        if axis == "w":
-            self._canvas._set_selected_width(value)
-        else:
-            self._canvas._set_selected_height(value)
+        if value <= 0:
+            reject_input(edit, f"{name} must be greater than zero")
+            return
+        if self._selection_locked():
+            reject_input(edit, _LOCKED_ERROR)
+            return
+        info = self._canvas.selection_geometry()
+        resize = (
+            self._canvas._set_selected_width if axis == "w" else self._canvas._set_selected_height
+        )
+        if not resize(value) and not (info is not None and _unchanged(value, float(info[axis]))):
+            reject_input(edit, f"This selection can't be resized to that {name.lower()}")
+            return
         self.refresh()
 
     def _on_aspect_lock_toggled(self, checked: bool) -> None:
@@ -618,13 +716,21 @@ class CanvasPropertiesPanel(QWidget):
         if self._updating:
             return
         angle = self._value(self._rot)
+        if angle is None:
+            reject_input(self._rot, _ANGLE_ERROR)
+            return
         info = self._canvas.selection_geometry()
-        if angle is not None and info is not None:
-            current = float(info.get("rotation", 0.0))
-            delta = (angle - current + 180.0) % 360.0 - 180.0
-            if abs(delta) > 1e-9:
-                self._canvas.rotate_selected(delta)
-            self.refresh()
+        if info is None:
+            return
+        if self._selection_locked():
+            reject_input(self._rot, _LOCKED_ERROR)
+            return
+        current = float(info.get("rotation", 0.0))
+        delta = (angle - current + 180.0) % 360.0 - 180.0
+        if abs(delta) > 1e-9 and not self._canvas.rotate_selected(delta):
+            reject_input(self._rot, "This selection can't be rotated")
+            return
+        self.refresh()
 
     def _rotate(self, angle: float) -> None:
         self._canvas.rotate_selected(angle)
@@ -632,9 +738,7 @@ class CanvasPropertiesPanel(QWidget):
 
     def _run_command(self, command_id: str) -> None:
         """Run a registry command so inspector and keyboard behavior stay identical."""
-        from simple_stipple.canvas.commands import get
-
-        command = get(command_id)
+        command = canvas_commands.get(command_id)
         if command.when is not None and not command.when(self._canvas):
             self._canvas._show_flash(f"{command.label} is not available for this selection", 1400)
             return
@@ -657,18 +761,31 @@ class CanvasPropertiesPanel(QWidget):
         if self._updating or self._param_entity_id is None:
             return
         edit = self._param_edits.get(key)
-        value = self._value(edit) if edit else None
+        if edit is None:
+            return
+        label = self._param_labels.get(key, key).replace(" °", "")
+        value = self._value(edit)
         if value is None:
-            # Restore the real value — leaving the rejected text in place
-            # made it look committed.
-            self._canvas._show_flash("Enter a valid number or expression", 1200)
+            reject_input(edit, _ANGLE_ERROR if key == "angle" else _NUMBER_ERROR)
+            return
+        if self._selection_locked():
+            reject_input(edit, _LOCKED_ERROR)
+            return
+        current = self._param_values.get(key)
+        if current is not None and _unchanged(value, current):
             self.refresh()
             return
         if self._param_kind == "line":
+            if key == "length" and value <= 0:
+                reject_input(edit, "Length must be greater than zero")
+                return
             if key == "length":
-                self._canvas._set_selected_line_length(value)
+                applied = self._canvas._set_selected_line_length(value)
             else:
-                self._canvas._set_selected_line_angle(value)
+                applied = self._canvas._set_selected_line_angle(value)
         else:
-            self._canvas.set_shape_param(self._param_entity_id, key, value)
+            applied = self._canvas.set_shape_param(self._param_entity_id, key, value)
+        if not applied:
+            reject_input(edit, f"{label} is out of range for this shape")
+            return
         self.refresh()

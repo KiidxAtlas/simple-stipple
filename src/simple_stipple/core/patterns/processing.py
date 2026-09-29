@@ -421,7 +421,7 @@ class PatternProcessor:
                 )
             raise ValueError(
                 "The selected boundary is closed, but it crosses itself or has invalid geometry. "
-                "Repair the shape before assigning a zone."
+                "Repair the shape before giving its region a treatment."
             )
         if open_paths:
             return (
@@ -454,7 +454,8 @@ class PatternProcessor:
             jobs.append({**normalized, "polys": resolved})
         if not jobs:
             raise ValueError(
-                "No valid closed zone outlines were found. Reassign zones after repairing the outlines."
+                "No valid closed regions were found. Repair the outlines, then reapply "
+                "the region treatments."
             )
         return jobs, warnings
 

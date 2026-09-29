@@ -8,6 +8,8 @@
 <h3 class="subheading">Image engraving inside an outline</h3>
 <ol><li>Load or draw a closed Pattern outline, then open <strong>Advanced controls → Image Engraving</strong>.</li><li>Add the image. It is proportionally fitted and centered in the outline; drag its overlay or use placement fields to refine it.</li><li>Choose Whole outline or a zone clip, review laser settings, select <strong>Use engraving export</strong>, then use main Export.</li></ol>
 <p><strong>Safety:</strong> material profiles are starting values. Frame the job and test on scrap.</p>
+<h3 class="subheading">Export preflight</h3>
+<p>Before writing a file, export checks the geometry. If paths are open (where closed regions are required), invalid, duplicated, tiny, nearly closed, or self-intersecting, a warning lists the counts. Choose <strong>Show Issues</strong> to cancel the export and select and frame the affected paths on the canvas, <strong>Return to Drawing</strong> to cancel, or <strong>Export Anyway</strong> if the conditions are intentional. After Export Anyway, exporting the same geometry again in this session skips the warning; any geometry change brings it back.</p>
 <h3 class="subheading">Precision and construction</h3>
 <p>The precision bar controls grid, object snaps, construction geometry, and constraints. Use snap strength to make capture looser or stronger; set it to zero for a temporary freehand pass without losing your saved snap choices. Apply horizontal, vertical, parallel, perpendicular, equal, coincident, midpoint, symmetric, intersection, fixed, projection, and compatible circular/curve constraints from Geometry Constraints or the command palette.</p>
 <h3 class="subheading">Shapes, arrays, and context actions</h3>

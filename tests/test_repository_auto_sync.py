@@ -168,7 +168,7 @@ def test_auto_sync_pushes_local_edits_and_pulls_remote_ones(
     controller.statusChanged.connect(statuses.append)
     controller.logged.connect(runs.append)
     controller.set_enabled(True)
-    qtbot.waitUntil(lambda: any(s.startswith("Up to date") for s in statuses), timeout=10_000)
+    qtbot.waitUntil(lambda: any("up to date" in s for s in statuses), timeout=10_000)
     assert runs == []  # a check that changed nothing stays out of the Git output
 
     (laptop / "new-tile.dxf").write_text("tile\n", encoding="utf-8")
@@ -189,7 +189,7 @@ def test_auto_sync_pushes_local_edits_and_pulls_remote_ones(
 
     controller.set_enabled(False)
     assert not controller._poll_timer.isActive()
-    assert statuses[-1] == "Auto sync is off."
+    assert statuses[-1] == "Off"
 
 
 def test_auto_sync_pauses_on_conflict_until_turned_back_on(
@@ -211,6 +211,7 @@ def test_auto_sync_pauses_on_conflict_until_turned_back_on(
 
     qtbot.waitUntil(lambda: controller._paused, timeout=10_000)
     assert not controller._poll_timer.isActive()
+    assert statuses[-1].startswith("Paused — ")
     assert "conflict" in statuses[-1]
     assert (laptop / "README.md").read_text(encoding="utf-8") == "laptop version\n"
     (conflict_run,) = runs

@@ -66,7 +66,9 @@ def scale_tolerance(polys: list[list[tuple[float, float]]]) -> float:
     return min(0.05, max(0.001, diagonal * 1e-5))
 
 
-def _revisited_vertex(poly: list[tuple[float, float]], tolerance: float) -> tuple[float, float] | None:
+def _revisited_vertex(
+    poly: list[tuple[float, float]], tolerance: float
+) -> tuple[float, float] | None:
     """Return a non-adjacent repeated vertex, excluding a normal ring closure."""
     for index, point in enumerate(poly):
         for previous in range(index - 1):

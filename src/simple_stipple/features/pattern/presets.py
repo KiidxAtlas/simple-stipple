@@ -33,12 +33,16 @@ from simple_stipple.core.patterns.presets import (
     merge_presets,
     reset_to_builtins,
 )
-from simple_stipple.features.pattern.form import collect_form_state, restore_form_state
+from simple_stipple.features.pattern.form import (
+    collect_form_state,
+    restore_form_state,
+    retired_pattern_notice,
+)
 from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import confirm, show_error
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.dialogs.files import pick_open_file, pick_save_file
-from simple_stipple.ui.style import STATUS_ERR, STATUS_OK
+from simple_stipple.ui.style import STATUS_ERR, STATUS_OK, STATUS_WARN
 
 
 def _preset_thumbnail(payload: dict) -> QIcon:
@@ -499,7 +503,11 @@ def apply_selected_preset(page: Any) -> None:
     page._suspend_state = True
     restore_form_state(page, payload)
     page._suspend_state = False
-    page._set_status(f"Loaded preset: {name}", STATUS_OK)
+    notice = retired_pattern_notice([payload.get("pattern")])
+    if notice:
+        page._set_status(f"Loaded preset: {name} · {notice}", STATUS_WARN)
+    else:
+        page._set_status(f"Loaded preset: {name}", STATUS_OK)
     page._schedule_preview()
     page._emit_state_changed()
 

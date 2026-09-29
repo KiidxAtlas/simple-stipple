@@ -3,96 +3,97 @@
     Pattern Types — Complete Guide
 </h2>
 
-<p>Simple Stipple includes geometric, organic, and custom-tile pattern generators.</p>
+<p>The Pattern list offers ten built-in generators — Basketweave, Brick, Grip Stipple,
+Honeycomb, Knurling, Mesh, Seigaiha, Stipple Dots, Truchet, and Voronoi — plus
+<strong>Custom Tile</strong> and any custom tiles you have saved. <strong>Image</strong> in the
+same list is not a generator: it gives the selected region the Engrave treatment.</p>
+
+<p>Every length is in millimetres. Hover a field to see its allowed range; type an exact value
+(or an expression such as <code>25/2</code>) and press Enter, or drag its slider. The default
+values below are what a new document starts with.</p>
 
 <p><strong>Repeat mode</strong> is available on every pattern: <em>Straight</em> stacks rows
 directly, <em>Half drop</em> shifts every other row by half a repeat, and <em>Brick offset</em>
 by a third. Stipple Dots, Grip Stipple, and Voronoi also offer <em>Off (random)</em>, their default free
 scatter; any other mode builds one random tile of <strong>Repeat size (mm)</strong> and repeats
 it with no crowding or broken cells at the seams. On Knurling the stagger applies to the
-diamond (cross-hatch) knurl.</p>
+diamond (cross-hatch) knurl. <strong>Align to region</strong> anchors a lattice to the region
+itself instead of the shared document grid — use it to centre a motif in one region.</p>
 
-<h3 class="subheading">Geometric Patterns</h3>
+<h3 class="subheading">Tilings</h3>
 
 <h4 class="panel-title">Honeycomb</h4>
-<p>A classic hexagonal grid pattern, ideal for structural engraving and decorative surfaces.</p>
+<p>A hexagonal grid, ideal for structural engraving and decorative surfaces.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Hex size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each hexagonal cell (default: 1.75 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between adjacent hexagons (default: 0.5 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Gradient Honeycomb</h4>
-<p>A hexagonal grid where cell sizes gradually change across the pattern, creating a flowing gradient effect.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Min size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Smallest hex cell (default: 0.8 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Max size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Largest hex cell (default: 2.5 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between hexagons (default: 0.5 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Direction (°)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gradient direction — 0° = left to right, 90° = vertical (default: 0°)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Half drop</td></tr>
 </table>
 
 <h4 class="panel-title">Brick</h4>
-<p>A classic brickwork pattern with staggered rows, perfect for wall and floor engraving.</p>
+<p>Brickwork with staggered rows.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Brick width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each brick (default: 4.0 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Brick height (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Height of each brick (default: 2.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Mortar gap (default: 0.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Mortar gap between bricks (default: 0.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Half drop</td></tr>
+</table>
+
+<h4 class="panel-title">Basketweave</h4>
+<p>Alternating horizontal and vertical strips that read as a woven basket.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each woven strip (default: 2.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip length (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Length of each woven strip (default: 8.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap between woven strips (default: 0.2 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Straight</td></tr>
 </table>
 
 <h4 class="panel-title">Mesh</h4>
-<p>A grid of circles arranged in a regular pattern, creating an elegant mesh effect.</p>
+<p>A regular grid of circles.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Circle radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each circle (default: 0.35 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Grid spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance (default: 1.2 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Circle radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each mesh circle (default: 0.35 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Grid spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance between circles (default: 1.2 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Straight</td></tr>
 </table>
 
-<h3 class="subheading">Organic / Curved Patterns</h3>
-
-<h4 class="panel-title">Fish Scale</h4>
-<p>Overlapping arc segments that mimic the appearance of fish scales.</p>
+<h4 class="panel-title">Knurling</h4>
+<p>Machined-knurl grip: raised pads between straight grooves, in one family or crossed into diamonds.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Horizontal span (default: 3.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale height (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Vertical height (default: 2.0 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Groove pitch (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between grooves; the diamond size follows from pitch and angle (default: 1.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Groove angle (°)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Angle of each groove family from horizontal, −89° to 89° (default: 30°)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Groove width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">The cut groove between raised pads (default: 0.3 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cross-hatch (diamond)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">On for diamond knurl; off for a single straight family (default: on)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Straight</td></tr>
 </table>
 
-<h4 class="panel-title">Topographic</h4>
-<p>Inward-offset contour lines that simulate topographic map elevation lines.</p>
+<h4 class="panel-title">Seigaiha</h4>
+<p>Japanese wave scales: overlapping rows of concentric arcs.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Contour spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Distance between successive contours (default: 1.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each wave scale; rows overlap by half this value (default: 6 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Rings per scale</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Concentric arcs inside each scale, 1–12 (default: 3)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Ring spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Distance between arcs within one scale (default: 1.2 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Scale spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap between neighbouring scales; 0 tiles the surface completely (default: 0.3 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Half drop</td></tr>
 </table>
 
-<h3 class="subheading">Mathematical / Fractal Patterns</h3>
-
-<h4 class="panel-title">Voronoi</h4>
-<p>A Voronoi diagram partitioning the outline into irregular polygonal cells.</p>
+<h4 class="panel-title">Truchet</h4>
+<p>Square tiles of quarter-circle arcs, each randomly rotated; the arcs meet exactly at tile edges and form continuous flowing curves.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell count</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Number of random cells (default: 60)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Inset distance between cells (default: 0.15 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed (default: 42)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Tile size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Edge length of each square tile (default: 6 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Space between cells; 0 leaves no room to fill around them (default: 0.3 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Fixes the random tile rotations so a re-solve is reproducible (default: 1)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Straight</td></tr>
 </table>
 
-<h3 class="subheading">Decorative / Woven Patterns</h3>
-
-<h4 class="panel-title">Basketweave</h4>
-<p>A woven pattern of horizontal and vertical strips, creating an interlaced basket effect.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each woven strip (default: 2.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip length (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Length of each strip (default: 8.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap between strips (default: 0.2 mm)</td></tr>
-</table>
-
-<h4 class="panel-title">Braid</h4>
-<p>Interlocking diagonal strips creating a braid or weave effect at ±45° angles.</p>
-<table style="width:100%;border-collapse:collapse;margin:6px 0;">
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Strip width (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Width of each diagonal strip (default: 2.0 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Gap between parallel strips (default: 3.0 mm)</td></tr>
-</table>
+<h3 class="subheading">Random Patterns</h3>
 
 <h4 class="panel-title">Stipple Dots</h4>
-<p>Poisson-disk distributed circles creating a stippled, pointillist effect.</p>
+<p>Poisson-disk distributed dots for a stippled, pointillist surface.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Dot radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each dot (default: 0.4 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance (default: 1.2 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Interlaced</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Use offset grid instead of Poisson-disk (checkbox)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance between dots (default: 1.2 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed for repeatable placement (default: 42)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode / Repeat size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Off (random); repeat tile 10 mm</td></tr>
 </table>
 
 <h4 class="panel-title">Grip Stipple</h4>
@@ -100,5 +101,39 @@ diamond (cross-hatch) knurl.</p>
 <table style="width:100%;border-collapse:collapse;margin:6px 0;">
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Element size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Approximate radius of each irregular grain (default: 0.28 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Minimum centre-to-centre distance between grains (default: 0.62 mm)</td></tr>
-    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed for repeatable results (default: 42)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed for repeatable grain placement and shapes (default: 42)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode / Repeat size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Off (random); repeat tile 10 mm</td></tr>
+</table>
+
+<h4 class="panel-title">Voronoi</h4>
+<p>Irregular polygonal cells partitioning the region.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Cell count</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Number of random cells, 2–2000 — per repeat tile when Repeat mode is on; high counts slow previews (default: 60)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Inset distance between cells (default: 0.15 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed for reproducible cell placement (default: 42)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode / Repeat size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Default: Off (random); repeat tile 10 mm</td></tr>
+</table>
+
+<h3 class="subheading">Custom Tiles</h3>
+<p>Choose <strong>Custom Tile</strong>, then right-click selected geometry on the canvas →
+<strong>Use as Custom Tile</strong> to repeat your own motif. <strong>Save custom tile</strong> adds it to the Pattern
+list as <em>Custom · name</em>; tiles in the configured tile folder appear there too. A saved tile
+remembers its own settings — choosing it loads them and the status line says
+<em>Loaded saved settings for name</em>.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Tile gap (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Spacing between repetitions of the motif (default: 0.5 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Repeat mode</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Straight, Half drop, Brick offset, Mirror rows, Mirror columns, or Alternate 180° (default: Straight)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Align to region</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Anchor the repeat to the region instead of the document grid (default: off)</td></tr>
+</table>
+
+<h3 class="subheading">Retired Patterns</h3>
+<p>Some older generators have been retired. A workspace or preset that uses one still opens:
+the pattern is replaced by its closest survivor and the status line names the substitution
+(for example <em>Retired pattern replaced: Flow Lines → Truchet</em>). Parameters of the retired
+pattern are not carried over, so review the replacement's settings and save the workspace to keep it.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Flow Lines</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">opens as Truchet</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Gradient Honeycomb</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">opens as Honeycomb</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Fish Scale</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">opens as Seigaiha</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Topographic</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">opens as Seigaiha</td></tr>
 </table>

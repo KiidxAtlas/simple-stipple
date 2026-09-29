@@ -550,6 +550,8 @@ class SettingsSchema(BaseModel):
     reduced_motion: bool = False
     persistent_notifications: bool = False
     export_review_enabled: bool = True
+    # First-run welcome (page chooser) — set once the user dismisses it.
+    welcome_seen: bool = False
     machine_profile_name: str = "No machine selected"
     machine_bed_width_mm: Annotated[float, Field(ge=0.0)] = 0.0
     machine_bed_height_mm: Annotated[float, Field(ge=0.0)] = 0.0

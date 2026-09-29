@@ -20,7 +20,11 @@ from simple_stipple.core.cad.constraints import (
     GeometricConstraint,
     solve_constraints,
 )
-from simple_stipple.core.cad.geometry import fit_polyline_to_bezier, minimum_clearance
+from simple_stipple.core.cad.geometry import (
+    build_spline_poly,
+    fit_polyline_to_bezier,
+    minimum_clearance,
+)
 from simple_stipple.core.cad.shape_factory import transform_meta
 from simple_stipple.core.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
 from simple_stipple.core.document.commands import (
@@ -52,6 +56,23 @@ from simple_stipple.core.editing.topology import (
     trim_polyline,
     trim_preview,
 )
+
+
+def _offset_source_points(entity: EntityRecord) -> list[tuple[float, float]]:
+    """Use the displayed spline contour rather than its sparse control points."""
+    if entity.kind != "spline":
+        return entity.points
+
+    meta = entity.meta or {}
+    try:
+        segments = max(4, int(meta.get("segments", 24)))
+    except (TypeError, ValueError, OverflowError):
+        segments = 24
+    return build_spline_poly(
+        entity.points,
+        segments=segments,
+        closed=bool(meta.get("closed", False)),
+    )
 
 
 class SplitGeometryHost(Protocol):
@@ -342,7 +363,7 @@ class EditingService:
             entity = self._host._entity_for_id(eid)
             if entity is None:
                 continue
-            poly = entity.points
+            poly = _offset_source_points(entity)
             offset_poly = self._host._offset_polyline(poly, distance)
             if offset_poly is None or len(offset_poly) < 2:
                 continue
@@ -2371,7 +2392,7 @@ class SelectionService:
             entity = self._host._entity_for_id(entity_id)
             if entity is None:
                 continue
-            poly = self._host._offset_polyline(entity.points, distance)
+            poly = self._host._offset_polyline(_offset_source_points(entity), distance)
             if poly is not None and len(poly) >= 2:
                 preview.append(poly)
         self._host._set_operation_preview(preview)

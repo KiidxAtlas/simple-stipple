@@ -114,16 +114,34 @@ def refresh_style(widget: QWidget) -> None:
 
 def set_line_edit_error(widget, message: str) -> None:
     """Highlight a line edit and attach a validation message."""
+    if not widget.property("error"):
+        widget.setProperty("_base_tooltip", widget.toolTip())
     widget.setProperty("error", True)
     refresh_style(widget)
     widget.setToolTip(message)
 
 
 def clear_line_edit_error(widget) -> None:
-    """Clear validation styling from a line edit."""
+    """Clear validation styling and restore the field's own tooltip."""
+    if not widget.property("error"):
+        return
     widget.setProperty("error", False)
     refresh_style(widget)
-    widget.setToolTip("")
+    widget.setToolTip(str(widget.property("_base_tooltip") or ""))
+
+
+def reject_input(widget: QLineEdit, message: str) -> None:
+    """The one invalid-entry behavior for committed numeric fields.
+
+    Keeps the user's typed text so it can be corrected, marks the field
+    red with *message* as its tooltip, and clears the mark as soon as the
+    user edits the text again. Callers must NOT restore the old value.
+    """
+    set_line_edit_error(widget, message)
+    if widget.property("_reject_clear_hooked"):
+        return
+    widget.setProperty("_reject_clear_hooked", True)
+    widget.textEdited.connect(lambda _text, w=widget: clear_line_edit_error(w))
 
 
 _notification_history: deque[tuple[str, str]] = deque(maxlen=200)

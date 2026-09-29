@@ -44,7 +44,6 @@ _DEFAULTS_COMMON: dict[str, str | bool] = {
     "scale_w": "",
     "scale_h": "",
     "ar_locked": True,
-    "include_border": True,
     "border_fade": "0",
     "density_mode": "Uniform",
     "density_strength": "0.75",
@@ -79,9 +78,7 @@ def _preset(pattern: str, **overrides: str | bool | float) -> dict:
 
 
 BUILTIN_PRESETS: dict[str, dict] = {
-    "★ Flow — Gentle": _preset(
-        "Flow Lines", flow_spacing="3", flow_amplitude="2", flow_wavelength="18", flow_angle="0"
-    ),
+    "★ Truchet — Arcs": _preset("Truchet", truchet_tile="5", truchet_gap="0.3", truchet_seed="1"),
     "★ Honeycomb — Fine": _preset("Honeycomb", hex_r="1.2", hex_gap="0.3"),
     "★ Honeycomb — Standard": _preset("Honeycomb", hex_r="2.5", hex_gap="0.5"),
     "★ Honeycomb — Bold": _preset("Honeycomb", hex_r="5.0", hex_gap="0.8"),

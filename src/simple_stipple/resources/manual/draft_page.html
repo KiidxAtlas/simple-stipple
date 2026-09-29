@@ -9,19 +9,20 @@
 <h3 class="subheading">Toolbar</h3>
 <ul>
     <li><strong>Import Vector:</strong> Open DXF, SVG, or FVI geometry (replaces the current drawing). Use the dropdown arrow to add it without replacing, or drop a supported file onto the page.</li>
-    <li><strong>Recent Vectors:</strong> Quick access to recently imported DXF, SVG, and FVI files.</li>
+    <li><strong>Recent:</strong> Quick access to recently imported DXF, SVG, and FVI files.</li>
     <li><strong>Explode:</strong> Break selected grouped shapes into individual segments.</li>
     <li><strong>Merge:</strong> Combine selected connected segments into single objects.</li>
-    <li><strong>Export DXF:</strong> Save as grouped DXF (shapes sharing a layer are treated as one group by the laser). Use the adjacent <strong>⋯</strong> menu for FVI or SVG export.</li>
-    <li><strong>Drawing Modes:</strong> Select (S), Draw (D), Edit (E) — also accessible via single-letter keys.</li>
-    <li><strong>Fit:</strong> Zoom to fit all content (F).</li>
+    <li><strong>Export DXF…:</strong> Save as grouped DXF (shapes sharing a layer are treated as one group by the laser). Use the adjacent <strong>Format</strong> menu for FVI or SVG export. If the export check finds problems, <strong>Show Issues</strong> selects and zooms to the affected shapes.</li>
+    <li><strong>Drawing Modes:</strong> Select (S), Draw (D), Edit (E), plus the Scale (M) and Dimension (Shift+M) toggles. Button tooltips always show the current shortcut, including rebound keys.</li>
+    <li><strong>Precision:</strong> The Precision menu holds grid, snap, construction, and constraint settings. The summary beside it (for example <em>Snap: all · Grid 5 mm</em>) shows the active aids without opening the menu; hover it for the full list.</li>
+    <li><strong>Fit:</strong> Zoom to fit all content (F), or to the selection (Shift+F).</li>
 </ul>
 
 <h3 class="subheading">Drawing Primitives</h3>
-<p>In Draw mode, pick a primitive from the "+" tool picker in the Draw sidebar, or from the <kbd>Q</kbd> radial menu (Polyline, Rectangle, Circle, Polygon, Line, Arc, Pen are included by default). Once picked:</p>
+<p>In Draw mode, choose a named tool directly from the Path or Shapes group in the sidebar, or use the <kbd>Q</kbd> radial menu. The sidebar shows the active tool and exposes Sketch, Constraint, Smoothing, and contextual Editing controls in its default layout; customized section visibility and order are preserved. Arc has a separate mode control.</p>
 <ul>
-    <li><strong>Rectangle, Circle, Ellipse, Polygon, Arc:</strong> click-drag to size the shape.</li>
-    <li><strong>Polyline / Line:</strong> click to place vertices, <kbd>Enter</kbd> or right-click to finish, click the first point to close, <kbd>Esc</kbd> to cancel.</li>
+    <li><strong>Rectangle, Circle, Ellipse, Polygon:</strong> click-drag to begin a live preview, then press <kbd>Tab</kbd> or <kbd>Shift+Tab</kbd> to edit Width and Height. The W/H field labels show the current drawing unit; values update the preview as you type. <kbd>Enter</kbd> applies the size and commits the shape; <kbd>Esc</kbd> cancels.</li>
+    <li><strong>Polyline / Line:</strong> click to place vertices, <kbd>Enter</kbd> or right-click to finish, click the first point to close, <kbd>Esc</kbd> to cancel. After the first point, <kbd>Tab</kbd> or <kbd>Shift+Tab</kbd> opens and moves between Length/Angle fields. Values preview live; <kbd>A</kbd> focuses Angle, and <kbd>Enter</kbd> applies the typed values.</li>
     <li><strong>Spline:</strong> click to place points; a smooth curve is fit through them (Catmull-Rom). For direct handle control, use the Pen tool instead (see below).</li>
 </ul>
 
@@ -39,8 +40,9 @@
 <ul>
     <li><strong>Vertex Editing:</strong> In Edit mode, click on shape vertices to move them individually.</li>
     <li><strong>8-Handle Resize:</strong> Select a shape to see 8 resize handles (corners + edges). Rotated parametric shapes use their local axes. Corners resize both dimensions, edges resize one; hold <kbd>Shift</kbd> to lock aspect ratio or <kbd>Alt</kbd> to resize from center.</li>
-    <li><strong>Properties &amp; Expressions:</strong> edit position, local size, rotation, and shape parameters without leaving the selection. Arithmetic and mixed units are accepted. Hover/focus a field to identify the geometry it controls.</li>
-    <li><strong>Contextual Actions:</strong> Edit Vertices, Duplicate, Open/Close Path, and Delete appear in Properties when valid for the current selection.</li>
+    <li><strong>Properties &amp; Expressions:</strong> edit position, local size, rotation, and shape parameters without leaving the selection. Arithmetic and mixed units are accepted. Hover/focus a field to identify the geometry it controls. A value that can't be used stays in the field, marked red, with the reason in its tooltip (for example <em>Selection is locked</em> or <em>Width must be greater than zero</em>); edit it to try again.</li>
+    <li><strong>Selection Actions:</strong> Duplicate, Delete, and Fit Selection sit in a row at the top of the Inspector whenever something is selected; their tooltips show the shortcuts. Offset, boolean, and cleanup actions stay in the collapsible Actions section, and Open/Close Path and constraint actions appear under Constraints when valid.</li>
+    <li><strong>Size Badges:</strong> In Select mode, <kbd>Tab</kbd> edits the size badges drawn on the canvas — W and H, or L and ∠ for a single line.</li>
     <li><strong>Rounding Corners:</strong> In Edit mode, hover a corner and press <kbd>R</kbd> to round it with a configurable radius.</li>
     <li><strong>Offset:</strong> Create an offset copy of selected shapes (O). Specify distance in mm.</li>
     <li><strong>Text:</strong> Add parametric text at cursor position (T) — see Text &amp; Typography for multi-line and text-on-path.</li>

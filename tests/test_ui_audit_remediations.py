@@ -253,7 +253,7 @@ def test_export_is_one_button_over_the_documents_operations(app: QApplication) -
     page = PatternPage(settings={})
     for gone in ("_export_default", "_select_export_kind"):
         assert not hasattr(page, gone), f"{gone} is part of the deleted export fork"
-    assert page._gen_btn.text() == "Export DXF"
+    assert page._gen_btn.text() == "Export DXF…"
 
     ring = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0), (0.0, 0.0)]
     page.load_outline_polys([ring])
@@ -356,15 +356,22 @@ def test_canvas_size_hud_uses_semantic_styling_and_recovers_from_invalid_input(
 
     canvas._size_w_edit.setText("not a number")
     canvas._apply_size_hud()
-    assert canvas._size_w_edit.property("error") == "true"
-    canvas._clear_size_hud_error("")
-    assert canvas._size_w_edit.property("error") is None
+    assert canvas._size_w_edit.property("error") is True
+    assert canvas._size_w_edit.text() == "not a number"
+    assert canvas._size_w_edit.toolTip() == "Enter a number or expression, e.g. 25/2"
+    canvas._size_w_edit.textEdited.emit("n")
+    assert not canvas._size_w_edit.property("error")
 
     canvas._size_w_edit.setText("0")
     canvas._size_h_edit.setText("2")
     canvas._apply_size_hud()
-    assert canvas._size_w_edit.property("error") == "true"
-    assert canvas._size_h_edit.property("error") is None
+    assert canvas._size_w_edit.toolTip() == "Width must be greater than zero"
+    assert not canvas._size_h_edit.property("error")
+
+    canvas._size_w_edit.setText("25/2")
+    canvas._apply_size_hud()
+    assert not canvas._size_w_edit.property("error")
+    assert canvas.selection_geometry()["w"] == pytest.approx(12.5)
     canvas.close()
 
 
@@ -1418,25 +1425,37 @@ def test_settings_shows_every_card_by_default_and_supports_navigation(
     assert visible == {"Trace Defaults"}
 
 
-def test_pattern_defaults_to_basic_controls_and_can_reveal_advanced(
+def test_pattern_laser_process_toggle_only_controls_engraving_process(
     app: QApplication,
 ) -> None:
     page = PatternPage(settings={})
     page.resize(1100, 760)
     page.show()
     app.processEvents()
+    page.load_outline_polys([[(0.0, 0.0), (40.0, 0.0), (40.0, 30.0), (0.0, 0.0)]])
+    region_id = page._outline_ids[0]
+    page._treatments[region_id] = {
+        "kind": "engrave",
+        "pattern": "Image",
+        "params": {},
+        "engraving": {"path": "/tmp/logo.png"},
+    }
+    page._refresh_zone_list()
+    page._zone_list.setCurrentRow(0)
+    page._pattern_combo.setCurrentText("Honeycomb")
+    app.processEvents()
     assert not page._advanced_mode_cb.isChecked()
-    # Zones are always available because they are part of the primary
-    # workflow, even when secondary advanced controls are hidden.
-    assert page._zone_scroll.isVisibleTo(page)
-    # Regions remain available, but the initial page follows the maker's
-    # normal sequence: outline, choose a pattern, then refine regions only
-    # when a multi-region job needs it.
-    assert not page._zones_section.is_expanded()
-
+    assert not page._engraving_process_section.isVisibleTo(page)
+    assert page._pattern_section.isVisibleTo(page)
+    assert page._zones_section.isVisibleTo(page)
+    assert page._modifiers_section.isVisibleTo(page)
+    assert not page._modifiers_section.is_expanded()
     page._advanced_mode_cb.setChecked(True)
     app.processEvents()
-    assert page._zone_scroll.isVisibleTo(page)
+    assert page._engraving_process_section.isVisibleTo(page)
+    assert page._pattern_section.isVisibleTo(page)
+    assert page._zones_section.isVisibleTo(page)
+    assert not page._modifiers_section.is_expanded()
     page.close()
 
 
@@ -2894,24 +2913,6 @@ def test_common_dimension_fields_display_two_decimal_places(app: QApplication) -
     page._update_dims_from_polys([[(0.0, 0.0), (12.3456, 7.8912)]])
     assert page._scale_w.text() == "12.35"
     assert page._scale_h.text() == "7.89"
-
-
-def test_pattern_parameter_sliders_snap_float_values_to_two_decimals(app: QApplication) -> None:
-    page = PatternPage(settings={})
-    slider = page._hex_gap_slider
-
-    slider.setValue(52)
-
-    assert page._hex_gap.text() == "1.04"
-
-
-def test_help_explains_pattern_slider_precision() -> None:
-    from simple_stipple.features.help import build_help_html
-
-    manual = build_help_html()
-
-    assert "Slider-driven decimal values are rounded" in manual
-    assert "two decimal places" in manual
 
 
 def test_pattern_outline_path_stays_readable_when_it_is_long(app: QApplication) -> None:

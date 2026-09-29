@@ -6,7 +6,7 @@ defaults stay strings: they feed ``QLineEdit(default)`` and
 ``make_resettable_line_edit``, whose reset-to-default expects the exact
 display text.
 
-Per-pattern generator parameters (hex radius, flow spacing, …) live in
+Per-pattern generator parameters (hex size, stipple spacing, …) live in
 ``_spec.PARAM_SPECS``, and Settings-dialog-backed defaults live in
 ``simple_stipple.platform.settings`` — neither is duplicated here.
 """
@@ -23,7 +23,7 @@ DEFAULT_FILL_MODE = "none"  # none | lines | crosshatch
 DEFAULT_FILL_SPACING = "0.5"  # mm
 DEFAULT_FILL_ANGLE = "0"  # degrees
 DEFAULT_FILL_INSET = "0"  # mm
-FILL_SPACING_FLOOR_MM = 0.05  # hard lower clamp when parsing
+FILL_SPACING_FLOOR_MM = 0.05  # smallest fill spacing a field accepts
 
 # ── Export / fabrication ──────────────────────────────────────────────────
 DEFAULT_MIN_SEGMENT = "0"  # mm; 0 disables

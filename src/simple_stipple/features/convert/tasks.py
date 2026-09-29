@@ -82,6 +82,10 @@ class _ConversionSubTab(QWidget):
 
     results_changed = Signal()
     _result_ready = Signal(int, object)
+    #: (completed, total) files; total 0 means a single operation of unknown length.
+    batch_progress = Signal(int, int)
+    #: (summary, status tone) once a multi-file job has run to the end.
+    job_finished = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -92,6 +96,8 @@ class _ConversionSubTab(QWidget):
         self._running = False
         self._thread: threading.Thread | None = None
         self._cancel_event = threading.Event()
+        self._job_completed = 0
+        self._job_total = 0
 
     @Slot(int, object)
     def _receive_result(self, revision: int, result: ConversionResult) -> None:
@@ -152,11 +158,8 @@ class _ConversionSubTab(QWidget):
             self._record_batch_item(index)
         self._running = False
         self._refresh_readiness()
-        self._status_sig.emit(
-            f"Retry complete — {len(failed) - errors} succeeded, {errors} failed",
-            STATUS_WARN if errors else STATUS_OK,
-        )
         self.results_changed.emit()
+        self._finish_batch(len(failed) - errors, errors, prefix="Retry: ")
 
     log_line = Signal(str)
     preview_path = Signal(str)
@@ -240,11 +243,13 @@ class _ConversionSubTab(QWidget):
         self._job_started_at = time.monotonic()
         self._job_completed = 0
         self._job_total = 0
+        self.batch_progress.emit(0, 0)
         return self._cancel_event
 
     def _begin_batch(self, total: int) -> None:
         self._job_total = total
         self._job_completed = 0
+        self.batch_progress.emit(0, total)
 
     def _elapsed_text(self) -> str:
         started_at = getattr(self, "_job_started_at", None)
@@ -262,6 +267,40 @@ class _ConversionSubTab(QWidget):
 
     def _record_batch_item(self, completed: int) -> None:
         self._job_completed = completed
+        self.batch_progress.emit(completed, self._job_total)
+
+    def _finish_batch(
+        self,
+        converted: int,
+        failed: int,
+        *,
+        details: tuple[str, ...] = (),
+        warnings: tuple[str, ...] = (),
+        include_subfolders: bool | None = None,
+        prefix: str = "",
+    ) -> None:
+        """Announce the end of a multi-file job as "N converted, M failed".
+
+        *details* are informational; *warnings* also turn the status amber.
+        """
+        parts = [f"{prefix}{converted} converted, {failed} failed", *warnings, *details]
+        if include_subfolders is not None:
+            parts.append("subfolders included" if include_subfolders else "subfolders skipped")
+        if failed and not converted:
+            tone = STATUS_ERR
+        elif failed or warnings:
+            tone = STATUS_WARN
+        else:
+            tone = STATUS_OK
+        self.job_finished.emit(" · ".join(parts), tone)
+
+    @staticmethod
+    def _found_line(count: int, include_subfolders: bool | None) -> str:
+        if include_subfolders is None:
+            note = ""
+        else:
+            note = " (subfolders included)" if include_subfolders else " (top folder only)"
+        return f"Found {count} file(s){note}\n"
 
     def cancel(self) -> None:
         event = getattr(self, "_cancel_event", None)
@@ -301,16 +340,17 @@ class _ConversionSubTab(QWidget):
         existing = [path for path in paths if path.exists()]
         if not existing:
             return True
-        answer = QMessageBox.question(
-            self,
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
             "Replace Existing Files?",
-            f"{len(existing)} destination file(s) already exist and will be replaced.\n\n"
-            + "\n".join(path.name for path in existing[:5])
-            + ("\n…" if len(existing) > 5 else ""),
+            f"{len(existing)} destination file(s) already exist and will be replaced.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            self,
         )
-        return answer == QMessageBox.StandardButton.Yes
+        box.setInformativeText("Show Details lists every file that will be replaced.")
+        box.setDetailedText("\n".join(str(path) for path in existing))
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
 
     def _set_mode(self, mode: str) -> None:
         batch = mode == "batch"
@@ -320,8 +360,10 @@ class _ConversionSubTab(QWidget):
         ]:
             b.setProperty("active", active)
             refresh_style(b)
-        self._include_subfolders.setVisible(batch)
+        self._include_subfolders.setEnabled(batch)
         self._on_mode_switch(mode)
+        if batch:
+            self._announce_subfolder_scope(self._include_subfolders.isChecked())
 
     def run(self) -> None:
         """Public entry point called by the page-level footer CTA."""
@@ -381,12 +423,22 @@ class _ConversionSubTab(QWidget):
         layout.addLayout(mode_row)
 
     def _build_subfolders_checkbox(self, layout: QVBoxLayout, tooltip: str) -> None:
-        """Add the (initially hidden) subfolders recursion checkbox."""
+        """Add the subfolder recursion checkbox, active only in folder (batch) mode."""
         self._include_subfolders = QCheckBox("Include subfolders")
         self._include_subfolders.setChecked(True)
-        self._include_subfolders.setToolTip(tooltip)
-        self._include_subfolders.setVisible(False)
+        self._include_subfolders.setToolTip(f"{tooltip}. Applies to Folder (batch) mode.")
+        self._include_subfolders.setEnabled(False)
+        self._include_subfolders.toggled.connect(self._announce_subfolder_scope)
         layout.addWidget(self._include_subfolders)
+
+    def _announce_subfolder_scope(self, include: bool) -> None:
+        if self._is_batch():
+            self._status_sig.emit(
+                "Folder batch will include subfolders"
+                if include
+                else "Folder batch will skip subfolders (top folder only)",
+                STATUS_NEUTRAL,
+            )
 
     def _build_action_row(self, btn_text: str, tooltip: str = "") -> None:
         """Create the primary action button and status label.
@@ -452,6 +504,10 @@ class FviSubTab(_ConversionSubTab):
 
     def _build(self, layout: QVBoxLayout) -> None:
         self._build_mode_row(layout, "Single file", "Folder (batch)")
+        fvi_hint = QLabel("FVI is the FiberStar/StarFX laser vector format.")
+        fvi_hint.setProperty("role", "hint")
+        fvi_hint.setWordWrap(True)
+        layout.addWidget(fvi_hint)
         self._build_subfolders_checkbox(
             layout,
             "Find FVI files recursively and preserve their folder structure in the output",
@@ -571,7 +627,8 @@ class FviSubTab(_ConversionSubTab):
             self._status_sig.emit("No FVI files found", STATUS_WARN)
             return
 
-        self.log_line.emit(f"Found {len(files)} file(s)\n")
+        scope = include_subfolders if Path(src).is_dir() else None
+        self.log_line.emit(self._found_line(len(files), scope))
         self._begin_batch(len(files))
         ok = err = warned = skipped = 0
         last_dxf: str | None = None
@@ -621,19 +678,19 @@ class FviSubTab(_ConversionSubTab):
         if files:
             final_dir = out_dir or str(files[0].parent)
             self._out_dir_sig.emit(final_dir)
-        if err == 0 and ok > 0:
-            self._status_sig.emit(
-                f"Done — {ok} converted"
-                + (f", {warned} with warnings" if warned else "")
-                + (f", {skipped} skipped" if skipped else ""),
-                STATUS_WARN if warned or skipped else STATUS_OK,
-            )
-        elif err > 0:
-            self._status_sig.emit(f"{err} error(s)", STATUS_ERR)
-        elif skipped:
-            self._status_sig.emit(
-                f"Done — {skipped} empty/unsupported file(s) skipped", STATUS_WARN
-            )
+        self._finish_batch(
+            ok,
+            err,
+            warnings=tuple(
+                note
+                for count, note in (
+                    (warned, f"{warned} with warnings"),
+                    (skipped, f"{skipped} skipped (no geometry)"),
+                )
+                if count
+            ),
+            include_subfolders=scope,
+        )
         if last_dxf:
             self.preview_path.emit(last_dxf)
 
@@ -865,13 +922,17 @@ class FixerSubTab(_ConversionSubTab):
         self._refresh_readiness()
         self._reveal_state.emit(True)
         self._last_out = str(output_root or Path(src))
-        tone = STATUS_OK if failed == 0 else STATUS_WARN
         changed = totals["closed"] + totals["simplified"] + totals["discarded"]
-        status = (
-            f"Done — {changed_files} with repairs · {unchanged_files} already clean · "
-            f"{failed} failed · {changed} geometry repairs"
+        self._finish_batch(
+            succeeded,
+            failed,
+            details=(
+                f"{changed_files} with repairs",
+                f"{unchanged_files} already clean",
+                f"{changed} geometry repairs",
+            ),
+            include_subfolders=include_subfolders,
         )
-        self._status_sig.emit(status, tone)
         summary_lines = [
             "",
             "BATCH SUMMARY",
@@ -1102,7 +1163,7 @@ class SvgSubTab(_ConversionSubTab):
             self.log_line.emit("No DXF files found in the selected folder.")
             return
         root = Path(src)
-        self.log_line.emit(f"Found {len(files)} file(s)\n")
+        self.log_line.emit(self._found_line(len(files), include_subfolders))
         self._begin_batch(len(files))
         ok = err = 0
         for index, dxf in enumerate(files, start=1):
@@ -1130,11 +1191,8 @@ class SvgSubTab(_ConversionSubTab):
         self._running = False
         self._refresh_readiness()
         self._last_out = out_dir
-        self._status_sig.emit(
-            f"Done — {ok} converted" + (f", {err} error(s)" if err else ""),
-            STATUS_WARN if err else STATUS_OK,
-        )
-        self.log_line.emit(f"\nDone — {ok} converted" + (f", {err} error(s)" if err else ""))
+        self._finish_batch(ok, err, include_subfolders=include_subfolders)
+        self.log_line.emit(f"\nDone — {ok} converted, {err} failed")
 
 
 class SvgToDxfSubTab(_ConversionSubTab):
@@ -1314,7 +1372,7 @@ class SvgToDxfSubTab(_ConversionSubTab):
             self.log_line.emit("No SVG files found in the selected folder.")
             return
         root = Path(src)
-        self.log_line.emit(f"Found {len(files)} file(s)\n")
+        self.log_line.emit(self._found_line(len(files), include_subfolders))
         self._begin_batch(len(files))
         ok = err = 0
         for index, svg in enumerate(files, start=1):
@@ -1348,8 +1406,5 @@ class SvgToDxfSubTab(_ConversionSubTab):
         self._running = False
         self._refresh_readiness()
         self._last_out = out_dir
-        self._status_sig.emit(
-            f"Done — {ok} converted" + (f", {err} error(s)" if err else ""),
-            STATUS_WARN if err else STATUS_OK,
-        )
-        self.log_line.emit(f"\nDone — {ok} converted" + (f", {err} error(s)" if err else ""))
+        self._finish_batch(ok, err, include_subfolders=include_subfolders)
+        self.log_line.emit(f"\nDone — {ok} converted, {err} failed")

@@ -153,7 +153,20 @@ def _install_sidebar_reflow(content: QWidget) -> None:
 
 
 class ResponsiveContentSplitter(QSplitter):
-    """Horizontal splitter that exposes a compact toggleable secondary drawer."""
+    """Horizontal splitter that exposes a compact toggleable secondary drawer.
+
+    One convention for every page (pane sides stay where each workflow puts
+    them):
+
+    * The secondary pane is the one that collapses into a drawer below
+      ``COMPACT_WIDTH``. Label it ``"Inspector"`` when it is the right-hand
+      selection/output panel and ``"Settings"`` when it is the left-hand
+      parameters pane; the toggle reads "Show/Hide <label>".
+    * The drawer reopens at its last open width. Its first width is the
+      secondary size given to :func:`content_splitter`; pages that persist a
+      width setting (``trace_sidebar_width``, ``convert_sidebar_width``) seed
+      that size from settings and save it on ``splitterMoved``.
+    """
 
     # The splitter itself is narrower than the outer application window after
     # shell gutters. Enter drawer mode early enough that a nominal 1050 px
@@ -188,8 +201,10 @@ class ResponsiveContentSplitter(QSplitter):
         self.splitterMoved.connect(self._sync_drawer_from_sizes)
 
     def set_responsive_secondary(self, index: int, label: str = "Inspector") -> None:
+        """Make pane ``index`` the compact drawer; see the class convention for ``label``."""
         self._responsive_secondary = index
         self._drawer_label = label
+        self._drawer_toggle.setAccessibleName(f"Toggle {label}")
         if 0 <= index < self.count():
             secondary = self.widget(index)
             if secondary is not None:

@@ -456,6 +456,16 @@ def shape_slot(length: float, width: float, n_end: int = 24) -> list[tuple[float
     return _to_coords(slot)
 
 
+def shape_slot_for_bounds(
+    width: float, height: float, n_end: int = 24
+) -> list[tuple[float, float]]:
+    """Return a horizontal or vertical slot profile within its drag bounds."""
+    width, height = abs(width), abs(height)
+    if height <= width:
+        return shape_slot(width, height, n_end)
+    return [(-y, x) for x, y in shape_slot(height, width, n_end)]
+
+
 def _translate(poly: Polyline, cx: float, cy: float) -> Polyline:
     return [(x + cx, y + cy) for x, y in poly]
 

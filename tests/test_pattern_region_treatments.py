@@ -203,8 +203,7 @@ def test_untreated_contained_outline_is_a_hole_in_outer_fill() -> None:
     )
     assert preview["fill"]
     assert all(
-        LineString(stroke).intersection(hole_interior).is_empty
-        for stroke in preview["fill"]
+        LineString(stroke).intersection(hole_interior).is_empty for stroke in preview["fill"]
     )
 
 
@@ -235,8 +234,7 @@ def test_every_nested_untreated_outline_stays_empty_in_outer_fill() -> None:
     for hole in (middle_hole, inner_hole):
         hole_interior = Polygon(hole).buffer(-0.001)
         assert all(
-            LineString(stroke).intersection(hole_interior).is_empty
-            for stroke in preview["fill"]
+            LineString(stroke).intersection(hole_interior).is_empty for stroke in preview["fill"]
         )
 
 

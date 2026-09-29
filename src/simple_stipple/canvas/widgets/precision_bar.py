@@ -17,14 +17,28 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
+from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.canvas.constants import GRID_SPACING_MAX_MM, GRID_SPACING_MIN_MM
 from simple_stipple.ui.components.feedback import (
     clear_line_edit_error,
     refresh_style,
-    set_line_edit_error,
+    reject_input,
 )
 from simple_stipple.ui.components.inputs import NoWheelSlider
-from simple_stipple.ui.components.units import parse_numeric_expression
+from simple_stipple.ui.components.units import parse_numeric_expression, to_display, unit_suffix
+
+# (state key, menu label, canvas setter, short summary name)
+_SNAP_AIDS = (
+    ("snap_vertex", "Vertices", "set_snap_vertex", "Vertex"),
+    ("snap_midpoint", "Midpoints", "set_snap_midpoint", "Mid"),
+    ("snap_intersection", "Intersections", "set_snap_intersection", "Intersect"),
+    ("snap_parallel", "Parallel", "set_snap_parallel", "Parallel"),
+    ("snap_perpendicular", "Perpendicular", "set_snap_perpendicular", "Perp"),
+    ("snap_equal_length", "Equal length", "set_snap_equal_length", "Equal"),
+    ("snap_align_x", "Align X", "set_snap_align_x", "Align X"),
+    ("snap_align_y", "Align Y", "set_snap_align_y", "Align Y"),
+    ("grid_snap", "Grid points", "set_grid_snap", "Grid"),
+)
 
 
 class CanvasPrecisionBar(QFrame):
@@ -35,6 +49,7 @@ class CanvasPrecisionBar(QFrame):
         self._canvas = canvas
         self._on_changed = on_changed
         self._compact = compact
+        self._shown_spacing: tuple[float, str] | None = None
 
         self.setFrameShape(QFrame.Shape.NoFrame)
         if compact:
@@ -55,7 +70,6 @@ class CanvasPrecisionBar(QFrame):
         self._pan_btn.setProperty("role", "precision-control")
         self._pan_btn.setMinimumHeight(30)
         self._pan_btn.setCheckable(True)
-        self._pan_btn.setToolTip("Pan the canvas by dragging (Shortcut: P)")
         self._pan_btn.setAccessibleName("Pan tool")
         self._pan_btn.clicked.connect(self._toggle_pan)
         if not compact:
@@ -79,11 +93,8 @@ class CanvasPrecisionBar(QFrame):
         self._spacing.setFixedWidth(76)
         self._spacing.setMinimumHeight(30)
         self._spacing.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._spacing.setToolTip("Grid spacing (mm) — accepts expressions like 25/2")
         self._spacing.setAccessibleName("Grid spacing")
-        self._spacing.returnPressed.connect(self._apply_spacing)
-        # Also commit on focus-out — typing a value and clicking elsewhere
-        # used to discard it silently.
+        # editingFinished covers both Enter and focus-out.
         self._spacing.editingFinished.connect(self._apply_spacing)
         layout.addWidget(self._spacing)
 
@@ -114,17 +125,7 @@ class CanvasPrecisionBar(QFrame):
         )
         self._snap_menu = QMenu(self._snap_btn)
         self._snap_actions = {}
-        for key, label_text, setter in (
-            ("snap_vertex", "Vertices", "set_snap_vertex"),
-            ("snap_midpoint", "Midpoints", "set_snap_midpoint"),
-            ("snap_intersection", "Intersections", "set_snap_intersection"),
-            ("snap_parallel", "Parallel", "set_snap_parallel"),
-            ("snap_perpendicular", "Perpendicular", "set_snap_perpendicular"),
-            ("snap_equal_length", "Equal length", "set_snap_equal_length"),
-            ("snap_align_x", "Align X", "set_snap_align_x"),
-            ("snap_align_y", "Align Y", "set_snap_align_y"),
-            ("grid_snap", "Grid points", "set_grid_snap"),
-        ):
+        for key, label_text, setter, _short in _SNAP_AIDS:
             action = self._snap_menu.addAction(label_text)
             action.setCheckable(True)
             action.toggled.connect(lambda checked, method=setter: self._set_snap(method, checked))
@@ -221,6 +222,12 @@ class CanvasPrecisionBar(QFrame):
             self._compact_trigger.setAccessibleName("Precision settings")
             self._compact_trigger.setMenu(self._precision_menu)
             shell_layout.addWidget(self._compact_trigger)
+            # The active aids stay readable without opening the menu.
+            shell_layout.addSpacing(6)
+            self._summary = QLabel()
+            self._summary.setProperty("role", "hint-sm")
+            self._summary.setAccessibleName("Active precision aids")
+            shell_layout.addWidget(self._summary)
         else:
             shell_layout.addWidget(self._controls)
         self.refresh()
@@ -247,6 +254,9 @@ class CanvasPrecisionBar(QFrame):
             hasattr(self._canvas, "get_mode") and self._canvas.get_mode() == "pan"
         )
         self._pan_btn.blockSignals(False)
+        self._pan_btn.setToolTip(
+            canvas_commands.tooltip_text("mode.pan", "Pan the canvas by dragging")
+        )
         self._grid_btn.setChecked(grid_on)
         self._construction_btn.blockSignals(True)
         self._construction_btn.setChecked(bool(state.get("construction_mode", False)))
@@ -264,7 +274,16 @@ class CanvasPrecisionBar(QFrame):
         self._snap_strength_slider.blockSignals(False)
         self._snap_strength_value.setText(f"{round(strength * 100)}%")
 
-        self._spacing.setText(f"{spacing:g}")
+        unit = self._unit()
+        suffix = unit_suffix(unit)
+        self._spacing_label.setText(f"Spacing ({suffix})")
+        # Keep a rejected entry (and its red mark) until the user edits it,
+        # unless the spacing itself changed underneath it.
+        if not self._spacing.property("error") or self._shown_spacing != (spacing, unit):
+            clear_line_edit_error(self._spacing)
+            self._spacing.setText(f"{to_display(spacing, unit):g}")
+            self._spacing.setToolTip(f"Grid spacing ({suffix}) — accepts expressions like 25/2")
+            self._shown_spacing = (spacing, unit)
         show_spacing = grid_on or bool(state.get("grid_snap", False))
         for widget in (
             self._spacing_label,
@@ -273,6 +292,47 @@ class CanvasPrecisionBar(QFrame):
             self._spacing_inc,
         ):
             widget.setVisible(show_spacing)
+        if self._compact:
+            self._refresh_summary(state, spacing, unit)
+
+    def _unit(self) -> str:
+        return str(getattr(self._canvas, "_unit_system", "mm"))
+
+    def _refresh_summary(self, state: dict, spacing: float, unit: str) -> None:
+        """Short always-visible readout of the aids the Precision menu holds."""
+        object_aids = [
+            (label, short)
+            for key, label, _setter, short in _SNAP_AIDS
+            if key != "grid_snap" and bool(state.get(key, True))
+        ]
+        grid_snap = bool(state.get("grid_snap", False))
+        grid_text = f"{to_display(spacing, unit):g} {unit_suffix(unit)}"
+        if not bool(state.get("snap_master", True)):
+            parts = ["Snap off"]
+        elif len(object_aids) == len(_SNAP_AIDS) - 1:
+            parts = ["Snap: all"]
+        elif not object_aids:
+            parts = ["Snap: none"]
+        elif len(object_aids) <= 3:
+            parts = ["Snap: " + ", ".join(short for _label, short in object_aids)]
+        else:
+            parts = [f"Snap: {len(object_aids)} of {len(_SNAP_AIDS) - 1}"]
+        if bool(state.get("grid_visible", False)) or grid_snap:
+            parts.append(f"Grid{' snap' if grid_snap else ''} {grid_text}")
+        if bool(state.get("construction_mode", False)):
+            parts.append("Construction")
+        self._summary.setText(" · ".join(parts))
+        enabled = ", ".join(label for label, _short in object_aids) or "none"
+        details = (
+            f"Snapping {'on' if state.get('snap_master', True) else 'off'}: {enabled}\n"
+            f"Grid: {'shown' if state.get('grid_visible', False) else 'hidden'}, "
+            f"{grid_text}, grid-point snap {'on' if grid_snap else 'off'}\n"
+            f"Construction: {'on' if state.get('construction_mode', False) else 'off'}"
+        )
+        self._summary.setToolTip(details)
+        self._compact_trigger.setToolTip(
+            f"Grid, snap, construction, and constraint settings\n{details}"
+        )
 
     def _set_snap(self, method: str, enabled: bool) -> None:
         canvas = self._canvas
@@ -330,28 +390,39 @@ class CanvasPrecisionBar(QFrame):
             return
         if not hasattr(canvas, "get_precision_state") or not hasattr(canvas, "set_grid_spacing"):
             return
-        current = float(canvas.get_precision_state().get("grid_spacing", 1.0))
-        canvas.set_grid_spacing(
-            max(GRID_SPACING_MIN_MM, min(GRID_SPACING_MAX_MM, current * factor))
-        )
-        self._after_change()
+        self._set_spacing(float(canvas.get_precision_state().get("grid_spacing", 1.0)) * factor)
 
     def _apply_spacing(self) -> None:
         canvas = self._canvas
-        if canvas is None:
-            return
-        if not hasattr(canvas, "set_grid_spacing"):
+        if canvas is None or not hasattr(canvas, "set_grid_spacing"):
             return
         try:
-            value = parse_numeric_expression(self._spacing.text(), "mm")
+            value = parse_numeric_expression(self._spacing.text(), self._unit())
         except (ValueError, ZeroDivisionError, OverflowError):
-            set_line_edit_error(self._spacing, "Use a positive number or expression, e.g. 25/2.")
+            reject_input(self._spacing, "Enter a number or expression, e.g. 25/2")
             return
         if value <= 0:
-            set_line_edit_error(self._spacing, "Grid spacing must be greater than zero.")
+            reject_input(self._spacing, "Grid spacing must be greater than zero")
             return
         clear_line_edit_error(self._spacing)
-        canvas.set_grid_spacing(max(GRID_SPACING_MIN_MM, min(GRID_SPACING_MAX_MM, value)))
+        self._set_spacing(value)
+
+    def _set_spacing(self, value_mm: float) -> None:
+        """Apply a spacing in mm, clamped to the shared range; say so when clamped."""
+        canvas = self._canvas
+        if canvas is None:
+            return
+        clamped = max(GRID_SPACING_MIN_MM, min(GRID_SPACING_MAX_MM, value_mm))
+        canvas.set_grid_spacing(clamped)
+        flash = getattr(canvas, "_show_flash", None)
+        if clamped != value_mm and callable(flash):
+            unit = self._unit()
+            low = to_display(GRID_SPACING_MIN_MM, unit)
+            high = to_display(GRID_SPACING_MAX_MM, unit)
+            flash(
+                f"Grid spacing is limited to {low:.4g}–{high:.4g} {unit_suffix(unit)}",
+                1600,
+            )
         self._after_change()
 
 

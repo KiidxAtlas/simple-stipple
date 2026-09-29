@@ -8,14 +8,20 @@
 <h3 class="subheading">Safe working routine</h3>
 <ol>
   <li>Use <strong>File → Save Workspace</strong> early and give the job a recognizable name.</li>
-  <li>Use <strong>File → Workspaces and Recovery…</strong> to browse and reopen named jobs.</li>
+  <li>Use <strong>File → Browse Workspaces…</strong> to browse and reopen named jobs, or <strong>File → Open Recent</strong> for the last few. The header's <strong>Workspace</strong> menu offers the same actions.</li>
   <li>Export only after fitting the view, checking layers, closed outlines, region treatments, and dimensions.</li>
   <li>Open the exported file in your machine software and verify scale, units, layers, and operation order.</li>
 </ol>
 <h3 class="subheading">Autosave and crash recovery</h3>
-<p>Named workspaces autosave periodically. Unsaved work receives rolling recovery
-snapshots. Choose <strong>File → Recover Unsaved Work…</strong> after a crash or accidental
-close; inspect a snapshot before restoring or permanently deleting it.</p>
+<p>There are two separate kinds of automatic writes. Hover the workspace name in the header to see the time of each.</p>
+<ul>
+  <li><strong>Saved to &lt;workspace&gt;:</strong> once a workspace has a name, unsaved changes are written to that file every 60 seconds.</li>
+  <li><strong>Recovery snapshot:</strong> every 90 seconds while there are unsaved changes, a crash-recovery snapshot is written to the app's data folder. It is <em>not</em> a workspace save and is removed when you save the workspace or close without unsaved changes.</li>
+</ul>
+<p>When you close with unsaved changes and choose <strong>Discard Changes</strong>, the latest recovery snapshot is kept
+(changes after it are lost; the dialog shows its time). Kept snapshots are offered the next time Simple Stipple
+starts, and stay in <strong>File → Recover Unsaved Work…</strong> until you restore or delete them. Inspect a snapshot
+there before restoring or permanently deleting it.</p>
 <h3 class="subheading">Importing and moving work</h3>
 <p>Draft accepts vector geometry for editing. Trace accepts bitmap images. Use
 <strong>Send to Draft</strong> or <strong>Send to Pattern</strong> when the next step is in

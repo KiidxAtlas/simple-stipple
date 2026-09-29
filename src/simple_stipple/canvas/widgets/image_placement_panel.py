@@ -4,7 +4,7 @@ Styled like the Draft Properties panel — X/Y/W/H grid, quarter-turn buttons,
 an absolute rotation field — and accepting the same arithmetic/unit input
 (``25/2``, ``1in + 3mm``). The owner applies edits and pushes the resulting
 placement back with :meth:`set_placement`, so dragging and typing share one
-source of truth.
+source of truth. Invalid entries stay in the field, marked, until corrected.
 """
 
 from __future__ import annotations
@@ -22,8 +22,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input
 from simple_stipple.ui.components.layout import CollapsibleSection, container_with_layout
 from simple_stipple.ui.components.units import parse_numeric_expression, to_display, unit_suffix
+
+_EXPRESSION_HINT = "Enter a number or expression, e.g. 25/2 or 1in + 3mm"
 
 
 def _num_edit(on_commit: Callable[[], None], tooltip: str) -> QLineEdit:
@@ -50,6 +53,8 @@ class ImagePlacementPanel(QWidget):
     """
 
     placementEdited = Signal(float, float, float, float, float)  # x, y, w, h, rotation
+    centerOnBedRequested = Signal()
+    fitToBedRequested = Signal()
 
     def __init__(self, unit: Callable[[], str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,8 +80,12 @@ class ImagePlacementPanel(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(6)
         grid.setVerticalSpacing(3)
-        self._x = _num_edit(self._commit_position, f"Left edge before rotation. {expression_tip}")
-        self._y = _num_edit(self._commit_position, f"Bottom edge before rotation. {expression_tip}")
+        self._x = _num_edit(
+            lambda: self._commit_position("x"), f"Left edge before rotation. {expression_tip}"
+        )
+        self._y = _num_edit(
+            lambda: self._commit_position("y"), f"Bottom edge before rotation. {expression_tip}"
+        )
         self._w = _num_edit(
             lambda: self._commit_size("w"), f"Width; height follows. {expression_tip}"
         )
@@ -97,6 +106,25 @@ class ImagePlacementPanel(QWidget):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         geometry_layout.addLayout(grid)
+        bed_row = QHBoxLayout()
+        bed_row.setSpacing(6)
+        for text, tip, signal in (
+            (
+                "Center on bed",
+                "Move the image so its centre sits at the centre of the machine bed",
+                self.centerOnBedRequested,
+            ),
+            (
+                "Fit to bed",
+                "Scale the image, keeping its proportions, to fill the machine bed, then centre it",
+                self.fitToBedRequested,
+            ),
+        ):
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.clicked.connect(signal)
+            bed_row.addWidget(button)
+        geometry_layout.addLayout(bed_row)
         self._geometry_section = CollapsibleSection("Geometry", geometry, expanded=True)
         root.addWidget(self._geometry_section)
 
@@ -136,7 +164,12 @@ class ImagePlacementPanel(QWidget):
     # ── Owner API ───────────────────────────────────────────────────────────
 
     def set_placement(self, placement: tuple[float, float, float, float, float] | None) -> None:
-        """Show ``(x, y, w, h, rotation)`` in mm/degrees, or the empty state."""
+        """Show ``(x, y, w, h, rotation)`` in mm/degrees, or the empty state.
+
+        A rejected entry keeps its typed text while the placement is
+        unchanged, so the user can correct it; a new placement replaces it.
+        """
+        changed = placement != self._placement
         self._placement = placement
         available = placement is not None
         self._empty_hint.setVisible(not available)
@@ -149,11 +182,17 @@ class ImagePlacementPanel(QWidget):
         x, y, w, h, rotation = placement
         self._updating = True
         try:
-            for edit, value in ((self._x, x), (self._y, y), (self._w, w), (self._h, h)):
-                if not edit.hasFocus():
-                    edit.setText(f"{to_display(value, unit):.3f}")
-            if not self._rotation.hasFocus():
-                self._rotation.setText(f"{_normalized_degrees(rotation):.2f}")
+            for edit, text in (
+                (self._x, f"{to_display(x, unit):.3f}"),
+                (self._y, f"{to_display(y, unit):.3f}"),
+                (self._w, f"{to_display(w, unit):.3f}"),
+                (self._h, f"{to_display(h, unit):.3f}"),
+                (self._rotation, f"{_normalized_degrees(rotation):.2f}"),
+            ):
+                if edit.hasFocus() or (edit.property("error") and not changed):
+                    continue
+                clear_line_edit_error(edit)
+                edit.setText(text)
         finally:
             self._updating = False
 
@@ -161,34 +200,42 @@ class ImagePlacementPanel(QWidget):
 
     def _parse(self, edit: QLineEdit, *, is_length: bool = True) -> float | None:
         try:
-            return parse_numeric_expression(edit.text(), self._unit(), is_length=is_length)
+            value = parse_numeric_expression(edit.text(), self._unit(), is_length=is_length)
         except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            reject_input(
+                edit,
+                _EXPRESSION_HINT if is_length else "Enter an angle in degrees, e.g. 90 or 45/2",
+            )
             return None
+        clear_line_edit_error(edit)
+        return value
 
     def _emit(self, x: float, y: float, w: float, h: float, rotation: float) -> None:
         self.placementEdited.emit(x, y, w, h, _normalized_degrees(rotation))
 
-    def _restore(self) -> None:
-        self.set_placement(self._placement)
-
-    def _commit_position(self) -> None:
+    def _commit_position(self, axis: str) -> None:
         if self._updating or self._placement is None:
             return
-        x, y = self._parse(self._x), self._parse(self._y)
-        if x is None or y is None:
-            self._restore()
+        value = self._parse(self._x if axis == "x" else self._y)
+        if value is None:
             return
-        _x, _y, w, h, rotation = self._placement
-        if (x, y) != (_x, _y):
-            self._emit(x, y, w, h, rotation)
+        x, y, w, h, rotation = self._placement
+        new_x, new_y = (value, y) if axis == "x" else (x, value)
+        if (new_x, new_y) != (x, y):
+            self._emit(new_x, new_y, w, h, rotation)
 
     def _commit_size(self, axis: str) -> None:
         if self._updating or self._placement is None:
             return
-        value = self._parse(self._w if axis == "w" else self._h)
+        edit = self._w if axis == "w" else self._h
+        value = self._parse(edit)
+        if value is None:
+            return
         x, y, w, h, rotation = self._placement
-        if value is None or value <= 0 or w <= 0 or h <= 0:
-            self._restore()
+        if value <= 0:
+            reject_input(edit, f"{'Width' if axis == 'w' else 'Height'} must be greater than zero")
+            return
+        if w <= 0 or h <= 0:
             return
         scale = value / (w if axis == "w" else h)
         if abs(scale - 1.0) > 1e-9:
@@ -199,7 +246,6 @@ class ImagePlacementPanel(QWidget):
             return
         angle = self._parse(self._rotation, is_length=False)
         if angle is None:
-            self._restore()
             return
         x, y, w, h, rotation = self._placement
         if abs(_normalized_degrees(angle - rotation)) > 1e-9:

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -142,7 +143,10 @@ class App(QMainWindow):
         self._restored_recovery_path: Path | None = None
         self._workspace_dirty: bool = False
         self._last_saved_document: dict | None = None
-        self._last_autosave_at: datetime | None = None
+        # A save to the named workspace file and a crash-recovery snapshot are
+        # tracked separately so the header never conflates the two.
+        self._last_workspace_save_at: datetime | None = None
+        self._last_recovery_snapshot_at: datetime | None = None
         self._has_unsaved_changes: bool = False
         self._workspace_timer = QTimer(self)
         self._workspace_timer.setSingleShot(True)
@@ -175,12 +179,16 @@ class App(QMainWindow):
         self._workspace_controller = WorkspaceController(self, self._page_runtime, self._tabs)
         self._workspace_timer.timeout.connect(self._update_workspace_dirty)
 
+        # ── Keyboard shortcuts (before menus: View → Fit View reuses the
+        #    registered canvas.fit action so the menu shows its live key) ────
+        self._global_actions: dict[str, QAction] = {}
+        self._setup_global_shortcuts()
+
         # ── Menus & actions (must precede shell header — the header reuses
         #    the File-menu actions for its Workspace overflow dropdown) ──────
         self._workspace_menu = self.menuBar().addMenu("File")
-        self._recent_workspaces_menu = self._workspace_menu.addMenu("Open Recent")
+        self._recent_workspaces_menus: list[QMenu] = []
         self._build_workspace_actions()
-        self._rebuild_recent_workspaces_menu()
         self._build_edit_view_help_menus()
 
         self._shell_header = self._build_shell_header()
@@ -198,10 +206,6 @@ class App(QMainWindow):
         self._page_runtime.connect_echoes(self._on_setting_echo)
         self._tabs.currentChanged.connect(self._schedule_workspace_dirty_check)
         self._tabs.currentChanged.connect(lambda _: self._refresh_workspace_header())
-
-        # ── Keyboard shortcuts ────────────────────────────────────────────────
-        self._global_actions: dict[str, QAction] = {}
-        self._setup_global_shortcuts()
 
         self._clear_workspace_state()
         self._last_saved_document = self._collect_workspace_document()
@@ -257,6 +261,9 @@ class App(QMainWindow):
 
     def _build_workspace_actions(self) -> None:
         self._workspace_controller._build_workspace_actions()
+
+    def _populate_workspace_menu(self, menu: QMenu) -> None:
+        self._workspace_controller._populate_workspace_menu(menu)
 
     def _rebuild_recent_workspaces_menu(self) -> None:
         self._workspace_controller._rebuild_recent_workspaces_menu()
@@ -327,6 +334,9 @@ class App(QMainWindow):
     def _shortcut(self, action_id: str) -> str:
         return self._command_controller._shortcut(action_id)
 
+    def _shell_shortcut_rows(self) -> list[tuple[str, str]]:
+        return self._command_controller._shell_shortcut_rows()
+
     def _open_command_palette(self) -> None:
         self._command_controller._open_command_palette()
 
@@ -338,6 +348,9 @@ class App(QMainWindow):
 
     def _show_help(self) -> None:
         self._command_controller._show_help()
+
+    def _offer_welcome(self) -> None:
+        self._menu_controller._offer_welcome()
 
     def _refresh_shortcut_tooltips(self) -> None:
         self._menu_controller._refresh_shortcut_tooltips()

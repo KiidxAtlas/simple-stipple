@@ -259,38 +259,9 @@ def get_command_guidance(self) -> tuple[str, str]:
             return "Scale: pick second reference point · Shift snaps angle", "accent"
         return "Scale reference locked · Enter applies distance · Esc exits", "success"
     if self._mode == "draw":
-        drag_shapes = {
-            "rectangle",
-            "rounded_rectangle",
-            "slot",
-            "circle",
-            "ellipse",
-            "polygon",
-            "star",
-        }
-        if self._draw_primitive in drag_shapes:
-            if not self._draw_shape_preview_active:
-                return (
-                    f"{self._draw_primitive.replace('_', ' ').title()}: drag to size · Esc exits",
-                    "accent",
-                )
-            return (
-                f"{self._draw_primitive.replace('_', ' ').title()}: release to place · Esc cancels",
-                "accent",
-            )
-        if self._draw_primitive == "text":
-            return "Text: click to place text · Esc exits", "accent"
-        if not self._draw_pts and not self._draw_shape_preview_active:
-            return f"{self._draw_primitive.title()}: pick first point · Esc exits", "accent"
-        return (
-            f"{self._draw_primitive.title()}: pick next point · Enter finishes · Esc cancels",
-            "accent",
-        )
+        return _draw_command_guidance(self)
     if self._mode == "edit":
-        return (
-            "Edit vertices: drag points · double-click an edge to insert · Esc exits",
-            "accent",
-        )
+        return "Edit vertices: drag points · double-click an edge to insert · Esc exits", "accent"
     if self._mode == "trim":
         return "Trim: hover a segment to preview removal · click to apply · Esc exits", "accent"
     if self._mode == "extend":
@@ -303,6 +274,35 @@ def get_command_guidance(self) -> tuple[str, str]:
             "success",
         )
     return "Select geometry · drag empty space for a selection window", "neutral"
+
+
+def _draw_command_guidance(view) -> tuple[str, str]:
+    drag_shapes = {"rectangle", "rounded_rectangle", "slot", "circle", "ellipse", "polygon", "star"}
+    if view._draw_primitive in drag_shapes:
+        name = view._draw_primitive.replace("_", " ").title()
+        if view._draw_shape_preview_active:
+            return (
+                f"{name}: release to place · Tab: width/height · Enter: apply · Esc cancels",
+                "accent",
+            )
+        return f"{name}: drag to size · Esc exits", "accent"
+    if view._draw_primitive == "text":
+        return "Text: click to place text · Esc exits", "accent"
+    numeric_entry = view._draw_primitive in ("polyline", "line")
+    if not view._draw_pts and not view._draw_shape_preview_active:
+        then_type = " · then Tab types length/angle" if numeric_entry else ""
+        return f"{view._draw_primitive.title()}: pick first point{then_type} · Esc exits", "accent"
+    if numeric_entry:
+        finish = "apply or finish" if view._draw_primitive == "polyline" else "apply"
+        return (
+            f"{view._draw_primitive.title()}: pick next point · Tab: length/angle · "
+            f"A: angle · Enter: {finish} · Esc cancels",
+            "accent",
+        )
+    return (
+        f"{view._draw_primitive.title()}: pick next point · Enter finishes · Esc cancels",
+        "accent",
+    )
 
 
 def get_context_actions(self) -> tuple[tuple[str, str, str], ...]:

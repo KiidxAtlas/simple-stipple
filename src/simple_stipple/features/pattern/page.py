@@ -58,10 +58,6 @@ from simple_stipple.features.pattern.custom_tiles import (
     update_custom_pattern_actions,
 )
 from simple_stipple.features.pattern.defaults import (
-    DEFAULT_BORDER_FADE,
-    DEFAULT_FILL_ANGLE,
-    DEFAULT_FILL_INSET,
-    DEFAULT_FILL_SPACING,
     DEFAULT_PREVIEW_QUALITY,
     FILL_SPACING_FLOOR_MM,
     PREVIEW_DEBOUNCE_MS,
@@ -74,6 +70,7 @@ from simple_stipple.features.pattern.export import (
     export_document_file,
     export_format_suffix,
     export_laserstar_job,
+    export_summary,
 )
 from simple_stipple.features.pattern.form import (
     PATTERN_SUMMARY_FIELDS,
@@ -81,8 +78,8 @@ from simple_stipple.features.pattern.form import (
     fill_subtitle,
     outline_subtitle,
     pattern_subtitle,
+    regions_subtitle,
     restore_form_state,
-    zones_subtitle,
 )
 from simple_stipple.features.pattern.layout import (
     build_left,
@@ -153,15 +150,16 @@ from simple_stipple.platform.settings import (  # noqa: F401
     user_data_dir,
 )
 from simple_stipple.ui.components.feedback import (
-    parse_float_field_with_feedback,
+    clear_line_edit_error,
+    parse_float_field,
     refresh_style,
+    reject_input,
     show_error,
 )
 from simple_stipple.ui.components.focus import EscapeBlurFilter, blocked_signals
 from simple_stipple.ui.components.layout import (
     CollapsibleSection,
     content_splitter,
-    sidebar_panel,
     surface_frame,
 )
 from simple_stipple.ui.components.recent import KIND_DXF, KIND_IMAGE, record_recent
@@ -242,6 +240,8 @@ class PatternPage(BasePage):
         # Output-panel state: run order and the rows the user has switched off.
         self._output_order: list[str] = []
         self._output_disabled: set[str] = set()
+        # Preflight findings on the editable outlines, shown beside Export.
+        self._preflight_finding_count: int = 0
         # Set for the one solve that feeds an export, so the written geometry
         # is never the fast preview approximation.
         self._force_export_quality: bool = False
@@ -299,14 +299,21 @@ class PatternPage(BasePage):
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(8)
 
-        self._left_panel = sidebar_panel(left_w, min_width=260, max_width=320)
+        # The workflow rail owns its scroll area; avoid wrapping it in another
+        # scrollable sidebar, which traps wheel input between nested viewports.
+        self._left_panel = surface_frame("sidebar")
+        self._left_panel.setMinimumWidth(260)
+        self._left_panel.setMaximumWidth(320)
+        rail_layout = QVBoxLayout(self._left_panel)
+        rail_layout.setContentsMargins(0, 0, 0, 0)
+        rail_layout.addWidget(left_w)
         self._splitter = content_splitter(
             self._left_panel,
             right_w,
             sizes=(300, 950),
         )
         self._splitter.setCollapsible(0, True)
-        self._splitter.set_responsive_secondary(0, "Pattern controls")
+        self._splitter.set_responsive_secondary(0, "Settings")
         root.addWidget(self._splitter, stretch=1)
 
         build_left(self, left)
@@ -422,7 +429,7 @@ class PatternPage(BasePage):
                         self,
                         "Replace Outline",
                         f"Replace the current outline with {Path(path).name}? "
-                        "Zones and cutouts will be reset.",
+                        "Region treatments and cutouts will be reset.",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                         QMessageBox.StandardButton.Cancel,
                     )
@@ -747,7 +754,16 @@ class PatternPage(BasePage):
         label: str,
         **kw,
     ):
-        return parse_float_field_with_feedback(entry, label, self._set_status, **kw)
+        """Read a committed field at solve time; a bad value is rejected in place."""
+        try:
+            value = parse_float_field(entry.text(), **kw)
+        except ValueError as exc:
+            message = f"{label} {exc}"
+            reject_input(entry, message)
+            self._set_status(message, STATUS_ERR)
+            raise ValueError(message) from exc
+        clear_line_edit_error(entry)
+        return value
 
     def _parse_int_field(
         self,
@@ -804,20 +820,6 @@ class PatternPage(BasePage):
         """
         key = self._pattern_key(self._pattern_combo.currentText())
         return NULL_PATTERN if key == IMAGE_PATTERN else key
-
-    def _apply_scale(
-        self,
-        polys: list[list[tuple[float, float]]],
-        sw: float,
-        sh: float,
-    ) -> list[list[tuple[float, float]]]:
-        return self._pattern_service.apply_scale(
-            polys,
-            sw,
-            sh,
-            orig_w=self._orig_w,
-            orig_h=self._orig_h,
-        )
 
     def _fresh_outline_ids(self, count: int) -> list[str]:
         return self._pattern_service.fresh_outline_ids(count)
@@ -914,6 +916,7 @@ class PatternPage(BasePage):
         else:
             self._output_disabled.add(key)
         self._emit_state_changed()
+        self._refresh_export_summary()
 
     def _move_output_row(self, delta: int) -> None:
         row = self._output_list.currentRow()
@@ -969,8 +972,22 @@ class PatternPage(BasePage):
         else:
             text = f"Preflight · {report.paths} paths, no findings"
         self._output_preflight.setText(text)
+        self._preflight_finding_count = len(issues) if self._edit_polys else 0
+        self._refresh_export_summary()
         if hasattr(self, "_geometry_findings") and not self._geometry_findings.isHidden():
             self._populate_geometry_findings(report.issues, issues)
+
+    def _refresh_export_summary(self) -> None:
+        if not hasattr(self, "_export_summary"):
+            return
+        self._export_summary.setText(
+            export_summary(
+                self._export_format,
+                self._document_operations(),
+                self._enabled_operations(),
+                self._preflight_finding_count,
+            )
+        )
 
     def _populate_geometry_findings(self, geometry_issues, output_issues) -> None:
         findings = list(geometry_issues)
@@ -1056,6 +1073,7 @@ class PatternPage(BasePage):
             return
         self._lattice_origin_x.setText(f"{min(x for x, _y in points):g}")
         self._lattice_origin_y.setText(f"{min(y for _x, y in points):g}")
+        self._on_document_lattice_changed()
         self._set_status("Pattern grid snapped to the selection.", STATUS_OK)
 
     # ── Preview / reset ───────────────────────────────────────────────────────
@@ -1457,7 +1475,15 @@ class PatternPage(BasePage):
             self._set_status("Load an outline before exporting.", STATUS_WARN)
             return
         self._pending_export_after_preview = continuation
-        self._set_status("Solving the pattern before export…", STATUS_WARN)
+        self._set_status(
+            "Solving at full quality for export…"
+            if self._force_export_quality
+            else "Solving the pattern before export…",
+            STATUS_WARN,
+        )
+        # The export solve can take a while; show that work is under way.
+        self._progress.setRange(0, 0)
+        self._progress.setVisible(True)
         self._schedule_preview()
 
     # ── Format ────────────────────────────────────────────────────────────
@@ -1480,11 +1506,17 @@ class PatternPage(BasePage):
         if not hasattr(self, "_gen_btn"):
             return
         self._gen_btn.setText(EXPORT_BUTTON_LABEL[self._export_format])
+        self._refresh_export_summary()
         for key, action in getattr(self, "_export_actions", {}).items():
             action.setChecked(key == self._export_format)
 
     def _export_document_job(self) -> None:
         """One Export: every enabled operation, in the chosen format."""
+        # Numeric fields commit on Enter or focus-out; the export shortcut does
+        # neither, so commit a pending edit before reading the document.
+        focused = QApplication.focusWidget()
+        if isinstance(focused, QLineEdit) and self.isAncestorOf(focused):
+            focused.clearFocus()
         operations = self._enabled_operations()
         if not operations:
             self._set_status("Nothing to export — load or draw an outline first.", STATUS_WARN)
@@ -1499,6 +1531,12 @@ class PatternPage(BasePage):
             return
         health_visible = bool(self._canvas.get_view_state()["geometry_health_visible"])
         self._canvas.set_geometry_health_visible(True)
+        shown_issues: list[int] = []
+
+        def show_issues(indices: list[int]) -> None:
+            shown_issues.extend(indices)
+            self._show_preflight_issues(indices)
+
         try:
             proceed, _report = export_preflight(
                 self,
@@ -1509,18 +1547,29 @@ class PatternPage(BasePage):
                 profile=machine_profile_from_settings(self._settings),
                 operations=tuple(operation.label for operation in operations),
                 show_review=bool(self._settings.get("export_review_enabled", False)),
+                on_show_issues=show_issues,
             )
         finally:
             self._canvas.set_geometry_health_visible(health_visible)
         if not proceed:
             self._check_geometry()
-            self._set_status("Export paused — review highlighted geometry.", STATUS_WARN)
+            if not shown_issues:
+                self._set_status("Export paused — review highlighted geometry.", STATUS_WARN)
             return
         # Export solves at full quality regardless of the preview setting: the
         # thing being written is the part, not a picture of it.
         self._force_export_quality = True
         self._preview_is_stale = True
         self._with_solved_pattern(self._perform_document_export)
+
+    def _show_preflight_issues(self, indices: list[int]) -> None:
+        """Select and frame the outlines preflight flagged (indices into _edit_polys)."""
+        ids = [self._outline_ids[index] for index in indices if 0 <= index < len(self._outline_ids)]
+        if not ids:
+            return
+        self._canvas.set_selection(ids)
+        self._fit_selection()
+        self._set_status(f"{len(ids)} path(s) need attention", STATUS_WARN)
 
     def _collect_engraving_job(self) -> tuple[str | None, Any, list | None]:
         """Source, settings, and clip mask for the enabled Engrave operation."""
@@ -1548,6 +1597,7 @@ class PatternPage(BasePage):
 
     def _perform_document_export(self) -> None:
         self._force_export_quality = False
+        self._hide_export_progress()
         operations = self._enabled_operations()
         wants_engraving = any(op.kind == "engrave" for op in operations)
         wants_vectors = any(op.kind in {"mark", "cut"} for op in operations)
@@ -1697,6 +1747,10 @@ class PatternPage(BasePage):
                     )
                 finally:
                     self._applying_tile_settings = False
+                if not self._loading_zone and not self._suspend_state:
+                    # The tile's private settings just replaced the Pattern
+                    # values; say so rather than swapping them silently.
+                    self._set_status(f"Loaded saved settings for {custom_name}", STATUS_OK)
         pattern_key = self._pattern_key(value)
         self._update_custom_pattern_actions(value)
         for w in self._pattern_widgets.values():
@@ -1707,8 +1761,7 @@ class PatternPage(BasePage):
         # output. Refresh it exactly as we do every other pattern choice.
         self._on_inspector_edit()
         has_pattern = pattern_key != "— None —" and pattern_key in self._pattern_widgets
-        self._modifiers_label.setVisible(has_pattern)
-        self._modifiers_widget.setVisible(has_pattern)
+        self._modifiers_section.setVisible(has_pattern)
         self._refresh_section_subtitles()
 
     def _update_custom_pattern_actions(self, value: str):
@@ -1790,7 +1843,7 @@ class PatternPage(BasePage):
             )
             self._fill_section.set_subtitle(text, dim=dim)
         if hasattr(self, "_zones_section") and isinstance(self._zones_section, CollapsibleSection):
-            text, dim = zones_subtitle(len(self._zones) if hasattr(self, "_zones") else 0)
+            text, dim = regions_subtitle(len(self._zones) if hasattr(self, "_zones") else 0)
             self._zones_section.set_subtitle(text, dim=dim)
 
     @staticmethod
@@ -1883,12 +1936,6 @@ class PatternPage(BasePage):
                 "run": self._assign_zone,
             },
             {"title": "Clear all region treatments", "run": self._clear_zones},
-            {
-                "title": "Toggle border on separate layer",
-                "run": lambda: self._include_border_cb.setChecked(
-                    not self._include_border_cb.isChecked()
-                ),
-            },
         ]
         return commands
 
@@ -1920,20 +1967,11 @@ class PatternPage(BasePage):
         target_pattern = self._fill_target_pattern_cb.isChecked()
         if not target_outline and not target_pattern:
             return None
-        try:
-            spacing = max(
-                FILL_SPACING_FLOOR_MM, float(self._fill_spacing.text() or DEFAULT_FILL_SPACING)
-            )
-        except ValueError:
-            spacing = 0.5
-        try:
-            angle = float(self._fill_angle.text() or DEFAULT_FILL_ANGLE)
-        except ValueError:
-            angle = 0.0
-        try:
-            inset = max(0.0, float(self._fill_inset.text() or DEFAULT_FILL_INSET))
-        except ValueError:
-            inset = 0.0
+        spacing = self._parse_float_field(
+            self._fill_spacing, "Fill spacing", minimum=FILL_SPACING_FLOOR_MM
+        )
+        angle = self._parse_float_field(self._fill_angle, "Fill angle")
+        inset = self._parse_float_field(self._fill_inset, "Fill inset", minimum=0.0)
         return {
             "mode": str(mode),
             "spacing": spacing,
@@ -2320,7 +2358,6 @@ class PatternPage(BasePage):
         self._update_preview_controls()
         preview_token = self._preview_revision
         pattern = self._current_pattern_key()
-        include_border = self._include_border_cb.isChecked()
         try:
             scale = self._collect_scale()
             params = self._collect_pattern_params(pattern) if pattern != "— None —" else {}
@@ -2331,40 +2368,40 @@ class PatternPage(BasePage):
             )
             if not self._zones:
                 self._validate_outline_inputs(self._edit_polys)
+            border_fade = self._parse_float_field(
+                self._border_fade, "Fade", minimum=0.0, allow_empty=False
+            )
+            if border_fade is None:
+                raise ValueError("Fade is required.")
+            fill_options = self._collect_fill_options()
         except ValueError as exc:
             self._preview_task.finish_run()
             self._set_preview_status(str(exc), "error")
             self._abandon_pending_export(f"Export blocked — {exc}", STATUS_ERR)
             self._update_preview_controls()
             return
-        try:
-            border_fade = max(0.0, float(self._border_fade.text() or DEFAULT_BORDER_FADE))
-        except ValueError:
-            border_fade = 0.0
-        fill_options = self._collect_fill_options()
-        self._set_preview_status("Solving…")
-        border_polys = None
+        self._set_preview_status(
+            "Solving at full quality for export…" if self._force_export_quality else "Solving…"
+        )
         if self._zones:
             try:
                 zones_snap = self._snapshot_zone_jobs()
             except ValueError as exc:
                 self._preview_task.finish_run()
                 self._set_preview_status(str(exc), "error")
+                self._abandon_pending_export(f"Export blocked — {exc}", STATUS_ERR)
                 self._update_preview_controls()
                 return
             all_polys_snap = self._generation_polys()
         else:
-            polys_snap = self._generation_polys()
-            border_polys = self._apply_scale(polys_snap, *scale) if include_border else None
             zones_snap = []
-            all_polys_snap = polys_snap
+            all_polys_snap = self._generation_polys()
         worker_call = build_preview_worker_call(
             zones=zones_snap,
             all_polys=all_polys_snap,
             pattern=pattern,
             params=params,
             scale=scale,
-            border_polys=border_polys,
             border_fade=border_fade,
             preview_token=preview_token,
             cancel_event=cancel_event,
@@ -2511,12 +2548,19 @@ class PatternPage(BasePage):
 
     def _abandon_pending_export(self, message: str, tone: str) -> None:
         """A solve ended without a result: drop the waiting export and say so,
-        rather than leaving "Solving the pattern before export…" up forever."""
+        rather than leaving "Solving at full quality for export…" up forever."""
         self._force_export_quality = False
+        self._hide_export_progress()
         if self._pending_export_after_preview is None:
             return
         self._pending_export_after_preview = None
         self._set_status(message, tone)
+
+    def _hide_export_progress(self) -> None:
+        """Stop the busy indicator shown while an export waits on its solve."""
+        if hasattr(self, "_progress") and not self._generate_task.running:
+            self._progress.setVisible(False)
+            self._progress.setRange(0, 100)
 
     def _set_preview_status(self, text: str, tone: str = "dim") -> None:
         self._preview_status.setText(text)
@@ -2585,14 +2629,7 @@ class PatternPage(BasePage):
         return update_zone_actions(self)
 
     def _set_advanced_mode(self, enabled: bool) -> None:
-        """Keep laser calibration optional without hiding the image itself.
-
-        This used to hide the whole engraving section, which since the
-        inspector rework is the *only* place an image can be removed or
-        placed — turning Advanced off left an image on the canvas with no
-        way to delete or edit it. Image controls follow the selection; only
-        the power/speed/passes detail is advanced.
-        """
+        """Show or hide only the optional image laser-process settings."""
         enabled = bool(enabled)
         self._settings["pattern_advanced_mode"] = enabled
         for name in ("_engraving_process_section",):
@@ -2603,9 +2640,7 @@ class PatternPage(BasePage):
         if hasattr(self, "_zone_scroll"):
             self._zone_scroll.setVisible(True)
         self._set_status(
-            "Advanced pattern controls shown"
-            if enabled
-            else "Basic mode · outline, pattern, fill, preview, and export",
+            "Laser process settings shown" if enabled else "Laser process settings hidden"
         )
 
     # ── Generation ────────────────────────────────────────────────────────────

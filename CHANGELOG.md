@@ -1,5 +1,152 @@
 # Changelog
 
+## Unreleased
+
+## 0.3.28 — 2026-09-29
+
+### Added
+
+- **First-run Welcome** — a dismissible window offers Draw or import, Make a
+  pattern, Trace an image, Convert files, or the manual, and opens that page.
+  Reopen it from Help ▸ Welcome….
+- **Export preflight "Show Issues"** — the warning can select and frame the
+  paths that need attention. After "Export Anyway", re-exporting the same
+  geometry in the session skips the warning until the geometry changes.
+- **Draft selection row** — Duplicate, Delete, and Fit Selection sit above the
+  Inspector's properties whenever something is selected, with their shortcuts
+  in the tooltips. Fit Selection is a new command (Shift+F).
+- **Active precision aids at a glance** — beside the Precision menu, a short
+  summary (e.g. "Snap: all · Grid 5 mm") shows the active snap aids, grid, and
+  construction mode; hover it for the full list.
+- **Numeric-entry hints while drawing** — the toolbar hint lists the keys for
+  typed input (Tab: length/angle · A: angle · Enter: apply; Tab: width/height
+  while sizing a shape).
+- **Trace: Center on bed / Fit to bed** — the Image panel centres the
+  picture on the machine bed or scales it, keeping proportions, to the largest
+  size that fits at its current rotation.
+- **Trace: sliders for Canny low/high** — every bounded detection setting now
+  has an entry + slider pair; each field's tooltip and placeholder give its
+  unit and valid range.
+- **Convert: batch progress and summary** — folder batches fill a progress bar
+  file by file and end with "N converted, M failed" under the run button; the
+  first failure is selected in File results with its message.
+- **Pattern export summary** — a line beside the Export button always shows
+  the format, the enabled operations in run order (e.g. "Engrave → Mark ×2 →
+  Cut"), and the number of preflight warnings; Export options and Output stay
+  collapsible.
+
+### Changed
+
+- **One set of workspace actions** — File and the header Workspace menu show
+  the same actions, labels, and grouping (Open Workspace…, Open Recent,
+  Browse Workspaces…, Save Workspace, Save Workspace As…, Recover Unsaved
+  Work…).
+- **Shortcut references follow your bindings** — Help ▸ Keyboard Shortcuts…
+  and the manual list all five pages (including Repository) with their
+  current keys, and mark canvas-only keys. View ▸ Fit View shows its real key.
+- **Saved vs. recovery status** — hovering the workspace name shows "Saved to
+  <workspace> <time>" and "Recovery snapshot <time>" separately. The unsaved
+  changes prompt explains what Discard Changes keeps.
+- **Draft export labels** — the primary button reads "Export DXF…", the
+  Format menu button says "Choose export format", and toolbar tool tooltips
+  (Select, Draw, Edit, Scale, Dimension, Pan) show the current, rebindable
+  shortcut.
+- **One rule for invalid numbers on the canvas** — Properties fields, the
+  grid spacing field, and the width/height HUD keep what you typed, mark it
+  red, and give the specific reason in the tooltip (e.g. "Selection is
+  locked", "Width must be greater than zero") instead of snapping back or
+  flashing a generic message. They commit on Enter or leaving the field.
+- **Grid spacing uses the canvas unit** — the field shows and parses inches
+  when the canvas is in inches; values outside 0.1–100 mm are limited and a
+  notice says so.
+- **Trace numbers follow the one invalid-input rule** — detection fields,
+  Width/Height, and the Image panel keep a rejected entry, mark it red with the
+  reason, and commit on Enter or leaving the field (sliders update live).
+  Width/Height use the canvas unit and accept expressions such as `1in + 3mm`.
+- **Trace preview feedback** — "Preview out of date" stays visible until the
+  retrace finishes, which reports the contour change (e.g. "+3 vs previous").
+- **Trace Next button** — names its destination in its label and tooltip; the
+  Next step menu marks the active one. Sending to Pattern reports how many open
+  contours are excluded and offers Draft for them, or explains when none are
+  closed.
+- **Trace Image panel works with the background hidden**; only dragging on the
+  canvas needs the picture visible.
+- **Convert: Include subfolders is always shown** (active in Folder mode), and
+  the status, log, and summary say whether subfolders were included. The
+  replace confirmation lists every file under Show Details.
+- **Repository** — failed Pull/Reset/Commit/Push steps name the cause
+  (authentication, no remote, no upstream, conflict, rejected, network,
+  timeout) with Git's key line and "Details in Git output"; folder checks say
+  whether the path is missing, a file, not permitted, or not a repository
+  (naming the repository root when inside one). The Auto sync line shows Off,
+  On — waiting for edits, Syncing…, or the last result with its time. The
+  Settings pane folds into a drawer in narrow windows, like other pages.
+- **Drawer labels** — Trace and Convert settings panes are labelled
+  "Settings"; Recent buttons read "Recent files".
+- **Pattern fields apply on Enter or leaving the field** — typing no longer
+  re-solves the preview on every keystroke; sliders, lists, and checkboxes
+  stay live. A rejected value keeps what you typed, turns red, and says why
+  (e.g. "Must be at least 0.001 mm"); fields accept expressions like `25/2`.
+- **Pattern sliders follow the field** — wide ranges (e.g. Hex size
+  0.001–20 mm) use a logarithmic track, slider values round to the field's
+  precision, and every field's tooltip shows its range.
+- **Pattern export says what it is doing** — the primary button reads
+  "Export DXF…" (SVG…, FVI…, Package…), and the status and progress bar show
+  "Solving at full quality for export…" during the pre-export solve. Preflight
+  "Show Issues" selects and frames the flagged outlines.
+- **Pattern wording** — "Region"/"Treatment" replace the remaining "zone"
+  text; the side drawers are labelled "Settings" and "Inspector"; switching to
+  a saved custom tile says "Loaded saved settings for <tile>".
+- **Pattern manual** — Pattern Types documents only the ten built-in
+  generators and custom tiles, with their real parameters and defaults, and
+  lists which retired patterns open as which replacement. The common-tasks
+  guide explains auto-preview versus Export instead of a Generate step.
+
+- **Installed version shown in the app** — the header and About read the
+  running package version. The release gate checks it against package metadata,
+  and the Windows installer uses that same version for its installed-app entry.
+
+- **One transform hierarchy in Draft** — the inspector identifies the selected
+  layer/group and remains the exact-value editor; canvas size badges are
+  smaller quick edits with the same correctable validation. The move grip is
+  low-emphasis until hover, resize handles preview their axis/modifier effects,
+  and the rotate handle stays in view. Canvas accents follow dark, light, and
+  high-contrast theme tokens.
+- **Draw stays compact** — the default shows Path, Shapes, Text, and Mode, with
+  every configured Path/Shape icon directly visible; advanced sections remain
+  customizable. Size entry keeps Tab/Backtab navigation.
+- **Pattern is an ordered workflow** — Outline → Pattern/Fill → Region
+  treatment stays in the left rail; layer and detailed export settings are in
+  the right Inspector, with Export pinned at its bottom. Laser-process
+  disclosure has a scoped label.
+- **Trace separates pixel cleanup from machine dimensions** and shows the
+  derived aspect-locked output size and reset affordance. Convert keeps the file
+  list and selected result details together, and Repository isolates destructive
+  reset from its normal Pull → Commit → Push steps.
+- **Visual grouping is quieter** — Draw groups no longer add a nested card
+  border inside the sidebar surface; shared palette tokens continue to drive
+  focus, selection, hover, and status colors across appearance modes.
+
+### Fixed
+
+- Closing with discarded changes now keeps the latest recovery snapshot;
+  shutdown used to delete it, leaving no way back to that work.
+- The Repository page shortcut (Alt+5) now appears in the command palette.
+- Drag and resize snapping keeps snapping to edges and edge midpoints on
+  drawings with more than 4000 edges; it used to drop them document-wide.
+- The "★ Flow — Gentle" starter preset used the retired Flow Lines generator;
+  it is replaced by "★ Truchet — Arcs". Loading a preset or workspace that
+  uses a retired pattern now names the substitution (e.g. "Flow Lines →
+  Truchet") instead of switching silently.
+- Removed Pattern's "Border on separate layer" checkbox: outlines are always
+  exported, so the option never changed the output.
+- Fill spacing, angle, and inset, and the fade width, are now validated like
+  other Pattern fields instead of silently falling back to defaults, and an
+  export waiting on a region solve that fails no longer stays "Solving" forever.
+
+- Spline offset preview and output now follow the displayed curve rather than
+  offsetting its sparse control points into visibly jagged linework.
+
 ## 0.3.27 — 2026-09-28
 
 ### Added

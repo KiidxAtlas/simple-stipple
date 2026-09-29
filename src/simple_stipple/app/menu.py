@@ -33,7 +33,11 @@ from simple_stipple.canvas.dialogs.customize_dialogs import (
 )
 from simple_stipple.canvas.dialogs.keybindings_dialog import KeybindingsDialog
 from simple_stipple.features.trace.form import TRACE_DEFAULT_FIELDS, trace_default
-from simple_stipple.platform.settings import DEFAULT_KEYBINDINGS, DEFAULT_RADIAL_MENU_TOOLS
+from simple_stipple.platform.settings import (
+    DEFAULT_KEYBINDINGS,
+    DEFAULT_RADIAL_MENU_TOOLS,
+    save_settings,
+)
 from simple_stipple.ui.components.feedback import refresh_style
 from simple_stipple.ui.components.icons import (
     download_icon,
@@ -46,6 +50,7 @@ from simple_stipple.ui.components.layout import (
 from simple_stipple.ui.dialogs.command_palette import CommandPaletteDialog
 from simple_stipple.ui.dialogs.settings_dialog import SettingsDialog
 from simple_stipple.ui.dialogs.update_dialog import UpdateDialog
+from simple_stipple.ui.dialogs.welcome import MANUAL_CHOICE, WelcomeDialog
 
 if TYPE_CHECKING:
     from simple_stipple.app.window import App
@@ -109,8 +114,13 @@ class MenuController:
 
         add_cmd(edit_menu, "edit.duplicate")
         # Delete intentionally has no global shortcut: Backspace must keep
-        # typing in text fields; the canvas handles it when focused.
-        add(edit_menu, "Delete Selected", lambda: self._app._canvas_call("delete_selected"))
+        # typing in text fields; the canvas handles it when focused, and the
+        # label says so.
+        add(
+            edit_menu,
+            "Delete Selected (Del on canvas)",
+            lambda: self._app._canvas_call("delete_selected"),
+        )
         edit_menu.addSeparator()
         add(
             edit_menu,
@@ -121,9 +131,13 @@ class MenuController:
         add_cmd(edit_menu, "select.none")
 
         view_menu = self._app.menuBar().addMenu("View")
-        # Single-letter canvas keys (F/S/D/E/M) stay widget-local; the menu
-        # spells them out instead of registering global shortcuts.
-        add(view_menu, "Fit View (F)", lambda: self._app._run_canvas_command("view.fit"))
+        # Fit View reuses the registered canvas.fit action so the menu shows
+        # the real, rebindable shortcut. Qt offers ShortcutOverride to the
+        # focused widget first, so a single-letter key still types into text
+        # fields.
+        fit_action = self._app._global_actions["canvas.fit"]
+        fit_action.setText("Fit View")
+        view_menu.addAction(fit_action)
         add(
             view_menu,
             "Zoom In",
@@ -150,6 +164,7 @@ class MenuController:
         view_menu.aboutToShow.connect(self._sync_view_menu_state)
 
         help_menu = self._app.menuBar().addMenu("Help")
+        add(help_menu, "Welcome…", self._show_welcome)
         add(help_menu, "User Manual…", self._app._show_help)
         add(help_menu, "Keyboard Shortcuts…", self._show_shortcuts_reference)
         add(help_menu, "Notification History…", self._show_notification_history)
@@ -208,6 +223,29 @@ class MenuController:
         dialog = SupportMeDialog(self._app)
         dialog.exec()
 
+    def _offer_welcome(self) -> None:
+        """Show the first-run welcome unless the user has already dismissed it."""
+        if not self._app._settings.get("welcome_seen", False):
+            self._show_welcome()
+
+    def _show_welcome(self) -> None:
+        """Open the task chooser without blocking (startup and Help → Welcome…)."""
+        dialog = WelcomeDialog(self._app)
+        dialog.finished.connect(lambda _result: self._on_welcome_finished(dialog))
+        dialog.open()
+
+    def _on_welcome_finished(self, dialog: WelcomeDialog) -> None:
+        # Any dismissal counts as seen; Help → Welcome… reopens it.
+        if not self._app._settings.get("welcome_seen", False):
+            self._app._settings["welcome_seen"] = True
+            save_settings(self._app._settings)
+        choice = dialog.choice
+        dialog.deleteLater()
+        if choice == MANUAL_CHOICE:
+            self._app._show_help()
+        elif choice is not None:
+            self._app._switch_to_page(choice)
+
     def _refresh_shortcut_tooltips(self) -> None:
         """(Re)build tooltips that embed a shortcut hint, e.g. "Save (Ctrl+S)".
 
@@ -219,24 +257,18 @@ class MenuController:
             btn.setToolTip(f"{base_text} ({keys})" if keys else base_text)
 
     def _show_shortcuts_reference(self) -> None:
-        rows = [
-            ("Workspace", ""),
-            ("New / Open / Save / Save As", "per File menu"),
-            ("Command palette", _native_keys(self._app._shortcut("app.command_palette"))),
-            ("Settings", _native_keys(self._app._shortcut("app.settings"))),
-            ("Switch tabs", "Alt+1 … Alt+4"),
-            ("Repository sync", _native_keys(self._app._shortcut("tab.repo"))),
-            ("", ""),
-        ]
-        # Canvas commands come straight from the registry so this dialog
-        # can never drift from the actual keymap.
+        # Every row is generated from the live bindings (page registry, File
+        # actions, canvas command registry), so rebinding or adding a page can
+        # never leave this dialog stale.
+        rows = self._app._shell_shortcut_rows()
+        rows += [("", ""), ("Canvas shortcuts — work while the canvas has focus", "")]
         rows += canvas_commands.shortcut_reference_rows()
         rows += [
             ("Canvas interaction", ""),
             ("Pan", "P, Space-drag, or middle mouse"),
             ("Zoom", "Mouse wheel, ⌘+ / ⌘-"),
             ("Nudge selection", "Arrows (⇧ = 1 mm)"),
-            ("Delete selected", "Backspace / Del"),
+            ("Delete selected", "Backspace / Del (canvas)"),
             ("Quick shape (select mode)", "Q radial menu · ⇧R/⇧C/⇧S/⇧P"),
         ]
         dialog = QDialog(self._app)
@@ -280,17 +312,27 @@ class MenuController:
             self._app._snap_action.setChecked(bool(getattr(canvas, "_grid_snap", False)))
 
     def _refresh_workspace_header(self) -> None:
-        title = self._app._workspace_path.stem if self._app._workspace_path else "Untitled"
+        path = self._app._workspace_path
+        title = path.stem if path else "Untitled"
         self._app._workspace_title_label.setText(title)
-        last_autosave = getattr(self._app, "_last_autosave_at", None)
-        autosave_text = (
-            last_autosave.strftime("%b %d, %Y %I:%M:%S %p")
-            if last_autosave is not None
-            else "Not yet"
+        # A save to the named workspace file and a crash-recovery snapshot are
+        # different guarantees; report each with its own time.
+        saved_at = self._app._last_workspace_save_at
+        if path is None:
+            save_line = "Not saved to a workspace file yet"
+        elif saved_at is None:
+            save_line = f"Workspace file: {path.name} (not saved this session)"
+        else:
+            save_line = f"Saved to {path.name} {saved_at:%H:%M}"
+        snapshot_at = self._app._last_recovery_snapshot_at
+        recovery_line = (
+            f"Recovery snapshot {snapshot_at:%H:%M} (not a workspace save)"
+            if snapshot_at is not None
+            else "No recovery snapshot yet (taken every 90 s while changes are unsaved)"
         )
         workspace_detail = (
             "Open saved workspaces, recent files, and recovery snapshots\n"
-            f"Last durable autosave: {autosave_text}"
+            f"{save_line}\n{recovery_line}"
         )
         self._app._workspace_title_label.setToolTip(workspace_detail)
         self._app._workspace_title_label.setAccessibleDescription(workspace_detail)
@@ -373,19 +415,12 @@ class MenuController:
         workspace_btn.setText("Workspace")
         workspace_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         workspace_btn.setAccessibleName("Workspace actions")
-        workspace_btn.setToolTip("New, open, and browse saved workspaces")
+        workspace_btn.setToolTip("New, open, save, and recover workspaces")
         workspace_menu = QMenu(workspace_btn)
-        # Reuse the File-menu actions so each shortcut belongs to exactly one
-        # QAction. Creating duplicates here makes Qt report ambiguous shortcuts.
-        for action in (
-            self._app._new_workspace_action,
-            self._app._new_window_action,
-            self._app._open_workspace_action,
-            self._app._save_workspace_as_action,
-        ):
-            workspace_menu.addAction(action)
-        workspace_menu.addSeparator()
-        workspace_menu.addAction("Browse Saved Workspaces…", self._app._open_saved_workspaces)
+        # Same QActions, labels, and grouping as the File menu, so each
+        # shortcut belongs to exactly one QAction (duplicates make Qt report
+        # ambiguous shortcuts) and the two menus cannot drift apart.
+        self._app._populate_workspace_menu(workspace_menu)
         workspace_btn.setMenu(workspace_menu)
         layout.addWidget(workspace_btn)
 
@@ -394,7 +429,7 @@ class MenuController:
         save_btn = QPushButton("Save")
         save_btn.setProperty("role", "primary")
         save_btn.clicked.connect(self._app._save_workspace)
-        self._app._shortcut_tooltip_specs.append((save_btn, "Save workspace", "workspace.save"))
+        self._app._shortcut_tooltip_specs.append((save_btn, "Save Workspace", "workspace.save"))
         layout.addWidget(save_btn)
 
         action_sep = QLabel("│")
@@ -424,11 +459,12 @@ class MenuController:
         app_btn.setProperty("role", "overflow")
         app_btn.setAccessibleName("Application menu")
         app_menu = QMenu(app_btn)
-        settings_action = app_menu.addAction("Settings…", self._app._open_settings)
-        settings_keys = self._app._shortcut("app.settings")
-        if settings_keys:
-            settings_action.setShortcut(QKeySequence(settings_keys))
-        app_menu.addAction("User Manual", self._app._show_help)
+        # The registered app.settings action, so its shortcut is the live,
+        # rebindable one and never an ambiguous duplicate.
+        settings_action = self._app._global_actions["app.settings"]
+        settings_action.setText("Settings…")
+        app_menu.addAction(settings_action)
+        app_menu.addAction("User Manual…", self._app._show_help)
         app_menu.addAction("Support Me", self._show_support_dialog)
         app_menu.addSeparator()
         update_action = app_menu.addAction("Check for Updates…", self._app._open_update_check)
@@ -502,6 +538,39 @@ class CommandController:
         canvas = self._active_canvas()
         if canvas is not None:
             canvas_commands.run(canvas, cmd_id)
+
+    def _shell_shortcut_rows(self) -> list[tuple[str, str]]:
+        """(label, keys) rows for workspace, application, and page shortcuts.
+
+        Labels are the menu/page names users see; keys are the effective
+        bindings, so the Keyboard Shortcuts dialog and the manual both follow
+        rebinding and the registered page list.
+        """
+
+        def keys(action_id: str) -> str:
+            return _native_keys(self._shortcut(action_id)) or "Not assigned"
+
+        app = self._app
+        rows: list[tuple[str, str]] = [("Workspace", "")]
+        rows += [
+            (action.text(), keys(action_id))
+            for action, action_id in (
+                (app._new_workspace_action, "workspace.new"),
+                (app._new_window_action, "workspace.new_window"),
+                (app._open_workspace_action, "workspace.open"),
+                (app._save_workspace_action, "workspace.save"),
+                (app._save_workspace_as_action, "workspace.save_as"),
+            )
+        ]
+        rows += [
+            ("Application", ""),
+            ("Command Palette", keys("app.command_palette")),
+            ("Settings…", keys("app.settings")),
+            ("Toggle Fullscreen", keys("window.fullscreen")),
+            ("Pages", ""),
+        ]
+        rows += [(spec.title, keys(spec.shortcut_id)) for spec in app._page_specs]
+        return rows
 
     def _shortcut(self, action_id: str) -> str:
         keybindings = self._app._settings.get("keybindings", {})
@@ -700,6 +769,7 @@ class CommandController:
         self._app._save_workspace_as_action.setShortcut(
             QKeySequence(self._shortcut("workspace.save_as"))
         )
+        self._app._repo_dialog_action.setShortcut(QKeySequence(self._shortcut("tab.repo")))
         self._app._refresh_shortcut_tooltips()
 
         self._app._update_checker._configure_auto_fetch_timer()
@@ -799,7 +869,7 @@ class CommandController:
         """Show the user manual help dialog."""
         from simple_stipple.features.help import HelpDialog
 
-        HelpDialog.show_help(self._app, self._app)
+        HelpDialog.show_help(self._app, self._app, shell_shortcuts=self._shell_shortcut_rows())
 
     def _invoke_canvas_measure(self) -> None:
         canvas = self._active_canvas()

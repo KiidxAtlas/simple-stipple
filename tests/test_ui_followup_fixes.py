@@ -228,6 +228,18 @@ def test_select_mode_has_no_vertex_drag_but_gizmo_still_transforms(
     rects = {name: rect for name, rect in canvas._gizmo_handle_rects}
     assert "s" in rects
     center = rects["s"].center().toPoint()
+    hover = QMouseEvent(
+        QMouseEvent.Type.MouseMove,
+        center.toPointF(),
+        center.toPointF(),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    QApplication.sendEvent(canvas, hover)
+    assert canvas._gizmo_hover == "scale-s"
+    assert "height only" in canvas.toolTip()
+    assert "Shift keeps proportions" in canvas.toolTip()
     QTest.mousePress(canvas, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, center)
     assert canvas._gizmo_drag_mode == "scale-s"
     target = center + QPoint(0, 30)
@@ -274,6 +286,57 @@ def test_rotated_ellipse_gizmo_follows_shape_axes(app: QApplication) -> None:
     angle = math.radians(35.0)
     exp = canvas._w2c(50.0 + 30.0 * math.cos(angle), 50.0 + 30.0 * math.sin(angle))
     assert abs(painted.x() - exp[0]) < 2 and abs(painted.y() - exp[1]) < 2
+    canvas.close()
+
+
+def test_rotate_grip_hit_area_stays_inside_viewport(app: QApplication) -> None:
+    from simple_stipple.core.document.model import EntityRecord
+
+    canvas = DxfCanvas()
+    canvas.resize(600, 400)
+    canvas.set_mode("select")
+    points = [canvas._c2w(x, y) for x, y in ((150, 18), (250, 18), (250, 68), (150, 68), (150, 18))]
+    center = ((points[0][0] + points[2][0]) / 2, (points[0][1] + points[2][1]) / 2)
+    canvas._canvas_service.create_entities(
+        [
+            EntityRecord(
+                points=points,
+                kind="rectangle",
+                meta={"center": center, "width": 100, "height": 50, "rotation": 35},
+            )
+        ]
+    )
+    canvas.set_selection([canvas._entities[-1].id])
+    canvas.grab()
+    app.processEvents()
+
+    hit = canvas._gizmo_rotate_rect
+    assert hit is not None
+    assert hit.left() >= 0 and hit.top() >= 0
+    assert hit.right() <= canvas.width() and hit.bottom() <= canvas.height()
+    canvas.close()
+
+
+def test_properties_panel_explains_selection_group_and_layer(app: QApplication) -> None:
+    from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
+    from simple_stipple.core.document.model import EntityRecord
+
+    canvas = DxfCanvas()
+    canvas._canvas_service.create_entities(
+        [
+            EntityRecord(
+                points=[(0, 0), (20, 0), (20, 10), (0, 10), (0, 0)], group=7, layer="Fixture"
+            )
+        ]
+    )
+    canvas._group_labels = {7: "Fixture Set"}
+    canvas.set_selection([canvas._entities[-1].id])
+    panel = CanvasPropertiesPanel(canvas)
+
+    assert "Fixture Set" in panel._context.text()
+    assert "Fixture" in panel._context.text()
+    assert "exact and persistent" in panel._edit_hint.text()
+    panel.close()
     canvas.close()
 
 
@@ -380,6 +443,27 @@ def test_selection_badge_editor_live_typing_single_undo(app: QApplication) -> No
     assert canvas._sel_dim_edit is None
     canvas.undo()
     assert width() == pytest.approx(40.0), "one undo must revert the whole typing session"
+    canvas.close()
+
+
+def test_selection_badge_invalid_input_stays_correctable(app: QApplication) -> None:
+    from PySide6.QtCore import QRectF
+
+    canvas = DxfCanvas()
+    canvas.add_polylines_state([[(0.0, 0.0), (40.0, 0.0), (40.0, 20.0), (0.0, 20.0), (0.0, 0.0)]])
+    canvas.set_selection([canvas._entities[0].id])
+    canvas._show_sel_dim_editor("w", QRectF(10, 10, 80, 30))
+    edit = canvas._sel_dim_edit
+    assert edit is not None
+
+    edit.setText("not a number")
+    canvas._apply_sel_dim_editor()
+    assert canvas._sel_dim_edit is edit
+    assert edit.property("error") is True
+    assert edit.text() == "not a number"
+    assert max(p[0] for p in canvas._entities[0].points) - min(
+        p[0] for p in canvas._entities[0].points
+    ) == pytest.approx(40.0)
     canvas.close()
 
 

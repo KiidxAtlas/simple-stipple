@@ -213,8 +213,8 @@ def live_update_selected_zone(page: Any, *_args) -> bool:
     try:
         treatment = collect_treatment(page)
     except (KeyError, TypeError, ValueError):
-        # A line edit can briefly contain an incomplete number while the
-        # user types. Keep the last valid treatment until it is complete.
+        # A rejected entry is marked on its field; keep the last valid
+        # treatment until the value is corrected.
         return False
     before = begin_treatment_change(page)
     for region_id in targets:
@@ -315,7 +315,8 @@ def assign_zone(page: Any) -> None:
             QMessageBox.information(
                 page,
                 "No Selection",
-                "Select a region on the canvas or in the Regions list, then click 'Apply'.",
+                "Select a region on the canvas or in the Regions list, "
+                "then click Apply to Selection.",
             )
             return
         _apply_treatment_to(page, listed)

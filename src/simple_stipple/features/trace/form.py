@@ -64,13 +64,18 @@ class TextField(QWidget):
         self._entry_width = width
         self.entry.setMinimumWidth(min(width, 64))
         self.entry.setMaximumWidth(width)
-        self.entry.setPlaceholderText(placeholder)
+        if placeholder:
+            self.entry.setPlaceholderText(placeholder)
         self.entry.setAccessibleName(label)
         self._marker.setBuddy(self.entry)
         if tooltip:
             self.entry.setToolTip(tooltip)
         self._layout.addWidget(self._marker, stretch=1)
         self._layout.addWidget(self.entry)
+
+    def set_label(self, label: str) -> None:
+        self._marker.setText(label)
+        self.entry.setAccessibleName(label)
 
     def resizeEvent(self, event) -> None:
         """Stack labels when the containing Trace inspector is below 340 px."""
@@ -193,13 +198,37 @@ def build_lazy_section(
 
 
 @dataclass(frozen=True)
+class FieldLimits:
+    """Validation for one numeric trace field; also drives its tooltip range."""
+
+    label: str
+    minimum: float
+    maximum: float | None = None
+    allow_empty: bool = False
+
+
+#: Every numeric detection field, keyed like ``TRACE_DEFAULTS``. Output
+#: width/height are lengths in the canvas unit and are parsed separately.
+TRACE_FIELD_LIMITS: dict[str, FieldLimits] = {
+    "blur": FieldLimits("Blur radius", 0.0),
+    "threshold": FieldLimits("Threshold", 0.0, 255.0),
+    "canny_low": FieldLimits("Canny low", 1.0, 255.0),
+    "canny_high": FieldLimits("Canny high", 1.0, 255.0),
+    "simplify": FieldLimits("Simplify", 0.0),
+    "min_area": FieldLimits("Min area", 0.0),
+    "max_area": FieldLimits("Max area", 0.0, allow_empty=True),
+    "close_r": FieldLimits("Closing radius", 0.0),
+    "max_res": FieldLimits("Max resolution", 64.0, 8000.0),
+}
+
+
+@dataclass(frozen=True)
 class TraceFieldBindings:
     blur: QLineEdit
     simplify: QLineEdit
     min_area: QLineEdit
     max_area: QLineEdit
     close_r: QLineEdit
-    width_mm: QLineEdit
     max_res: QLineEdit
     threshold: QLineEdit
     canny_low: QLineEdit
@@ -213,56 +242,34 @@ class TraceFieldBindings:
 def build_trace_kwargs(
     fields: TraceFieldBindings,
     *,
-    parse_float_field,
+    width_mm: float,
+    parse_field: Callable[[QLineEdit, str], float | None],
     on_progress,
-) -> dict | None:
-    """Parse all form values and return trace kwargs."""
-    blur_radius = parse_float_field(fields.blur, "Blur radius", minimum=0.0)
-    simplify = parse_float_field(fields.simplify, "Simplify", minimum=0.0)
-    min_area = parse_float_field(fields.min_area, "Min area", minimum=0.0)
-    max_area = parse_float_field(
-        fields.max_area,
-        "Max area",
-        minimum=0.0,
-        allow_empty=True,
+) -> dict:
+    """Parse all form values and return trace kwargs.
+
+    ``parse_field(entry, key)`` validates against ``TRACE_FIELD_LIMITS[key]``
+    and raises ``ValueError`` for an invalid entry.
+    """
+    blur_radius = parse_field(fields.blur, "blur")
+    simplify = parse_field(fields.simplify, "simplify")
+    min_area = parse_field(fields.min_area, "min_area")
+    max_area = parse_field(fields.max_area, "max_area")
+    close_r = parse_field(fields.close_r, "close_r")
+    thresh = (
+        None if fields.auto_thresh_cb.isChecked() else parse_field(fields.threshold, "threshold")
     )
-    close_r = parse_float_field(fields.close_r, "Closing radius", minimum=0.0)
-    width_mm = parse_float_field(fields.width_mm, "Width", minimum=0.001)
-
-    auto_thresh = fields.auto_thresh_cb.isChecked()
-    thresh: float | None = None
-    if not auto_thresh:
-        thresh = parse_float_field(
-            fields.threshold,
-            "Threshold",
-            minimum=0.0,
-            maximum=255.0,
-        )
-
-    required = [blur_radius, simplify, min_area, close_r, width_mm]
-    if not auto_thresh:
-        required.append(thresh)
-    if any(value is None for value in required):
-        return None
-
-    assert blur_radius is not None
-    assert simplify is not None
-    assert min_area is not None
-    assert close_r is not None
-    assert width_mm is not None
-
     edge_mode = fields.edge_mode_cb.isChecked()
     canny_low_val = 50
     canny_high_val = 150
     if edge_mode:
-        canny_l = parse_float_field(fields.canny_low, "Canny low", minimum=1.0, maximum=255.0)
-        canny_h = parse_float_field(fields.canny_high, "Canny high", minimum=1.0, maximum=255.0)
-        assert canny_l is not None
-        assert canny_h is not None
-        canny_low_val = int(canny_l)
-        canny_high_val = int(canny_h)
-
-    max_res = parse_float_field(fields.max_res, "Max resolution", minimum=64.0, maximum=8000.0)
+        canny_low_val = int(parse_field(fields.canny_low, "canny_low") or canny_low_val)
+        canny_high_val = int(parse_field(fields.canny_high, "canny_high") or canny_high_val)
+    max_res = parse_field(fields.max_res, "max_res")
+    assert blur_radius is not None
+    assert simplify is not None
+    assert min_area is not None
+    assert close_r is not None
     assert max_res is not None
 
     return {
@@ -339,9 +346,12 @@ def trace_default(settings: dict | None, key: str) -> str:
 
 
 __all__ = [
+    "FieldLimits",
     "PathField",
     "TRACE_DEFAULTS",
     "TRACE_DEFAULT_FIELDS",
+    "TRACE_FIELD_LIMITS",
+    "SliderField",
     "TextField",
     "TraceFieldBindings",
     "build_lazy_section",

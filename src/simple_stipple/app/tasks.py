@@ -174,6 +174,7 @@ class AutosaveController(QObject):
         if self._shutting_down or not isinstance(document, dict):
             return
         self._app._last_saved_document = document
+        self._app._last_workspace_save_at = datetime.now().astimezone()
         self._record_durable_write_success()
         # Only mark clean if no newer GUI state arrived during the write.
         current = self._app._collect_workspace_document()
@@ -184,11 +185,11 @@ class AutosaveController(QObject):
 
     def _on_recovery_saved(self) -> None:
         if not self._shutting_down:
+            self._app._last_recovery_snapshot_at = datetime.now().astimezone()
             self._record_durable_write_success()
 
     def _record_durable_write_success(self) -> None:
         self._last_failure_message = ""
-        self._app._last_autosave_at = datetime.now().astimezone()
         self._app.clear_system_failure()
         self._app._refresh_workspace_header()
 
@@ -246,6 +247,7 @@ class AutosaveController(QObject):
             base = path.name.removesuffix(".workspace.json")
             for snapshot in path.parent.glob(f"{base}*.workspace.json"):
                 snapshot.unlink(missing_ok=True)
+            self._app._last_recovery_snapshot_at = None
         except OSError as exc:
             LOGGER.warning("Could not remove autosave: %s", exc)
 
@@ -259,9 +261,10 @@ class AutosaveController(QObject):
         except OSError as exc:
             LOGGER.warning("Could not remove restored recovery snapshot: %s", exc)
 
-    def offer_startup_autosave_recovery(self) -> None:
+    def offer_startup_autosave_recovery(self) -> bool:
+        """Open the recovery browser when snapshots exist; True when it was shown."""
         if self._shutting_down or self._recovery_offered:
-            return
+            return False
         self._recovery_offered = True
         recovery_dir = user_data_dir() / "recovery"
         paths = sorted(
@@ -273,21 +276,25 @@ class AutosaveController(QObject):
         if legacy.exists():
             paths.append(legacy)
         if not paths:
-            return
+            return False
         # Startup and manual recovery must use the same browsable surface.  The
         # old QInputDialog made snapshots with similar workspace names appear
         # indistinguishable and offered no direct management actions.
         self._app._open_saved_workspaces(initial_source="recovery")
+        return True
 
     def shutdown(self) -> None:
-        """Stops all timers and cleans up the autosave file."""
+        """Stop the timers and let in-flight writes finish.
+
+        Snapshot cleanup belongs to the caller: a clean close discards it,
+        while closing with discarded changes keeps it for recovery.
+        """
         self._shutting_down = True
         self._recovery_timer.stop()
         self._regular_timer.stop()
         for thread in (self._recovery_write_thread, self._regular_write_thread):
             if thread is not None and thread.is_alive():
                 thread.join(timeout=5.0)
-        self._discard_autosave()
 
 
 class UpdateChecker:
@@ -438,14 +445,14 @@ class AutoSyncController(QObject):
                 self._pending_status = self._attempted_status = ""
                 self._poll_timer.start()
                 self._remote_timer.start()
-                self.statusChanged.emit("Auto sync on: checking the remote…")
+                self.statusChanged.emit("On — checking the remote…")
                 self._sync_remote()
         else:
             self._poll_timer.stop()
             self._remote_timer.stop()
             self._quiet_timer.stop()
             if not enabled:
-                self.statusChanged.emit("Auto sync is off.")
+                self.statusChanged.emit("Off")
         self.enabledChanged.emit(enabled)
 
     def _repo(self) -> Path | None:
@@ -469,7 +476,7 @@ class AutoSyncController(QObject):
             return False
         repo = self._repo()
         if repo is None:
-            self.statusChanged.emit("Auto sync is waiting for a valid repository folder.")
+            self.statusChanged.emit("On — waiting for a valid repository folder")
             return False
         if self._app._repo_page.is_git_busy():
             return False
@@ -478,6 +485,8 @@ class AutoSyncController(QObject):
             self._report_problem(GIT_NOT_FOUND_MESSAGE)
             return False
         self._running = True
+        if kind == "sync":
+            self.statusChanged.emit("Syncing…")
         runner = GitRunner(git, repo, on_process=self._track_process)
         message = f"Auto-sync {datetime.now():%Y-%m-%d %H:%M:%S}" if commit else None
 
@@ -530,10 +539,10 @@ class AutoSyncController(QObject):
             self._last_problem = ""
             self._pending_status = self._attempted_status = ""
             self.logged.emit(steps)
-            self.statusChanged.emit(f"Synced at {stamp} ({result.detail}).")
+            self.statusChanged.emit(f"On — synced at {stamp} ({result.detail})")
         elif result.state == "up_to_date":
             self._last_problem = ""
-            self.statusChanged.emit(f"Up to date · checked {stamp}.")
+            self.statusChanged.emit(f"On — waiting for edits · up to date at {stamp}")
         elif result.state == "conflict":
             self._paused = True
             self._poll_timer.stop()
@@ -551,9 +560,13 @@ class AutoSyncController(QObject):
         return (detail.strip().splitlines() or ["unknown error"])[0]
 
     def _report_problem(self, detail: str) -> None:
-        """Show the problem; notify once per distinct problem, not every tick."""
+        """Show the problem; notify once per distinct problem, not every tick.
+
+        A conflict pauses syncing, so its status says so instead of a time.
+        """
         summary = self._problem_summary(detail)
-        self.statusChanged.emit(f"Auto sync problem: {summary}")
+        prefix = "Paused" if self._paused else f"Problem at {datetime.now():%H:%M}"
+        self.statusChanged.emit(f"{prefix} — {summary}")
         if summary == self._last_problem:
             return
         self._last_problem = summary
@@ -579,12 +592,13 @@ class TaskController:
     """Single lifecycle surface for background application tasks."""
 
     def __init__(self, app: App) -> None:
+        self._app = app
         self.autosave = AutosaveController(app)
         self.updates = UpdateChecker(app)
         self.auto_sync = AutoSyncController(app)
-        self._recovery_start_timer = QTimer(app)
-        self._recovery_start_timer.setSingleShot(True)
-        self._recovery_start_timer.timeout.connect(self.autosave.offer_startup_autosave_recovery)
+        self._startup_prompt_timer = QTimer(app)
+        self._startup_prompt_timer.setSingleShot(True)
+        self._startup_prompt_timer.timeout.connect(self._show_startup_prompts)
         self._update_start_timer = QTimer(app)
         self._update_start_timer.setSingleShot(True)
         self._update_start_timer.timeout.connect(self.updates._attempt_startup_update_check)
@@ -592,14 +606,20 @@ class TaskController:
     def startup(self, *, check_updates: bool) -> None:
         # Windows updates are launched through the native installer after the
         # verified download completes; startup must not inspect stale temp files.
-        self._recovery_start_timer.start(200)
+        self._startup_prompt_timer.start(200)
         if check_updates:
             self._update_start_timer.start(1000)
         self.updates._configure_auto_fetch_timer()
         self.auto_sync.configure()
 
+    def _show_startup_prompts(self) -> None:
+        # Recovering lost work outranks orientation; a first-run welcome that
+        # yields to recovery simply waits for the next launch.
+        if not self.autosave.offer_startup_autosave_recovery():
+            self._app._offer_welcome()
+
     def shutdown(self) -> None:
-        self._recovery_start_timer.stop()
+        self._startup_prompt_timer.stop()
         self._update_start_timer.stop()
         self.autosave.shutdown()
         self.updates.shutdown()

@@ -133,7 +133,7 @@ class RecentFilesButton(QPushButton):
         settings: dict,
         kind: str,
         *,
-        empty_message: str = "No recent files.",
+        empty_message: str = "No recent files",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__("Recent", parent)
@@ -147,7 +147,7 @@ class RecentFilesButton(QPushButton):
         self.setMinimumWidth(94)
         self.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.setAccessibleName("Open recent files")
-        self.setToolTip("Pick from recently opened files")
+        self.setToolTip("Recent files")
         self.clicked.connect(self._open_menu)
 
     def _open_menu(self) -> None:

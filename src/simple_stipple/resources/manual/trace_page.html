@@ -2,97 +2,187 @@
 
 <h3 class="subheading">Overview</h3>
 <p>
-  The Trace page converts raster images (PNG, JPG, BMP, TIFF, GIF, WebP) into
-  vector outlines suitable for laser cutting. It uses image tracing algorithms
-  to detect edges and convert them to DXF-compatible polylines.
+  The Trace page converts raster images (PNG, JPG, JPEG, BMP, TIFF, GIF, WebP)
+  into vector outlines suitable for laser cutting. The left <strong>Settings</strong>
+  pane holds the source and trace settings; the right <strong>Inspector</strong>
+  holds the Image placement panel, the layer list, and the export and next-step
+  buttons. In a narrow window each pane folds into a drawer with a
+  Show/Hide button.
 </p>
 
 <h3 class="subheading">Workflow</h3>
 <ol>
   <li>
-    <strong>Import an image</strong> — drag and drop or use the file picker.
-    Supported formats: PNG, JPG, JPEG, BMP, TIFF, GIF, WebP.
+    <strong>Open an image</strong> — drag and drop it onto the page, type its path,
+    choose <strong>Browse</strong>, or pick one from <strong>Recent files</strong>.
   </li>
   <li>
-    <strong>Adjust tracing parameters</strong> — threshold, smoothing, minimum
-    feature size.
+    <strong>Tune the trace</strong> — the preview retraces automatically after
+    each change (see Trace Settings and Advanced below).
   </li>
   <li>
-    <strong>Preview the trace</strong> — see the vector overlay on your image.
+    <strong>Place the image</strong> if needed — drag it on the canvas or type exact
+    values in the Image panel.
   </li>
   <li>
-    <strong>Export as DXF</strong> — save the traced outlines for your laser
-    cutter.
+    <strong>Export or continue</strong> — <strong>Export DXF…</strong>, or send the
+    outlines to Draft or Pattern with the Next button.
   </li>
 </ol>
 
-<h3 class="subheading">Parameters</h3>
+<h3 class="subheading">Source</h3>
 <ul>
+  <li><strong>Image path, Browse, Recent files:</strong> choose the picture to trace.</li>
   <li>
-    <strong>Threshold:</strong> Controls the brightness cutoff for edge
-    detection. Higher values capture more detail but may add noise.
-  </li>
-  <li>
-    <strong>Smoothing:</strong> Reduces jagged edges in the traced output.
-  </li>
-  <li>
-    <strong>Minimum feature size:</strong> Ignores features smaller than this
-    value (in mm), reducing noise.
-  </li>
-  <li>
-    <strong>Output width (mm):</strong> Physical size of the traced output.
-  </li>
-  <li>
-    <strong>Aspect ratio lock:</strong> When enabled, maintains the original
-    image proportions.
+    <strong>Show image in background:</strong> draws the faded source behind the
+    outlines. Hiding it keeps the placement and the outlines.
   </li>
 </ul>
 
-<h3 class="subheading">Features</h3>
+<h3 class="subheading">Trace Settings</h3>
+<p>
+  Each number field shows its unit and valid range in its tooltip and placeholder.
+  Fields accept arithmetic such as <code>25/2</code>. A typed value is applied when
+  you press Enter or leave the field; the slider under a field retraces while you
+  drag it. The trailing ✕ in a field restores its default. An invalid entry stays in
+  the field, outlined in red, with the reason in its tooltip and the status line —
+  the preview keeps the last valid result until you correct it.
+</p>
 <ul>
   <li>
-    <strong>Real-time preview:</strong> See tracing results update as you adjust
-    parameters.
+    <strong>Blur radius (px):</strong> Gaussian blur applied before thresholding or
+    edge detection; smooths noise. 0 or more (slider 0–5).
   </li>
   <li>
-    <strong>Background image:</strong> The original image is shown as a
-    semi-transparent background for alignment. Turn on <strong>Adjust Image</strong>
-    in the canvas toolbar and click the image to move it, pull a corner to scale it
-    (proportions are kept and the trace refreshes at the new size), or drag the top
-    handle to rotate it (Shift snaps). The traced outlines follow the image.
-    For exact values use the <strong>Image</strong> panel in the Inspector: X/Y (the
-    bottom-left corner before rotation), W/H (proportions kept), an absolute
-    <strong>Rotation</strong>, R +90 / R -90, and Reset. Fields accept arithmetic and
-    units such as <code>25/2</code> or <code>1in + 3mm</code>, like Draft's Properties.
-    <strong>Remove Image</strong>, or Delete while the image is selected, unloads it
-    and keeps the outlines.
+    <strong>Edge mode (line art / Canny):</strong> traces edges with Canny edge
+    detection instead of a brightness threshold — better for sketches and thin
+    strokes. It swaps the threshold controls for <strong>Canny low</strong> and
+    <strong>Canny high</strong> (1–255): edges weaker than Canny low are dropped,
+    edges stronger than Canny high are always kept.
   </li>
   <li>
-    <strong>Progress bar:</strong> Shows tracing progress with status messages.
+    <strong>Auto threshold (Otsu):</strong> picks the brightness cutoff
+    automatically. Turn it off to set <strong>Threshold (0–255)</strong> yourself:
+    pixels darker than the threshold become shapes.
   </li>
-  <li><strong>Cancel:</strong> Cancel a long-running trace operation.</li>
+  <li><strong>Invert (dark → light):</strong> swaps foreground and background.</li>
   <li>
-    <strong>Send to Draft/Pattern:</strong> Export traced geometry directly to
-    the Draft or Pattern pages.
+    <strong>Width / Height:</strong> output size in canvas units (mm or in, set in
+    Settings), not image pixels. Image cleanup controls such as blur and simplify use
+    source-image px. With <strong>Lock aspect ratio</strong> checked, changing either
+    dimension derives the other; the live image-size line shows source px and current
+    output dimensions. The reset control (✕) restores that field’s current default.
+  </li>
+</ul>
+
+<h3 class="subheading">Advanced</h3>
+<ul>
+  <li>
+    <strong>Simplify (px):</strong> polygon simplification tolerance — higher values
+    give fewer points. 0 or more (slider 0–10).
+  </li>
+  <li>
+    <strong>Min area (px²):</strong> discards contours smaller than this area; raise
+    it to drop specks. 0 or more (slider 0–1000).
+  </li>
+  <li>
+    <strong>Max area (px²):</strong> discards contours larger than this area; leave
+    it empty for no limit.
+  </li>
+  <li>
+    <strong>Closing radius (px):</strong> morphological closing that bridges small
+    gaps so outlines close. 0 or more (slider 0–20).
+  </li>
+  <li>
+    <strong>Outer contours only (skip holes):</strong> keeps only outermost outlines,
+    dropping interior holes such as the counters in A, B, and O.
+  </li>
+  <li>
+    <strong>Max resolution (px):</strong> largest pixel dimension used when loading
+    the image, 64–8000. Higher values give finer detail but trace more slowly.
+  </li>
+</ul>
+
+<h3 class="subheading">Preview and Status</h3>
+<ul>
+  <li>
+    <strong>Refresh Preview</strong> retraces immediately. While a trace runs it reads
+    <strong>Restart Trace</strong> and abandons the running trace for a fresh one.
+  </li>
+  <li>
+    While a retrace is pending or running, the status line reads
+    <strong>Preview out of date</strong> and the previous outlines stay visible.
+    A progress bar shows the tracing stages.
+  </li>
+  <li>
+    When a trace finishes, the status line lists the contour count — with the change
+    from the previous trace, such as <code>(+3 vs previous)</code> — the output size,
+    vertices, and how many outlines are closed or open.
+  </li>
+  <li>
+    <strong>Smooth Curves…</strong> fits every outline to smooth curves once, at a
+    tolerance you enter; Undo reverts it and the next retrace starts over.
+  </li>
+</ul>
+
+<h3 class="subheading">Placing the Image</h3>
+<p>
+  Turn on <strong>Adjust Image</strong> in the canvas toolbar and click the image to
+  move it, pull a corner to scale it (proportions are kept and the trace refreshes at
+  the new size), or drag the top handle to rotate it (Shift snaps). Dragging needs the
+  image shown in the background. The outlines follow the image.
+</p>
+<p>
+  For exact values use the <strong>Image</strong> panel in the Inspector, which works
+  whether or not the image is shown: X/Y (the bottom-left corner before rotation),
+  W/H (proportions kept), <strong>Center on bed</strong> and <strong>Fit to bed</strong>
+  (largest size that fits the machine bed at the current rotation, keeping proportions,
+  then centred — set the bed size in Settings first), an absolute
+  <strong>Rotation</strong>, R +90 / R -90, and Reset. Fields accept arithmetic and
+  units such as <code>25/2</code> or <code>1in + 3mm</code>, like Draft's Properties;
+  an invalid entry is kept and outlined in red with the reason in its tooltip.
+  <strong>Remove Image</strong>, or Delete while the image is selected, unloads it and
+  keeps the outlines.
+</p>
+
+<h3 class="subheading">Export and Next Steps</h3>
+<ul>
+  <li>
+    <strong>Export DXF…</strong> saves every traced outline. The
+    <strong>Format</strong> menu also offers <strong>Export Selected as DXF…</strong>,
+    <strong>Export Raster Engraving…</strong> (a grayscale PNG with position and laser
+    settings), and revealing the last export. If the export check finds problems,
+    <strong>Show Issues</strong> selects the affected outlines and zooms to them.
+  </li>
+  <li>
+    The <strong>Next</strong> button names its destination —
+    <strong>Next — Edit in Draft</strong>, <strong>Next — Use in Pattern</strong>, or
+    <strong>Next — Export DXF…</strong>; change it with the <strong>Next step</strong>
+    menu beside it. It sends the selected outlines, or all of them when nothing is
+    selected.
+  </li>
+  <li>
+    Pattern uses closed outlines only. If some traced contours are open, Trace says how
+    many will be excluded and offers to send the open ones to Draft to close them; if
+    none are closed it explains why and offers Draft instead. The canvas context menu's
+    Send to Pattern does the same check.
   </li>
 </ul>
 
 <h3 class="subheading">Tips</h3>
 <ul>
   <li>
-    <strong>High-contrast images work best.</strong> Black-and-white or
-    high-contrast photos trace most accurately.
+    <strong>High-contrast images work best.</strong> Black-and-white or high-contrast
+    pictures trace most accurately; photographs may produce noisy outlines.
   </li>
   <li>
-    <strong>Use line art or logos</strong> for cleanest results. Photographs may
-    produce noisy outlines.
+    <strong>Noisy result?</strong> Raise Blur radius or Min area.
   </li>
   <li>
-    <strong>Adjust threshold carefully</strong> — too low misses details, too
-    high adds noise.
+    <strong>Outlines not closing?</strong> Raise Closing radius, or turn off Edge mode.
   </li>
   <li>
-    <strong>Increase minimum feature size</strong> to filter out small artifacts
-    from noisy images.
+    <strong>Nothing traced?</strong> Try Invert, or turn off Auto threshold and adjust
+    Threshold.
   </li>
 </ul>

@@ -4,25 +4,29 @@
 </h2>
 
 <h3 class="subheading">Overview</h3>
-<p>Repository (<strong>File ▸ Open Repository</strong>, Alt+5) provides a simplified Git workflow for managing your project repository directly from the application.</p>
+<p>Repository (<strong>File ▸ Open Repository</strong>, Alt+5) provides a simplified Git workflow for keeping a shared pattern or workspace library in sync with its Git remote. The left <strong>Settings</strong> pane holds the folder, Auto sync, and workflow cards; the right pane shows <strong>Git output</strong>. In a narrow window the Settings pane folds into a drawer with a Show/Hide button.</p>
 
 <h3 class="subheading">Setup</h3>
 <ol>
-    <li><strong>Select repository folder:</strong> Browse to your Git repository root directory.</li>
-    <li>The page will automatically detect and display the current repository status.</li>
+    <li><strong>Select the repository folder:</strong> type its path or choose <strong>Browse…</strong> and pick the repository's root folder.</li>
+    <li>The line under the path says whether the folder is ready, or exactly what is wrong: the folder is not found, the path is a file, you have no permission to open it, or it is not a Git repository. When the folder is inside a repository, the message names the repository root to choose instead.</li>
 </ol>
 
 <h3 class="subheading">Workflow Cards</h3>
 
-<h4 class='panel-title'>Pull</h4>
-<p>Pull the latest changes from the remote repository. This fetches and merges updates from your configured remote.</p>
+<h4 class="panel-title">1 Pull from remote</h4>
+<p><strong>Pull</strong> fetches and merges updates from the configured remote. Follow with review/commit, then push the commit to the remote.</p>
 
-<h4 class='panel-title'>Commit</h4>
-<p>Stage all changes and commit with a message. The default message is "Update project files" but you can customize it.</p>
+<h4 class='panel-title'>2 Review and commit</h4>
+<p><strong>Commit</strong> shows the changed files for review, then stages all changes and commits them with the message above (default "Update project files"). If Git has no author name or email for the repository, you are asked for them first.</p>
 
-<h4 class='panel-title'>Push</h4>
-<p>Push committed changes to the remote repository. This is marked as a primary action (highlighted button).</p>
+<h4 class='panel-title'>3 Push to remote</h4>
+<p><strong>Push</strong> is the final primary action: sends the committed changes to the remote. The branch needs a configured upstream remote; if it has none, Git reports the missing upstream in the step status and Git output.</p>
 
+<h4 class='panel-title'>Step results</h4>
+<p>Each card shows its last result. A failed step names the cause and quotes the key line from Git — for example authentication failed, no remote configured, no upstream branch, conflicting changes, the remote has newer commits, a network error, a timeout (each Git command gets 30 seconds), or cancelled — followed by "Details in Git output".</p>
+<h4 class="panel-title">Destructive actions</h4>
+<p><strong>Reset to Remote…</strong> is separated from the normal Pull → Commit → Push flow. It discards local tracked and untracked changes to match the remote tracking branch, and requires confirmation.</p>
 <h3 class="subheading">Auto Sync</h3>
 <p>Turn on <strong>Auto sync this repository</strong> (also in <strong>File ▸ Auto Sync Repository</strong> and Settings) to keep the selected folder and its remote in step without pressing any buttons:</p>
 <ul>
@@ -30,21 +34,25 @@
     <li><strong>Remote changes:</strong> checked every minute and pulled whenever no local edits are waiting to be committed.</li>
     <li><strong>Conflicts:</strong> if the same file changed on both sides, Auto sync undoes the attempted merge, leaves your files untouched, and pauses. Use <strong>Pull</strong> to resolve it, then turn Auto sync back on.</li>
 </ul>
-<p>The line under the toggle shows the last result, such as "Synced at 14:02 (pulled 1, pushed 0)" or the reason syncing stopped. Every sync that commits, pulls, or pushes — and every new failure or conflict — also appears in <strong>Git output</strong> under an "Auto sync" heading, with each git command and its result; routine checks that find nothing to do are left out. The branch must already have a remote branch; push it once with <strong>Push</strong> first.</p>
+<p>The line under the toggle shows the current state:</p>
+<ul>
+    <li><strong>Off</strong> — Auto sync is turned off.</li>
+    <li><strong>On — waiting for edits</strong> — watching for changes; after a check it adds the time, such as "up to date at 14:02".</li>
+    <li><strong>Syncing…</strong> — a sync is running.</li>
+    <li><strong>On — synced at 14:02 (pulled 1, pushed 0)</strong> — the last sync's result and time.</li>
+    <li><strong>Problem at 14:02 — …</strong> or <strong>Paused — …</strong> — the reason syncing failed or stopped; a paused sync resumes when you turn it back on.</li>
+</ul>
+<p>Every sync that commits, pulls, or pushes — and every new failure or conflict — also appears in <strong>Git output</strong> under an "Auto sync" heading; routine checks that find nothing to do are left out. The branch must already have a remote branch; push it once with <strong>Push</strong> first.</p>
 
 <h3 class="subheading">Secondary Actions</h3>
 <ul>
-    <li><strong>Status:</strong> Show the current repository status (modified files, staged changes, branch info).</li>
-    <li><strong>Open Folder:</strong> Open the repository folder in Finder.</li>
+    <li><strong>Status:</strong> show the current branch and changed files in Git output.</li>
+    <li><strong>Cancel:</strong> stop the pull, commit, or push in progress.</li>
+    <li><strong>Show in Finder</strong> (Show in Explorer / Show in Files on other systems): open the repository folder in your file manager.</li>
 </ul>
 
-<h3 class="subheading">Git Log</h3>
-<p>The right panel displays the Git log showing recent commits with:</p>
-<ul>
-    <li>Commit hash and message</li>
-    <li>Author and date</li>
-    <li>Branch information</li>
-</ul>
+<h3 class="subheading">Git Output</h3>
+<p>The right panel shows the output of every Git command run from this page or by Auto sync: each command is listed as <code>$ git …</code> followed by what Git printed, with errors highlighted. It is a command log, not a commit history. <strong>Clear</strong> empties it.</p>
 
 <h3 class="subheading">Settings Integration</h3>
 <p>The repository folder path is persisted in your settings and remembered between sessions. You can configure the default repo directory in Settings.</p>

@@ -1,11 +1,8 @@
 """Draw sidebar — compact, icon-first, grouped controls.
 
-Every multi-state control (tool-family pickers, arc mode, constraint mode,
-split) uses ``CycleIconButton``: left-click cycles, right-click opens a
-small modal for direct selection, hovering shows a flyout preview of every
-state. Single-purpose actions (Text, Dimension, the contextual
-polyline-editing row) use the same widget with one state so the visuals
-stay consistent.
+Path and Shapes each show one icon per configured tool. Clicking an icon
+selects that tool directly; the selected icon carries the active state.
+Advanced sections remain available through sidebar customization.
 
 Snap toggles (master/grid/vertex/edge/angle), Construction, and Scale
 live only in the Precision bar (``simple_stipple.canvas.widgets.precision_bar``) — it's
@@ -22,9 +19,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -201,7 +199,8 @@ class DrawSidebar(QFrame):
 
         self._on_width_changed = on_width_changed
         self._on_height_changed = on_height_changed
-        self._sections = list(sections) if sections else list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+        configured_sections = list(sections) if sections else list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
+        self._sections = configured_sections
         self._path_tools = [
             t for t in (path_tools or []) if t in DEFAULT_DRAW_SIDEBAR_PATH_TOOLS
         ] or list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
@@ -232,7 +231,7 @@ class DrawSidebar(QFrame):
         # compensate for an undersized viewport (the minimum-width contract
         # below guarantees both 44 px tool columns actually fit).
         col.setContentsMargins(2, 2, 2, 2)
-        col.setSpacing(10)
+        col.setSpacing(6)
 
         title = QLabel("Draw")
         title.setProperty("role", "title")
@@ -244,26 +243,18 @@ class DrawSidebar(QFrame):
         # but only *add* a section's frame to the layout — in the
         # configured order — if it's actually enabled. ─────────────────────
 
-        # Polyline/Shapes are direct-select icon grids, not cycle buttons:
-        # a cycle button always advances on click, so clicking the tool
-        # that's *already* shown (the common case — you open Draw wanting
-        # the default/last tool) instead switched to the next one. Each
-        # icon here is its own single-state CycleIconButton (same pattern
-        # already used for Text/Dimension/Scale/the editing row below) —
-        # clicking it always re-selects that exact tool, no cycling, and
-        # set_active_tool() drives which one shows checked/highlighted.
-        self._polyline_buttons: dict[str, CycleIconButton] = {
-            tool_id: CycleIconButton(
-                [_state(icon_name, tool_id, label)],
-                (lambda tid: lambda _sid: on_polyline_family(tid))(tool_id),
-            )
-            for tool_id, icon_name, label in (
-                ("polyline", "polyline", "Polyline"),
-                ("spline", "spline", "Spline"),
-                ("arc", "arc", "Arc"),
-                ("bezier", "bezier", "Bezier Pen"),
-            )
+        path_entries = {
+            "polyline": _state("polyline", "polyline", "Polyline"),
+            "spline": _state("spline", "spline", "Spline"),
+            "arc": _state("arc", "arc", "Arc"),
+            "bezier": _state("bezier", "bezier", "Bezier Pen"),
         }
+        self._path_buttons = {
+            tool: CycleIconButton([path_entries[tool]], on_polyline_family)
+            for tool in self._path_tools
+        }
+        for button in self._path_buttons.values():
+            button.clicked.connect(self._restore_canvas_focus)
         self._arc_mode_button = CycleIconButton(
             [
                 _state("arc", "3point", "Arc: pick 3 points"),
@@ -271,21 +262,24 @@ class DrawSidebar(QFrame):
             ],
             on_arc_mode,
         )
-        self._shapes_buttons: dict[str, CycleIconButton] = {
-            tool_id: CycleIconButton(
-                [_state(icon_name, tool_id, label)],
-                (lambda tid: lambda _sid: on_shapes_family(tid))(tool_id),
-            )
-            for tool_id, icon_name, label in (
-                ("rectangle", "rectangle", "Rectangle"),
-                ("rounded_rectangle", "rounded_rectangle", "Rounded Rectangle"),
-                ("slot", "slot", "Slot"),
-                ("circle", "circle", "Circle"),
-                ("ellipse", "ellipse", "Ellipse"),
-                ("polygon", "polygon", "Polygon"),
-                ("star", "star", "Star"),
-            )
+        self._arc_mode_button.clicked.connect(self._restore_canvas_focus)
+        shape_entries = {
+            "rectangle": _state("rectangle", "rectangle", "Rectangle"),
+            "rounded_rectangle": _state(
+                "rounded_rectangle", "rounded_rectangle", "Rounded Rectangle"
+            ),
+            "slot": _state("slot", "slot", "Slot"),
+            "circle": _state("circle", "circle", "Circle"),
+            "ellipse": _state("ellipse", "ellipse", "Ellipse"),
+            "polygon": _state("polygon", "polygon", "Polygon"),
+            "star": _state("star", "star", "Star"),
         }
+        self._shape_buttons = {
+            tool: CycleIconButton([shape_entries[tool]], on_shapes_family)
+            for tool in self._shape_tools
+        }
+        for button in self._shape_buttons.values():
+            button.clicked.connect(self._restore_canvas_focus)
         self._text_button = CycleIconButton(
             [_state("text", "text", "Text")], lambda _sid: on_text()
         )
@@ -309,7 +303,9 @@ class DrawSidebar(QFrame):
             [
                 _state("smooth_chaikin", "chaikin", "Smooth corners: Chaikin (keeps shape)"),
                 _state("smooth_gaussian", "gaussian", "Smooth corners: Gaussian (softest)"),
-                _state("smooth_catmull", "catmull_rom", "Smooth curve: Catmull-Rom (through points)"),
+                _state(
+                    "smooth_catmull", "catmull_rom", "Smooth curve: Catmull-Rom (through points)"
+                ),
             ],
             on_smoothing_method,
         )
@@ -326,18 +322,22 @@ class DrawSidebar(QFrame):
             lambda _sid: on_undo_point(),
         )
         self._cancel_button = CycleIconButton(
-            [_state("cancel", "cancel", "Cancel drawing (Esc)")],
-            lambda _sid: on_cancel_draw()
+            [_state("cancel", "cancel", "Cancel drawing (Esc)")], lambda _sid: on_cancel_draw()
         )
         self._select_button = CycleIconButton(
             [_state("select_arrow", "select", "Back to Select")],
             lambda _sid: on_back_to_select(),
         )
 
-        path_buttons = [self._polyline_buttons[t] for t in self._path_tools]
+        path_buttons = list(self._path_buttons.values())
+        shape_buttons = list(self._shape_buttons.values())
+        self._tool_buttons = (*path_buttons, *shape_buttons, self._arc_mode_button)
+        self._canvas_had_focus = False
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            app.focusChanged.connect(self._on_focus_changed)
         if "arc" in self._path_tools:
             path_buttons.append(self._arc_mode_button)
-        shape_buttons = [self._shapes_buttons[t] for t in self._shape_tools]
 
         # Build ONLY the configured sections. Section frames are QWidget(self)
         # children, so a frame that is created but never added to the layout
@@ -350,10 +350,20 @@ class DrawSidebar(QFrame):
             "text": lambda: self._section("Text", [self._text_button]),
             # Snap toggles live in the Precision bar now; only Constraint (unique
             # to Draw) remains under this legacy "snapping" key.
-            "snapping": lambda: self._section("Constraint", [self._constraint_button]),
+            "snapping": lambda: self._section(
+                "Constraint",
+                [self._constraint_button],
+                hint="Choose Free, H, V, or 45° from the menu.",
+            ),
             "mode": lambda: self._section("Mode", [self._split_button]),
-            "sketch": lambda: self._section("Sketch", [self._dimension_button]),
-            "smoothing": lambda: self._section("Smoothing", [self._smoothing_button]),
+            "sketch": lambda: self._section(
+                "Sketch", [self._dimension_button], hint="Add a measured dimension (Shift+M)."
+            ),
+            "smoothing": lambda: self._section(
+                "Smoothing",
+                [self._smoothing_button],
+                hint="Choose a smoothing method from the menu.",
+            ),
             "editing": lambda: self._section(
                 "Editing",
                 [
@@ -391,6 +401,23 @@ class DrawSidebar(QFrame):
         outer.addLayout(row, stretch=1)
         outer.addWidget(_BottomResizeHandle(self))
 
+    def _on_focus_changed(self, old: QWidget | None, new: QWidget | None) -> None:
+        if old is self.parentWidget() and any(new is button for button in self._tool_buttons):
+            self._canvas_had_focus = True
+        elif self._canvas_had_focus and new is not self.parentWidget():
+            in_selector = any(
+                new is button or (new is not None and button.isAncestorOf(new))
+                for button in self._tool_buttons
+            )
+            if not in_selector:
+                self._canvas_had_focus = False
+
+    def _restore_canvas_focus(self) -> None:
+        canvas = self.parentWidget()
+        if self._canvas_had_focus and canvas is not None:
+            QTimer.singleShot(0, canvas.setFocus)
+        self._canvas_had_focus = False
+
     # -- resize --------------------------------------------------------------
 
     def _apply_width(self, width: int) -> None:
@@ -418,7 +445,7 @@ class DrawSidebar(QFrame):
         return lambda sid: fn(sid == "on")
 
     def _section(
-        self, caption: str, buttons: list[CycleIconButton], *, columns: int = 1
+        self, caption: str, buttons: list[CycleIconButton], *, columns: int = 1, hint: str = ""
     ) -> QWidget:
         # Deliberately borderless: proximity, whitespace, and typography do
         # the grouping instead of nesting a card inside the sidebar card.
@@ -428,17 +455,16 @@ class DrawSidebar(QFrame):
         layout.setContentsMargins(2, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Qt QSS doesn't support text-transform, so the uppercase small-caps
-        # look this role's letter-spacing implies has to come from the text
-        # itself, not the stylesheet.
-        label = QLabel(caption.upper())
+        label = QLabel(caption)
         label.setProperty("role", "section-title")
         label.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        # Word-wrap defensively: a caption that renders wider than the
-        # sidebar under the real system font shouldn't be able to force
-        # the whole panel wider — wrapping keeps the layout's width fixed.
         label.setWordWrap(True)
         layout.addWidget(label)
+        if hint:
+            hint_label = QLabel(hint, section)
+            hint_label.setProperty("role", "help")
+            hint_label.setWordWrap(True)
+            layout.addWidget(hint_label)
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
@@ -454,12 +480,10 @@ class DrawSidebar(QFrame):
     # -- state sync (called from view.py) ------------------------------------
 
     def set_active_tool(self, tool: str) -> None:
-        # Each Path/Shapes icon is single-state now (no cycling) — the only
-        # sync needed is which one shows checked/highlighted.
-        for tool_id, btn in self._polyline_buttons.items():
-            btn.setChecked(tool_id == tool)
-        for tool_id, btn in self._shapes_buttons.items():
-            btn.setChecked(tool_id == tool)
+        for tool_id, button in self._path_buttons.items():
+            button.setChecked(tool_id == tool)
+        for tool_id, button in self._shape_buttons.items():
+            button.setChecked(tool_id == tool)
 
     @staticmethod
     def _set_button_visible(button: CycleIconButton, visible: bool) -> None:
@@ -499,11 +523,12 @@ class DrawSidebar(QFrame):
         self._constraint_button.set_current_state(mode or "Free")
 
     def set_constraint_mode_enabled(self, enabled: bool) -> None:
-        # Constraint is a single-button section — hide the caption with it when
-        # that section is actually shown (it's off the default sidebar).
+        # Keep the section discoverable in the default palette, while making
+        # its line-angle control available only when drawing can use it.
         if self._constraint_section is not None:
-            self._constraint_section.setVisible(enabled)
-        self._set_button_visible(self._constraint_button, enabled)
+            self._constraint_section.setVisible(True)
+        self._set_button_visible(self._constraint_button, True)
+        self._constraint_button.setEnabled(enabled)
 
     def set_smoothing_method(self, method: str) -> None:
         self._smoothing_button.set_current_state(method)

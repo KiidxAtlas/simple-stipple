@@ -195,8 +195,55 @@ def test_the_panel_follows_a_canvas_drag(traced_page: TracePage) -> None:
     assert traced_page._image_panel._y.text() == "3.000"
 
 
-def test_invalid_input_restores_the_current_value(traced_page: TracePage) -> None:
-    _type(traced_page._image_panel._x, "abc")
+def test_invalid_input_is_kept_and_marked_until_corrected(traced_page: TracePage) -> None:
+    field = traced_page._image_panel._x
+    _type(field, "abc")
 
-    assert traced_page._image_panel._x.text() == "0.000"
+    assert field.text() == "abc"
+    assert field.property("error")
+    assert "25/2" in field.toolTip()
     _assert_points(_outline(traced_page), SQUARE)
+    traced_page._refresh_image_panel()  # an unrelated refresh keeps the attempt
+    assert field.text() == "abc"
+
+    _type(field, "5")
+    assert not field.property("error")
+    _assert_points(_outline(traced_page), [(x + 5.0, y) for x, y in SQUARE])
+
+
+def test_a_size_of_zero_is_rejected_with_its_reason(traced_page: TracePage) -> None:
+    field = traced_page._image_panel._w
+    _type(field, "0")
+
+    assert field.text() == "0"
+    assert "greater than zero" in field.toolTip()
+    _assert_points(_outline(traced_page), SQUARE)
+
+
+def test_placement_stays_editable_while_the_picture_is_hidden(traced_page: TracePage) -> None:
+    traced_page._bg_visible_cb.setChecked(False)
+
+    assert not traced_page._adjust_image_btn.isEnabled()
+    _type(traced_page._image_panel._x, "12")
+    _assert_points(_outline(traced_page), [(x + 12.0, y) for x, y in SQUARE])
+
+
+def test_fit_to_bed_keeps_proportions_and_centres_the_turned_picture(
+    traced_page: TracePage,
+) -> None:
+    traced_page._settings.update(machine_bed_width_mm=100.0, machine_bed_height_mm=60.0)
+    traced_page._image_panel._rotate_by(90.0)  # 40×20 turned: 20 wide × 40 tall
+    traced_page._image_panel.fitToBedRequested.emit()
+
+    # min(100 / 20, 60 / 40) = 1.5 → 60×30, centred on the 100×60 bed.
+    assert (traced_page._last_width_mm, traced_page._last_height_mm) == pytest.approx((60, 30))
+    assert (traced_page._image_x_mm, traced_page._image_y_mm) == pytest.approx((20, 15))
+    assert traced_page._preview_timer.isActive()
+
+
+def test_centre_on_bed_moves_without_resizing(traced_page: TracePage) -> None:
+    traced_page._settings.update(machine_bed_width_mm=100.0, machine_bed_height_mm=60.0)
+    traced_page._image_panel.centerOnBedRequested.emit()
+
+    _assert_points(_outline(traced_page), [(x + 30.0, y + 20.0) for x, y in SQUARE])
+    assert not traced_page._preview_timer.isActive()

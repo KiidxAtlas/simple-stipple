@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import platform as _platform
 from typing import cast
 
 from PySide6.QtCore import Qt, Signal
@@ -25,9 +24,6 @@ from simple_stipple.ui.components.layout import info_chip
 from simple_stipple.ui.components.units import to_display as _to_display
 from simple_stipple.ui.components.units import unit_suffix as _unit_suffix
 from simple_stipple.ui.style import icon_path
-
-# Platform modifier for human-readable shortcut hints
-_KBD_MOD = "Meta" if _platform.system() == "Darwin" else "Ctrl"
 
 
 class _ElidingLabel(QLabel):
@@ -137,19 +133,37 @@ class ResponsiveCanvasToolbar(QWidget):
         self._update_responsive_state()
 
 
+_MODE_DESCRIPTIONS = {
+    "Select": "Select and move geometry",
+    "Draw": "Draw lines, paths, and shapes",
+    "Edit": "Edit vertices",
+}
+# Draw/Edit are canvas Commands; Select is an app-level binding only (it is
+# the default mode, not a canvas action), so it resolves via native_binding.
+_MODE_COMMANDS = {"Draw": "mode.draw", "Edit": "mode.edit"}
+
+
+def apply_mode_shortcut_hints(mode_buttons: dict[str, QPushButton]) -> None:
+    """(Re)apply mode tooltips with the live, rebindable shortcut."""
+    for mode, button in mode_buttons.items():
+        description = _MODE_DESCRIPTIONS.get(mode, f"{mode} mode")
+        if mode in _MODE_COMMANDS:
+            button.setToolTip(canvas_commands.tooltip_text(_MODE_COMMANDS[mode], description))
+        elif mode == "Select":
+            keys = canvas_commands.native_binding("canvas.select_mode", "S")
+            button.setToolTip(f"{description} ({keys})" if keys else description)
+        else:
+            button.setToolTip(description)
+
+
 def canvas_toolbar(
     on_mode,
     on_fit,
     *,
     modes: tuple[str, ...] = ("Select", "Draw", "Edit"),
     show_fit: bool = True,
-    secondary_actions=None,
 ):
-    """Compact canvas toolbar with mode toggles and optional actions.
-
-    Redesigned: larger buttons, clearer visual hierarchy, subtle styling
-    that matches GitHub's dark theme while being more polished.
-    """
+    """Compact canvas toolbar with mode toggles and an optional Fit action."""
     shell = ResponsiveCanvasToolbar()
     shell.setObjectName("canvas-toolbar")
     shell_layout = QHBoxLayout(shell)
@@ -157,57 +171,24 @@ def canvas_toolbar(
     shell_layout.setSpacing(4)
 
     mode_buttons: dict[str, QPushButton] = {}
-    # Draw/Edit read their live, rebindable shortcut from the canvas Command
-    # registry (native_shortcut() already resolves the user's override and
-    # renders it platform-correctly, e.g. no more literal "Meta+..." on
-    # macOS) — hardcoded literals here went stale after a rebind. Select has
-    # no matching Command entry (it's the default mode, not an action), so
-    # it keeps its default-only fallback.
-    mode_hints = {
-        "Select": "Shortcut: S",
-        "Draw": f"Shortcut: {canvas_commands.native_shortcut('mode.draw') or 'D'}",
-        "Edit": f"Shortcut: {canvas_commands.native_shortcut('mode.edit') or 'E'}",
-    }
     for mode in modes:
         btn = QPushButton(mode)
         btn.setProperty("role", "mode-button")
         btn.setProperty("active", mode == modes[0])
-        if mode in mode_hints:
-            btn.setToolTip(mode_hints[mode])
         btn.clicked.connect(lambda checked=False, m=mode: on_mode(m))
         shell_layout.addWidget(btn)
         mode_buttons[mode] = btn
+    apply_mode_shortcut_hints(mode_buttons)
 
     if show_fit:
         shell_layout.addSpacing(8)
 
         fit_btn = QPushButton("Fit")
         fit_btn.setProperty("role", "secondary")
-        fit_keys = canvas_commands.native_shortcut("view.fit") or "F"
-        fit_btn.setToolTip(f"Fit view to content (Shortcut: {fit_keys})")
+        fit_btn.setToolTip(canvas_commands.tooltip_text("view.fit", "Fit view to content"))
         fit_btn.clicked.connect(on_fit)
         shell_layout.addWidget(fit_btn)
         shell.register_secondary(fit_btn)
-
-    if secondary_actions:
-        shell_layout.addSpacing(8)
-        secondary_hints = {
-            "Select All": f"Shortcut: {_KBD_MOD}+A",
-            "Deselect": f"Shortcut: {_KBD_MOD}+Shift+A",
-            "Delete": "Shortcut: Delete",
-            "Undo": f"Shortcut: {_KBD_MOD}+Z",
-            "Close": "Shortcut: Shift+C",
-            "Open": "Shortcut: Shift+O",
-        }
-        for spec in secondary_actions:
-            label, slot, role = spec if len(spec) == 3 else (*spec, None)
-            btn = QPushButton(label)
-            btn.setProperty("role", role or "secondary")
-            if label in secondary_hints:
-                btn.setToolTip(secondary_hints[label])
-            btn.clicked.connect(slot)
-            shell_layout.addWidget(btn)
-            shell.register_secondary(btn)
 
     guidance_label = _ElidingLabel("Select geometry · Esc clears selection")
     guidance_label.setProperty("role", "toolbar-guidance")

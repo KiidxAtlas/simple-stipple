@@ -254,8 +254,8 @@ def keyPressEvent(self, event: QKeyEvent):
         if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             reverse = key == Qt.Key.Key_Backtab
             if self._mode == "select" and self._sel:
-                # Tab cycles through the available selection badges
-                # (W, H, and for a single line also L and ∠).
+                # Tab cycles through the painted selection badges (W and H,
+                # or L and ∠ for a single line — see _sel_badge_axes).
                 axes = self._sel_badge_axes()
                 if axes:
                     if self._sel_dim_edit is None:
@@ -290,14 +290,14 @@ def keyPressEvent(self, event: QKeyEvent):
                 if self._draw_shape_w_edit is None or self._draw_shape_h_edit is None:
                     event.accept()
                     return
-                if (self._draw_shape_w_edit.hasFocus() and not reverse) or (
-                    self._draw_shape_h_edit.hasFocus() and reverse
-                ):
-                    self._draw_shape_h_edit.setFocus()
-                    self._draw_shape_h_edit.selectAll()
+                if self._draw_shape_w_edit.hasFocus():
+                    target = self._draw_shape_h_edit
+                elif self._draw_shape_h_edit.hasFocus():
+                    target = self._draw_shape_w_edit
                 else:
-                    self._draw_shape_w_edit.setFocus()
-                    self._draw_shape_w_edit.selectAll()
+                    target = self._draw_shape_h_edit if reverse else self._draw_shape_w_edit
+                target.setFocus()
+                target.selectAll()
                 event.accept()
                 return
             # Tab cycles focus between distance and angle fields
@@ -305,25 +305,14 @@ def keyPressEvent(self, event: QKeyEvent):
                 # Focus + select only — dirty is set by textEdited when the
                 # user actually types, so the value keeps live-updating and
                 # the first keystroke replaces it.
-                if (self._dim_distance_edit.hasFocus() and not reverse) or (
-                    self._dim_angle_edit.hasFocus() and reverse
-                ):
-                    self._dim_angle_edit.setFocus()
-                    self._dim_angle_edit.selectAll()
-                elif (self._dim_angle_edit.hasFocus() and not reverse) or (
-                    self._dim_distance_edit.hasFocus() and reverse
-                ):
-                    self._dim_distance_edit.setFocus()
-                    self._dim_distance_edit.selectAll()
+                if self._dim_distance_edit.hasFocus():
+                    target = self._dim_angle_edit
+                elif self._dim_angle_edit.hasFocus():
+                    target = self._dim_distance_edit
                 else:
-                    # Neither field has focus — give focus to distance
-                    # (Shift+Tab goes straight to angle)
-                    if reverse:
-                        self._dim_angle_edit.setFocus()
-                        self._dim_angle_edit.selectAll()
-                    else:
-                        self._dim_distance_edit.setFocus()
-                        self._dim_distance_edit.selectAll()
+                    target = self._dim_angle_edit if reverse else self._dim_distance_edit
+                target.setFocus()
+                target.selectAll()
             event.accept()
             return
     elif key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):

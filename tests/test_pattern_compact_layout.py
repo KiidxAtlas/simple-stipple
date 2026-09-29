@@ -100,10 +100,19 @@ def test_pattern_drawers_and_export_stay_reachable(compact_app, scale, width, he
     assert not page._gen_btn.visibleRegion().isEmpty()
     assert not _rect_in(page._gen_btn, page).intersects(_rect_in(page._status, page))
     assert not _rect_in(page._gen_btn, page).intersects(_rect_in(page._details_scroll, page))
+    footer = page._export_footer_layout.parentWidget()
+    assert footer is not None
+    assert page._canvas_splitter.widget(1).isAncestorOf(footer)
+    assert not page._splitter.widget(0).isAncestorOf(footer)
+    assert page._export_summary.isVisibleTo(page)
     if height == 600:
-        assert page._details_scroll.verticalScrollBar().maximum() > 0
+        scrollbar = page._details_scroll.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        _settle(app)
+        assert not page._gen_btn.visibleRegion().isEmpty(), (
+            "export footer must stay pinned while Inspector details scroll"
+        )
 
-    # Handle drags must synchronize the label and reopening must recover space.
     for splitter in (page._canvas_splitter, page._splitter):
         index = splitter._responsive_secondary
         sizes = [splitter.width(), 0] if index == 1 else [0, splitter.width()]
@@ -159,6 +168,7 @@ def test_collapsed_pattern_groups_preserve_document_and_region_values(compact_ap
     page._zone_list.setCurrentRow(0)
     page._pattern_combo.setCurrentText("Honeycomb")
     page._hex_r.setText("3.2")
+    page._hex_r.editingFinished.emit()  # numeric fields commit on Enter/focus-out
     page._lattice_origin_x.setText("2.5")
     page._lattice_origin_y.setText("1.75")
     page._lattice_seed.setText("19")
@@ -256,6 +266,7 @@ def test_custom_tile_group_follows_saved_tile_restoration(compact_app):
     page._zone_list.setCurrentRow(0)
     page._pattern_combo.setCurrentText("Custom · Polish fixture")
     page._pattern_rotation.setText("32")
+    page._pattern_rotation.editingFinished.emit()  # commits the edit to region 1
     page._lattice_origin_x.setText("8.5")
     page._lattice_seed.setText("23")
     page._zone_list.setCurrentRow(1)
