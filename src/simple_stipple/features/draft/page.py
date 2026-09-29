@@ -16,7 +16,6 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -31,6 +30,8 @@ from simple_stipple.canvas.runtime import (
     CanvasLayerTreeModule,
     CanvasRuntime,
     CanvasToolbarModule,
+    ExplodeMergeButtons,
+    toolbar_separator,
 )
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.properties_panel import CanvasPropertiesPanel
@@ -79,12 +80,6 @@ LOGGER = logging.getLogger(__name__)
 
 # ── Page default settings ────────────────────────────────────────────────
 VECTOR_IMPORT_EXTENSIONS = (".dxf", ".fvi", ".svg")
-
-
-def _toolbar_sep() -> QLabel:
-    sep = QLabel("│")
-    sep.setProperty("role", "toolbar-sep")
-    return sep
 
 
 class DraftPage(BasePage):
@@ -160,15 +155,7 @@ class DraftPage(BasePage):
         self._recent_btn.setToolTip("Pick from recently imported DXF, FVI, or SVG files")
         self._recent_btn.fileSelected.connect(self._load_vector)
 
-        self._explode_btn = QPushButton("Explode")
-        self._explode_btn.setToolTip("Explode selected shapes into segments")
-        self._explode_btn.setEnabled(False)
-        self._explode_btn.clicked.connect(self._explode_selected)
-
-        self._merge_btn = QPushButton("Merge")
-        self._merge_btn.setToolTip("Merge selected segments into connected objects (select 2+)")
-        self._merge_btn.setEnabled(False)
-        self._merge_btn.clicked.connect(self._merge_selected)
+        self._segment_buttons = ExplodeMergeButtons(self._canvas, self._refresh_status)
 
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
@@ -176,25 +163,15 @@ class DraftPage(BasePage):
             on_fit=self._canvas.fit,
             show_fit=False,
             extra_widgets=[
-                _toolbar_sep(),
-                self._explode_btn,
-                self._merge_btn,
-                _toolbar_sep(),
+                toolbar_separator(),
+                self._segment_buttons.explode,
+                self._segment_buttons.merge,
+                toolbar_separator(),
                 open_btn,
                 self._recent_btn,
             ],
         )
         return self._toolbar_module
-
-    def _explode_selected(self) -> None:
-        count = self._canvas.explode_selected_to_segments()
-        if count:
-            self._refresh_status()
-
-    def _merge_selected(self) -> None:
-        count = self._canvas.merge_selected_segments_to_objects()
-        if count:
-            self._refresh_status()
 
     def _build_grid(self) -> QWidget:
         self._grid_module = CanvasGridModule(
@@ -735,10 +712,8 @@ class DraftPage(BasePage):
         """
         selected = self._canvas.sel_count
         n = self._canvas.poly_count
-        if hasattr(self, "_explode_btn"):
-            self._explode_btn.setEnabled(selected > 0)
-        if hasattr(self, "_merge_btn"):
-            self._merge_btn.setEnabled(selected > 1)
+        if hasattr(self, "_segment_buttons"):
+            self._segment_buttons.sync(selected)
         if hasattr(self, "_export_btn"):
             self._export_btn.setEnabled(n > 0 or bool(self._canvas._dimensions))
 

@@ -481,6 +481,9 @@ def _migrate_settings(data: dict) -> dict:
     saved_shape_tools = data.get("draw_sidebar_shape_tools")
     if isinstance(saved_shape_tools, list):
         data["draw_sidebar_shape_tools"] = normalize_draw_sidebar_shape_tools(saved_shape_tools)
+    # "Auto commit & push" grew pulling and became "Auto sync".
+    if "auto_commit_push" in data:
+        data.setdefault("auto_sync_repo", bool(data.pop("auto_commit_push")))
     return data
 
 
@@ -517,7 +520,7 @@ class SettingsSchema(BaseModel):
     auto_fetch_on_startup: bool = False
     auto_fetch_periodic: bool = False
     auto_fetch_interval_minutes: Annotated[int, Field(ge=1, le=1440)] = 10
-    auto_commit_push: bool = False
+    auto_sync_repo: bool = False
     ui_scale: Annotated[float, Field(ge=0.5, le=3.0)] = 1.0
     interface_density: Literal["compact", "comfortable"] = "compact"
     appearance: Literal["system", "dark", "light"] = "system"

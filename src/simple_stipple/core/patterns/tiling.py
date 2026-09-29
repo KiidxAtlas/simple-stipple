@@ -21,6 +21,7 @@ from simple_stipple.core.patterns.geometry import (
     _hex_verts,
     is_open_polyline,
     lattice_cells,
+    row_offset,
 )
 
 
@@ -384,6 +385,7 @@ def gen_knurling(
     cross: bool = True,
     groove: float = 0.3,
     *,
+    repeat_mode: str = "Straight",
     origin_x: float = 0.0,
     origin_y: float = 0.0,
 ) -> list[list[tuple[float, float]]]:
@@ -392,7 +394,9 @@ def gen_knurling(
     The knurl is the raised diamonds, not the grooves, so the generator emits
     the diamonds as closed cells. That is what lets fill hatch inside each
     pad, or hatch the region around them, the same way Honeycomb behaves.
-    ``cross`` off gives closed straight-knurl strips instead.
+    ``cross`` off gives closed straight-knurl strips instead; those run the
+    full width, so ``repeat_mode`` (which staggers alternate diamond rows by
+    half or a third of a diamond) only applies to the diamond knurl.
     """
     if pitch <= 0:
         return []
@@ -438,7 +442,7 @@ def gen_knurling(
     for i in range(-steps, steps + 1):
         cancellation_checkpoint()
         for j in range(-steps, steps + 1):
-            a = i + phase_a
+            a = i + phase_a + row_offset(repeat_mode, 1.0, j)
             b = j + phase_b
             verts = [node(a, b), node(a + 1, b), node(a + 1, b + 1), node(a, b + 1)]
             xs = [x for x, _ in verts]

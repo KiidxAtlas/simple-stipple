@@ -558,6 +558,7 @@ class PatternPage(BasePage):
 
     def _on_sel_change(self, count: int) -> None:
         self._canvas_runtime.on_selection_change(count)  # updates toolbar
+        self._segment_buttons.sync(count)
         # `_edit_polys` mirrors the FULL canvas state, never the selection
         # subset. The id check is belt-and-braces now that the canvas only ever
         # holds outlines: geometry and its parallel id list must stay aligned.
@@ -2333,6 +2334,7 @@ class PatternPage(BasePage):
         except ValueError as exc:
             self._preview_task.finish_run()
             self._set_preview_status(str(exc), "error")
+            self._abandon_pending_export(f"Export blocked — {exc}", STATUS_ERR)
             self._update_preview_controls()
             return
         try:
@@ -2492,20 +2494,29 @@ class PatternPage(BasePage):
                 self._preview_timer.start(0)
             return
         if msg == CANCELLED_MESSAGE:
-            self._pending_export_after_preview = None
+            self._abandon_pending_export("Export cancelled.", STATUS_WARN)
             self._update_preview_controls()
             if restart and (self._edit_polys or self._zones):
                 self._preview_timer.start(0)
             return
         self._set_preview_status(f"Solve failed: {msg}", "error")
-        if self._pending_export_after_preview is not None:
-            self._pending_export_after_preview = None
-            self._set_status(f"Export blocked — the pattern failed to solve: {msg}", STATUS_ERR)
+        self._abandon_pending_export(
+            f"Export blocked — the pattern failed to solve: {msg}", STATUS_ERR
+        )
         self._canvas.setToolTip("Solve failed; showing the last completed result.")
         self._update_preview_controls()
         self._refresh_canvas_panels()
         if restart and (self._edit_polys or self._zones):
             self._preview_timer.start(0)
+
+    def _abandon_pending_export(self, message: str, tone: str) -> None:
+        """A solve ended without a result: drop the waiting export and say so,
+        rather than leaving "Solving the pattern before export…" up forever."""
+        self._force_export_quality = False
+        if self._pending_export_after_preview is None:
+            return
+        self._pending_export_after_preview = None
+        self._set_status(message, tone)
 
     def _set_preview_status(self, text: str, tone: str = "dim") -> None:
         self._preview_status.setText(text)

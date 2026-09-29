@@ -66,6 +66,9 @@ def get_trace_workspace_state(page: Any) -> dict:
         "img_aspect": page._img_aspect,
         "last_width_mm": page._last_width_mm,
         "last_height_mm": page._last_height_mm,
+        "image_x_mm": page._image_x_mm,
+        "image_y_mm": page._image_y_mm,
+        "image_rotation_deg": page._image_rotation_deg,
         "canvas_polys": page._canvas.get_polylines_state(),
         "canvas_view": page._canvas.get_view_state(),
     }
@@ -107,6 +110,10 @@ def apply_trace_workspace_state(page: Any, state: dict | None) -> None:
         page._load_thumbnail(image_path)
     else:
         page._img_info_lbl.setText("")
+    # After the thumbnail load, which resets placement for a new picture.
+    page._image_x_mm = trace_state.image_x_mm
+    page._image_y_mm = trace_state.image_y_mm
+    page._image_rotation_deg = trace_state.image_rotation_deg
     polys: list[list[tuple[float, float]]] = [list(poly) for poly in trace_state.canvas_polys]
     page._canvas.set_polylines_state(polys, fit=bool(polys))
     if trace_state.last_width_mm > 0 and trace_state.last_height_mm > 0:

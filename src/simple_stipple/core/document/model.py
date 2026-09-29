@@ -476,6 +476,9 @@ class TraceTabState(TabStateBase):
     img_aspect: float = 1.0
     last_width_mm: float = 0.0
     last_height_mm: float = 0.0
+    image_x_mm: float = 0.0
+    image_y_mm: float = 0.0
+    image_rotation_deg: float = 0.0
     canvas_polys: list[list[tuple[float, float]]] = Field(default_factory=list)
     canvas_view: dict[str, Any] = Field(default_factory=dict)
 

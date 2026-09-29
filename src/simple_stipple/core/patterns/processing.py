@@ -15,6 +15,7 @@ from simple_stipple.core.formats.dxf import (
     analyze_outline_polylines,
     polylines_to_outline,
 )
+from simple_stipple.core.patterns.cancellation import cancellation_checkpoint
 from simple_stipple.core.patterns.complexity import (
     MAX_ESTIMATED_ELEMENTS as _MAX_ESTIMATED_ELEMENTS,
 )
@@ -37,6 +38,13 @@ from simple_stipple.core.patterns.fill import (
     gen_voronoi,
 )
 from simple_stipple.core.patterns.geometry import (
+    NO_REPEAT,
+    apply_border_fade,
+    apply_interlace,
+    apply_invert_fill,
+    apply_mirror,
+)
+from simple_stipple.core.patterns.geometry import (
     _collect_lines as _collect_lines_shared,
 )
 from simple_stipple.core.patterns.geometry import (
@@ -49,12 +57,6 @@ from simple_stipple.core.patterns.geometry import (
     _polygon_from_polyline as _polygon_from_polyline_shared,
 )
 from simple_stipple.core.patterns.geometry import (
-    apply_border_fade,
-    apply_interlace,
-    apply_invert_fill,
-    apply_mirror,
-)
-from simple_stipple.core.patterns.geometry import (
     gen_custom_tile as _gen_custom_tile,
 )
 from simple_stipple.core.patterns.geometry import (
@@ -63,6 +65,7 @@ from simple_stipple.core.patterns.geometry import (
 from simple_stipple.core.patterns.geometry import (
     repair_overlay_geometry as _repair_overlay_geometry,
 )
+from simple_stipple.core.patterns.grip import gen_grip_stipple
 from simple_stipple.core.patterns.outline_identity import (
     fresh_outline_ids as _fresh_outline_ids,
 )
@@ -90,6 +93,7 @@ PATTERNS = (
     "Custom Tile",
     "Basketweave",
     "Brick",
+    "Grip Stipple",
     "Honeycomb",
     "Knurling",
     "Mesh",
@@ -111,6 +115,7 @@ _GENERATORS: dict[str, Any] = {
     "gen_basketweave": gen_basketweave,
     "gen_mesh": gen_mesh,
     "gen_voronoi": gen_voronoi,
+    "gen_grip_stipple": gen_grip_stipple,
     "gen_stipple_interlaced": gen_stipple_interlaced,
 }
 _EXTERNAL_PATTERNS: dict[str, Any] = {}
@@ -167,6 +172,8 @@ def get_generator(name: str):
 
 
 LOGGER = logging.getLogger(__name__)
+# Cell rings per native boolean call when cutting cells out of the outline.
+_CLIP_BATCH = 1_000
 
 # Physical-length parameters affected by the user's pattern-size multiplier.
 # This domain mapping intentionally does not depend on UI field labels.
@@ -175,6 +182,7 @@ _LENGTH_PARAM_KEYS: dict[str, tuple[str, ...]] = {
     "Honeycomb": ("r", "gap"),
     "Basketweave": ("strip_w", "strip_l", "gap"),
     "Stipple Dots": ("r", "spacing"),
+    "Grip Stipple": ("element_size", "spacing"),
     "Brick": ("brick_w", "brick_h", "gap"),
     "Knurling": ("pitch", "groove"),
     "Mesh": ("r", "spacing"),
@@ -584,6 +592,7 @@ class PatternProcessor:
                 params.get("angle", 30.0),
                 bool(params.get("cross", True)),
                 params.get("groove", 0.3),
+                repeat_mode=params.get("repeat_mode", "Straight"),
                 origin_x=params.get("origin_x", 0.0),
                 origin_y=params.get("origin_y", 0.0),
             )
@@ -594,6 +603,21 @@ class PatternProcessor:
                 params["spacing"],
                 seed=params.get("seed"),
                 quality=params.get("quality", "high"),
+                repeat_mode=params.get("repeat_mode", NO_REPEAT),
+                repeat_size=params.get("repeat_size", 10.0),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
+            )
+        if pattern == "Grip Stipple":
+            return get_generator("gen_grip_stipple")(
+                outline,
+                params["element_size"],
+                params["spacing"],
+                seed=params.get("seed", 42),
+                repeat_mode=params.get("repeat_mode", NO_REPEAT),
+                repeat_size=params.get("repeat_size", 10.0),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
         if pattern == "Brick":
             return get_generator("gen_brick")(
@@ -627,7 +651,14 @@ class PatternProcessor:
             )
         if pattern == "Voronoi":
             return get_generator("gen_voronoi")(
-                outline, params["n_cells"], params["gap"], params["seed"]
+                outline,
+                params["n_cells"],
+                params["gap"],
+                params["seed"],
+                repeat_mode=params.get("repeat_mode", NO_REPEAT),
+                repeat_size=params.get("repeat_size", 10.0),
+                origin_x=params.get("origin_x", 0.0),
+                origin_y=params.get("origin_y", 0.0),
             )
         extension = _EXTERNAL_PATTERNS.get(pattern)
         if extension is not None:
@@ -954,14 +985,33 @@ class PatternProcessor:
                 try:
                     outline_fill_region = fill_outline
                     if cell_shapes:
+                        from shapely.geometry.polygon import orient
+
                         from simple_stipple.core.editing.boolean import clipper_difference
 
-                        outline_paths: list[list[tuple[float, float]]] = []
-                        _extract_all_rings_shared(fill_outline, outline_paths)
-                        cell_paths: list[list[tuple[float, float]]] = []
-                        for shape, _repeat_signature, _instance_signature in cell_shapes:
-                            _extract_all_rings_shared(shape, cell_paths)
-                        clipped_paths = clipper_difference(outline_paths, cell_paths)
+                        def oriented_rings(shape: Any) -> list[list[tuple[float, float]]]:
+                            # Clipper's non-zero rule reads winding: exteriors
+                            # must all turn the same way (holes the other), or
+                            # overlapping cells cancel instead of adding up.
+                            rings: list[list[tuple[float, float]]] = []
+                            for part in getattr(shape, "geoms", [shape]):
+                                if part.geom_type == "Polygon" and not part.is_empty:
+                                    _extract_all_rings_shared(orient(part, 1.0), rings)
+                            return rings
+
+                        cells = [oriented_rings(shape) for shape, _r, _i in cell_shapes]
+                        # In batches of whole cells: one native call over every
+                        # overlapping cell can run for seconds, and Cancel or a
+                        # newer edit only takes effect between calls.
+                        clipped_paths = oriented_rings(fill_outline)
+                        for start in range(0, len(cells), _CLIP_BATCH):
+                            cancellation_checkpoint()
+                            batch = [
+                                ring for cell in cells[start : start + _CLIP_BATCH] for ring in cell
+                            ]
+                            clipped_paths = clipper_difference(clipped_paths, batch)
+                            if not clipped_paths:
+                                break
                         outline_fill_region = build_fill_region(clipped_paths)
                     if outline_fill_region is not None:
                         fill_strokes.extend(apply_fill(outline_fill_region, spec))
@@ -973,6 +1023,7 @@ class PatternProcessor:
             if spec.target_pattern:
                 try:
                     for shape, repeat_signature, instance_signature in cell_shapes:
+                        cancellation_checkpoint()
                         if repeat_signature is not None and (
                             repeat_signature in cell_cutout_signatures
                             or instance_signature in instance_cutout_signatures

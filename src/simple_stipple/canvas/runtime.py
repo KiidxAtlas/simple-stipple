@@ -14,7 +14,15 @@ from collections.abc import Callable, Sequence
 from copy import deepcopy
 from typing import Any
 
-from PySide6.QtWidgets import QAbstractButton, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from simple_stipple.canvas.layers.logic import (
     CanvasLayerSidebarController,
@@ -370,6 +378,59 @@ class CanvasPageRuntimeBase:
 # ══════════════════════════════════════════════════════════════════════════
 
 
+def _keep_canvas_focus_on_click(root: QWidget) -> None:
+    """Stop toolbar buttons from taking keyboard focus when clicked.
+
+    Every toolbar button acts on the canvas. When a click moves focus to the
+    button, Delete, arrow nudges, and tool keys go to that button instead of
+    the canvas until the user clicks the canvas again. Tab still reaches the
+    buttons, matching QToolButton's default policy.
+    """
+    buttons = root.findChildren(QAbstractButton)
+    if isinstance(root, QAbstractButton):
+        buttons.append(root)
+    for button in buttons:
+        button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+
+
+def toolbar_separator() -> QLabel:
+    """A thin divider between groups of canvas toolbar buttons."""
+    separator = QLabel("│")
+    separator.setProperty("role", "toolbar-sep")
+    return separator
+
+
+class ExplodeMergeButtons:
+    """Explode/Merge toolbar buttons for every page that edits outlines.
+
+    ``sync`` enables them from the canvas selection count; ``on_changed``
+    runs after either command actually changed geometry.
+    """
+
+    def __init__(self, canvas: Any, on_changed: Callable[[], None]) -> None:
+        self._canvas = canvas
+        self._on_changed = on_changed
+        self.explode = QPushButton("Explode")
+        self.explode.setToolTip("Explode selected shapes into segments")
+        self.explode.clicked.connect(self._explode)
+        self.merge = QPushButton("Merge")
+        self.merge.setToolTip("Merge selected segments into connected objects (select 2+)")
+        self.merge.clicked.connect(self._merge)
+        self.sync(0)
+
+    def sync(self, selected: int) -> None:
+        self.explode.setEnabled(selected > 0)
+        self.merge.setEnabled(selected > 1)
+
+    def _explode(self) -> None:
+        if self._canvas.explode_selected_to_segments():
+            self._on_changed()
+
+    def _merge(self) -> None:
+        if self._canvas.merge_selected_segments_to_objects():
+            self._on_changed()
+
+
 class CanvasToolbarModule(QWidget):
     """Toolbar module that can auto-control a bound canvas."""
 
@@ -431,6 +492,7 @@ class CanvasToolbarModule(QWidget):
                     toolbar.register_secondary_widget(widget)
 
         root.addWidget(toolbar)
+        _keep_canvas_focus_on_click(toolbar)
 
         self.toolbar = toolbar
         self.mode_buttons = mode_buttons
@@ -445,6 +507,7 @@ class CanvasToolbarModule(QWidget):
             return
         guidance_index = toolbar_layout.indexOf(self.guidance_label)
         toolbar_layout.insertWidget(max(0, guidance_index), widget)
+        _keep_canvas_focus_on_click(widget)
 
     def bind_canvas(self, canvas: Any | None) -> None:
         self._canvas = canvas

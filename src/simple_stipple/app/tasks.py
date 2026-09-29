@@ -11,7 +11,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from simple_stipple.platform.settings import project_root, user_data_dir
+from simple_stipple.platform.git import (
+    GIT_NOT_FOUND_MESSAGE,
+    GitRunner,
+    SyncResult,
+    find_git,
+    sync_repository,
+)
+from simple_stipple.platform.settings import save_settings, user_data_dir
 from simple_stipple.platform.storage import (
     MAX_WORKSPACE_FILE_BYTES,
     read_json_file,
@@ -300,7 +307,7 @@ class UpdateChecker:
     def _attempt_auto_fetch(self) -> None:
         """Attempt to fetch remote repository metadata without altering the working tree."""
         try:
-            cast(Any, self._app._repo_page).auto_fetch()
+            self._app._repo_page.auto_fetch()
         except (OSError, RuntimeError, ValueError) as exc:
             LOGGER.warning("Auto-fetch failed: %s", exc)
 
@@ -364,152 +371,201 @@ class UpdateChecker:
         self._startup_update_thread = None
 
 
-class AutoCommitController(QObject):
-    """Watch the repository folder; commit and push once the tree goes quiet.
+class AutoSyncController(QObject):
+    """Keep the Repository page's folder in sync with its remote.
 
-    Enabled by the ``auto_commit_push`` setting (File menu / Settings). A short
-    poll notices uncommitted changes; a quiet-period timer waits until edits
-    stop before running ``git add -A && git commit && git push`` on a daemon
-    thread, so an active editing session produces one commit, not dozens.
+    Enabled by the ``auto_sync_repo`` setting (Repository page, File menu,
+    Settings dialog). Local edits, including new files: a status poll notices
+    them and a short quiet period lets multi-file saves finish, then one
+    background job commits, rebases onto the remote, and pushes. Remote
+    edits: a periodic check pulls them whenever no local edit is pending. A
+    conflicting rebase is aborted, so nothing is lost, and syncing pauses
+    until the user turns it back on.
     """
 
     _POLL_INTERVAL_MS = 5_000
     _QUIET_PERIOD_MS = 4_000
+    _REMOTE_INTERVAL_MS = 60_000
 
-    _git_done = Signal(object)
+    enabledChanged = Signal(bool)
+    statusChanged = Signal(str)
+    # [(git args, ok, output)] for a run worth showing in the Git output.
+    logged = Signal(object)
+    _job_done = Signal(object)
 
     def __init__(self, app: App) -> None:
         super().__init__(app)
         self._app = app
         self._shutting_down = False
         self._running = False
+        self._paused = False
         self._proc: subprocess.Popen[str] | None = None
-        self._git_done.connect(self._on_git_done)
+        # Porcelain output already committed (or already failed to commit):
+        # an unchanged dirty tree is not retried until something changes.
+        self._pending_status = ""
+        self._attempted_status = ""
+        self._last_problem = ""
+        self._job_done.connect(self._on_job_done)
 
-        self._poll_timer = QTimer(self._app)
+        self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self._POLL_INTERVAL_MS)
         self._poll_timer.timeout.connect(self._poll)
 
-        self._quiet_timer = QTimer(self._app)
+        self._quiet_timer = QTimer(self)
         self._quiet_timer.setSingleShot(True)
         self._quiet_timer.setInterval(self._QUIET_PERIOD_MS)
-        self._quiet_timer.timeout.connect(self._commit_and_push)
+        self._quiet_timer.timeout.connect(self._sync_local)
+
+        self._remote_timer = QTimer(self)
+        self._remote_timer.setInterval(self._REMOTE_INTERVAL_MS)
+        self._remote_timer.timeout.connect(self._sync_remote)
+
+    def enabled(self) -> bool:
+        return bool(self._app._settings.get("auto_sync_repo", False))
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Persist the toggle and start/stop syncing; every toggle routes here."""
+        self._app._settings["auto_sync_repo"] = enabled
+        save_settings(self._app._settings)
+        self._paused = False
+        self.configure()
 
     def configure(self) -> None:
-        """Start/stop watching from the current setting (menu, Settings dialog)."""
-        enabled = bool(self._app._settings.get("auto_commit_push", False))
-        if enabled and self._repo() is not None:
+        """Start/stop watching from the current setting and announce the state."""
+        enabled = self.enabled()
+        if enabled and not self._paused:
             if not self._poll_timer.isActive():
+                self._pending_status = self._attempted_status = ""
                 self._poll_timer.start()
+                self._remote_timer.start()
+                self.statusChanged.emit("Auto sync on: checking the remote…")
+                self._sync_remote()
         else:
             self._poll_timer.stop()
+            self._remote_timer.stop()
             self._quiet_timer.stop()
+            if not enabled:
+                self.statusChanged.emit("Auto sync is off.")
+        self.enabledChanged.emit(enabled)
 
     def _repo(self) -> Path | None:
-        """Configured repository folder, falling back to the app's own checkout."""
-        raw = str(self._app._settings.get("repo_dir", "") or "").strip()
-        candidates = [Path(raw)] if raw else []
-        candidates.append(project_root())
-        for candidate in candidates:
-            try:
-                if candidate.is_dir() and (candidate / ".git").exists():
-                    return candidate
-            except OSError:
-                continue
-        return None
+        return self._app._repo_page.current_repo()
 
-    def _launch(self, tag: str, commands: list[list[str]]) -> bool:
-        """Run git steps sequentially on a daemon thread; False when busy."""
-        if self._running or self._shutting_down:
+    def _poll(self) -> None:
+        self._start("status")
+
+    def _sync_local(self) -> None:
+        if self._start("sync", commit=True):
+            self._attempted_status = self._pending_status
+        else:
+            self._pending_status = ""  # skipped (busy): the next poll re-arms it
+
+    def _sync_remote(self) -> None:
+        self._start("sync", commit=False)
+
+    def _start(self, kind: str, *, commit: bool = False) -> bool:
+        """Run one git job on a daemon thread; False when the tick was skipped."""
+        if self._running or self._shutting_down or self._paused:
             return False
         repo = self._repo()
         if repo is None:
+            self.statusChanged.emit("Auto sync is waiting for a valid repository folder.")
+            return False
+        if self._app._repo_page.is_git_busy():
+            return False
+        git = find_git()
+        if git is None:
+            self._report_problem(GIT_NOT_FOUND_MESSAGE)
             return False
         self._running = True
+        runner = GitRunner(git, repo, on_process=self._track_process)
+        message = f"Auto-sync {datetime.now():%Y-%m-%d %H:%M:%S}" if commit else None
 
         def work() -> None:
-            results: list[tuple[list[str], bool, str]] = []
-            try:
-                for args in commands:
-                    if self._shutting_down:
-                        break
-                    try:
-                        proc = subprocess.Popen(
-                            ["git", *args],
-                            cwd=str(repo),
-                            text=True,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                        )
-                        self._proc = proc
-                        stdout, stderr = proc.communicate(timeout=30)
-                        out = (stdout or "") + ("\n" + stderr if stderr else "")
-                        ok = proc.returncode == 0 and not self._shutting_down
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        stdout, stderr = proc.communicate()
-                        out = (stdout or "") + ("\n" + stderr if stderr else "") + "\nTimed out"
-                        ok = False
-                    except OSError as exc:
-                        out, ok = str(exc), False
-                    finally:
-                        self._proc = None
-                    results.append((args, ok, out.strip()))
-                    if not ok:
-                        break
-            finally:
-                if self._shutting_down:
-                    self._running = False
-                else:
-                    self._git_done.emit((tag, results))
+            if kind == "status":
+                step = runner.run("status", "--porcelain")
+                payload: object = ("status", step.output if step.ok else "")
+            else:
+                result = sync_repository(runner, commit_message=message)
+                steps = [(list(step.args), step.ok, step.output) for step in runner.steps]
+                payload = ("sync", (result, steps))
+            if self._shutting_down:
+                self._running = False
+            else:
+                self._job_done.emit(payload)
 
         threading.Thread(target=work, daemon=True).start()
         return True
 
-    def _poll(self) -> None:
-        if self._shutting_down:
-            return
-        # Busy (or a missing git binary/repo) just retries on the next tick.
-        self._launch("status", [["status", "--porcelain"]])
+    def _track_process(self, proc: subprocess.Popen[str] | None) -> None:
+        self._proc = proc
 
-    def _on_git_done(self, payload: object) -> None:
+    def _on_job_done(self, payload: object) -> None:
         self._running = False
-        if self._shutting_down:
+        if self._shutting_down or self._paused or not self.enabled():
             return
-        tag, results = cast("tuple[str, list[tuple[list[str], bool, str]]]", payload)
-        if tag == "status":
-            dirty = any(ok and out for _args, ok, out in results)
-            if dirty:
-                # (Re)start the quiet period: only commit once edits pause.
+        kind, value = cast("tuple[str, Any]", payload)
+        if kind == "status":
+            status = cast(str, value)
+            if not status:
+                self._pending_status = self._attempted_status = ""
+            elif status not in (self._attempted_status, self._pending_status):
+                # New or different edits: (re)start the quiet period. An
+                # unchanged tree that already failed to sync is not retried.
+                self._pending_status = status
                 self._quiet_timer.start()
-        elif tag == "verify":
-            dirty = any(ok and out for _args, ok, out in results)
-            if dirty:
-                stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                self._launch(
-                    "commit",
-                    [["add", "-A"], ["commit", "-m", f"Auto-commit {stamp}"], ["push"]],
-                )
-        elif tag == "commit":
-            if results and all(ok for _args, ok, _out in results):
-                LOGGER.info("Auto-commit && push finished")
-            else:
-                detail = next((out for _args, ok, out in results if not ok), "unknown error")
-                LOGGER.warning("Auto-commit failed: %s", detail)
-                from simple_stipple.ui.components.feedback import record_notification
-
-                record_notification(f"Auto-commit && push failed: {detail.splitlines()[0]}")
-
-    def _commit_and_push(self) -> None:
-        if self._shutting_down:
             return
-        # Re-check before writing: the user may have committed by hand while the
-        # quiet period ran, and an empty "git commit" would error noisily.
-        self._launch("verify", [["status", "--porcelain"]])
+        result, steps = cast("tuple[SyncResult, list[tuple[list[str], bool, str]]]", value)
+        self._on_sync_result(result, steps)
+
+    def _on_sync_result(self, result: SyncResult, steps: list[tuple[list[str], bool, str]]) -> None:
+        """Update the status line and log runs that did something to the Git output.
+
+        Routine checks that changed nothing are left out of the log — one a
+        minute would bury manual Pull/Push output — and a failure that keeps
+        repeating is logged once, like its notification.
+        """
+        stamp = datetime.now().strftime("%H:%M")
+        if result.state == "synced":
+            self._last_problem = ""
+            self._pending_status = self._attempted_status = ""
+            self.logged.emit(steps)
+            self.statusChanged.emit(f"Synced at {stamp} ({result.detail}).")
+        elif result.state == "up_to_date":
+            self._last_problem = ""
+            self.statusChanged.emit(f"Up to date · checked {stamp}.")
+        elif result.state == "conflict":
+            self._paused = True
+            self._poll_timer.stop()
+            self._remote_timer.stop()
+            self._quiet_timer.stop()
+            self.logged.emit(steps)
+            self._report_problem(result.detail)
+        elif result.state in ("error", "no_upstream"):
+            if self._problem_summary(result.detail) != self._last_problem:
+                self.logged.emit(steps)
+            self._report_problem(result.detail)
+
+    @staticmethod
+    def _problem_summary(detail: str) -> str:
+        return (detail.strip().splitlines() or ["unknown error"])[0]
+
+    def _report_problem(self, detail: str) -> None:
+        """Show the problem; notify once per distinct problem, not every tick."""
+        summary = self._problem_summary(detail)
+        self.statusChanged.emit(f"Auto sync problem: {summary}")
+        if summary == self._last_problem:
+            return
+        self._last_problem = summary
+        LOGGER.warning("Auto sync failed: %s", detail)
+        from simple_stipple.ui.components.feedback import record_notification
+
+        record_notification(f"Auto sync: {summary}")
 
     def shutdown(self) -> None:
         self._shutting_down = True
         self._poll_timer.stop()
+        self._remote_timer.stop()
         self._quiet_timer.stop()
         proc = self._proc
         if proc is not None and proc.poll() is None:
@@ -525,7 +581,7 @@ class TaskController:
     def __init__(self, app: App) -> None:
         self.autosave = AutosaveController(app)
         self.updates = UpdateChecker(app)
-        self.auto_commit = AutoCommitController(app)
+        self.auto_sync = AutoSyncController(app)
         self._recovery_start_timer = QTimer(app)
         self._recovery_start_timer.setSingleShot(True)
         self._recovery_start_timer.timeout.connect(self.autosave.offer_startup_autosave_recovery)
@@ -540,11 +596,11 @@ class TaskController:
         if check_updates:
             self._update_start_timer.start(1000)
         self.updates._configure_auto_fetch_timer()
-        self.auto_commit.configure()
+        self.auto_sync.configure()
 
     def shutdown(self) -> None:
         self._recovery_start_timer.stop()
         self._update_start_timer.stop()
         self.autosave.shutdown()
         self.updates.shutdown()
-        self.auto_commit.shutdown()
+        self.auto_sync.shutdown()

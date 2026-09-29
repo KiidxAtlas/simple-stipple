@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSpinBox,
+    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -36,6 +37,7 @@ from simple_stipple.canvas.runtime import (
     CanvasToolbarModule,
 )
 from simple_stipple.canvas.widget import DxfCanvas
+from simple_stipple.canvas.widgets.image_placement_panel import ImagePlacementPanel
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.core.cad.preflight import analyze_geometry
 from simple_stipple.core.cad.production import machine_profile_from_settings
@@ -52,6 +54,7 @@ from simple_stipple.features.trace.form import (
     trace_default,
 )
 from simple_stipple.features.trace.model import TraceModel
+from simple_stipple.features.trace.placement import ImagePlacement
 from simple_stipple.features.trace.session import (
     apply_trace_workspace_state,
     clear_trace_workspace_state,
@@ -130,6 +133,9 @@ class TracePage(BasePage):
         "_img_h_px": "image_height_px",
         "_img_aspect": "image_aspect",
         "_aspect_locked": "aspect_locked",
+        "_image_x_mm": "image_x_mm",
+        "_image_y_mm": "image_y_mm",
+        "_image_rotation_deg": "image_rotation_deg",
         "_trace_revision": "trace_revision",
         "_needs_view_fit": "needs_view_fit",
         "_trace_result_stale": "trace_result_stale",
@@ -168,6 +174,9 @@ class TracePage(BasePage):
         # must leave the user's current zoom/pan alone.
         self._needs_view_fit: bool = True
         self._trace_result_stale: bool = False
+        # While the picture is being dragged: its placement when the drag
+        # began and the outlines expressed in that placement's frame.
+        self._image_edit_base: tuple[ImagePlacement, list[list[tuple[float, float]]]] | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -723,11 +732,32 @@ class TracePage(BasePage):
         self._canvas.set_grid_visible(DEFAULT_GRID_VISIBLE)
         self._canvas.set_grid_snap(False)
         self._canvas.set_grid_spacing(DEFAULT_GRID_SPACING_MM)
+        self._canvas.set_background_image_key_callback(self._on_image_key)
+        self._canvas.backgroundEditFinished.connect(self._on_image_edit_finished)
+        self._canvas.backgroundSelectionChanged.connect(self._on_image_selection_changed)
 
+        # On the canvas toolbar, not the Source section: that section
+        # collapses after every successful trace.
+        self._adjust_image_btn = QPushButton("Adjust Image")
+        self._adjust_image_btn.setCheckable(True)
+        self._adjust_image_btn.setMinimumHeight(28)
+        self._adjust_image_btn.setToolTip(
+            "Click the image, then drag to move it, pull a corner to scale, or drag "
+            "the top handle to rotate. The outlines follow the image."
+        )
+        self._adjust_image_btn.toggled.connect(self._on_adjust_image_toggled)
+        self._remove_image_btn = QPushButton("Remove Image")
+        self._remove_image_btn.setMinimumHeight(28)
+        self._remove_image_btn.setToolTip(
+            "Unload the source image; traced outlines stay on the canvas. "
+            "Delete does the same while the image is selected."
+        )
+        self._remove_image_btn.clicked.connect(self._remove_image)
         self._toolbar_module = CanvasToolbarModule(
             canvas=self._canvas,
             on_mode=self._on_toolbar_mode,
             on_fit=self._canvas.fit,
+            extra_widgets=(self._adjust_image_btn, self._remove_image_btn),
         )
         layout.addWidget(self._toolbar_module)
 
@@ -772,7 +802,19 @@ class TracePage(BasePage):
         )
         self._layers_tree = self._layer_module.tree
         self._layer_sidebar = self._layer_module.controller
-        side_layout.addWidget(self._layer_module, stretch=1)
+        self._image_panel = ImagePlacementPanel(
+            unit=lambda: getattr(self._canvas, "_unit_system", "mm")
+        )
+        self._image_panel.placementEdited.connect(self._apply_image_placement)
+        # Same inspector anatomy as Draft: numeric panel above, layers below.
+        inspector_splitter = QSplitter(Qt.Orientation.Vertical)
+        inspector_splitter.setChildrenCollapsible(False)
+        inspector_splitter.addWidget(self._image_panel)
+        inspector_splitter.addWidget(self._layer_module)
+        inspector_splitter.setStretchFactor(0, 1)
+        inspector_splitter.setStretchFactor(1, 2)
+        inspector_splitter.setSizes([260, 400])
+        side_layout.addWidget(inspector_splitter, stretch=1)
         side_layout.addWidget(self._export_footer)
 
         self._canvas_runtime = TraceCanvasPageRuntime(
@@ -786,7 +828,7 @@ class TracePage(BasePage):
         )
 
         splitter = content_splitter(canvas_shell, side_panel, sizes=(780, 340))
-        splitter.set_responsive_secondary(1, "Layers")
+        splitter.set_responsive_secondary(1, "Inspector")
         self._canvas_splitter = splitter
         layout.addWidget(splitter, stretch=1)
         layout.addWidget(self._canvas_status)
@@ -834,6 +876,12 @@ class TracePage(BasePage):
         has_polys = bool(self._canvas.poly_count) if hasattr(self, "_canvas") else False
         has_selection = bool(self._canvas.sel_count) if hasattr(self, "_canvas") else False
         self._bg_visible_cb.setEnabled(has_image)
+        shows_image = has_image and self._bg_visible_cb.isChecked()
+        if not shows_image:
+            self._adjust_image_btn.setChecked(False)
+        self._adjust_image_btn.setEnabled(shows_image)
+        self._remove_image_btn.setEnabled(bool(self._img_path))
+        self._refresh_image_panel()
         self._export_all_btn.setEnabled(has_polys)
         self._export_raster_action.setEnabled(has_image)
         # The overflow holds the raster export, which needs only a loaded
@@ -927,6 +975,8 @@ class TracePage(BasePage):
                 )
             )
             self._thumb_lbl.setVisible(True)
+            # A newly chosen picture starts unmoved and unrotated.
+            self._image_x_mm = self._image_y_mm = self._image_rotation_deg = 0.0
             self._img_info_lbl.setText(
                 f"{Path(path).name}  ·  {self._img_w_px}×{self._img_h_px} px"
             )
@@ -1167,17 +1217,10 @@ class TracePage(BasePage):
                 f"{count} contour(s) · {width_mm_val:.0f}×{height_mm_val:.0f} mm"
             )
         if _display_img is not None and self._bg_visible_cb.isChecked():
-            try:
-                bg_layer = Image.new("RGB", _display_img.size, TRACE_BG_COLOR)
-                faded = Image.blend(
-                    _display_img.convert("RGB"),
-                    bg_layer,
-                    TRACE_BG_BLEND_ALPHA,
-                )
-                self._canvas.set_background_image(faded, width_mm_val, height_mm_val)
-            except (OSError, ValueError) as exc:
-                LOGGER.debug("Failed to apply traced background image: %s", exc)
+            self._show_background()
         if polys:
+            placement = self._image_placement()
+            polys = placement.place(polys, (width_mm_val, height_mm_val))
             self._canvas.set_polylines_state(polys, fit=self._needs_view_fit)
             self._trace_result_stale = False
             self._canvas.setToolTip("")
@@ -1335,19 +1378,144 @@ class TracePage(BasePage):
 
     def _on_bg_visible_changed(self, state: int) -> None:
         if state and self._last_display_img is not None:
-            try:
-                bg_layer = Image.new("RGB", self._last_display_img.size, TRACE_BG_COLOR)
-                faded = Image.blend(
-                    self._last_display_img.convert("RGB"),
-                    bg_layer,
-                    TRACE_BG_BLEND_ALPHA,
-                )
-                self._canvas.set_background_image(faded, self._last_width_mm, self._last_height_mm)
-            except (OSError, ValueError) as exc:
-                LOGGER.debug("Failed to toggle background image visibility: %s", exc)
+            self._show_background()
         elif not state:
+            self._adjust_image_btn.setChecked(False)
             self._canvas.clear_background_image()
         self._update_trace_action_states()
+
+    def _image_placement(self) -> ImagePlacement:
+        return ImagePlacement(
+            self._image_x_mm,
+            self._image_y_mm,
+            self._last_width_mm,
+            self._last_height_mm,
+            self._image_rotation_deg,
+        )
+
+    def _show_background(self) -> None:
+        """Draw the faded source image at its current placement."""
+        if self._last_display_img is None:
+            return
+        try:
+            bg_layer = Image.new("RGB", self._last_display_img.size, TRACE_BG_COLOR)
+            faded = Image.blend(
+                self._last_display_img.convert("RGB"), bg_layer, TRACE_BG_BLEND_ALPHA
+            )
+        except (OSError, ValueError) as exc:
+            LOGGER.debug("Failed to prepare the background image: %s", exc)
+            return
+        placement = self._image_placement()
+        self._canvas.set_background_image(
+            faded,
+            placement.width_mm,
+            placement.height_mm,
+            placement.x_mm,
+            placement.y_mm,
+            placement.rotation_deg,
+        )
+
+    def _on_adjust_image_toggled(self, enabled: bool) -> None:
+        self._image_edit_base = None
+        self._canvas.set_background_image_editable(
+            enabled, self._on_image_transform, keep_aspect=True
+        )
+        if enabled:
+            self._canvas.deselect_all()
+            self._canvas.select_background_image(True)
+
+    def _on_image_selection_changed(self, selected: bool) -> None:
+        if selected:
+            self._set_status(
+                "Image selected — drag to move, pull a corner to scale, drag the top "
+                "handle to rotate (Shift snaps). Delete removes it.",
+                STATUS_OK,
+            )
+        elif self._adjust_image_btn.isChecked():
+            self._set_status("Click the image to move, scale, or rotate it.")
+
+    def _on_image_transform(
+        self, x: float, y: float, w: float, h: float, rotation: float = 0.0
+    ) -> None:
+        """Keep the outlines glued to the picture while it is dragged."""
+        if self._image_edit_base is None:
+            start = self._image_placement()
+            self._image_edit_base = (start, start.unplace(self._canvas.get_polylines_state()))
+        start, local_polys = self._image_edit_base
+        moved = ImagePlacement(x, y, w, h, rotation)
+        self._image_x_mm, self._image_y_mm, self._image_rotation_deg = x, y, rotation
+        self._last_width_mm, self._last_height_mm = w, h
+        self._canvas.set_polylines_state(
+            moved.place(local_polys, (start.width_mm, start.height_mm))
+        )
+        if abs(w - start.width_mm) > 1e-6:
+            self._width_mm.blockSignals(True)
+            self._width_mm.setText(f"{w:.2f}")
+            self._width_mm.blockSignals(False)
+            self._update_height_from_width()
+        self._refresh_image_panel()
+
+    def _apply_image_placement(
+        self, x: float, y: float, w: float, h: float, rotation: float
+    ) -> None:
+        """A typed placement: one complete edit through the same path as a drag."""
+        self._on_image_transform(x, y, w, h, rotation)
+        self._show_background()
+        self._on_image_edit_finished()
+
+    def _refresh_image_panel(self) -> None:
+        shown = self._last_display_img is not None and self._bg_visible_cb.isChecked()
+        placement = self._image_placement()
+        self._image_panel.set_placement(
+            (
+                placement.x_mm,
+                placement.y_mm,
+                placement.width_mm,
+                placement.height_mm,
+                placement.rotation_deg,
+            )
+            if shown and placement.width_mm > 0
+            else None
+        )
+
+    def _on_image_edit_finished(self) -> None:
+        if self._image_edit_base is None:
+            return
+        start, _local = self._image_edit_base
+        self._image_edit_base = None
+        if abs(self._last_width_mm - start.width_mm) > 1e-6:
+            # Trace detail depends on the physical size: re-trace at the new
+            # width. The scaled outlines stay visible until it finishes.
+            self._schedule_trace()
+        else:
+            self._emit_state_changed()
+
+    def _on_image_key(self, action: str, _reverse: bool = False) -> None:
+        if action == "remove":
+            self._remove_image()
+
+    def _remove_image(self) -> None:
+        """Unload the source picture; outlines already traced stay editable."""
+        if not self._img_path and self._last_display_img is None:
+            return
+        self._preview_timer.stop()
+        self._trace_revision += 1  # ignore any trace still finishing
+        self._image_edit_base = None
+        self._adjust_image_btn.setChecked(False)
+        self._reset_trace_runtime_state()
+        self._img_path = None
+        self._img_edit.setText("")
+        self._image_x_mm = self._image_y_mm = self._image_rotation_deg = 0.0
+        self._needs_view_fit = True
+        self._canvas.clear_background_image()
+        self._reload_btn.setText("Refresh Preview")
+        self._update_trace_action_states()
+        self._set_status(
+            "Image removed — traced outlines kept. Select them and press Delete to clear."
+            if self._canvas.poly_count
+            else "Image removed."
+        )
+        self._emit_state_changed()
 
     def _on_toolbar_mode(self, value: str) -> None:
         self._canvas_runtime.on_toolbar_mode(value)
@@ -1518,18 +1686,12 @@ class TracePage(BasePage):
     def _restore_background_from_path(self, path: str) -> None:
         try:
             with Image.open(path) as src:
-                display_img = src.convert("RGB")
-            bg_layer = Image.new("RGB", display_img.size, TRACE_BG_COLOR)
-            faded = Image.blend(display_img, bg_layer, TRACE_BG_BLEND_ALPHA)
-            self._last_display_img = display_img
-            self._canvas.set_background_image(
-                faded,
-                self._last_width_mm,
-                self._last_height_mm,
-            )
+                self._last_display_img = src.convert("RGB")
         except (OSError, ValueError) as exc:
             LOGGER.debug("Failed to restore background image from path '%s': %s", path, exc)
             self._canvas.clear_background_image()
+            return
+        self._show_background()
 
     def shutdown(self) -> None:
         """Called by ``App.closeEvent`` before the window tears down.

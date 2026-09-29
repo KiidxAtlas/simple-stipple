@@ -355,6 +355,7 @@ def _initialize_view(
     self._bg_y_mm = 0.0
     self._bg_rotation_deg = 0.0
     self._bg_editable = False
+    self._bg_keep_aspect = False
     self._bg_selected = False
     self._bg_edit_callback = None
     self._bg_key_callback = None

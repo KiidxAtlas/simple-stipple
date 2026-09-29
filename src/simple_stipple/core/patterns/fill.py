@@ -33,8 +33,12 @@ from shapely.geometry import (
 from simple_stipple.core.geometry import poisson_disk_points, tessellate_circles, voronoi_diagram
 from simple_stipple.core.patterns.cancellation import cancellation_checkpoint
 from simple_stipple.core.patterns.geometry import (
+    NO_REPEAT,
     _coords_to_polyline,
     _extract_polys,
+    is_repeating,
+    periodic_poisson_points,
+    stamp_tile_points,
 )
 from simple_stipple.core.patterns.geometry import (
     repair_overlay_geometry as _repair_fill_geometry,
@@ -399,11 +403,17 @@ def gen_stipple_dots(
     *,
     seed: int | None = None,
     quality: str = "high",
+    repeat_mode: str = NO_REPEAT,
+    repeat_size: float = 10.0,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
 ) -> list[list[tuple[float, float]]]:
     """Poisson-Disk sampled filled circles clipped to the outline.
 
     ``seed`` controls the RNG used for sampling; when ``None`` a stable
-    default is used so renders remain deterministic across runs.
+    default is used so renders remain deterministic across runs. With a
+    lattice ``repeat_mode`` one random square tile of ``repeat_size`` is
+    sampled seamlessly and repeated (straight, half drop, or brick offset).
     """
     if radius <= 0 or spacing <= 0:
         return []
@@ -415,8 +425,24 @@ def gen_stipple_dots(
         return []
 
     rng_seed = 42 if seed is None else int(seed)
-    centers_array = poisson_disk_points(minx, miny, maxx, maxy, spacing, rng_seed)
-    centres_world = [(float(x), float(y)) for x, y in centers_array]
+    if is_repeating(repeat_mode):
+        size = max(float(repeat_size), spacing)
+        tile = periodic_poisson_points(size, size, spacing, rng_seed, repeat_mode)
+        centres_world = stamp_tile_points(
+            outline_poly,
+            tile,
+            size,
+            size,
+            pad=size + radius,
+            repeat_mode=repeat_mode,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+        if not centres_world:
+            return []
+    else:
+        centers_array = poisson_disk_points(minx, miny, maxx, maxy, spacing, rng_seed)
+        centres_world = [(float(x), float(y)) for x, y in centers_array]
 
     prep = prepared.prep(outline_poly)
     n_seg = {"fast": 12, "balanced": 24}.get(quality, 48)
@@ -515,9 +541,22 @@ def gen_stipple_interlaced(
 
 
 def gen_voronoi(
-    outline_poly, n_cells: int, gap: float = 0.1, seed: int = 42
+    outline_poly,
+    n_cells: int,
+    gap: float = 0.1,
+    seed: int = 42,
+    *,
+    repeat_mode: str = NO_REPEAT,
+    repeat_size: float = 10.0,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
 ) -> list[list[tuple[float, float]]]:
-    """Random-seed Voronoi cells clipped to the outline."""
+    """Random-seed Voronoi cells clipped to the outline.
+
+    With a lattice ``repeat_mode``, ``n_cells`` seeds are scattered in one
+    square tile of ``repeat_size`` and that tile is repeated; the diagram is
+    built over all copies, so cells stay whole across tile seams.
+    """
     if n_cells < 2 or not math.isfinite(gap):
         return []
     minx, miny, maxx, maxy = outline_poly.bounds
@@ -527,7 +566,21 @@ def gen_voronoi(
     if extent <= 0:
         return []
     rng = random.Random(seed)
-    pts = [(rng.uniform(minx, maxx), rng.uniform(miny, maxy)) for _ in range(n_cells)]
+    if is_repeating(repeat_mode):
+        size = max(float(repeat_size), 0.1)
+        tile = [(rng.uniform(0.0, size), rng.uniform(0.0, size)) for _ in range(n_cells)]
+        pts = stamp_tile_points(
+            outline_poly,
+            tile,
+            size,
+            size,
+            pad=size,
+            repeat_mode=repeat_mode,
+            origin_x=origin_x,
+            origin_y=origin_y,
+        )
+    else:
+        pts = [(rng.uniform(minx, maxx), rng.uniform(miny, maxy)) for _ in range(n_cells)]
     try:
         cells = voronoi_diagram(pts, radius=extent * 4.0)
     except (TypeError, ValueError, RuntimeError):

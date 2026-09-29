@@ -568,6 +568,18 @@ def mouseMoveEvent(self, event: QMouseEvent):
                 bottom = min(wy, top - 0.01)
             if "n" in mode:
                 top = max(wy, bottom + 0.01)
+            if self._bg_keep_aspect and ow > 0 and oh > 0:
+                # Corner handles only: grow/shrink uniformly from the
+                # opposite corner so the image never distorts.
+                scale = max((right - left) / ow, (top - bottom) / oh)
+                if "w" in mode:
+                    left = right - ow * scale
+                else:
+                    right = left + ow * scale
+                if "s" in mode:
+                    bottom = top - oh * scale
+                else:
+                    top = bottom + oh * scale
             self._bg_x_mm, self._bg_y_mm = left, bottom
             self._bg_w_mm, self._bg_h_mm = right - left, top - bottom
         if callable(self._bg_edit_callback):
@@ -646,6 +658,7 @@ def mouseReleaseEvent(self, event: QMouseEvent):
 
     if self._bg_drag is not None:
         self._bg_drag = None
+        self.backgroundEditFinished.emit()
         return
 
     if self._space_pan_active or self._mode == "pan":

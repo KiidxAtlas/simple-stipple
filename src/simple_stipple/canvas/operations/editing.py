@@ -33,6 +33,7 @@ from simple_stipple.core.document.commands import (
 )
 from simple_stipple.core.document.geometry import (
     move_entity_control_point,
+    remove_entity_points,
     synchronize_entity_control_points,
     transform_entity_metadata,
     update_entity_parameter,
@@ -1620,7 +1621,9 @@ class SelectionService:
             if self._host._hover_vert is not None:
                 self._delete_edit_vertices({self._host._hover_vert})
                 return
-        if self._host._mode == "select":
+        # Pan is a view tool: the selection stays highlighted, so Delete
+        # must still act on it.
+        if self._host._mode in ("select", "pan"):
             self._host.delete_selected()
 
     def _delete_selected_guide(self) -> None:
@@ -1652,7 +1655,7 @@ class SelectionService:
             self._host._redraw()
         elif getattr(self._host, "_mode", None) == "edit":
             self._key_delete()
-        elif getattr(self._host, "_mode", None) == "select":
+        elif getattr(self._host, "_mode", None) in ("select", "pan"):
             self._host.delete_selected()
 
     def _linked_vertices_by_id(self, entity_id: str, vert_idx: int) -> set[tuple[str, int]]:
@@ -2299,6 +2302,7 @@ class SelectionService:
             requested.setdefault(eid, set()).add(vi)
 
         grouped: dict[str, set[int]] = {}
+        below_minimum = False
         for eid, vis in requested.items():
             entity = self._host._entity_for_id(eid)
             if entity is None:
@@ -2306,20 +2310,24 @@ class SelectionService:
             poly = entity.points
             closed = self._host._is_poly_closed(poly)
             available = (len(poly) - 1) if closed else len(poly)
+            # A closed outline's last point duplicates its first: deleting
+            # either one means deleting that corner.
+            candidates = sorted({0 if closed and vi == len(poly) - 1 else vi for vi in vis})
             # Selecting every vertex means the shape itself: deleting down to a
-            # degenerate triangle stump is never the intent.
-            if len({vi for vi in vis if not (closed and vi == len(poly) - 1)}) >= available:
+            # degenerate stump is never the intent.
+            if len(candidates) >= available:
                 whole_entities.append(eid)
                 continue
-            max_removable = max(0, available - 3)
+            # A closed outline keeps three corners; an open path keeps two ends.
+            max_removable = max(0, available - (3 if closed else 2))
             if max_removable <= 0:
+                below_minimum = True
                 continue
-            candidates = sorted(vi for vi in vis if not (closed and vi == len(poly) - 1))
-            keep = set(candidates[:max_removable])
-            if keep:
-                grouped[eid] = keep
+            grouped[eid] = set(candidates[:max_removable])
 
         if not grouped and not whole_entities:
+            if below_minimum:
+                self._host._show_flash("Can't delete: shapes need at least 3 points, paths 2", 1600)
             return 0
         deleted = 0
         updated = []
@@ -2328,14 +2336,11 @@ class SelectionService:
             if entity is None:
                 continue
             entity = deepcopy(entity)
-            poly = entity.points
-            closed = self._host._is_poly_closed(poly)
-            for vi in sorted(grouped[eid], reverse=True):
-                if 0 <= vi < len(poly):
-                    poly.pop(vi)
-                    deleted += 1
-            if closed and len(poly) >= 4:
-                poly[-1] = poly[0]
+            closed = self._host._is_poly_closed(entity.points)
+            remove_entity_points(entity, grouped[eid])
+            deleted += len(grouped[eid])
+            if closed and len(entity.points) >= 4:
+                entity.points[-1] = entity.points[0]
             updated.append(entity)
         self._host._canvas_service.update_entities(updated)
         if whole_entities:

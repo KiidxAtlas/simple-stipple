@@ -237,6 +237,38 @@ def synchronize_entity_control_points(entity: Any) -> None:
     entity.meta = metadata
 
 
+_BEZIER_PER_ANCHOR_KEYS = ("tangents", "handles_in", "handles_out", "node_types")
+
+
+def remove_entity_points(entity: Any, indices: set[int]) -> None:
+    """Delete points by index and keep ``kind``/``meta`` describing the result.
+
+    Control-point kinds (spline, bezier) stay curves and drop the matching
+    per-point metadata. Parametric outlines (rectangle, circle, polygon, …)
+    store a tessellation of their metadata, so removing one of their points
+    turns them into plain polylines; otherwise the metadata would keep
+    redrawing the original shape.
+    """
+    entity.points = [point for index, point in enumerate(entity.points) if index not in indices]
+    kind = str(getattr(entity, "kind", "polyline"))
+    if kind == "polyline":
+        return
+    if kind == "bezier":
+        metadata = dict(getattr(entity, "meta", None) or {})
+        for key in _BEZIER_PER_ANCHOR_KEYS:
+            values = metadata.get(key)
+            if isinstance(values, list):
+                metadata[key] = [
+                    value for index, value in enumerate(values) if index not in indices
+                ]
+        entity.meta = metadata
+    elif kind in {"line", "spline"}:
+        synchronize_entity_control_points(entity)
+    else:
+        entity.kind = "polyline"
+        entity.meta = None
+
+
 def transform_entity_metadata(
     entity: Any,
     *,

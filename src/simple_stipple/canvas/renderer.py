@@ -1888,77 +1888,6 @@ class CanvasRenderer:
         painter.drawText(QRectF(x1, y1, bw, bh), Qt.AlignmentFlag.AlignCenter, label)
         self._host._mbtn_rect = (x1, y1, x2, y2)
 
-    def _paint_active_precision_tool_panel(self, painter: QPainter, canvas_w: int) -> None:
-        if not (self._host._measure_mode or self._host._dimension_mode):
-            return
-        available = max(280.0, float(canvas_w - self._chrome_left() - 16))
-        panel_w, panel_h = min(390.0, available), 106.0
-        x = max(float(self._chrome_left() + 8), canvas_w - panel_w - 6.0)
-        y = float(self._chrome_top() + 36)
-        accent = QColor("#00d8ff") if self._host._measure_mode else QColor("#a371f7")
-        painter.setPen(QPen(accent, 1.4))
-        painter.setBrush(QBrush(QColor(10, 16, 28, 238)))
-        painter.drawRoundedRect(QRectF(x, y, panel_w, panel_h), 8, 8)
-
-        painter.setPen(QColor("#f0f6fc"))
-        painter.setFont(_FONT_HEL_11_BOLD)
-        if self._host._measure_mode:
-            title = "SCALE BY REFERENCE"
-            selected = len(self._host._selected_ids())
-            scope = (
-                f"Affects {selected} selected object{'s' if selected != 1 else ''}"
-                if selected
-                else "Affects all visible unlocked objects"
-            )
-            stage = (
-                0
-                if self._host._measure_anchor is None
-                else (2 if self._host._measure_locked else 1)
-            )
-            steps = ("1  Base point", "2  Reference point", "3  Target distance")
-        else:
-            title = "SKETCH DIMENSION"
-            scope = "Target-aware · segment, vertex, circle, or existing dimension"
-            stage = (
-                2
-                if self._host._dimension_tool.stage == "place"
-                else min(1, len(self._host._dimension_tool.targets))
-            )
-            steps = ("1  Select target", "2  Select relation", "3  Position & place")
-        painter.drawText(QRectF(x + 14, y + 10, panel_w - 28, 18), title)
-        painter.setFont(_FONT_HEL_9)
-        painter.setPen(QColor("#9da7b3"))
-        painter.drawText(QRectF(x + 14, y + 30, panel_w - 28, 16), scope)
-
-        chip_y = y + 54
-        chip_w = (panel_w - 40.0) / 3.0
-        for index, step in enumerate(steps):
-            chip_x = x + 12 + index * (chip_w + 8)
-            active = index == stage
-            completed = index < stage
-            painter.setPen(QPen(accent if active or completed else QColor("#3d4652"), 1))
-            painter.setBrush(
-                QBrush(
-                    QColor(accent.red(), accent.green(), accent.blue(), 45)
-                    if active
-                    else QColor("#151c26")
-                )
-            )
-            painter.drawRoundedRect(QRectF(chip_x, chip_y, chip_w, 25), 5, 5)
-            painter.setPen(accent if active or completed else QColor("#788391"))
-            painter.drawText(QRectF(chip_x, chip_y, chip_w, 25), Qt.AlignmentFlag.AlignCenter, step)
-        painter.setPen(QColor("#788391"))
-        footer = (
-            "Esc exits  ·  Right-click steps back  ·  Shift constrains"
-            if self._host._measure_mode
-            else "Select targets  ·  Double-click a ◆ value to change geometry  ·  Esc exits"
-        )
-        painter.drawText(
-            QRectF(x + 14, y + 84, panel_w - 28, 15),
-            Qt.AlignmentFlag.AlignLeft,
-            footer,
-        )
-
     def _paint_measure_overlay(self, painter: QPainter) -> None:
         if self._host._measure_anchor is None or self._host._measure_hover is None:
             return
@@ -2380,7 +2309,6 @@ class CanvasRenderer:
         # staged workflow card while either tool is active. Paint this as UI
         # chrome after geometry so it cannot disappear behind the drawing.
         self._paint_measure_button(painter, w)
-        self._paint_active_precision_tool_panel(painter, w)
 
         # Flash indicator
         if self._host._flash_text:

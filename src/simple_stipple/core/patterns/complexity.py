@@ -10,6 +10,12 @@ from simple_stipple.core.patterns.fill import NULL_PATTERN
 MAX_ESTIMATED_ELEMENTS = 100_000
 
 
+def _is_repeating(params: dict) -> bool:
+    from simple_stipple.core.patterns.geometry import is_repeating
+
+    return is_repeating(str(params.get("repeat_mode", "") or ""))
+
+
 def estimate_pattern_elements(outline: Any, pattern: str, params: dict) -> int:
     """Return a conservative pre-generation element estimate."""
     if pattern == NULL_PATTERN or outline is None or outline.is_empty:
@@ -23,15 +29,22 @@ def estimate_pattern_elements(outline: Any, pattern: str, params: dict) -> int:
         return max(value if math.isfinite(value) else float(default), 1e-6)
 
     if pattern == "Voronoi":
-        return max(0, int(params.get("n_cells", 0) or 0))
+        cells = max(0, int(params.get("n_cells", 0) or 0))
+        if _is_repeating(params):
+            tile = positive("repeat_size", 10.0)
+            return int(cells * (area / (tile * tile) + 4)) + 1  # + edge tiles
+        return cells
     if pattern == "Knurling":
         return int(math.hypot(width, height) / positive("pitch") * 2) + 2
     if pattern == "Truchet":
         return int(area / positive("tile") ** 2 * 2) + 2
     if pattern == "Seigaiha":
         return int(area / positive("r") ** 2 * 2 * max(1.0, positive("rings", 3.0))) + 2
-    if pattern in {"Stipple Dots", "Mesh"}:
-        return int(area / positive("spacing") ** 2 * 1.5) + 1
+    if pattern in {"Stipple Dots", "Grip Stipple", "Mesh"}:
+        sampled = area
+        if pattern != "Mesh" and _is_repeating(params):
+            sampled = max(area, positive("repeat_size", 10.0) ** 2)  # the tile is sampled whole
+        return int(sampled / positive("spacing") ** 2 * 1.5) + 1
     if pattern == "Honeycomb":
         step = positive("r", positive("r_min", 1.0)) + max(float(params.get("gap", 0) or 0), 0.0)
         return int(area / max(step * step * 2.0, 1e-9)) + 1

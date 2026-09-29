@@ -107,6 +107,7 @@ def test_shared_ui_and_platform_homes_have_no_root_level_facades() -> None:
     assert {path.name for path in (PACKAGE / "platform").iterdir() if path.is_file()} == {
         "__init__.py",
         "error_reporting.py",
+        "git.py",
         "launcher.py",
         "settings.py",
         "storage.py",

@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.3.27 — 2026-09-28
+
+### Added
+
+- **Repeat mode (incl. Half drop) on every pattern** — Stipple Dots, Grip
+  Stipple, Voronoi, and Knurling gain it too. The random patterns keep their free scatter as
+  "Off (random)" by default; Straight / Half drop / Brick offset repeat one
+  random tile of a chosen Repeat size seamlessly across tile edges.
+- **Explode and Merge on the Pattern page** — the same toolbar buttons as
+  Draft, enabled by the outline selection.
+- **Move, scale, rotate, and remove the Trace image** — Adjust Image on the
+  Trace canvas toolbar puts handles on the source picture; the traced outlines
+  follow it, scaling re-traces at the new width, and the placement is saved
+  with the workspace. Remove Image (or Delete while the image is selected)
+  unloads the picture and keeps the outlines. For exact placement the Trace
+  Inspector has an Image panel like Draft's Properties: X, Y, W, H
+  (proportions kept), absolute rotation, ±90° buttons, and Reset, with the
+  same arithmetic/unit input.
+- **Auto sync for the Repository folder** — a toggle on the Repository page
+  (also File ▸ Auto Sync Repository and Settings) commits and pushes edited
+  or new files shortly after saving stops, and pulls remote changes every
+  minute. Conflicting edits are never merged automatically: the attempt is
+  undone, files are left as they were, and syncing pauses with an explanation.
+  Replaces "Auto commit & push", which never pulled, could fall back to the
+  app's own source folder, and failed to push once the remote moved ahead;
+  the previous on/off choice carries over. Each sync that commits, pulls, or
+  pushes (and each new failure or conflict) is written to the Repository
+  page's Git output, command by command.
+
+### Changed
+
+- **Dimension and Scale tools no longer show the instruction fly-out** — the
+  step panel that covered the top-right of the canvas is gone; the brief
+  on-entry hint and toolbar guidance remain.
+- **Double-click no longer finishes or closes a polyline** — quick clicks just
+  place vertices; finish with Enter or right-click, close by clicking the
+  first point. The Pen tool still finishes on double-click.
+
+### Fixed
+
+- **Export froze the app on dense patterns** — "Optimize paths" ordering
+  recomputed every path's nesting against every other path on each step,
+  so a ~15,000-path Grip Stipple + crosshatch job ran for hours on the UI
+  thread. Ordering now computes nesting once with a spatial index and picks
+  the nearest next path with a KD-tree: 35,000 paths order in under half a
+  second. Nesting now counts shapes that fully contain a contour, so inner
+  contours are cut before their outers even where other shapes overlap.
+- **Export stuck on "Solving the pattern before export…"** — when the solve
+  could not start (an invalid field) or was cancelled, the export stayed
+  pending with no message. It now reports "Export blocked — …" or "Export
+  cancelled."
+
+- **Pattern solve hung with "Outline space" fill on overlapping elements** —
+  grains or dots that overlap (Grip Stipple, dense Stipple Dots) were cut out
+  of the outline with mixed winding, so overlaps cancelled: the solve ran for
+  minutes inside one uncancellable call and the fill region came out wrong,
+  hatching through covered spots. Cells are now oriented consistently and cut
+  in batches, so the same solve takes a fraction of a second, Cancel and newer
+  edits take effect between batches and between filled cells, and the safety
+  estimate counts repeat tiles for Voronoi, Stipple Dots, and Grip Stipple.
+
+- **Delete key ignored after clicking a toolbar button** — toolbar buttons no
+  longer take keyboard focus from the canvas when clicked, so Delete, arrow
+  nudges, and tool shortcuts keep working. Delete also removes the selection
+  while the Pan tool is active.
+- **Edit mode could not delete points** — deleting a vertex of a drawn
+  rectangle, circle, polygon, or other parametric shape now changes the
+  outline (it becomes an editable path) instead of being redrawn from the
+  original shape. Spline and Bezier deletions keep their remaining handles
+  aligned, the closing point of a closed shape can be deleted, open paths can
+  shrink to two points, and a refused deletion now says why.
+
 ## 0.3.26 — 2026-09-28
 
 ### Fixed

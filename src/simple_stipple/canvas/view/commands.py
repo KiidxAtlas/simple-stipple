@@ -288,6 +288,7 @@ def _cancel_active_drag(self) -> bool:
         self._bg_pixmap = None
         self._bg_drag = None
         self._redraw()
+        self.backgroundEditFinished.emit()
         return True
     if self._guide_drag is not None:
         self._canvas_service.cancel_preview(self._guide_preview)

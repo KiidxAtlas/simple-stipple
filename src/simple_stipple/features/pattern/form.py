@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.core.patterns.geometry import NO_REPEAT, REPEAT_MODES
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
     DEFAULT_DENSITY_ANGLE,
@@ -42,6 +43,7 @@ PATTERN_SUMMARY_FIELDS: dict[str, tuple[str, str]] = {
     "Flow Lines": ("_flow_spacing", "mm"),
     "Gradient Honeycomb": ("_grad_r_max", "mm"),
     "Stipple Dots": ("_stip_spacing", "mm"),
+    "Grip Stipple": ("_grip_spacing", "mm"),
     "Brick": ("_brick_w", "mm"),
     "Mesh": ("_mesh_spacing", "mm"),
     "Basketweave": ("_basket_gap", "mm"),
@@ -129,6 +131,18 @@ class ParamField:
             )
 
 
+def _align_field(prefix: str) -> ParamField:
+    return ParamField(
+        f"_{prefix}_align_region",
+        "Align to region",
+        "false",
+        "Anchor the lattice to this shape instead of the document grid — "
+        "use it to centre a motif in one region",
+        kind="checkbox",
+        param_key="align_to_region",
+    )
+
+
 def _lattice_fields(prefix: str, *, default_mode: str = "Half drop") -> list[ParamField]:
     """Repeat mode and the align-to-region opt-out, shared by every tiling
     pattern.
@@ -145,18 +159,36 @@ def _lattice_fields(prefix: str, *, default_mode: str = "Half drop") -> list[Par
             default_mode,
             "How each row of the lattice is offset from the one below it",
             kind="combobox",
-            items=["Straight", "Half drop", "Brick offset"],
+            items=list(REPEAT_MODES),
+            param_key="repeat_mode",
+        ),
+        _align_field(prefix),
+    ]
+
+
+def _scatter_repeat_fields(prefix: str) -> list[ParamField]:
+    """Repeat controls for random patterns: off scatters over the whole
+    region; any lattice mode repeats one random tile, seamlessly."""
+    return [
+        ParamField(
+            f"_{prefix}_repeat",
+            "Repeat mode",
+            NO_REPEAT,
+            "Off scatters freely over the whole region. Straight, Half drop, and "
+            "Brick offset repeat one random tile, offsetting each row of tiles",
+            kind="combobox",
+            items=[NO_REPEAT, *REPEAT_MODES],
             param_key="repeat_mode",
         ),
         ParamField(
-            f"_{prefix}_align_region",
-            "Align to region",
-            "false",
-            "Anchor the lattice to this shape instead of the document grid — "
-            "use it to centre a motif in one region",
-            kind="checkbox",
-            param_key="align_to_region",
+            f"_{prefix}_repeat_size",
+            "Repeat size (mm)",
+            "10",
+            "Edge length of the square tile that repeats when Repeat mode is on",
+            param_key="repeat_size",
+            minimum=1.0,
         ),
+        _align_field(prefix),
     ]
 
 
@@ -278,6 +310,34 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             kind="int",
             param_key="seed",
         ),
+        *_scatter_repeat_fields("stip"),
+    ],
+    "Grip Stipple": [
+        ParamField(
+            "_grip_element_size",
+            "Element size (mm)",
+            "0.28",
+            "Approximate radius of each irregular raised grain",
+            param_key="element_size",
+            minimum=0.001,
+        ),
+        ParamField(
+            "_grip_spacing",
+            "Spacing (mm)",
+            "0.62",
+            "Minimum centre-to-centre distance between grains",
+            param_key="spacing",
+            minimum=0.001,
+        ),
+        ParamField(
+            "_grip_seed",
+            "Seed",
+            "42",
+            "Deterministic random seed for repeatable grain placement and shapes",
+            kind="int",
+            param_key="seed",
+        ),
+        *_scatter_repeat_fields("grip"),
     ],
     "Brick": [
         ParamField(
@@ -437,21 +497,15 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             kind="checkbox",
             param_key="cross",
         ),
-        ParamField(
-            "_knurl_align_region",
-            "Align to region",
-            "false",
-            "Anchor the grooves to this shape instead of the document grid",
-            kind="checkbox",
-            param_key="align_to_region",
-        ),
+        *_lattice_fields("knurl", default_mode="Straight"),
     ],
     "Voronoi": [
         ParamField(
             "_vor_cells",
             "Cell count",
             "60",
-            "Number of random Voronoi cells to generate (high counts slow previews)",
+            "Number of random Voronoi cells to generate — per repeat tile when Repeat "
+            "mode is on (high counts slow previews)",
             kind="int",
             param_key="n_cells",
             minimum=2,
@@ -474,6 +528,7 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
             kind="int",
             param_key="seed",
         ),
+        *_scatter_repeat_fields("vor"),
     ],
 }
 
@@ -717,9 +772,7 @@ def collect_form_state(page: Any) -> dict:
     return data
 
 
-def restore_form_state(
-    page: Any, payload: dict, *, restore_document_lattice: bool = True
-) -> None:
+def restore_form_state(page: Any, payload: dict, *, restore_document_lattice: bool = True) -> None:
     """Write fill-parameter widget values from a plain dict.
 
     Missing keys fall back to the current widget values, so partial payloads

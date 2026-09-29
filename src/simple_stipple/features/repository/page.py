@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import os
-import shutil
 import subprocess
 import threading
+from datetime import datetime
 from html import escape
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -26,8 +26,10 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.features.base import BasePage
+from simple_stipple.platform.git import GIT_NOT_FOUND_MESSAGE, NO_CONSOLE_WINDOW, find_git
 from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import show_error
+from simple_stipple.ui.components.focus import blocked_signals
 from simple_stipple.ui.components.layout import (
     content_splitter,
     sidebar_panel,
@@ -41,40 +43,11 @@ from simple_stipple.ui.style import STATUS_ERR, STATUS_NEUTRAL, STATUS_OK
 # launch on a fresh account can be slow (macOS xcrun shim, Windows AV scans),
 # so keep this generous enough to not misreport a working install.
 _GIT_PROBE_TIMEOUT_S = 15
-_GIT_NOT_FOUND = (
-    "Git was not found. Install Git, or add it to PATH for this user account, "
-    "then restart Simple Stipple."
-)
-
-
-def _find_git() -> str | None:
-    """Locate the git executable.
-
-    Apps launched from Finder/Dock/Start menu do not inherit the shell PATH a
-    terminal gets, so a git that works in the terminal can be invisible here.
-    Fall back to the standard install locations before giving up.
-    """
-    found = shutil.which("git")
-    if found:
-        return found
-    if os.name == "nt":
-        candidates = [
-            Path(base) / "Git" / "cmd" / "git.exe"
-            for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"))
-            if base
-        ]
-        local = os.environ.get("LOCALAPPDATA")
-        if local:
-            candidates.append(Path(local) / "Programs" / "Git" / "cmd" / "git.exe")
-    else:
-        candidates = [
-            Path(p) for p in ("/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git")
-        ]
-    return next((str(c) for c in candidates if c.is_file()), None)
 
 
 class RepoPage(BasePage):
     _git_op_done = Signal(object)
+    autoSyncToggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
@@ -122,6 +95,19 @@ class RepoPage(BasePage):
         self._repo_status = QLabel("")
         self._repo_status.setWordWrap(True)
         left.addWidget(self._repo_status)
+
+        self._auto_sync_check = QCheckBox("Auto sync this repository")
+        self._auto_sync_check.setToolTip(
+            "Commit, pull, and push automatically when files change here or on the remote"
+        )
+        self._auto_sync_check.toggled.connect(self.autoSyncToggled)
+        left.addWidget(self._auto_sync_check)
+        self._auto_sync_status = QLabel(
+            "Commits and pushes local changes once edits pause, and pulls remote changes."
+        )
+        self._auto_sync_status.setProperty("role", "hint")
+        self._auto_sync_status.setWordWrap(True)
+        left.addWidget(self._auto_sync_status)
 
         workflow_title = QLabel("Repository workflow")
         workflow_title.setProperty("role", "section-label")
@@ -352,10 +338,10 @@ class RepoPage(BasePage):
         repo = self._repo_dir(show_dialogs=show_dialogs)
         if repo is None:
             return False
-        git = _find_git()
+        git = find_git()
         if git is None:
             if show_dialogs:
-                QMessageBox.warning(self, "Repository", _GIT_NOT_FOUND)
+                QMessageBox.warning(self, "Repository", GIT_NOT_FOUND_MESSAGE)
             return False
         if self._git_busy:
             return False
@@ -376,6 +362,7 @@ class RepoPage(BasePage):
                         text=True,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
+                        creationflags=NO_CONSOLE_WINDOW,
                     )
                     self._git_process = proc
                     stdout, stderr = proc.communicate(timeout=30)
@@ -404,15 +391,25 @@ class RepoPage(BasePage):
         if self._shutting_down:
             return
         results, on_done = payload
+        self._append_git_results(results)
+        self._emit_state_changed()
+        self._git_busy = False
+        self._refresh_repo_state()
+        on_done(results)
+
+    def _append_git_results(self, results: list[tuple[list[str], bool, str]]) -> None:
         for args, _ok, out in results:
             self._append_log_line(f"$ git {' '.join(args)}")
             for line in out.splitlines() if out else ["(done)"]:
                 self._append_log_line(line)
             self._append_log_line("")
-        self._emit_state_changed()
-        self._git_busy = False
-        self._refresh_repo_state()
-        on_done(results)
+
+    def append_auto_sync_log(self, results: list[tuple[list[str], bool, str]]) -> None:
+        """Show a background auto-sync run in the Git output, like a manual one."""
+        if self._shutting_down or not results:
+            return
+        self._append_log_line(f"── Auto sync {datetime.now():%H:%M:%S} ──")
+        self._append_git_results(results)
 
     def _git_status(self) -> None:
         self._run_git_async([["status", "--short", "--branch"]], lambda results: None)
@@ -474,9 +471,9 @@ class RepoPage(BasePage):
         repo = self._repo_dir(show_dialogs=True)
         if repo is None:
             return
-        git = _find_git()
+        git = find_git()
         if git is None:
-            QMessageBox.warning(self, "Commit", _GIT_NOT_FOUND)
+            QMessageBox.warning(self, "Commit", GIT_NOT_FOUND_MESSAGE)
             return
         try:
             identity = {
@@ -487,6 +484,7 @@ class RepoPage(BasePage):
                     capture_output=True,
                     timeout=_GIT_PROBE_TIMEOUT_S,
                     check=False,
+                    creationflags=NO_CONSOLE_WINDOW,
                 ).stdout.strip()
                 for key in ("user.name", "user.email")
             }
@@ -517,6 +515,7 @@ class RepoPage(BasePage):
                 capture_output=True,
                 timeout=_GIT_PROBE_TIMEOUT_S,
                 check=False,
+                creationflags=NO_CONSOLE_WINDOW,
             ).stdout.strip()
         except (OSError, subprocess.TimeoutExpired) as exc:
             show_error(self, "Commit setup failed", exc, message="Could not inspect changed files.")
@@ -597,6 +596,22 @@ class RepoPage(BasePage):
             lambda _results: None,
             show_dialogs=False,
         )
+
+    def current_repo(self) -> Path | None:
+        """The repository chosen on this page, when it is a valid git checkout."""
+        return self._repo_dir(show_dialogs=False)
+
+    def is_git_busy(self) -> bool:
+        """Whether a pull/commit/push started from this page is still running."""
+        return self._git_busy
+
+    def set_auto_sync_enabled(self, enabled: bool) -> None:
+        """Mirror the Auto sync setting without re-emitting ``autoSyncToggled``."""
+        with blocked_signals(self._auto_sync_check):
+            self._auto_sync_check.setChecked(enabled)
+
+    def set_auto_sync_status(self, text: str) -> None:
+        self._auto_sync_status.setText(text)
 
     def _cancel_git_op(self) -> None:
         if not self._git_busy:

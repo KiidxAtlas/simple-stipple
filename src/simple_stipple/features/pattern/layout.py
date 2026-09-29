@@ -34,6 +34,8 @@ from simple_stipple.canvas.runtime import (
     CanvasGridModule,
     CanvasLayerTreeModule,
     CanvasToolbarModule,
+    ExplodeMergeButtons,
+    toolbar_separator,
 )
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
@@ -167,11 +169,19 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
     page._canvas.set_selection_drag_edits(False)
     page._canvas.backgroundSelectionChanged.connect(page._on_engraving_selection_changed)
 
+    page._segment_buttons = ExplodeMergeButtons(page._canvas, page._refresh_canvas_panels)
     page._toolbar_module = CanvasToolbarModule(
         canvas=page._canvas,
         on_mode=page._on_toolbar_mode,
         on_fit=page._canvas.fit,
-        extra_widgets=[page._pattern_visible_btn, page._reset_preview_btn],
+        extra_widgets=[
+            toolbar_separator(),
+            page._segment_buttons.explode,
+            page._segment_buttons.merge,
+            toolbar_separator(),
+            page._pattern_visible_btn,
+            page._reset_preview_btn,
+        ],
     )
     layout.addWidget(page._toolbar_module)
 

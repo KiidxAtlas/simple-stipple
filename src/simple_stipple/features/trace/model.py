@@ -31,6 +31,10 @@ class TraceModel:
     image_height_px: int = 0
     image_aspect: float = 1.0
     aspect_locked: bool = True
+    # Where the user moved/rotated the picture; its size is the trace size.
+    image_x_mm: float = 0.0
+    image_y_mm: float = 0.0
+    image_rotation_deg: float = 0.0
     trace_revision: int = 0
     needs_view_fit: bool = True
     trace_result_stale: bool = False

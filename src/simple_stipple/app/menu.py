@@ -703,12 +703,9 @@ class CommandController:
         self._app._refresh_shortcut_tooltips()
 
         self._app._update_checker._configure_auto_fetch_timer()
-        # Keep the File-menu toggle and the watcher in lock-step with the
-        # Settings dialog's "Auto commit and push" checkbox.
-        self._app._auto_commit_action.setChecked(
-            bool(self._app._settings.get("auto_commit_push", False))
-        )
-        self._app._task_controller.auto_commit.configure()
+        # Re-read the Settings dialog's "Auto sync" checkbox; the controller
+        # updates the File-menu toggle and the Repository page from here.
+        self._app._task_controller.auto_sync.configure()
 
     def _build_command_palette_commands(self) -> list[dict[str, object]]:
         """Return every shell and canvas command from their live registries."""

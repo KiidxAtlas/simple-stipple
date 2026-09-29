@@ -11,6 +11,8 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
+from shapely import STRtree  # type: ignore[import-untyped]
 from shapely.geometry import Polygon  # type: ignore[import-untyped]
 
 from simple_stipple.core.editing.boolean import offset_polyline
@@ -199,6 +201,87 @@ def apply_kerf_compensation(
     return compensated
 
 
+def _is_closed(path: Polyline) -> bool:
+    return len(path) >= 4 and math.dist(path[0], path[-1]) <= 1e-6
+
+
+def _nesting_depths(paths: list[Polyline]) -> list[int]:
+    """How many other valid closed paths fully contain each closed path.
+
+    Open and invalid paths are depth 0. If A contains B, everything that
+    contains A also contains B, so B is always strictly deeper: cutting
+    deepest first finishes every inner contour before its outer, even when
+    other shapes partially overlap. Computed once with a spatial index.
+    """
+    depths = [0] * len(paths)
+    indices: list[int] = []
+    shapes: list[Polygon] = []
+    for index, path in enumerate(paths):
+        if not _is_closed(path):
+            continue
+        try:
+            shape = Polygon(path)
+        except (TypeError, ValueError):
+            continue
+        if shape.is_valid and not shape.is_empty:
+            indices.append(index)
+            shapes.append(shape)
+    if len(shapes) < 2:
+        return depths
+    inner, outer = STRtree(shapes).query(shapes, predicate="within")
+    counts = np.bincount(inner[inner != outer], minlength=len(shapes))
+    for index, count in zip(indices, counts, strict=True):
+        depths[index] = int(count)
+    return depths
+
+
+def _nearest_path_order(
+    starts: np.ndarray, ends: np.ndarray, reversible: np.ndarray, cursor: np.ndarray
+) -> list[tuple[int, bool]]:
+    """Greedy nearest-next order as ``(path, reversed)`` pairs, from ``cursor``.
+
+    Every path is entered at its start, or at its end when reversible. A
+    KD-tree over those entry points finds the nearest one still unused;
+    equally near entries go to the lower path index, then its start.
+    """
+    from scipy.spatial import cKDTree  # type: ignore[import-untyped]
+
+    owners = np.concatenate([np.arange(len(starts)), np.flatnonzero(reversible)])
+    points = np.concatenate([starts, ends[reversible]])
+    at_end = np.concatenate([np.zeros(len(starts), bool), np.ones(int(reversible.sum()), bool)])
+    used = np.zeros(len(starts), dtype=bool)
+    entries_per_path = 1 + reversible.astype(int)
+    live = np.arange(len(points))  # entry points still in the tree
+    dead = 0  # entries in ``live`` whose path is already used
+    tree = cKDTree(points)
+    order: list[tuple[int, bool]] = []
+    while len(order) < len(starts):
+        k = min(16, len(live))
+        while True:
+            distance, hit = tree.query(cursor, k=k)
+            distance, hit = np.atleast_1d(distance), live[np.atleast_1d(hit)]
+            free = ~used[owners[hit]]
+            # Widen until a free entry is found and no tie can lie beyond k.
+            if k == len(live) or (free.any() and distance[-1] > distance[free].min()):
+                break
+            k = min(k * 4, len(live))
+        distance, hit = distance[free], hit[free]
+        tied = hit[distance <= distance.min()]
+        entry = int(min(tied, key=lambda e: (owners[e], at_end[e])))
+        path, reverse = int(owners[entry]), bool(at_end[entry])
+        used[path] = True
+        dead += int(entries_per_path[path])
+        order.append((path, reverse))
+        cursor = ends[path] if not reverse else starts[path]
+        # Drop used entries once they are the majority, so queries near
+        # finished areas do not wade through them.
+        if dead * 2 > len(live) and len(order) < len(starts):
+            live = live[~used[owners[live]]]
+            dead = 0
+            tree = cKDTree(points[live])
+    return order
+
+
 def order_for_cut(
     polylines: list[list[tuple[float, float]]], *, allow_reverse_open_paths: bool = True
 ) -> list[Polyline]:
@@ -206,54 +289,29 @@ def order_for_cut(
 
     This is a conservative ordering helper for vector writers.  Closed rings
     are never reversed, preserving their winding; only open paths may reverse
-    to reduce travel.
+    to reduce travel. Ties go to the path listed first.
     """
-    remaining = [_clean_path(poly) for poly in polylines]
-    remaining = [poly for poly in remaining if len(poly) >= 2]
-
-    def containment_depth(poly: Polyline) -> int:
-        if len(poly) < 4 or math.dist(poly[0], poly[-1]) > 1e-6:
-            return 0
-        try:
-            candidate = Polygon(poly)
-            if not candidate.is_valid or candidate.is_empty:
-                return 0
-            point = candidate.representative_point()
-            return sum(
-                1
-                for other in remaining
-                if other is not poly
-                and len(other) >= 4
-                and math.dist(other[0], other[-1]) <= 1e-6
-                and Polygon(other).is_valid
-                and Polygon(other).contains(point)
-            )
-        except (TypeError, ValueError):
-            return 0
-
-    cursor: Point = (0.0, 0.0)
+    paths = [path for poly in polylines if len(path := _clean_path(poly)) >= 2]
+    if not paths:
+        return []
+    depths = _nesting_depths(paths)
+    starts = np.array([path[0] for path in paths], dtype=float)
+    ends = np.array([path[-1] for path in paths], dtype=float)
+    reversible = np.array(
+        [allow_reverse_open_paths and not _is_closed(path) for path in paths], dtype=bool
+    )
+    cursor = np.zeros(2)
     result: list[Polyline] = []
-    while remaining:
-        depths = [containment_depth(poly) for poly in remaining]
-        deepest = max(depths)
-        candidates = [index for index, depth in enumerate(depths) if depth == deepest]
-        best_index = candidates[0]
-        best_reverse = False
-        best_distance = math.inf
-        for index in candidates:
-            poly = remaining[index]
-            closed = len(poly) >= 4 and math.dist(poly[0], poly[-1]) <= 1e-6
-            options = [(math.dist(cursor, poly[0]), False)]
-            if allow_reverse_open_paths and not closed:
-                options.append((math.dist(cursor, poly[-1]), True))
-            distance, reverse = min(options)
-            if distance < best_distance:
-                best_index, best_reverse, best_distance = index, reverse, distance
-        chosen = remaining.pop(best_index)
-        if best_reverse:
-            chosen = list(reversed(chosen))
-        result.append(chosen)
-        cursor = chosen[-1]
+    for depth in sorted(set(depths), reverse=True):
+        level = np.array([i for i, d in enumerate(depths) if d == depth])
+        for pick, reverse in _nearest_path_order(
+            starts[level], ends[level], reversible[level], cursor
+        ):
+            chosen = paths[int(level[pick])]
+            if reverse:
+                chosen = list(reversed(chosen))
+            result.append(chosen)
+            cursor = np.asarray(chosen[-1], dtype=float)
     return result
 
 

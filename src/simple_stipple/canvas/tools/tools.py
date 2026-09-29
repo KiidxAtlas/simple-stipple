@@ -420,12 +420,17 @@ class DrawTool(CanvasTool):
         if v._draw_primitive == "bezier":
             v._finish_pen()
             return True
-        # Double-click finishes and closes the polygon (Fusion 360 behavior)
-        if len(v._draw_pts) >= 3:
-            v._finish_draw(close=True)
-        else:
-            v._finish_draw()
-        return True
+        # No finishing or closing on double-click: rapid clicks are vertex
+        # placement. Qt delivers the second press of a fast pair as this
+        # event, so place it like any click — unless it lands on the vertex
+        # the first click just placed. Enter, right-click, or clicking the
+        # start point finish the path.
+        if v._draw_pts:
+            last_cx, last_cy = v._w2c(*v._draw_pts[-1])
+            pos = event.position()
+            if math.hypot(pos.x() - last_cx, pos.y() - last_cy) <= 3.0:
+                return True
+        return self.press(event)
 
     def key(self, event) -> bool:
         if self.v._draw_primitive != "bezier":

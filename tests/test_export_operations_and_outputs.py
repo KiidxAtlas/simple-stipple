@@ -76,6 +76,28 @@ def test_pattern_export_order_uses_the_shared_containment_aware_planner() -> Non
     assert order_for_cut([outer, inner]) == [inner, outer]
 
 
+def test_export_waiting_on_a_solve_that_cannot_start_is_reported_not_left_pending(
+    app: QApplication,
+) -> None:
+    """It used to sit on "Solving the pattern before export…" forever."""
+    page = PatternPage(settings={})
+    page.load_outline_polys([OUTER])
+    page._scale_w.setText("not a size")
+    exported: list[bool] = []
+
+    page._with_solved_pattern(lambda: exported.append(True))
+    page._preview_timer.stop()
+    page._start_preview_thread()
+    app.processEvents()
+
+    assert exported == []
+    assert page._pending_export_after_preview is None
+    assert page._status.text().startswith("Export blocked")
+    assert page._force_export_quality is False
+    page.shutdown()
+    page.close()
+
+
 def test_run_order_is_engrave_then_mark_then_cut(app: QApplication) -> None:
     page = PatternPage(settings={})
     page.load_outline_polys([OUTER, CIRCLE])

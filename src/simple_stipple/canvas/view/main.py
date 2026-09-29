@@ -80,7 +80,7 @@ class CanvasView(
 
     Modes:
     - ``select`` — click polylines to select/deselect, Shift+drag rubber-band
-    - ``draw``   — click to place vertices, finish with dbl-click/Enter/right-click
+    - ``draw``   — click to place vertices, finish with Enter/right-click or the start point
     - ``edit``   — drag vertices, double-click edge to insert, right-click vertex to delete
 
     Set ``selectable=False`` for a display-only preview (no mode switching).
@@ -229,6 +229,9 @@ class CanvasView(
     smoothIterationsChanged = Signal(int)
     simplifyToleranceChanged = Signal(float)
     backgroundSelectionChanged = Signal(bool)
+    # Emitted once when a move/scale/rotate drag of an editable background
+    # image ends (mouse release or Esc restoring the original placement).
+    backgroundEditFinished = Signal()
     document_changed = Signal()
     operation_failed = Signal(str)
     viewChanged = Signal()  # emitted on zoom/pan so status readouts can update live
@@ -1360,11 +1363,14 @@ class CanvasView(
             self.backgroundSelectionChanged.emit(False)
         self._redraw()
 
-    def set_background_image_editable(self, enabled: bool, callback=None) -> None:
+    def set_background_image_editable(
+        self, enabled: bool, callback=None, *, keep_aspect: bool = False
+    ) -> None:
         self._bg_editable = bool(enabled)
         if not self._bg_editable:
             self.select_background_image(False)
         self._bg_edit_callback = callback
+        self._bg_keep_aspect = keep_aspect
         self._bg_drag = None
         self._redraw()
 

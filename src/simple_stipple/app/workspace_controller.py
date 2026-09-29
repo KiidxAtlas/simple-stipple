@@ -150,24 +150,18 @@ class WorkspaceController(_WorkspaceStateController):
         self._app._repo_dialog_action.setShortcut(QKeySequence(self._app._shortcut("tab.repo")))
         self._app._repo_dialog_action.triggered.connect(self._app._open_repo_dialog)
         self._app._workspace_menu.addAction(self._app._repo_dialog_action)
-        self._app._auto_commit_action = QAction("Auto Commit && Push Changes", self._app)
-        self._app._auto_commit_action.setCheckable(True)
-        self._app._auto_commit_action.setToolTip(
-            "Watch the repository folder and automatically commit && push "
-            "whenever files change"
+        auto_sync = self._app._task_controller.auto_sync
+        self._app._auto_sync_action = QAction("Auto Sync Repository", self._app)
+        self._app._auto_sync_action.setCheckable(True)
+        self._app._auto_sync_action.setToolTip(
+            "Watch the repository folder; commit, pull, and push changes automatically"
         )
-        self._app._auto_commit_action.setChecked(
-            bool(self._app._settings.get("auto_commit_push", False))
-        )
-        self._app._auto_commit_action.triggered.connect(self._on_auto_commit_toggled)
-        self._app._workspace_menu.addAction(self._app._auto_commit_action)
+        self._app._auto_sync_action.setChecked(auto_sync.enabled())
+        self._app._auto_sync_action.triggered.connect(auto_sync.set_enabled)
+        auto_sync.enabledChanged.connect(self._app._auto_sync_action.setChecked)
+        self._app._workspace_menu.addAction(self._app._auto_sync_action)
 
         self._app._workspace_menu.addSeparator()
-
-    def _on_auto_commit_toggled(self, checked: bool) -> None:
-        self._app._settings["auto_commit_push"] = checked
-        save_settings(self._app._settings)
-        self._app._task_controller.auto_commit.configure()
 
     def _collect_workspace_document(self) -> dict:
         self._app._workspace_controller.path = self._app._workspace_path

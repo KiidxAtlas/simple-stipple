@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
+from shapely.ops import unary_union
 
 from simple_stipple.core.patterns.processing import (
     PATTERNS,
@@ -20,6 +23,7 @@ DEFAULTS = {
     "Basketweave": {"strip_w": 2, "strip_l": 6, "gap": 0.3},
     "Mesh": {"r": 1, "spacing": 3},
     "Stipple Dots": {"r": 0.6, "spacing": 3},
+    "Grip Stipple": {"element_size": 0.5, "spacing": 1.2, "seed": 1},
     "Voronoi": {"n_cells": 40, "gap": 0.3, "seed": 1},
     "Truchet": {"tile": 6, "gap": 0.3, "seed": 1},
     "Seigaiha": {"r": 6, "rings": 3, "ring_gap": 1.2},
@@ -27,6 +31,9 @@ DEFAULTS = {
 }
 
 LATTICE_PATTERNS = ("Honeycomb", "Brick", "Basketweave", "Mesh", "Truchet", "Seigaiha")
+# Every built-in pattern offers Repeat mode; these repeat one random tile.
+SCATTER_PATTERNS = ("Stipple Dots", "Grip Stipple", "Voronoi")
+REPEATING_PATTERNS = (*LATTICE_PATTERNS, "Knurling", *SCATTER_PATTERNS)
 
 
 @pytest.mark.parametrize("name", ["Truchet", "Seigaiha", "Knurling"])
@@ -52,9 +59,9 @@ def test_truchet_is_reproducible_for_a_fixed_seed() -> None:
     assert first == second
 
 
-@pytest.mark.parametrize("name", LATTICE_PATTERNS)
+@pytest.mark.parametrize("name", REPEATING_PATTERNS)
 @pytest.mark.parametrize("mode", ["Straight", "Half drop", "Brick offset"])
-def test_every_lattice_pattern_accepts_a_repeat_mode(name: str, mode: str) -> None:
+def test_every_pattern_accepts_a_repeat_mode(name: str, mode: str) -> None:
     """Repeat mode used to exist only on Custom Tile; it is shared now."""
     params = {**DEFAULTS[name], "repeat_mode": mode}
     assert PatternProcessor()._generate_base_pattern(PANEL, name, params)
@@ -71,7 +78,14 @@ def test_lattice_origin_shifts_the_pattern(name: str) -> None:
     assert base != shifted
 
 
-@pytest.mark.parametrize("name", LATTICE_PATTERNS)
+def test_every_pattern_offers_half_drop_in_the_form() -> None:
+    named = {name for name in PATTERNS if name != "— None —"}
+    for name in sorted(named):
+        repeat = [field for field in PARAM_SPECS[name] if field.param_key == "repeat_mode"]
+        assert repeat and "Half drop" in repeat[0].items, (name, PARAM_SPECS[name])
+
+
+@pytest.mark.parametrize("name", REPEATING_PATTERNS)
 def test_lattice_patterns_expose_their_controls_in_the_form(name: str) -> None:
     """The grid origin is a document control, so a region only chooses its
     repeat mode and whether to leave the document grid at all."""
@@ -158,6 +172,29 @@ def test_fill_reaches_both_targets(name: str, target: str) -> None:
     assert strokes, f"{name} produced no fill for {target}"
 
 
+def test_outline_fill_stays_out_of_overlapping_cells() -> None:
+    """Grains overlap, and boundary-clipped ones wind the other way: every
+    covered spot must still count as a cell, or the hatch runs through them."""
+    square = [[(0.0, 0.0), (11.0, 0.0), (11.0, 11.7), (0.0, 11.7), (0.0, 0.0)]]
+    params = {"element_size": 0.5, "spacing": 0.4, "seed": 1}
+    service = PatternProcessor()
+    strokes: list = []
+    grains = service.build_pattern_polys(
+        square,
+        pattern="Grip Stipple",
+        params=params,
+        scale=(11.0, 11.7),
+        orig_w=11.0,
+        orig_h=11.7,
+        fill_options=_fill_spec(mode="crosshatch", spacing=0.1, target_outline=True),
+        fill_polys_out=strokes,
+    )
+    covered = unary_union([Polygon(g).buffer(0) for g in grains if len(g) >= 4]).buffer(-0.02)
+    assert strokes
+    inside = sum(LineString(s).intersection(covered).length for s in strokes if len(s) >= 2)
+    assert inside < 1e-6
+
+
 def test_knurling_groove_leaves_room_to_fill_around_the_pads() -> None:
     """Diamonds tile the plane exactly, so without a groove there is no
     space around them for the outline fill to hatch."""
@@ -186,3 +223,64 @@ def test_truchet_generates_at_every_gap_and_size(gap: float, size: float) -> Non
         region, "Truchet", {"tile": 6.0, "gap": gap, "seed": 1}
     )
     assert len(cells) > 1, f"Truchet collapsed at gap={gap}, size={size}"
+
+
+# ── Scatter patterns repeat one random tile ───────────────────────────────
+
+BIG = Polygon([(0, 0), (60, 0), (60, 60), (0, 60)])
+
+
+def _dot_centres(mode: str) -> list[tuple[float, float]]:
+    dots = PatternProcessor()._generate_base_pattern(
+        BIG,
+        "Stipple Dots",
+        {"r": 0.3, "spacing": 2.0, "seed": 7, "repeat_mode": mode, "repeat_size": 10.0},
+    )
+    whole = [Polygon(dot) for dot in dots if Polygon(dot).area > 0.27]  # uncut circles
+    return [(d.centroid.x, d.centroid.y) for d in whole]
+
+
+def _has_point(points, target, tol: float = 1e-3) -> bool:
+    return any(math.dist(point, target) <= tol for point in points)
+
+
+@pytest.mark.parametrize(
+    ("mode", "next_row"),
+    [("Straight", (0.0, 10.0)), ("Half drop", (5.0, 10.0)), ("Brick offset", (10 / 3, 10.0))],
+)
+def test_stipple_repeat_copies_its_tile_with_the_row_offset(mode: str, next_row) -> None:
+    centres = _dot_centres(mode)
+    inner = [(x, y) for x, y in centres if 5 < x < 40 and 0 < y < 10]  # one even row
+    assert inner
+    for x, y in inner:
+        assert _has_point(centres, (x + 10.0, y))  # next tile along the row
+        assert _has_point(centres, (x + next_row[0], y + next_row[1]))
+
+
+@pytest.mark.parametrize("mode", ["Straight", "Half drop", "Brick offset"])
+def test_stipple_repeat_keeps_dot_spacing_across_tile_seams(mode: str) -> None:
+    centres = _dot_centres(mode)
+    closest = min(math.dist(a, b) for i, a in enumerate(centres) for b in centres[i + 1 :])
+    assert closest >= 2.0 - 1e-3
+
+
+def test_voronoi_half_drop_repeats_whole_cells() -> None:
+    cells = PatternProcessor()._generate_base_pattern(
+        BIG,
+        "Voronoi",
+        {"n_cells": 6, "gap": 0.2, "seed": 3, "repeat_mode": "Half drop", "repeat_size": 12.0},
+    )
+    centroids = {(round(Polygon(c).centroid.x, 2), round(Polygon(c).centroid.y, 2)) for c in cells}
+    inner = [(x, y) for x, y in centroids if 12 < x < 36 and 12 < y < 24]
+    assert inner
+    for x, y in inner:
+        assert (round(x + 6.0, 2), round(y + 12.0, 2)) in centroids
+
+
+def test_knurling_half_drop_staggers_the_diamond_rows() -> None:
+    service = PatternProcessor()
+    straight = service._generate_base_pattern(PANEL, "Knurling", dict(DEFAULTS["Knurling"]))
+    dropped = service._generate_base_pattern(
+        PANEL, "Knurling", {**DEFAULTS["Knurling"], "repeat_mode": "Half drop"}
+    )
+    assert dropped and straight != dropped

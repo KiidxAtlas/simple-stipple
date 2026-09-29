@@ -8,16 +8,19 @@ request, and badge-anchored dimension editors.
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QObject, QPoint, Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QWidget
 
-from simple_stipple.app.tasks import AutoCommitController, AutosaveController
+from simple_stipple.app.tasks import AutosaveController
 from simple_stipple.app.window import App
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.core.cad.detection import _closed_vertices, detect_primitive
+from simple_stipple.core.cad.shape_factory import ShapeFactory
+from simple_stipple.core.document.geometry import geometry_for_entity
 from simple_stipple.core.editing.corners import chamfered_corner_points, rounded_corner_points
 from simple_stipple.features.draft import DraftPage
+from simple_stipple.features.pattern.page import PatternPage
 from simple_stipple.ui.components.layout import ResponsiveContentSplitter
 
 
@@ -521,6 +524,126 @@ def test_edit_mode_deleting_all_points_deletes_the_shape(app: QApplication) -> N
     canvas.close()
 
 
+def _canvas_with_shape(shape) -> tuple[DxfCanvas, str]:
+    canvas = DxfCanvas()
+    kind, meta = shape.to_meta_dict()
+    points = list(shape.control_points) if kind in {"spline", "bezier"} else list(shape.points)
+    canvas.add_polylines_state([points])
+    entity = canvas._entities[0]
+    entity.kind, entity.meta = kind, meta
+    return canvas, entity.id
+
+
+def test_edit_mode_deleting_a_rectangle_corner_changes_the_drawn_outline(
+    app: QApplication,
+) -> None:
+    """Parametric metadata must not keep redrawing the corner that was deleted."""
+    rectangle = ShapeFactory.rectangle(center=(20.0, 20.0), width=40.0, height=30.0)
+    canvas, eid = _canvas_with_shape(rectangle)
+    deleted_corner = canvas._entities[0].points[1]
+    assert canvas._selection_service._delete_edit_vertices({(eid, 1)}) == 1
+    outline = geometry_for_entity(canvas._entities[0]).tessellate()
+    assert deleted_corner not in outline
+    assert len(outline) == 4 and outline[0] == outline[-1]
+    canvas.close()
+
+
+def test_edit_mode_deleting_the_closing_point_removes_that_corner(app: QApplication) -> None:
+    canvas = DxfCanvas()
+    square = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+    canvas.add_polylines_state([square])
+    eid = canvas._entities[0].id
+    assert canvas._selection_service._delete_edit_vertices({(eid, 4)}) == 1
+    assert canvas._entities[0].points == [(10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (10.0, 0.0)]
+    canvas.close()
+
+
+def test_edit_mode_open_path_can_shrink_to_two_points_but_not_below(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.add_polylines_state([[(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)]])
+    eid = canvas._entities[0].id
+    assert canvas._selection_service._delete_edit_vertices({(eid, 1)}) == 1
+    assert canvas._entities[0].points == [(0.0, 0.0), (10.0, 0.0)]
+    assert canvas._selection_service._delete_edit_vertices({(eid, 0)}) == 0
+    assert canvas._entities[0].points == [(0.0, 0.0), (10.0, 0.0)]
+    canvas.close()
+
+
+def test_edit_mode_deleting_a_bezier_anchor_keeps_remaining_handles_aligned(
+    app: QApplication,
+) -> None:
+    bezier = ShapeFactory.from_meta_dict(
+        "bezier",
+        [(0.0, 0.0), (10.0, 10.0), (20.0, 0.0), (30.0, 10.0)],
+        {
+            "handles_in": [(-1.0, 0.0), (-2.0, 0.0), (-3.0, 0.0), (-4.0, 0.0)],
+            "handles_out": [(1.0, 0.0), (2.0, 0.0), (3.0, 0.0), (4.0, 0.0)],
+            "node_types": ["corner", "smooth", "symmetric", "corner"],
+        },
+    )
+    canvas, eid = _canvas_with_shape(bezier)
+    assert canvas._selection_service._delete_edit_vertices({(eid, 1)}) == 1
+    entity = canvas._entities[0]
+    assert entity.kind == "bezier"
+    assert entity.points == [(0.0, 0.0), (20.0, 0.0), (30.0, 10.0)]
+    assert [tuple(h) for h in entity.meta["handles_out"]] == [(1.0, 0.0), (3.0, 0.0), (4.0, 0.0)]
+    assert [tuple(h) for h in entity.meta["handles_in"]] == [(-1.0, 0.0), (-3.0, 0.0), (-4.0, 0.0)]
+    assert entity.meta["node_types"] == ["corner", "symmetric", "corner"]
+    canvas.close()
+
+
+def test_edit_mode_deleting_a_spline_control_point_updates_the_curve(
+    app: QApplication,
+) -> None:
+    spline = ShapeFactory.spline(
+        control_points=[(0.0, 0.0), (10.0, 20.0), (20.0, -20.0), (30.0, 0.0), (40.0, 5.0)]
+    )
+    canvas, eid = _canvas_with_shape(spline)
+    assert canvas._selection_service._delete_edit_vertices({(eid, 2)}) == 1
+    entity = canvas._entities[0]
+    assert entity.kind == "spline"
+    assert (20.0, -20.0) not in entity.meta["control_points"]
+    assert geometry_for_entity(entity).shape.control_points == entity.points
+    canvas.close()
+
+
+def test_delete_key_still_reaches_canvas_after_clicking_a_toolbar_button(
+    app: QApplication,
+) -> None:
+    """A toolbar click must not strand keyboard focus away from the canvas."""
+    draft = DraftPage(settings={})
+    draft.resize(1400, 900)
+    draft.show()
+    draft.activateWindow()
+    canvas = draft._canvas
+    canvas.add_polylines_state([[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]])
+    canvas.set_selection([canvas._entities[0].id])
+    canvas.setFocus()
+    app.processEvents()
+
+    QTest.mouseClick(draft._toolbar_module.mode_buttons["Select"], Qt.MouseButton.LeftButton)
+    QTest.keyClick(QApplication.focusWidget() or draft, Qt.Key.Key_Delete)
+
+    assert not canvas._entities
+    draft.close()
+
+
+def test_delete_key_removes_the_selection_while_the_pan_tool_is_active(
+    app: QApplication,
+) -> None:
+    canvas = DxfCanvas()
+    canvas.add_polylines_state([[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 0.0)]])
+    canvas.set_selection([canvas._entities[0].id])
+    canvas.set_mode("pan")
+
+    QTest.keyClick(canvas, Qt.Key.Key_Delete)
+
+    assert not canvas._entities
+    canvas.close()
+
+
 def test_layer_tree_double_click_renames_without_collapse(app: QApplication) -> None:
     from simple_stipple.features.draft import DraftPage
 
@@ -637,48 +760,48 @@ def test_merge_touching_open_paths(app: QApplication) -> None:
     canvas.close()
 
 
-class _StubApp(QObject):
-    """QObject parent with the one attribute AutoCommitController reads."""
-
-    def __init__(self, settings: dict) -> None:
-        super().__init__()
-        self._settings = settings
-
-
-def test_auto_commit_controller_watches_only_when_enabled(
-    app: QApplication, monkeypatch: pytest.MonkeyPatch
+def test_double_click_while_drawing_a_polyline_neither_finishes_nor_closes_it(
+    app: QApplication,
 ) -> None:
-    stub = _StubApp({})
-    ctrl = AutoCommitController(stub)
-    ctrl.configure()
-    assert not ctrl._poll_timer.isActive()
+    canvas = DxfCanvas()
+    canvas.resize(800, 600)
+    canvas.show()
+    canvas.set_mode("draw")
+    canvas._draw_primitive = "polyline"
 
-    stub._settings["auto_commit_push"] = True
-    ctrl.configure()
-    # Active only when a git repo is resolvable (true inside the dev checkout).
-    assert ctrl._poll_timer.isActive() == (ctrl._repo() is not None)
+    def at(x: float, y: float) -> QPoint:
+        cx, cy = canvas._w2c(x, y)
+        return QPoint(int(cx), int(cy))
 
-    launched: list[tuple[str, list]] = []
-    monkeypatch.setattr(ctrl, "_launch", lambda tag, cmds: launched.append((tag, cmds)) or True)
-    ctrl._poll()
-    assert launched == [("status", [["status", "--porcelain"]])]
+    for point in ((0.0, 0.0), (20.0, 0.0), (20.0, 20.0)):
+        QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=at(*point))
+    QTest.mouseDClick(canvas, Qt.MouseButton.LeftButton, pos=at(20.0, 20.0))
 
-    # Dirty status starts the quiet period; elapsing re-verifies, then commits.
-    ctrl._on_git_done(("status", [(["status"], True, " M file.py")]))
-    assert ctrl._quiet_timer.isActive()
-    ctrl._quiet_timer.timeout.emit()
-    assert launched[-1][0] == "verify"
-    ctrl._on_git_done(("verify", [(["status"], True, " M file.py")]))
-    tag, cmds = launched[-1]
-    assert tag == "commit"
-    assert cmds[0] == ["add", "-A"]
-    assert cmds[1][:2] == ["commit", "-m"]
-    assert cmds[2] == ["push"]
+    assert not canvas._entities
+    assert len(canvas._draw_pts) == 3  # the repeat click on the last vertex adds nothing
+    QTest.keyClick(canvas, Qt.Key.Key_Return)
+    points = canvas._entities[0].points
+    assert len(points) == 3 and points[0] != points[-1]
+    canvas.close()
 
-    # A clean verify (user committed by hand meanwhile) commits nothing.
-    before = len(launched)
-    ctrl._on_git_done(("verify", [(["status"], True, "")]))
-    assert len(launched) == before
 
-    ctrl.shutdown()
-    assert not ctrl._poll_timer.isActive()
+def test_pattern_page_explode_and_merge_edit_the_outlines(app: QApplication) -> None:
+    page = PatternPage(settings={})
+    square = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0), (0.0, 0.0)]
+    page._canvas.set_polylines_state([square])
+    page._on_canvas_geometry_change()
+    buttons = page._segment_buttons
+    assert not buttons.explode.isEnabled()
+
+    page._canvas.select_all()
+    buttons.explode.click()
+    assert page._canvas.poly_count == 4
+    assert len(page._outline_ids) == 4
+
+    page._canvas.select_all()
+    assert buttons.merge.isEnabled()
+    buttons.merge.click()
+    assert page._canvas.poly_count == 1
+    assert len(page._outline_ids) == 1
+    page.shutdown()
+    page.close()

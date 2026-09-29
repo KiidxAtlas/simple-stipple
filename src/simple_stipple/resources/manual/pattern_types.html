@@ -5,6 +5,13 @@
 
 <p>Simple Stipple includes geometric, organic, and custom-tile pattern generators.</p>
 
+<p><strong>Repeat mode</strong> is available on every pattern: <em>Straight</em> stacks rows
+directly, <em>Half drop</em> shifts every other row by half a repeat, and <em>Brick offset</em>
+by a third. Stipple Dots, Grip Stipple, and Voronoi also offer <em>Off (random)</em>, their default free
+scatter; any other mode builds one random tile of <strong>Repeat size (mm)</strong> and repeats
+it with no crowding or broken cells at the seams. On Knurling the stagger applies to the
+diamond (cross-hatch) knurl.</p>
+
 <h3 class="subheading">Geometric Patterns</h3>
 
 <h4 class="panel-title">Honeycomb</h4>
@@ -86,4 +93,12 @@
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Dot radius (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Radius of each dot (default: 0.4 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Centre-to-centre distance (default: 1.2 mm)</td></tr>
     <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Interlaced</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Use offset grid instead of Poisson-disk (checkbox)</td></tr>
+</table>
+
+<h4 class="panel-title">Grip Stipple</h4>
+<p>Dense, randomly placed angular grains with narrow grooves, inspired by molded grip textures.</p>
+<table style="width:100%;border-collapse:collapse;margin:6px 0;">
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Element size (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Approximate radius of each irregular grain (default: 0.28 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Spacing (mm)</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Minimum centre-to-centre distance between grains (default: 0.62 mm)</td></tr>
+    <tr><td style="padding:4px;border-bottom:1px solid #30363d;"><strong>Seed</strong></td><td style="padding:4px;border-bottom:1px solid #30363d;">Random seed for repeatable results (default: 42)</td></tr>
 </table>

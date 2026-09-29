@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from simple_stipple.core.cad.preflight import analyze_geometry
@@ -69,6 +71,34 @@ def test_cut_order_finishes_contained_contours_before_outer_boundary() -> None:
 
     assert ordered[0] == INNER
     assert ordered[1] == OUTER
+
+
+def _square(x: float, y: float, size: float) -> list[tuple[float, float]]:
+    return [(x, y), (x + size, y), (x + size, y + size), (x, y + size), (x, y)]
+
+
+def test_cut_order_keeps_inner_first_when_another_shape_overlaps_the_outer() -> None:
+    outer = _square(0.0, 0.0, 10.0)
+    inner = _square(1.0, 1.0, 2.0)
+    overlap = _square(4.0, 4.0, 10.0)  # covers the outer's middle, not the inner
+
+    ordered = order_for_cut([overlap, outer, inner])
+
+    assert ordered.index(inner) < ordered.index(outer)
+
+
+def test_cut_order_finishes_a_dense_grain_and_hatch_job_quickly() -> None:
+    """Export ran this on the UI thread; it used to be cubic and froze the app."""
+    grains = [_square(x * 0.7, y * 0.7, 0.5) for x in range(40) for y in range(40)]
+    hatch = [[(0.0, y * 0.01), (28.0, y * 0.01)] for y in range(2800)]
+    outline = _square(-1.0, -1.0, 30.0)
+
+    start = time.perf_counter()
+    ordered = order_for_cut([outline, *hatch, *grains])
+
+    assert time.perf_counter() - start < 10.0
+    assert len(ordered) == 1 + len(hatch) + len(grains)
+    assert ordered.index(outline) > max(ordered.index(grain) for grain in grains)
 
 
 def test_preflight_calls_out_self_intersections_separately() -> None:

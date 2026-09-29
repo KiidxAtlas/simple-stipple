@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from typing import Any
 
+import numpy as np
 from shapely import prepared  # type: ignore[import-untyped]
 from shapely.geometry import (  # type: ignore[import-untyped]
     GeometryCollection,
@@ -432,11 +434,23 @@ def _polygon_from_polyline(
 # Every lattice pattern offsets its rows the same way, so the choice belongs
 # in one place rather than being reinvented (or omitted) per generator.
 REPEAT_MODES = ("Straight", "Half drop", "Brick offset")
+# Scatter patterns (stipple, Voronoi) can also skip the repeat and fill the
+# whole region freely — their original, still default, behaviour.
+NO_REPEAT = "Off (random)"
+
+
+def _normalized_mode(repeat_mode: str) -> str:
+    return str(repeat_mode or "Straight").strip().lower().replace("_", " ")
+
+
+def is_repeating(repeat_mode: str) -> bool:
+    """Whether ``repeat_mode`` names a lattice repeat rather than free scatter."""
+    return _normalized_mode(repeat_mode) in {mode.lower() for mode in REPEAT_MODES}
 
 
 def row_offset(repeat_mode: str, col_step: float, row: int) -> float:
     """Horizontal shift applied to a lattice row."""
-    mode = str(repeat_mode or "Straight").strip().lower().replace("_", " ")
+    mode = _normalized_mode(repeat_mode)
     if row % 2 == 0:
         return 0.0
     if mode == "half drop":
@@ -488,6 +502,93 @@ def lattice_cells(
             col += 1
         y += row_step
         row += 1
+
+
+def _tile_images(tile_w: float, tile_h: float, repeat_mode: str) -> np.ndarray:
+    """Translations to every copy of a tile that can touch the central one.
+
+    Brick offset only staggers odd rows, so an adjacent row sits at +shift or
+    -shift depending on parity; both are included, which is conservative.
+    """
+    shift = row_offset(repeat_mode, tile_w, 1)
+    images = []
+    for row in (-1, 0, 1):
+        shifts = {0.0} if row == 0 else {0.0, shift, -shift}
+        for col in (-1, 0, 1):
+            for extra in shifts:
+                if row == 0 and col == 0:
+                    continue
+                images.append((col * tile_w + extra, row * tile_h))
+    return np.asarray(sorted(set(images)), dtype=float)
+
+
+def periodic_poisson_points(
+    tile_w: float, tile_h: float, spacing: float, seed: int, repeat_mode: str
+) -> list[tuple[float, float]]:
+    """Random points in one tile, at least ``spacing`` apart even across seams.
+
+    Distances are checked against every neighbouring copy of the tile as it
+    will be laid out by ``repeat_mode``, so stamping the tile produces no
+    crowded dots where copies meet. Returns no points when the tile is too
+    small for even one dot to clear its own copies.
+    """
+    images = _tile_images(tile_w, tile_h, repeat_mode)
+    limit_sq = spacing * spacing
+    if float(np.min(np.einsum("ij,ij->i", images, images))) < limit_sq:
+        return []
+    rng = random.Random(seed)
+    shifts = [(0.0, 0.0), *((float(dx), float(dy)) for dx, dy in images)]
+    # Spatial hash of accepted points and their copies, cell = spacing, so a
+    # candidate only checks the 3×3 cells around it: O(n) instead of O(n²).
+    grid: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    accepted: list[tuple[float, float]] = []
+    failures = 0
+    while failures < 400:  # dart throwing: stop once the tile is saturated
+        cancellation_checkpoint()
+        x, y = rng.uniform(0.0, tile_w), rng.uniform(0.0, tile_h)
+        col, row = math.floor(x / spacing), math.floor(y / spacing)
+        if any(
+            (px - x) ** 2 + (py - y) ** 2 < limit_sq
+            for dc in (-1, 0, 1)
+            for dr in (-1, 0, 1)
+            for px, py in grid.get((col + dc, row + dr), ())
+        ):
+            failures += 1
+            continue
+        accepted.append((x, y))
+        for dx, dy in shifts:
+            cx, cy = x + dx, y + dy
+            grid.setdefault((math.floor(cx / spacing), math.floor(cy / spacing)), []).append(
+                (cx, cy)
+            )
+        failures = 0
+    return accepted
+
+
+def stamp_tile_points(
+    outline_poly,
+    tile_points: list[tuple[float, float]],
+    tile_w: float,
+    tile_h: float,
+    *,
+    pad: float,
+    repeat_mode: str,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+) -> list[tuple[float, float]]:
+    """Copy one tile's points onto every lattice cell covering the outline."""
+    placed: list[tuple[float, float]] = []
+    for x, y, _row, _col in lattice_cells(
+        outline_poly,
+        tile_w,
+        tile_h,
+        pad=pad,
+        repeat_mode=repeat_mode,
+        origin_x=origin_x,
+        origin_y=origin_y,
+    ):
+        placed.extend((x + px, y + py) for px, py in tile_points)
+    return placed
 
 
 def gen_custom_tile(

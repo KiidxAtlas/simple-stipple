@@ -27,6 +27,7 @@ from simple_stipple.app.pages import PageRuntime, PageSpec, default_page_specs
 from simple_stipple.app.tasks import TaskController
 from simple_stipple.app.workspace_controller import WorkspaceController
 from simple_stipple.canvas import commands as canvas_commands
+from simple_stipple.features.repository import RepoPage
 from simple_stipple.platform.error_reporting import report_error
 from simple_stipple.platform.settings import (
     DEFAULT_KEYBINDINGS,
@@ -87,7 +88,7 @@ class App(QMainWindow):
     _save_workspace_as_action: QAction
     _recover_workspace_action: QAction
     _repo_dialog_action: QAction
-    _auto_commit_action: QAction
+    _auto_sync_action: QAction
     _workspace_title_label: QPushButton
     _workspace_state_chip: QLabel
     _shortcut_tooltip_specs: list[tuple[QWidget, str, str]]
@@ -346,7 +347,12 @@ class App(QMainWindow):
         self._pattern_page: Any = cast(Any, self._page_runtime.get("pattern"))
         # Repository is a first-class page; the File menu action points to
         # this same instance so its state cannot diverge.
-        self._repo_page: Any = self._page_runtime.get("repository")
+        self._repo_page = cast(RepoPage, self._page_runtime.get("repository"))
+        auto_sync = self._task_controller.auto_sync
+        self._repo_page.autoSyncToggled.connect(auto_sync.set_enabled)
+        auto_sync.enabledChanged.connect(self._repo_page.set_auto_sync_enabled)
+        auto_sync.statusChanged.connect(self._repo_page.set_auto_sync_status)
+        auto_sync.logged.connect(self._repo_page.append_auto_sync_log)
 
         self._page_runtime.connect_state_changed(self._schedule_workspace_dirty_check)
 

@@ -23,6 +23,15 @@
 <h4 class='panel-title'>Push</h4>
 <p>Push committed changes to the remote repository. This is marked as a primary action (highlighted button).</p>
 
+<h3 class="subheading">Auto Sync</h3>
+<p>Turn on <strong>Auto sync this repository</strong> (also in <strong>File ▸ Auto Sync Repository</strong> and Settings) to keep the selected folder and its remote in step without pressing any buttons:</p>
+<ul>
+    <li><strong>Local changes:</strong> edited or newly added files are committed a few seconds after saving stops, then pushed. Remote commits are pulled in first, so the push is not rejected.</li>
+    <li><strong>Remote changes:</strong> checked every minute and pulled whenever no local edits are waiting to be committed.</li>
+    <li><strong>Conflicts:</strong> if the same file changed on both sides, Auto sync undoes the attempted merge, leaves your files untouched, and pauses. Use <strong>Pull</strong> to resolve it, then turn Auto sync back on.</li>
+</ul>
+<p>The line under the toggle shows the last result, such as "Synced at 14:02 (pulled 1, pushed 0)" or the reason syncing stopped. Every sync that commits, pulls, or pushes — and every new failure or conflict — also appears in <strong>Git output</strong> under an "Auto sync" heading, with each git command and its result; routine checks that find nothing to do are left out. The branch must already have a remote branch; push it once with <strong>Push</strong> first.</p>
+
 <h3 class="subheading">Secondary Actions</h3>
 <ul>
     <li><strong>Status:</strong> Show the current repository status (modified files, staged changes, branch info).</li>

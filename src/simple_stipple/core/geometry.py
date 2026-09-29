@@ -188,7 +188,7 @@ def tessellate_arc(center_x, center_y, radius, start_angle, end_angle, segments)
     return points
 
 
-@njit(cache=_CACHE_ENABLED, parallel=True)
+@njit(cache=_CACHE_ENABLED, parallel=True, nogil=True)
 def tessellate_circles(centers, radius, segments):
     """Tessellate all equal-radius circles in one compiled batch."""
     points = np.empty((len(centers), segments + 1, 2), dtype=np.float64)
@@ -200,7 +200,7 @@ def tessellate_circles(centers, radius, segments):
     return points
 
 
-@njit(cache=_CACHE_ENABLED)
+@njit(cache=_CACHE_ENABLED, nogil=True)
 def poisson_disk_points(min_x, min_y, max_x, max_y, min_distance, seed):
     """Fast deterministic dart-throwing sampler with a neighbor grid."""
     width = max_x - min_x
