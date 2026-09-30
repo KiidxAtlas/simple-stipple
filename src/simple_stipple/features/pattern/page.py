@@ -66,6 +66,7 @@ from simple_stipple.features.pattern.defaults import (
 from simple_stipple.features.pattern.export import (
     EXPORT_BUTTON_LABEL,
     EXPORT_FORMAT_KEYS,
+    IMAGE_EXPORT_FORMAT,
     build_engraving_job,
     export_document_file,
     export_format_suffix,
@@ -182,6 +183,8 @@ class PatternPage(BasePage):
     openPageRequested = Signal(str)
     repairTileRequested = Signal(str)
 
+    _export_format: str
+    _auto_export_format: str | None
     _MODEL_STATE_FIELDS = {
         "_orig_polys": "original_polys",
         "_edit_polys": "editable_polys",
@@ -302,16 +305,18 @@ class PatternPage(BasePage):
         # The workflow rail owns its scroll area; avoid wrapping it in another
         # scrollable sidebar, which traps wheel input between nested viewports.
         self._left_panel = surface_frame("sidebar")
-        self._left_panel.setMinimumWidth(260)
-        self._left_panel.setMaximumWidth(320)
+        self._left_panel.setMinimumWidth(340)
+        self._left_panel.setMaximumWidth(480)
         rail_layout = QVBoxLayout(self._left_panel)
         rail_layout.setContentsMargins(0, 0, 0, 0)
         rail_layout.addWidget(left_w)
         self._splitter = content_splitter(
             self._left_panel,
             right_w,
-            sizes=(300, 950),
+            sizes=(420, 950),
         )
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
         self._splitter.setCollapsible(0, True)
         self._splitter.set_responsive_secondary(0, "Settings")
         root.addWidget(self._splitter, stretch=1)
@@ -703,6 +708,17 @@ class PatternPage(BasePage):
     def _cancel_pattern_workers(self) -> None:
         self._preview_task.cancel()
         self._generate_task.cancel()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Sizes given at construction are scaled against a not-yet-laid-out
+        # width, so the sidebar opened at its minimum. Seat it once, at its
+        # intended width, when there is real room for it.
+        if not getattr(self, "_sidebar_seated", False):
+            self._sidebar_seated = True
+            total = sum(self._splitter.sizes())
+            if total >= self._splitter.COMPACT_WIDTH:
+                self._splitter.setSizes([420, total - 420])
 
     def shutdown(self) -> None:
         """Called by ``App.closeEvent`` before the window tears down.
@@ -1149,6 +1165,7 @@ class PatternPage(BasePage):
         self._engraving_image_path = ""
         self._canvas.clear_background_image()
         self._refresh_engraving_ui()
+        self._restore_export_after_image()
         self._set_status("Engraving image removed from this workspace.", STATUS_OK)
         self._emit_state_changed()
 
@@ -1241,6 +1258,7 @@ class PatternPage(BasePage):
             "Engraving image placed in the outline — drag it or use the corner handles.",
             STATUS_OK,
         )
+        self._default_export_for_image()
 
     def _apply_engraving_material(self, *_args) -> None:
         profiles = {
@@ -1365,6 +1383,7 @@ class PatternPage(BasePage):
         self._attach_image_to_selected_region(path)
         self._update_engraving_overlay()
         self._set_status(f"Engraving {Path(path).name} into this region.", STATUS_OK)
+        self._default_export_for_image()
         return True
 
     def _selected_region_id(self) -> str | None:
@@ -1492,6 +1511,25 @@ class PatternPage(BasePage):
     # It never changes which operations get written — the Output panel owns
     # that, which is what separates this from the old three-kind fork where
     # picking "engraving" silently dropped your vectors.
+
+    def _default_export_for_image(self) -> None:
+        """Make PNG the export format when an image arrives, unless the user chose one.
+
+        Not persisted: it is a default, and a format the user picked by hand
+        (stored in settings) is never overridden.
+        """
+        if "pattern_export_format" in self._settings or self._export_format == IMAGE_EXPORT_FORMAT:
+            return
+        self._auto_export_format = self._export_format
+        self._export_format = IMAGE_EXPORT_FORMAT
+        self._refresh_export_format_label()
+
+    def _restore_export_after_image(self) -> None:
+        previous = getattr(self, "_auto_export_format", None)
+        if previous is not None and self._export_format == IMAGE_EXPORT_FORMAT:
+            self._export_format = previous
+            self._refresh_export_format_label()
+        self._auto_export_format = None
 
     def _select_export_format(self, export_format: str) -> None:
         if export_format not in EXPORT_FORMAT_KEYS:
@@ -1660,6 +1698,8 @@ class PatternPage(BasePage):
             if len(written) > 1
             else ""
         )
+        if self._export_format == IMAGE_EXPORT_FORMAT and vectors:
+            extra += " — PNG holds the image only; pick SVG/DXF to include the linework"
         self._set_status(
             f"{len(operations)} operation{'s' if len(operations) != 1 else ''} exported → "
             f"{Path(written[0]).name}{extra}",
@@ -2272,6 +2312,7 @@ class PatternPage(BasePage):
         Either way the pattern re-solves — there is no scope to remember.
         """
         if not self._live_update_selected_zone():
+            sync_engraving_visibility(self)
             self._schedule_preview()
 
     def _show_zone_context_menu(self, pos) -> None:

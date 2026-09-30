@@ -288,7 +288,10 @@ def write_document_svg(
             "width": f"{image.width_mm:.4f}",
             "height": f"{image.height_mm:.4f}",
             "preserveAspectRatio": "none",
-            "href": f"data:image/png;base64,{encoded}",
+            # SVG 1.1 spelling: plain ``href`` is SVG 2 only, and importers
+            # that predate it (most laser/CAM software) drop the image and
+            # leave only its empty frame.
+            "xlink:href": f"data:image/png;base64,{encoded}",
         }
         if image.rotation_deg:
             centre_x = image.x_mm + image.width_mm / 2.0

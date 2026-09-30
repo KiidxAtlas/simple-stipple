@@ -132,6 +132,7 @@ def export_laserstar_job(
 # the raster becomes a sidecar for the two that cannot embed one.
 EXPORT_FORMATS: tuple[tuple[str, str, str], ...] = (
     # key, menu label, file suffix ("" = writes a folder)
+    ("png", "PNG — engraving image only (lossless, placed + clipped)", ".png"),
     ("dxf", "DXF — vectors (image as sidecar PNG)", ".dxf"),
     ("svg", "SVG — vectors + embedded image, one file", ".svg"),
     ("fvi", "FVI — LaserStar vectors (image as sidecar PNG)", ".fvi"),
@@ -142,15 +143,26 @@ EXPORT_FORMAT_KEYS = tuple(key for key, _label, _suffix in EXPORT_FORMATS)
 
 # Short label for the primary button; it names the format it will write.
 EXPORT_BUTTON_LABEL = {
+    "png": "Export PNG…",
     "dxf": "Export DXF…",
     "svg": "Export SVG…",
     "fvi": "Export FVI…",
     "laserstar": "Export Package…",
 }
 
-_FORMAT_NAME = {"dxf": "DXF", "svg": "SVG", "fvi": "FVI", "laserstar": "LaserStar package"}
+_FORMAT_NAME = {
+    "png": "PNG",
+    "dxf": "DXF",
+    "svg": "SVG",
+    "fvi": "FVI",
+    "laserstar": "LaserStar package",
+}
 
 _SUFFIX = {key: suffix for key, _label, suffix in EXPORT_FORMATS}
+
+#: Default format when the document is only an image. PNG is lossless, so the
+#: power map survives exactly; JPEG would smear dithered and halftone pixels.
+IMAGE_EXPORT_FORMAT = "png"
 
 
 def export_format_suffix(export_format: str) -> str:
@@ -252,7 +264,7 @@ def _write_document_files(
             with Image.open(engraving_source) as image:
                 prepared = prepare_engraving_image(image, spec.validated(), engraving_mask)
             buffer = io.BytesIO()
-            prepared.save(buffer, format="PNG")
+            prepared.convert("RGB").save(buffer, format="PNG")
             placements.append(
                 SvgImagePlacement(
                     png_bytes=buffer.getvalue(),
@@ -265,6 +277,15 @@ def _write_document_files(
             )
         write_document_svg(vector_polys, target, images=placements)
         return written
+
+    if export_format == "png":
+        if not engraving_source or spec is None:
+            raise ValueError("PNG export writes the engraving image — add an image first.")
+        png, metadata, positioned_svg = export_raster_job(
+            engraving_source, target, spec, engraving_mask
+        )
+        positioned_svg.unlink()
+        return [png, metadata]
 
     if export_format == "fvi":
         write_fvi(
@@ -290,6 +311,7 @@ __all__ = [
     "EXPORT_BUTTON_LABEL",
     "EXPORT_FORMATS",
     "EXPORT_FORMAT_KEYS",
+    "IMAGE_EXPORT_FORMAT",
     "EngravingJob",
     "build_engraving_job",
     "export_document_file",

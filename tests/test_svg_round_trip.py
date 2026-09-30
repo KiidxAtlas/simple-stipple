@@ -78,6 +78,19 @@ def test_rotation_survives_the_flip_in_both_directions(tmp_path) -> None:
     assert read_svg_images(target)[0].rotation_deg == pytest.approx(30.0)
 
 
+def test_svg_images_use_the_svg_1_1_href_older_importers_read(tmp_path) -> None:
+    """Plain ``href`` is SVG 2; laser software that predates it drew an empty frame."""
+    target = tmp_path / "legacy.svg"
+    write_document_svg(
+        [SQUARE],
+        target,
+        images=[SvgImagePlacement(_png(), x_mm=1.0, y_mm=1.0, width_mm=20.0, height_mm=10.0)],
+    )
+    text = target.read_text(encoding="utf-8")
+    assert 'xlink:href="data:image/png;base64,' in text
+    assert ' href="' not in text
+
+
 def test_an_svg_without_images_reads_as_no_images(tmp_path) -> None:
     target = tmp_path / "plain.svg"
     write_document_svg([SQUARE], target)

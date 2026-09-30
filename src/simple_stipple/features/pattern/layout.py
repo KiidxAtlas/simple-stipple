@@ -790,9 +790,9 @@ def build_image_engraving_section(page: Any, layout: QVBoxLayout) -> None:
     placement_grid.setHorizontalSpacing(8)
     for row, (left_label, left_field, right_label, right_field) in enumerate(
         (
-            ("X (mm)", page._engrave_x, "Y (mm)", page._engrave_y),
-            ("Width (mm)", page._engrave_w, "Height (mm)", page._engrave_h),
-            ("Rotation (°)", page._engrave_rotation, "", None),
+            ("X", page._engrave_x, "Y", page._engrave_y),
+            ("W", page._engrave_w, "H", page._engrave_h),
+            ("Rotation °", page._engrave_rotation, "", None),
         )
     ):
         placement_grid.addWidget(QLabel(left_label), row, 0)

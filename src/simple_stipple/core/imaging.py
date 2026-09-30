@@ -702,7 +702,7 @@ def export_raster_job(
         f'  <image x="{spec.x_mm}" y="{spec.y_mm}" width="{spec.width_mm}" '
         f'height="{spec.height_mm}" preserveAspectRatio="none" '
         f'transform="rotate({spec.rotation_deg} {center_x} {center_y})" '
-        f'href="data:image/png;base64,{encoded}"/>\n</svg>\n',
+        f'xlink:href="data:image/png;base64,{encoded}"/>\n</svg>\n',
         encoding="utf-8",
     )
     return output, metadata, positioned_svg

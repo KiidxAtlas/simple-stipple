@@ -2749,6 +2749,20 @@ def test_image_flow_is_region_owned_end_to_end(app: QApplication, tmp_path) -> N
         instance.close()
 
 
+def test_choosing_image_without_a_selected_region_reveals_add_image(app: QApplication) -> None:
+    """Image in the pattern dropdown used to do nothing until a region was selected."""
+    from simple_stipple.features.pattern.regions.treatments import IMAGE_PATTERN
+
+    page = PatternPage(settings={})
+    page.show()
+    page._pattern_combo.setCurrentText(IMAGE_PATTERN)
+    assert page._engrave_choose_btn.isVisibleTo(page)
+    page._pattern_combo.setCurrentText("— None —")
+    assert page._engraving_section.isHidden()
+    page.shutdown()
+    page.close()
+
+
 def test_image_is_a_pattern_choice_not_a_sidebar_section(app: QApplication) -> None:
     """A region either carries a generated pattern or an image, so both live in
     the same dropdown and the image controls belong to the selected region."""

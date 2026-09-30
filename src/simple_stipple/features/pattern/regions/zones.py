@@ -244,11 +244,19 @@ def show_zone_context_menu(page: Any, pos) -> None:
 
 
 def sync_engraving_visibility(page: Any) -> None:
-    """Show the image controls only for the region that carries an image."""
+    """Show the image controls for an image region, or when Image is chosen.
+
+    With no region selected the pattern dropdown edits the document defaults,
+    so choosing Image there must still reveal Add image — otherwise the
+    option does nothing until a region happens to be selected first.
+    """
     if not hasattr(page, "_engraving_section"):
         return
     region_id = selected_region_id(page)
-    is_image = region_id is not None and treatment_kind(page, region_id) == "engrave"
+    if region_id is None:
+        is_image = page._pattern_combo.currentText() == IMAGE_PATTERN
+    else:
+        is_image = treatment_kind(page, region_id) == "engrave"
     page._engraving_section.setVisible(is_image)
     if is_image:
         # The engraving controls live inside the Regions section, which is

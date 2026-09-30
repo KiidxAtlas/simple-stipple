@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.3.29 — 2026-09-29
+
+### Added
+
+- **PNG export** — a lossless image-only export format that writes the placed,
+  clipped engraving image plus its placement JSON. It becomes the default when
+  an image is added, unless you have picked a format yourself.
+
+- Repository controls show the current branch or detached HEAD, let you switch
+  to local/remote branches or create a local branch, and provide a Git command
+  field for diagnostics such as checking the current upstream. Commands run as
+  Git arguments, not through a shell.
+
+### Fixed
+
+- SVG image exports wrote the picture under plain `href`, which older laser
+  software ignores, leaving only an empty frame. They now use `xlink:href` and
+  an RGB PNG.
+- The Pattern sidebar opens wide enough for the image controls (420 px, up to
+  480), and choosing Image with no region selected now shows Add image.
+- Repository push errors now explain when a branch ref changed concurrently;
+  fetch and integrate the latest branch before retrying.
+
 ## 0.3.28 — 2026-09-29
 
 ### Added

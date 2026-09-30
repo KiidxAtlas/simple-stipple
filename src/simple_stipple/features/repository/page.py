@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import subprocess
 import threading
 from datetime import datetime
@@ -13,6 +15,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -27,7 +30,12 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.features.base import BasePage
-from simple_stipple.platform.git import GIT_NOT_FOUND_MESSAGE, NO_CONSOLE_WINDOW, find_git
+from simple_stipple.platform.git import (
+    GIT_NOT_FOUND_MESSAGE,
+    NO_CONSOLE_WINDOW,
+    GitRunner,
+    find_git,
+)
 from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.focus import blocked_signals
@@ -73,6 +81,10 @@ _GIT_FAILURE_CAUSES: tuple[tuple[tuple[str, ...], str], ...] = (
     (
         ("conflict", "unmerged", "would be overwritten"),
         "conflicting changes — resolve them, then commit",
+    ),
+    (
+        ("cannot lock ref",),
+        "branch ref changed concurrently — fetch the latest branch, integrate it, then retry",
     ),
     (
         ("[rejected]", "non-fast-forward", "fetch first"),
@@ -124,6 +136,58 @@ def git_failure_summary(results: list[tuple[list[str], bool, str]]) -> str:
     return key_line if match is None else f"{match[0]} ({key_line})"
 
 
+_GIT_CREDENTIAL_URL = re.compile(r"(?i)(https?://)[^\s/@]+@")
+
+
+def _redact_git_text(text: str) -> str:
+    """Avoid echoing embedded HTTP credentials into the Git output panel."""
+    return _GIT_CREDENTIAL_URL.sub(r"\1[redacted]@", text)
+
+
+def parse_git_command(command: str) -> list[str]:
+    """Parse a Git command line into argv; no shell or pipelines are executed."""
+    try:
+        args = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"Invalid quoting in Git command: {exc}") from exc
+    if args and Path(args[0]).name.casefold() in {"git", "git.exe"}:
+        args = args[1:]
+    if not args:
+        raise ValueError("Enter Git arguments, e.g. status --short --branch.")
+    return args
+
+
+def branch_switch_commands(
+    target: str, local_branches: set[str], remote_branches: set[str]
+) -> list[list[str]]:
+    """Plan a safe checkout, tracking an explicitly selected remote branch."""
+    target = target.strip()
+    if not target or target.startswith("-"):
+        raise ValueError("Enter a valid local, remote, or new branch name.")
+    if target in local_branches:
+        return [["switch", target]]
+    if target in remote_branches:
+        remote_branch = target.partition("/")[2]
+        if not remote_branch:
+            raise ValueError("Choose a remote branch such as origin/main.")
+        if remote_branch in local_branches:
+            return [
+                ["switch", remote_branch],
+                ["branch", "--set-upstream-to", target, remote_branch],
+            ]
+        return [["switch", "--track", "-c", remote_branch, target]]
+
+    matching_remote = sorted(
+        branch for branch in remote_branches if branch.partition("/")[2] == target
+    )
+    if len(matching_remote) > 1:
+        choices = ", ".join(matching_remote)
+        raise ValueError(f"Several remotes have branch {target}: choose one ({choices}).")
+    if matching_remote:
+        return [["switch", "--track", "-c", target, matching_remote[0]]]
+    return [["check-ref-format", "--branch", target], ["switch", "--create", target]]
+
+
 class RepoPage(BasePage):
     _git_op_done = Signal(object)
     autoSyncToggled = Signal(bool)
@@ -137,6 +201,9 @@ class RepoPage(BasePage):
         self._git_thread: threading.Thread | None = None
         self._git_op_done.connect(self._on_git_op_done)
         self._workflow_repo_key: str | None = None
+        self._branch_repo_key: str | None = None
+        self._local_branches: set[str] = set()
+        self._remote_branches: set[str] = set()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -186,6 +253,42 @@ class RepoPage(BasePage):
         self._auto_sync_status.setWordWrap(True)
         left.addWidget(self._auto_sync_status)
         self.set_auto_sync_status("Off")
+        branch_card = surface_frame("panel")
+        branch_layout = QVBoxLayout(branch_card)
+        branch_layout.setContentsMargins(8, 8, 8, 8)
+        branch_layout.setSpacing(6)
+        branch_title = QLabel("BRANCH")
+        branch_title.setProperty("role", "eyebrow")
+        branch_layout.addWidget(branch_title)
+        self._current_branch_label = QLabel("Choose a repository")
+        self._current_branch_label.setWordWrap(True)
+        branch_layout.addWidget(self._current_branch_label)
+        branch_row = QHBoxLayout()
+        self._branch_combo = QComboBox()
+        self._branch_combo.setEditable(True)
+        self._branch_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._branch_combo.setPlaceholderText("Select or type a branch")
+        self._branch_combo.setToolTip(
+            "Choose a local branch, a remote such as origin/main, or type a new name"
+        )
+        branch_row.addWidget(self._branch_combo, stretch=1)
+        self._switch_branch_btn = QPushButton("Switch / create")
+        self._switch_branch_btn.setToolTip(
+            "Switch to the selected branch, track a remote branch, or create a branch here"
+        )
+        self._switch_branch_btn.clicked.connect(self._switch_branch)
+        branch_row.addWidget(self._switch_branch_btn)
+        branch_layout.addLayout(branch_row)
+        branch_hint = QLabel(
+            "Choose origin/main to create or attach a tracking branch. A new name starts at the current commit."
+        )
+        branch_hint.setProperty("role", "hint")
+        branch_hint.setWordWrap(True)
+        branch_layout.addWidget(branch_hint)
+        self._branch_action_status = QLabel("")
+        self._branch_action_status.setWordWrap(True)
+        branch_layout.addWidget(self._branch_action_status)
+        left.addWidget(branch_card)
 
         workflow_title = QLabel("Repository workflow")
         workflow_title.setProperty("role", "section-label")
@@ -339,6 +442,30 @@ class RepoPage(BasePage):
         self._log.setPlaceholderText("Git command output appears here.")
         _clear_btn.clicked.connect(self._log.clear)
         right.addWidget(self._log, stretch=1)
+        command_row = QHBoxLayout()
+        self._git_command_edit = QLineEdit()
+        self._git_command_edit.setMinimumHeight(34)
+        self._git_command_edit.setPlaceholderText(
+            "git rev-parse --abbrev-ref --symbolic-full-name @{u}"
+        )
+        self._git_command_edit.setAccessibleName("Git command")
+        self._git_command_edit.setToolTip(
+            "Enter a Git command or its arguments; it runs in this repository without a shell"
+        )
+        self._git_command_edit.returnPressed.connect(self._run_git_command)
+        command_row.addWidget(self._git_command_edit, stretch=1)
+        self._run_command_btn = QPushButton("Run")
+        self._run_command_btn.setMinimumHeight(34)
+        self._run_command_btn.clicked.connect(self._run_git_command)
+        command_row.addWidget(self._run_command_btn)
+        right.addLayout(command_row)
+        command_hint = QLabel("Git arguments only — shell commands and pipelines are not executed.")
+        command_hint.setProperty("role", "hint")
+        command_hint.setWordWrap(True)
+        right.addWidget(command_hint)
+        self._command_status = QLabel("")
+        self._command_status.setWordWrap(True)
+        right.addWidget(self._command_status)
 
         self._splitter = content_splitter(self._left_panel, right_w, sizes=(380, 720))
         self._splitter.setCollapsible(0, True)
@@ -407,6 +534,9 @@ class RepoPage(BasePage):
         else:
             message = self._repo_problem() or ""
             color = STATUS_NEUTRAL if not self._dir_edit.text().strip() else STATUS_ERR
+        if repo_key != self._branch_repo_key:
+            self._branch_repo_key = repo_key
+            self._refresh_branch_choices(repo, preserve_selection=False)
         self._set_step_status(self._repo_status, message, color)
         self._open_btn.setEnabled(ready)
         # Git-action buttons stay disabled while a background pull/commit/
@@ -418,9 +548,78 @@ class RepoPage(BasePage):
             self._force_pull_btn,
             self._commit_btn,
             self._push_btn,
+            self._switch_branch_btn,
+            self._run_command_btn,
         ):
             button.setEnabled(git_enabled)
+        self._branch_combo.setEnabled(git_enabled)
+        self._git_command_edit.setEnabled(git_enabled)
         self._cancel_btn.setEnabled(self._git_busy)
+
+    def _refresh_branch_choices(
+        self, repo: Path | None, *, preserve_selection: bool = True
+    ) -> None:
+        if repo is None:
+            self._local_branches.clear()
+            self._remote_branches.clear()
+            with blocked_signals(self._branch_combo):
+                self._branch_combo.clear()
+                self._branch_combo.setEditText("")
+            self._set_step_status(self._current_branch_label, "Choose a repository", STATUS_NEUTRAL)
+            return
+
+        git = find_git()
+        if git is None:
+            self._set_step_status(self._current_branch_label, GIT_NOT_FOUND_MESSAGE, STATUS_ERR)
+            return
+
+        runner = GitRunner(git, repo, timeout_s=_GIT_PROBE_TIMEOUT_S)
+        refs = runner.run(
+            "for-each-ref",
+            "--format=%(refname:short) %(refname)",
+            "refs/heads",
+            "refs/remotes",
+        )
+        if not refs.ok:
+            detail = refs.output or "Git could not list this repository's branches."
+            self._set_step_status(
+                self._current_branch_label, f"Could not list branches: {detail}", STATUS_WARN
+            )
+            return
+
+        local_branches: set[str] = set()
+        remote_branches: set[str] = set()
+        for line in refs.output.splitlines():
+            short_name, separator, full_name = line.rpartition(" ")
+            if not separator:
+                continue
+            if full_name.startswith("refs/heads/"):
+                local_branches.add(short_name)
+            elif full_name.startswith("refs/remotes/") and not short_name.endswith("/HEAD"):
+                remote_branches.add(short_name)
+        self._local_branches = local_branches
+        self._remote_branches = remote_branches
+
+        current_step = runner.run("symbolic-ref", "--short", "-q", "HEAD")
+        current_branch = current_step.output.strip() if current_step.ok else ""
+        previous_selection = self._branch_combo.currentText()
+        with blocked_signals(self._branch_combo):
+            self._branch_combo.clear()
+            self._branch_combo.addItems(sorted(local_branches | remote_branches, key=str.casefold))
+            self._branch_combo.setEditText(
+                current_branch or (previous_selection if preserve_selection else "")
+            )
+
+        if current_branch:
+            self._set_step_status(
+                self._current_branch_label, f"Current branch: {current_branch}", STATUS_OK
+            )
+        else:
+            self._set_step_status(
+                self._current_branch_label,
+                "Detached HEAD — select a branch to attach this checkout.",
+                STATUS_WARN,
+            )
 
     @staticmethod
     def _set_step_status(label: QLabel, text: str, color: str) -> None:
@@ -483,6 +682,7 @@ class RepoPage(BasePage):
         self._refresh_repo_state()
 
         def work() -> None:
+            git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
             results: list[tuple[list[str], bool, str]] = []
             for args in commands:
                 if self._git_cancel.is_set():
@@ -492,9 +692,14 @@ class RepoPage(BasePage):
                     proc = subprocess.Popen(
                         [git, *args],
                         cwd=str(repo),
+                        env=git_env,
+                        stdin=subprocess.DEVNULL,
                         text=True,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
+                        encoding="utf-8",
+                        errors="replace",
+                        shell=False,
                         creationflags=NO_CONSOLE_WINDOW,
                     )
                     self._git_process = proc
@@ -530,13 +735,23 @@ class RepoPage(BasePage):
         self._emit_state_changed()
         self._git_busy = False
         self._refresh_repo_state()
+        branch_commands = {"switch", "checkout", "branch", "fetch", "pull", "reset", "remote"}
+        changed_refs = any(args and args[0] in branch_commands for args, _ok, _out in results)
+        if changed_refs:
+            repo = self._repo_dir(show_dialogs=False)
+            prefer_current = any(
+                args and args[0] in {"switch", "checkout", "branch", "reset"}
+                for args, _ok, _out in results
+            )
+            self._refresh_branch_choices(repo, preserve_selection=not prefer_current)
         on_done(results)
 
     def _append_git_results(self, results: list[tuple[list[str], bool, str]]) -> None:
         for args, _ok, out in results:
-            self._append_log_line(f"$ git {' '.join(args)}")
+            command = _redact_git_text(f"$ git {' '.join(args)}")
+            self._append_log_line(command)
             for line in out.splitlines() if out else ["(done)"]:
-                self._append_log_line(line)
+                self._append_log_line(_redact_git_text(line))
             self._append_log_line("")
 
     def append_auto_sync_log(self, results: list[tuple[list[str], bool, str]]) -> None:
@@ -545,6 +760,39 @@ class RepoPage(BasePage):
             return
         self._append_log_line(f"── Auto sync {datetime.now():%H:%M:%S} ──")
         self._append_git_results(results)
+
+    def _switch_branch(self) -> None:
+        target = self._branch_combo.currentText().strip()
+        try:
+            commands = branch_switch_commands(target, self._local_branches, self._remote_branches)
+        except ValueError as exc:
+            self._set_step_status(self._branch_action_status, str(exc), STATUS_WARN)
+            return
+
+        def done(results: list[tuple[list[str], bool, str]]) -> None:
+            if results and all(result[1] for result in results):
+                self._set_step_status(
+                    self._branch_action_status, f"Using branch {target}.", STATUS_OK
+                )
+            else:
+                self._set_step_failure(self._branch_action_status, "Branch switch", results)
+
+        self._run_git_async(commands, done)
+
+    def _run_git_command(self) -> None:
+        try:
+            args = parse_git_command(self._git_command_edit.text())
+        except ValueError as exc:
+            self._set_step_status(self._command_status, str(exc), STATUS_WARN)
+            return
+
+        def done(results: list[tuple[list[str], bool, str]]) -> None:
+            if results and all(result[1] for result in results):
+                self._set_step_status(self._command_status, "Git command completed.", STATUS_OK)
+            else:
+                self._set_step_failure(self._command_status, "Git command", results)
+
+        self._run_git_async([args], done)
 
     def _git_status(self) -> None:
         self._run_git_async([["status", "--short", "--branch"]], lambda results: None)

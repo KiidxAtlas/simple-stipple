@@ -12,6 +12,9 @@
     <li>The line under the path says whether the folder is ready, or exactly what is wrong: the folder is not found, the path is a file, you have no permission to open it, or it is not a Git repository. When the folder is inside a repository, the message names the repository root to choose instead.</li>
 </ol>
 
+<h3 class="subheading">Branch and Detached HEAD</h3>
+<p>The Branch panel shows the current branch or <strong>Detached HEAD</strong>. Choose a local branch to switch to it, select a remote ref such as <code>origin/main</code> to attach or create a local tracking branch, or type a new name to create a branch at the current commit. Git will refuse a switch that would overwrite local changes; this control never force-resets your work.</p>
+
 <h3 class="subheading">Workflow Cards</h3>
 
 <h4 class="panel-title">1 Pull from remote</h4>
@@ -24,7 +27,7 @@
 <p><strong>Push</strong> is the final primary action: sends the committed changes to the remote. The branch needs a configured upstream remote; if it has none, Git reports the missing upstream in the step status and Git output.</p>
 
 <h4 class='panel-title'>Step results</h4>
-<p>Each card shows its last result. A failed step names the cause and quotes the key line from Git — for example authentication failed, no remote configured, no upstream branch, conflicting changes, the remote has newer commits, a network error, a timeout (each Git command gets 30 seconds), or cancelled — followed by "Details in Git output".</p>
+<p>Each card shows its last result. A failed step names the cause and quotes the key line from Git — for example authentication failed, no remote configured, no upstream branch, conflicting changes, the remote has newer commits, a branch ref changed during an update (fetch/integrate the latest branch before retrying), a network error, a timeout (each Git command gets 30 seconds), or cancelled — followed by "Details in Git output".</p>
 <h4 class="panel-title">Destructive actions</h4>
 <p><strong>Reset to Remote…</strong> is separated from the normal Pull → Commit → Push flow. It discards local tracked and untracked changes to match the remote tracking branch, and requires confirmation.</p>
 <h3 class="subheading">Auto Sync</h3>
@@ -53,6 +56,9 @@
 
 <h3 class="subheading">Git Output</h3>
 <p>The right panel shows the output of every Git command run from this page or by Auto sync: each command is listed as <code>$ git …</code> followed by what Git printed, with errors highlighted. It is a command log, not a commit history. <strong>Clear</strong> empties it.</p>
+
+<h3 class="subheading">Run a Git command</h3>
+<p>Enter a Git command or its arguments in the command field below Git output. For example, <code>git rev-parse --abbrev-ref --symbolic-full-name @{u}</code> reports the current branch's upstream. Git runs directly in the selected repository; shell operators and pipelines are not executed. Review commands that reset, clean, or force-push because they can discard or overwrite work. Credentials embedded in HTTP remote URLs are redacted from the output log.</p>
 
 <h3 class="subheading">Settings Integration</h3>
 <p>The repository folder path is persisted in your settings and remembered between sessions. You can configure the default repo directory in Settings.</p>
