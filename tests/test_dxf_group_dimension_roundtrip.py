@@ -10,6 +10,7 @@ through the SVG→DXF conversion into the same XDATA channel. Foreign files
 from __future__ import annotations
 
 import json
+import math
 
 import ezdxf
 import pytest
@@ -67,9 +68,7 @@ def test_foreign_dimension_without_xdata_stays_unsupported(tmp_path) -> None:
     doc.header["$INSUNITS"] = 4
     msp = doc.modelspace()
     msp.add_lwpolyline([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], close=True)
-    msp.add_linear_dim(
-        base=(0.0, 5.0), p1=(0.0, 0.0), p2=(10.0, 0.0), dimstyle="EZDXF"
-    ).render()
+    msp.add_linear_dim(base=(0.0, 5.0), p1=(0.0, 0.0), p2=(10.0, 0.0), dimstyle="EZDXF").render()
     doc.saveas(str(target))
 
     by_layer, report = load_dxf_polylines_by_layer_with_report(str(target))
@@ -106,6 +105,47 @@ def test_plain_export_writes_no_xdata_and_empty_report_fields(tmp_path) -> None:
     assert report.dimensions == []
     assert report.groups == []
     assert report.group_labels == {}
+
+
+def test_ellipse_exports_as_accurate_closed_polyline_for_laserstar(tmp_path) -> None:
+    """LaserStar/StarFX drops native ELLIPSE entities, so an ellipse must be
+    written as a closed LWPOLYLINE that tracks the true curve closely and
+    keeps its layer and group metadata."""
+    center, rx, ry, rotation = (50.0, 30.0), 20.0, 35.0, 30.0
+    meta = {"center": center, "rx": rx, "ry": ry, "rotation": rotation}
+    target = tmp_path / "ellipse.dxf"
+    write_polylines_dxf(
+        [SQUARE_A],
+        str(target),
+        pattern_layer="Cut",
+        entity_kinds=["ellipse"],
+        entity_meta=[meta],
+        entity_groups=[4],
+    )
+
+    entities = list(ezdxf.readfile(str(target)).modelspace())
+    assert [entity.dxftype() for entity in entities] == ["LWPOLYLINE"]
+    polyline = entities[0]
+    assert polyline.closed
+    assert polyline.dxf.layer == "Cut"
+
+    angle = math.radians(rotation)
+
+    def radial_error(point: tuple[float, float]) -> float:
+        dx, dy = point[0] - center[0], point[1] - center[1]
+        local_x = dx * math.cos(angle) + dy * math.sin(angle)
+        local_y = -dx * math.sin(angle) + dy * math.cos(angle)
+        scale = math.hypot(local_x / rx, local_y / ry)
+        return math.hypot(dx, dy) * abs(1.0 / scale - 1.0)
+
+    points = [(x, y) for x, y, *_rest in polyline.get_points()]
+    assert max(radial_error(point) for point in points) < 1e-6
+    chords = zip(points, points[1:] + points[:1])
+    midpoints = [((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0) for a, b in chords]
+    assert max(radial_error(point) for point in midpoints) <= 0.015
+
+    _by_layer, report = load_dxf_polylines_by_layer_with_report(str(target))
+    assert [entry["group"] for entry in report.groups] == [4]
 
 
 def test_svg_group_marker_flows_into_dxf_import(tmp_path) -> None:

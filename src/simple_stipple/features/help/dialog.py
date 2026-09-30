@@ -635,6 +635,7 @@ def _build_canvas_commands() -> str:
 <h3 class="subheading">Canvas Interaction</h3>
 <ul>
     <li><strong>Pan:</strong> Space-drag or middle mouse button</li>
+    <li><strong>Circle size:</strong> Choose Circle, click its center, then press Tab to enter Diameter and Enter to create it. The Properties inspector and canvas diameter badge edit the selected circle. Expressions and mm/in units are supported; ellipses retain separate width and height.</li>
     <li><strong>Zoom:</strong> Mouse wheel, ⌘+ / ⌘−</li>
     <li><strong>Nudge selection:</strong> Arrow keys (⇧ = 1 mm step)</li>
     <li><strong>Delete selected:</strong> Backspace / Del</li>

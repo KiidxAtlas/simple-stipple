@@ -85,6 +85,10 @@ DXF_FIX_CLOSE_TOL = 0.01
 #: cross-product deviation to treat a segment as collinear with its neighbor.
 DXF_FIX_COLINEAR_TOL = 0.001
 
+#: Maximum chord deviation when writing ellipses as DXF polylines (mm).
+#: LaserStar/StarFX drops native ELLIPSE entities on import.
+DXF_CURVE_FLATTEN_TOL_MM = 0.01
+
 # ── FVI (FlexiCam/SignCut) tolerances (mm) ──────────────────────────────────
 
 #: Closure tolerance for FVI path processing (mm).
@@ -110,6 +114,7 @@ __all__ = [
     # DXF fix
     "DXF_FIX_CLOSE_TOL",
     "DXF_FIX_COLINEAR_TOL",
+    "DXF_CURVE_FLATTEN_TOL_MM",
     # FVI
     "FVI_CLOSE_TOL_MM",
 ]

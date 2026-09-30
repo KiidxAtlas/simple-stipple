@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QLabel, QMenu
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.editing.corners import chamfered_corner_points, rounded_corner_points
+from simple_stipple.ui.components.units import to_display as _to_display
 from simple_stipple.ui.components.units import unit_suffix as _unit_suffix
 
 
@@ -358,26 +359,40 @@ def _show_shape_dim_inputs(self) -> None:
         return
     sx, sy = self._draw_shape_anchor_w
     ex, ey = self._draw_shape_cursor_w
-    w = abs(ex - sx)
+    circle = self._draw_primitive == "circle"
+    w = 2 * math.hypot(ex - sx, ey - sy) if circle else abs(ex - sx)
     h = abs(ey - sy)
-    w_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
-    w_edit.setText(f"{w:.2f}")
-    w_edit.setAccessibleName("Shape width")
-    w_edit.setToolTip("Width · enter a value or expression")
+    w_edit = self._make_hud_edit(
+        width=112 if circle else 86, height=24, align=Qt.AlignmentFlag.AlignCenter
+    )
+    w_edit.setText(f"{_to_display(w, self._unit_system):.2f}")
+    w_edit.setAccessibleName("Circle diameter" if circle else "Shape width")
+    w_edit.setToolTip(
+        "Diameter · enter a value or expression"
+        if circle
+        else "Width · enter a value or expression"
+    )
     w_edit.setProperty("shape_hud_temp", True)
     w_edit.returnPressed.connect(self._apply_and_commit_shape_preview)
     # Resize live as the user types; Enter still commits. The preview is
     # transient (moves the rubber cursor), so partial input is harmless.
     w_edit.textEdited.connect(lambda _t: self._apply_shape_size_inputs())
-    w_label = QLabel(f"W ({_unit_suffix(self._unit_system)})", self)
+    w_label = QLabel(f"{'Diameter' if circle else 'W'} ({_unit_suffix(self._unit_system)})", self)
     w_label.setProperty("role", "canvas-hud-label")
     w_label.setProperty("shape_hud_temp", True)
-    w_label.setFixedSize(86, 16)
+    w_label.setFixedSize(112 if circle else 86, 16)
     w_label.show()
     self._draw_shape_w_label = w_label
 
+    if circle:
+        self._draw_shape_w_edit = w_edit
+        w_edit.setFocus()
+        w_edit.selectAll()
+        self._reposition_shape_dim_inputs()
+        return
+
     h_edit = self._make_hud_edit(width=86, height=24, align=Qt.AlignmentFlag.AlignCenter)
-    h_edit.setText(f"{h:.2f}")
+    h_edit.setText(f"{_to_display(h, self._unit_system):.2f}")
     h_edit.setAccessibleName("Shape height")
     h_edit.setToolTip("Height · enter a value or expression")
     h_edit.setProperty("shape_hud_temp", True)

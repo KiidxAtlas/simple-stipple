@@ -942,6 +942,9 @@ class HudTextService:
                 return
             x0, y0, x1, y1 = bounds
             cur_val = (x1 - x0) if axis == "w" else (y1 - y0)
+            diameter = self._host.selected_circle_diameter() if axis == "w" else None
+            if diameter is not None:
+                cur_val = diameter
 
         edit = self._make_hud_edit(
             width=max(int(rect.width()) + 20, 112),
@@ -1009,6 +1012,8 @@ class HudTextService:
                 self._host._sel_dim_snapshot = self._host._canvas_service.begin_preview()
                 self._host._redraw()
             noun = {"w": "Width", "h": "Height", "l": "Length"}.get(axis, "Value")
+            if axis == "w" and self._host.selected_circle_diameter() is not None:
+                noun = "Diameter"
             reject_input(edit, f"{noun} must be greater than zero")
             return
         try:

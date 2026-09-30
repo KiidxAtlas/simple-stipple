@@ -45,17 +45,14 @@ def eventFilter(self, obj, event) -> bool:
             return True
         if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
             reverse = key == Qt.Key.Key_Backtab
-            if (
-                self._draw_shape_w_edit is not None
-                and self._draw_shape_h_edit is not None
-                and obj
-                in {
-                    self._draw_shape_w_edit,
-                    self._draw_shape_h_edit,
-                    self._draw_shape_sides_spin,
-                }
-            ):
-                fields: list[Any] = [self._draw_shape_w_edit, self._draw_shape_h_edit]
+            if self._draw_shape_w_edit is not None and obj in {
+                self._draw_shape_w_edit,
+                self._draw_shape_h_edit,
+                self._draw_shape_sides_spin,
+            }:
+                fields: list[Any] = [self._draw_shape_w_edit]
+                if self._draw_shape_h_edit is not None:
+                    fields.append(self._draw_shape_h_edit)
                 if self._draw_shape_sides_spin is not None:
                     fields.append(self._draw_shape_sides_spin)
                 current = fields.index(obj)

@@ -534,12 +534,11 @@ class EditingService:
                 "circle": ("radius", height / 2.0),
                 "slot": ("width", height),
             }.get(entity.kind)
-            # Parametric primitives update a single metadata field directly.
-            # With the persistent aspect lock enabled that shortcut skipped
-            # the companion dimension entirely, leaving a highlighted Lock
-            # button that had no effect. Use the common uniform scaler while
-            # locked so W and H always change together.
-            if parameter is not None and not self._host._aspect_ratio_locked:
+            # Circles always resize uniformly through their radius; other
+            # primitives use the common scaler when aspect lock is enabled.
+            if parameter is not None and (
+                entity.kind == "circle" or not self._host._aspect_ratio_locked
+            ):
                 return self._host.set_shape_param(indices[0], *parameter)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
@@ -578,6 +577,11 @@ class EditingService:
             return False
         if len(ids) == 1:
             live = self._host._entities_by_id.get(ids[0])
+            if live is not None and live.kind == "circle" and axis in ("w", "h"):
+                if not update_entity_parameter(live, "radius", target / 2.0):
+                    return False
+                self._host._redraw()
+                return True
             if live is not None and len(live.points) == 2:
                 (ax, ay), (bx, by) = live.points
                 if axis == "a":
@@ -635,7 +639,9 @@ class EditingService:
                 "circle": ("radius", width / 2.0),
                 "slot": ("length", width),
             }.get(entity.kind)
-            if parameter is not None and not self._host._aspect_ratio_locked:
+            if parameter is not None and (
+                entity.kind == "circle" or not self._host._aspect_ratio_locked
+            ):
                 return self._host.set_shape_param(indices[0], *parameter)
         cur_w = bounds[2] - bounds[0]
         cur_h = bounds[3] - bounds[1]
@@ -1271,29 +1277,6 @@ class EditingService:
         self._host._fire_poly_change()
         return True
 
-    def _apply_shape_size_inputs(self) -> None:
-        if (
-            self._host._draw_shape_w_edit is None
-            or self._host._draw_shape_h_edit is None
-            or self._host._draw_shape_anchor_w is None
-            or not self._host._shape_primitive_active()
-        ):
-            return
-        try:
-            w = max(0.001, float(self._host._draw_shape_w_edit.text().strip()))
-            h = max(0.001, float(self._host._draw_shape_h_edit.text().strip()))
-        except ValueError:
-            return
-
-        sx, sy = self._host._draw_shape_anchor_w
-        if self._host._draw_shape_cursor_w is None:
-            self._host._draw_shape_cursor_w = (sx + w, sy + h)
-        ex0, ey0 = self._host._draw_shape_cursor_w
-        sign_x = 1.0 if ex0 >= sx else -1.0
-        sign_y = 1.0 if ey0 >= sy else -1.0
-        self._host._draw_shape_cursor_w = (sx + sign_x * w, sy + sign_y * h)
-        self._host._redraw()
-
     def _immediate_segments_for_vertices(
         self,
         vertices: set[tuple[str, int]],
@@ -1328,28 +1311,6 @@ class EditingService:
         distance: float,
     ) -> list[tuple[float, float]] | None:
         return offset_polyline(poly, distance)
-
-    def _update_shape_size_fields_from_preview(self) -> None:
-        if self._host._draw_shape_w_edit is None or self._host._draw_shape_h_edit is None:
-            return
-        enabled = (
-            self._host._shape_primitive_active() and self._host._draw_shape_anchor_w is not None
-        )
-        self._host._draw_shape_w_edit.setEnabled(enabled)
-        self._host._draw_shape_h_edit.setEnabled(enabled)
-        if self._host._draw_shape_sides_spin is not None:
-            self._host._draw_shape_sides_spin.setEnabled(enabled)
-        if not enabled:
-            return
-        if self._host._draw_shape_anchor_w is None or self._host._draw_shape_cursor_w is None:
-            return
-        sx, sy = self._host._draw_shape_anchor_w
-        ex, ey = self._host._draw_shape_cursor_w
-        self._host._draw_shape_w_edit.setText(f"{abs(ex - sx):.2f}")
-        self._host._draw_shape_h_edit.setText(f"{abs(ey - sy):.2f}")
-        # The fields sit on the badge anchors (bbox edges), which move as the
-        # preview grows — track them.
-        self._host._reposition_shape_dim_inputs()
 
     def offset_selected(self, distance: float) -> int:
         """Public command/API wrapper for the canonical offset operation."""

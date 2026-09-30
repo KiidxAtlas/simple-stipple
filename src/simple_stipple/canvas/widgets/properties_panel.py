@@ -1,7 +1,7 @@
 """Persistent properties panel: numeric editing for the current selection.
 
 Shows X / Y / W / H for any selection, rotate/mirror actions, and — for a
-single parametric entity — its defining parameters (circle radius, polygon
+single parametric entity — its defining parameters (circle diameter, polygon
 radius/sides, ellipse rx/ry, arc radius, line length/angle). Replaces the
 scattered modal prompts as the always-available numeric editing surface.
 """
@@ -36,7 +36,6 @@ _UNITLESS_KEYS = frozenset({"rotation", "angle", "sides", "points", "inner_ratio
 
 _PARAM_FIELDS: dict[str, list[tuple[str, str]]] = {
     # kind → [(meta key, label)]
-    "circle": [("radius", "Radius")],
     "polygon": [("radius", "Radius"), ("sides", "Sides")],
     # Width/height already live in the common W/H row; only expose unique
     # defining parameters here to avoid a duplicated, noisy inspector.
@@ -438,6 +437,12 @@ class CanvasPropertiesPanel(QWidget):
                 return
             count = info["count"]
             kind = info.get("kind")
+            circle = count == 1 and kind == "circle"
+            self._axis_labels["W"].setText("Diameter" if circle else "W")
+            self._w.setAccessibleName("Diameter" if circle else "Width")
+            self._h.setVisible(not circle)
+            self._axis_labels["H"].setVisible(not circle)
+            self._aspect_lock_btn.setVisible(not circle)
             display_kind = info.get("display_kind") or kind
             if count == 1 and display_kind:
                 self._summary.setText(str(display_kind).replace("_", " ").title())
@@ -687,7 +692,9 @@ class CanvasPropertiesPanel(QWidget):
         if self._updating:
             return
         edit = self._w if axis == "w" else self._h
-        name = "Width" if axis == "w" else "Height"
+        info = self._canvas.selection_geometry()
+        circle = self._canvas.selected_circle_diameter() is not None
+        name = "Diameter" if circle and axis == "w" else "Width" if axis == "w" else "Height"
         value = self._value(edit)
         if value is None:
             reject_input(edit, _NUMBER_ERROR)
@@ -698,7 +705,6 @@ class CanvasPropertiesPanel(QWidget):
         if self._selection_locked():
             reject_input(edit, _LOCKED_ERROR)
             return
-        info = self._canvas.selection_geometry()
         resize = (
             self._canvas._set_selected_width if axis == "w" else self._canvas._set_selected_height
         )

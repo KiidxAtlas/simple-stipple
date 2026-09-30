@@ -124,9 +124,9 @@ def test_elliptical_arc_start_and_end_points_match_arc_before_the_scale() -> Non
     assert math.isclose(got_end[1], expected_end[1], abs_tol=1e-9)
 
 
-def test_elliptical_arc_exports_to_dxf_with_ratio_within_spec() -> None:
-    """ry > rx must still export — ezdxf's ELLIPSE requires ratio <= 1.0,
-    so this only passes if the shape swaps which axis is major."""
+def test_elliptical_arc_exports_to_dxf_as_open_polyline_on_the_arc() -> None:
+    """ry > rx must export as polyline geometry LaserStar can import, with
+    its endpoints and interior on the arc (not an axis-swapped arc)."""
     import ezdxf
 
     shape = EllipticalArcShape(
@@ -135,9 +135,14 @@ def test_elliptical_arc_exports_to_dxf_with_ratio_within_spec() -> None:
     doc = ezdxf.new()
     msp = doc.modelspace()
     assert shape.to_dxf(msp) is True
-    entity = msp[0]
-    assert entity.dxftype() == "ELLIPSE"
-    assert entity.dxf.ratio <= 1.0
+    assert [entity.dxftype() for entity in msp] == ["LWPOLYLINE"]
+    polyline = msp[0]
+    assert not polyline.closed
+    points = [(x, y) for x, y, *_rest in polyline.get_points()]
+    start, end = shape.control_points[1], shape.control_points[2]
+    assert math.dist(points[0], start) < 1e-9
+    assert math.dist(points[-1], end) < 1e-9
+    assert all(math.isclose((x / 3.0) ** 2 + (y / 7.0) ** 2, 1.0) for x, y in points)
 
 
 def test_transform_meta_keeps_bezier_kind_under_non_uniform_scale() -> None:

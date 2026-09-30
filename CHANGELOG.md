@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.3.30 — 2026-09-30
+
+### Fixed
+
+- Circles use one Diameter input while drawing and in selection properties,
+  size editing, and canvas badges; ellipses retain separate width and height.
+  Diameter entry supports expressions and units, preserves circular geometry,
+  and rejects non-positive values without committing the preview.
+- Ellipses and elliptical arcs exported to DXF (Draft export and SVG→DXF
+  conversion) no longer disappear when imported into LaserStar/StarFX. They
+  are written as polylines within 0.01 mm of the true curve instead of native
+  DXF ELLIPSE entities, keeping their layer and group.
 
 ## 0.3.29 — 2026-09-29
 

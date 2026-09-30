@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 
+from simple_stipple.core.cad.constants import DXF_CURVE_FLATTEN_TOL_MM
 from simple_stipple.core.cad.shape_base import (
     Point,
     Shape,
@@ -16,6 +17,42 @@ from simple_stipple.core.cad.shape_base import (
     _rotate_pt,
     _scale_pt,
 )
+
+
+def _add_ellipse_polyline(
+    msp,
+    center: Point,
+    rx: float,
+    ry: float,
+    rotation_deg: float,
+    dxfattribs: dict | None,
+    *,
+    start_deg: float = 0.0,
+    end_deg: float = 360.0,
+    closed: bool,
+) -> bool:
+    """Write an ellipse or elliptical arc as a flattened LWPOLYLINE.
+
+    LaserStar/StarFX silently drops native DXF ELLIPSE entities, so the
+    curve is emitted as polyline geometry within ``DXF_CURVE_FLATTEN_TOL_MM``.
+    """
+    from ezdxf.math import ConstructionEllipse  # type: ignore[attr-defined]
+
+    rot = math.radians(rotation_deg)
+    ellipse = ConstructionEllipse(
+        center=(float(center[0]), float(center[1])),
+        major_axis=(rx * math.cos(rot), rx * math.sin(rot)),
+        ratio=ry / rx,
+        start_param=math.radians(start_deg),
+        end_param=math.radians(end_deg),
+    )
+    points = [(float(p.x), float(p.y)) for p in ellipse.flattening(DXF_CURVE_FLATTEN_TOL_MM)]
+    if closed and len(points) > 1 and math.dist(points[0], points[-1]) <= 1e-9:
+        points.pop()
+    if len(points) < (3 if closed else 2):
+        return False
+    msp.add_lwpolyline(points, close=closed, dxfattribs=dxfattribs)
+    return True
 
 
 class PolylineShape(Shape):
@@ -423,29 +460,17 @@ class EllipticalArcShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):
             or self.ry <= 1e-9
         ):
             return False
-        from ezdxf.math import ConstructionEllipse  # type: ignore[attr-defined]
-
-        rot = math.radians(self.rotation)
-        ellipse = ConstructionEllipse(
-            center=(float(cx), float(cy)),
-            major_axis=(self.rx * math.cos(rot), self.rx * math.sin(rot)),
-            ratio=self.ry / self.rx,
-            start_param=math.radians(self.start_angle),
-            end_param=math.radians(self.end_angle),
+        return _add_ellipse_polyline(
+            msp,
+            (cx, cy),
+            self.rx,
+            self.ry,
+            self.rotation,
+            dxfattribs,
+            start_deg=self.start_angle,
+            end_deg=self.end_angle,
+            closed=False,
         )
-        if ellipse.ratio > 1.0:
-            # ezdxf's ELLIPSE requires ratio (minor/major) <= 1.0 — swap
-            # which axis is "major" rather than emit an invalid entity.
-            ellipse.swap_axis()
-        msp.add_ellipse(
-            ellipse.center,
-            major_axis=ellipse.major_axis,
-            ratio=ellipse.ratio,
-            start_param=ellipse.start_param,
-            end_param=ellipse.end_param,
-            dxfattribs=dxfattribs,
-        )
-        return True
 
 
 class CircleShape(_CenterBasedShapeMixin, Shape):
@@ -642,19 +667,7 @@ class EllipseShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):
         rx, ry, rot_deg = self.rx, self.ry, self.rotation
         if not _finite(cx, cy, rx, ry, rot_deg) or rx <= 0 or ry <= 0:
             return False
-        # DXF requires ratio ≤ 1 (minor/major). If ry > rx, the major axis
-        # is the y one — swap and rotate 90°.
-        if ry > rx:
-            rx, ry = ry, rx
-            rot_deg += 90.0
-        rot = math.radians(rot_deg)
-        msp.add_ellipse(
-            (float(cx), float(cy)),
-            (rx * math.cos(rot), rx * math.sin(rot)),
-            ratio=min(ry / rx, 1.0),
-            dxfattribs=dxfattribs,
-        )
-        return True
+        return _add_ellipse_polyline(msp, (cx, cy), rx, ry, rot_deg, dxfattribs, closed=True)
 
 
 class RectangleShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):

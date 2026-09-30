@@ -936,7 +936,10 @@ class CanvasRenderer:
         cy = (sy + ey) / 2.0
         w = abs(ex - sx)
         h = abs(ey - sy)
-        if w < 1e-6 or h < 1e-6:
+        if self._host._draw_primitive == "circle":
+            if math.hypot(ex - sx, ey - sy) < 1e-6:
+                return
+        elif w < 1e-6 or h < 1e-6:
             return
 
         preview_paths: list[list[tuple[float, float]]] = []
@@ -992,7 +995,7 @@ class CanvasRenderer:
                 path.lineTo(px, py)
             painter.drawPath(path)
 
-        # Dimension annotations — circle gets radius line + R badge;
+        # Dimension annotations — circle gets radius line + diameter badge;
         # other shapes get W/H badges at bounding box edges.
         has_hud = getattr(self._host, "_draw_shape_w_edit", None) is not None
         if self._host._draw_primitive == "circle":
@@ -1017,7 +1020,7 @@ class CanvasRenderer:
                 )
             # "R: X.XX" badge near cursor (not near anchor), skip if HUD showing
             if not has_hud:
-                r_text = f"R  {_fmt_len(radius, self._host._unit_system)}"
+                r_text = f"Ø  {_fmt_len(2 * radius, self._host._unit_system)}"
                 painter.setFont(_FONT_HEL_9)
                 fm = QFontMetrics(painter.font())
                 tw = fm.horizontalAdvance(r_text)
@@ -1592,6 +1595,9 @@ class CanvasRenderer:
             height = _to_display(max(ys) - min(ys), self._host._unit_system)
             suffix = _unit_suffix(self._host._unit_system)
             size_text = f"W {width:.2f}  H {height:.2f} {suffix}"
+            diameter = self._host.selected_circle_diameter()
+            if diameter is not None:
+                size_text = f"Ø {_to_display(diameter, self._host._unit_system):.2f} {suffix}"
             size_text += "  ·  Shift lock  ·  Alt center"
             painter.setFont(_FONT_HEL_9)
             metrics = painter.fontMetrics()
@@ -2055,13 +2061,19 @@ class CanvasRenderer:
                 painter, midpoint_x + 42, badge_y, f"∠ {angle:.1f}°", 9
             )
             return
+        diameter = self._host.selected_circle_diameter()
+        width = diameter if diameter is not None else x1 - x0
+        label = "W" if diameter is None else "Ø"
         self._host._sel_badge_w_rect = self._draw_badge(
             painter,
             midpoint_x,
             min(canvas_y0, canvas_y1) - 18,
-            f"W {_fmt_len(x1 - x0, self._host._unit_system)}",
+            f"{label} {_fmt_len(width, self._host._unit_system)}",
             9,
         )
+        if diameter is not None:
+            self._host._sel_badge_h_rect = None
+            return
         self._host._sel_badge_h_rect = self._draw_badge(
             painter,
             max(canvas_x0, canvas_x1) + 34,

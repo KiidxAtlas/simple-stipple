@@ -285,12 +285,14 @@ def keyPressEvent(self, event: QKeyEvent):
                 and self._shape_primitive_active()
                 and self._draw_shape_preview_active
             ):
-                if self._draw_shape_w_edit is None or self._draw_shape_h_edit is None:
+                if self._draw_shape_w_edit is None:
                     self._show_shape_dim_inputs()
-                if self._draw_shape_w_edit is None or self._draw_shape_h_edit is None:
+                if self._draw_shape_w_edit is None:
                     event.accept()
                     return
-                if self._draw_shape_w_edit.hasFocus():
+                if self._draw_shape_h_edit is None:
+                    target = self._draw_shape_w_edit
+                elif self._draw_shape_w_edit.hasFocus():
                     target = self._draw_shape_h_edit
                 elif self._draw_shape_h_edit.hasFocus():
                     target = self._draw_shape_w_edit

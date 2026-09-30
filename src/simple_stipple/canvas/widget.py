@@ -763,7 +763,12 @@ class DxfCanvas(CanvasView):
             lambda: _run_transform(lambda: self.mirror_selected("vertical")),
         )
         transform_menu.addSeparator()
-        add("size", "Edit width + height…", lambda: _run_transform(self._show_size_hud))
+        size_label = (
+            "Edit diameter…"
+            if self.selected_circle_diameter() is not None
+            else "Edit width + height…"
+        )
+        add("size", size_label, lambda: _run_transform(self._show_size_hud))
         add(
             "length",
             "Set line length…",
@@ -867,6 +872,7 @@ class DxfCanvas(CanvasView):
             return
 
         self._dismiss_size_hud()
+        circle = self.selected_circle_diameter() is not None
         cx_w = (bounds[0] + bounds[2]) / 2.0
         cy_w = (bounds[1] + bounds[3]) / 2.0
         cx, cy = self._w2c(cx_w, cy_w)
@@ -880,7 +886,10 @@ class DxfCanvas(CanvasView):
         )
         suffix = unit_suffix(self._unit_system)
         edits: list[QLineEdit] = []
-        for offset, placeholder, name in ((0, "W", "width"), (106, "H", "height")):
+        fields = (
+            ((0, "Diameter", "diameter"),) if circle else ((0, "W", "width"), (106, "H", "height"))
+        )
+        for offset, placeholder, name in fields:
             edit = QLineEdit(self)
             edit.setFixedWidth(90)
             edit.setFixedHeight(24)
@@ -894,14 +903,16 @@ class DxfCanvas(CanvasView):
             edit.editingFinished.connect(self._apply_size_hud)
             edit.show()
             edits.append(edit)
-        self._size_w_edit, self._size_h_edit = edits
+        self._size_w_edit = edits[0]
+        self._size_h_edit = None if circle else edits[1]
         self._show_size_hud_values(bounds)
         self._size_w_edit.setFocus()
         self._size_w_edit.selectAll()
 
     def _show_size_hud_values(self, bounds: tuple[float, float, float, float]) -> None:
+        diameter = self.selected_circle_diameter()
         for edit, value in (
-            (self._size_w_edit, bounds[2] - bounds[0]),
+            (self._size_w_edit, diameter if diameter is not None else bounds[2] - bounds[0]),
             (self._size_h_edit, bounds[3] - bounds[1]),
         ):
             if edit is not None:
@@ -919,13 +930,17 @@ class DxfCanvas(CanvasView):
             self._size_h_edit = None
 
     def _apply_size_hud(self) -> None:
-        if self._size_w_edit is None or self._size_h_edit is None:
+        if self._size_w_edit is None:
             return
         values: dict[str, float] = {}
+        diameter = self.selected_circle_diameter()
+        circle = diameter is not None
         for axis, name, edit in (
-            ("w", "Width", self._size_w_edit),
+            ("w", "Diameter" if circle else "Width", self._size_w_edit),
             ("h", "Height", self._size_h_edit),
         ):
+            if edit is None:
+                continue
             try:
                 value = parse_numeric_expression(edit.text(), self._unit_system)
             except (TypeError, ValueError, ZeroDivisionError, OverflowError):
@@ -935,7 +950,7 @@ class DxfCanvas(CanvasView):
                 reject_input(edit, f"{name} must be greater than zero")
                 continue
             values[axis] = value
-        if len(values) < 2:
+        if len(values) < (1 if circle else 2):
             return
         indices = self._selected_ids()
         bounds = self._selection_bounds(indices)
@@ -944,7 +959,8 @@ class DxfCanvas(CanvasView):
             return
         if not self._mutable_selected_ids():
             reject_input(self._size_w_edit, "Selection is locked")
-            reject_input(self._size_h_edit, "Selection is locked")
+            if self._size_h_edit is not None:
+                reject_input(self._size_h_edit, "Selection is locked")
             return
 
         # Compare against the displayed (2-decimal) values so an untouched
@@ -952,9 +968,17 @@ class DxfCanvas(CanvasView):
         unit = self._unit_system
         changed = False
         for axis, name, edit, current, resize in (
-            ("w", "width", self._size_w_edit, bounds[2] - bounds[0], self._set_selected_width),
+            (
+                "w",
+                "diameter" if circle else "width",
+                self._size_w_edit,
+                diameter if diameter is not None else bounds[2] - bounds[0],
+                self._set_selected_width,
+            ),
             ("h", "height", self._size_h_edit, bounds[3] - bounds[1], self._set_selected_height),
         ):
+            if edit is None:
+                continue
             shown = parse_numeric_expression(f"{to_display(max(current, 0.0), unit):.2f}", unit)
             if abs(values[axis] - shown) <= 1e-9:
                 continue

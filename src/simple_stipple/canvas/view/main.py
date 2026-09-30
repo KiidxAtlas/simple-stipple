@@ -64,8 +64,36 @@ from simple_stipple.core.document.geometry import (
 )
 from simple_stipple.core.document.model import CanvasDocument, EntityRecord
 from simple_stipple.core.editing.corners import chamfered_corner_points
+from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input
+from simple_stipple.ui.components.units import parse_numeric_expression, to_display
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features
+
+
+def shape_cursor_for_size(
+    anchor: tuple[float, float],
+    cursor: tuple[float, float] | None,
+    width: float,
+    height: float,
+    *,
+    circle: bool,
+) -> tuple[float, float]:
+    """Rubber-band cursor that gives a shape preview the requested size.
+
+    A circle's anchor is its center, so ``width`` is the diameter and the
+    cursor keeps its current direction. Other shapes span ``width`` x
+    ``height`` from the anchor toward the cursor's quadrant.
+    """
+    sx, sy = anchor
+    ex, ey = cursor or anchor
+    if circle:
+        angle = math.atan2(ey - sy, ex - sx)
+        radius = width / 2.0
+        return (sx + radius * math.cos(angle), sy + radius * math.sin(angle))
+    return (
+        sx + (width if ex >= sx else -width),
+        sy + (height if ey >= sy else -height),
+    )
 
 
 class CanvasView(
@@ -1174,6 +1202,13 @@ class CanvasView(
     def selection_geometry(self, *args, **kwargs):
         return self._editing.selection_geometry(*args, **kwargs)
 
+    def selected_circle_diameter(self) -> float | None:
+        """Diameter of the sole selected circle, or ``None`` for any other selection."""
+        info = self.selection_geometry()
+        if info is None or info["count"] != 1 or info.get("kind") != "circle":
+            return None
+        return float(info["w"])
+
     def move_selection_to(self, *args, **kwargs):
         return self._editing.move_selection_to(*args, **kwargs)
 
@@ -1192,8 +1227,42 @@ class CanvasView(
     def scale_by_reference(self, *args, **kwargs):
         return self._editing.scale_by_reference(*args, **kwargs)
 
-    def _apply_shape_size_inputs(self, *args, **kwargs):
-        return self._editing._apply_shape_size_inputs(*args, **kwargs)
+    def _apply_shape_size_inputs(self) -> bool:
+        """Resize the shape preview from the typed Diameter or W/H fields."""
+        if (
+            self._draw_shape_w_edit is None
+            or self._draw_shape_anchor_w is None
+            or not self._shape_primitive_active()
+        ):
+            return False
+        circle = self._draw_primitive == "circle"
+        fields = [(self._draw_shape_w_edit, "Diameter" if circle else "Width")]
+        if not circle:
+            if self._draw_shape_h_edit is None:
+                return False
+            fields.append((self._draw_shape_h_edit, "Height"))
+        values = []
+        for edit, name in fields:
+            try:
+                value = parse_numeric_expression(edit.text(), self._unit_system)
+            except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                reject_input(edit, "Enter a number or expression, e.g. 25/2")
+                return False
+            if value <= 0:
+                reject_input(edit, f"{name} must be greater than zero")
+                return False
+            clear_line_edit_error(edit)
+            values.append(value)
+        self._draw_shape_cursor_w = shape_cursor_for_size(
+            self._draw_shape_anchor_w,
+            self._draw_shape_cursor_w,
+            values[0],
+            values[-1],
+            circle=circle,
+        )
+        self._reposition_shape_dim_inputs()
+        self._redraw()
+        return True
 
     def _immediate_segments_for_vertices(self, *args, **kwargs):
         return self._editing._immediate_segments_for_vertices(*args, **kwargs)
@@ -1201,8 +1270,28 @@ class CanvasView(
     def _offset_polyline(self, *args, **kwargs):
         return self._editing._offset_polyline(*args, **kwargs)
 
-    def _update_shape_size_fields_from_preview(self, *args, **kwargs):
-        return self._editing._update_shape_size_fields_from_preview(*args, **kwargs)
+    def _update_shape_size_fields_from_preview(self) -> None:
+        """Show the preview's live Diameter or W/H in the typed-size fields."""
+        if self._draw_shape_w_edit is None:
+            return
+        enabled = self._shape_primitive_active() and self._draw_shape_anchor_w is not None
+        self._draw_shape_w_edit.setEnabled(enabled)
+        if self._draw_shape_h_edit is not None:
+            self._draw_shape_h_edit.setEnabled(enabled)
+        if self._draw_shape_sides_spin is not None:
+            self._draw_shape_sides_spin.setEnabled(enabled)
+        if not enabled or self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
+            return
+        sx, sy = self._draw_shape_anchor_w
+        ex, ey = self._draw_shape_cursor_w
+        circle = self._draw_primitive == "circle"
+        width = 2 * math.hypot(ex - sx, ey - sy) if circle else abs(ex - sx)
+        self._draw_shape_w_edit.setText(f"{to_display(width, self._unit_system):.2f}")
+        if self._draw_shape_h_edit is not None:
+            self._draw_shape_h_edit.setText(f"{to_display(abs(ey - sy), self._unit_system):.2f}")
+        # The fields sit on the badge anchors (bbox edges), which move as the
+        # preview grows — track them.
+        self._reposition_shape_dim_inputs()
 
     def offset_selected(self, *args, **kwargs):
         return self._editing.offset_selected(*args, **kwargs)
@@ -1518,21 +1607,26 @@ class CanvasView(
         )
 
     def _reposition_shape_dim_inputs(self) -> None:
-        """Pin the shape W/H fields to the badge anchors on the preview's bbox.
+        """Pin the shape diameter or W/H fields to the badge anchors on the preview's bbox.
 
         W centers below the bounding box, H centers right of it — the same
         spots ``renderer._paint_draw_shape_preview`` paints the amber badges,
         which are suppressed while these fields exist. Re-run on every preview
         mouse-move so the fields track the growing shape.
         """
-        if self._draw_shape_w_edit is None or self._draw_shape_h_edit is None:
+        if self._draw_shape_w_edit is None:
             return
         if self._draw_shape_anchor_w is None or self._draw_shape_cursor_w is None:
             return
         sx, sy = self._draw_shape_anchor_w
         ex, ey = self._draw_shape_cursor_w
-        bx0, by0 = self._w2c(min(sx, ex), max(sy, ey))
-        bx1, by1 = self._w2c(max(sx, ex), min(sy, ey))
+        if self._draw_primitive == "circle":
+            radius = math.hypot(ex - sx, ey - sy)
+            bx0, by0 = self._w2c(sx - radius, sy + radius)
+            bx1, by1 = self._w2c(sx + radius, sy - radius)
+        else:
+            bx0, by0 = self._w2c(min(sx, ex), max(sy, ey))
+            bx1, by1 = self._w2c(max(sx, ex), min(sy, ey))
         bottom = max(by0, by1)
         right = max(bx0, bx1)
         mid_btm_x = (bx0 + bx1) / 2.0
@@ -1544,14 +1638,15 @@ class CanvasView(
         h_edit = self._draw_shape_h_edit
         w_x = max(8, min(int(mid_btm_x - w_edit.width() / 2), vw - w_edit.width() - 8))
         w_y = max(top, min(int(bottom + 6), vh - w_edit.height() - 8))
-        h_x = max(8, min(int(right + 6), vw - h_edit.width() - 8))
-        h_y = max(top, min(int(mid_rgt_y - h_edit.height() / 2), vh - h_edit.height() - 8))
         w_edit.move(w_x, w_y)
-        h_edit.move(h_x, h_y)
+        if h_edit is not None:
+            h_x = max(8, min(int(right + 6), vw - h_edit.width() - 8))
+            h_y = max(top, min(int(mid_rgt_y - h_edit.height() / 2), vh - h_edit.height() - 8))
+            h_edit.move(h_x, h_y)
+            if self._draw_shape_h_label is not None:
+                self._draw_shape_h_label.move(h_x, h_y - 16)
         if self._draw_shape_w_label is not None:
             self._draw_shape_w_label.move(w_x, w_y - 16)
-        if self._draw_shape_h_label is not None:
-            self._draw_shape_h_label.move(h_x, h_y - 16)
         if self._draw_shape_sides_spin is not None:
             spin = self._draw_shape_sides_spin
             spin.move(max(8, min(w_x, vw - spin.width() - 8)), w_y + 34)
@@ -1795,7 +1890,8 @@ class CanvasView(
     def _apply_and_commit_shape_preview(self) -> None:
         if not (self._mode == "draw" and self._draw_shape_preview_active):
             return
-        self._apply_shape_size_inputs()
+        if self._draw_shape_w_edit is not None and not self._apply_shape_size_inputs():
+            return
         self._dismiss_shape_dim_inputs()
         self._commit_shape_preview()
 
