@@ -29,6 +29,13 @@ uv run mypy src
 uv run pyright
 ```
 
+Tests that drive Qt widgets are marked `gui` automatically (see
+`tests/conftest.py`); `uv run pytest -q -m "not gui"` runs the fast headless
+core suite. Exporter output is pinned by golden files in `tests/data/golden`;
+when an output change is intended, regenerate them with
+`UPDATE_GOLDEN=1 uv run pytest tests/test_export_golden.py` and review the
+diff.
+
 For an interactive run:
 
 ```bash

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from simple_stipple.core.patterns.params import (
     InvalidParam,
@@ -54,6 +56,32 @@ def test_every_form_default_satisfies_its_schema(pattern):
     result, issues = normalize_pattern_params(specs, defaults)
     assert issues == []
     assert result == defaults
+
+
+_json = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats() | st.text(max_size=8),
+    lambda inner: (
+        st.lists(inner, max_size=3) | st.dictionaries(st.text(max_size=4), inner, max_size=3)
+    ),
+    max_leaves=6,
+)
+
+
+@settings(max_examples=200, deadline=None)
+@given(pattern=st.sampled_from(sorted(PATTERN_PARAM_SCHEMAS)), data=st.data())
+def test_normalize_accepts_any_json_and_is_idempotent(pattern, data):
+    specs = PATTERN_PARAM_SCHEMAS[pattern]
+    keys = st.sampled_from([spec.key for spec in specs]) | st.text(max_size=6)
+    stored = data.draw(st.dictionaries(keys, _json, max_size=8))
+    once, _ = normalize_pattern_params(specs, stored)
+    twice, second_issues = normalize_pattern_params(specs, once)
+    assert twice == once
+    for spec in specs:
+        if spec.key in once:
+            # Every schema key now holds its declared type.
+            assert spec.coerce(once[spec.key]) == once[spec.key]
+    # A second pass replaces nothing; it can only re-report range notes.
+    assert all("kept as stored" in issue for issue in second_issues)
 
 
 def test_workspace_treatments_are_normalized_on_load():

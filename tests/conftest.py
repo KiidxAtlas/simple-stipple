@@ -1,9 +1,38 @@
-"""Global pytest cleanup for the shared offscreen QApplication."""
+"""Global pytest setup: the ``gui`` marker and shared offscreen QApplication cleanup."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from PySide6.QtWidgets import QApplication
+
+# A test module that imports any of these drives Qt widgets (directly or via
+# a page/canvas) and is marked ``gui``; ``pytest -m "not gui"`` is the fast
+# headless core suite.
+_GUI_IMPORTS = (
+    "PySide6",
+    "qtbot",
+    "simple_stipple.app",
+    "simple_stipple.canvas",
+    "simple_stipple.features",
+    "simple_stipple.ui",
+)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line("markers", "gui: needs a QApplication and Qt widgets")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    gui_modules: dict[Path, bool] = {}
+    for item in items:
+        path = item.path
+        if path not in gui_modules:
+            source = path.read_text(encoding="utf-8")
+            gui_modules[path] = any(name in source for name in _GUI_IMPORTS)
+        if gui_modules[path]:
+            item.add_marker(pytest.mark.gui)
 
 
 @pytest.fixture(autouse=True)
