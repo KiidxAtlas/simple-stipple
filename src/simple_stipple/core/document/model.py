@@ -13,9 +13,8 @@
   ``build_workspace_document``) for existing UI code, delegating to the
   Pydantic models internally.
 
-Only the current schema version is supported — a workspace file saved by
-an older app version does not migrate forward; it is rejected in favor of
-a fresh empty document.
+Workspace files from schema versions 1–2 are migrated forward on load (see
+``validate_workspace_document``); files newer than this build are rejected.
 """
 
 from __future__ import annotations
@@ -30,23 +29,34 @@ from pydantic import BaseModel, Field, model_validator
 
 from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.document.identity import EntityId, new_entity_id
+from simple_stipple.core.document.kinds import EntityKind
 
 Point = tuple[float, float]
 
 
 @dataclass
 class EntityRecord:
-    """Runtime domain entity with stable identity and editor attributes."""
+    """Runtime domain entity with stable identity and editor attributes.
+
+    ``kind`` is always an :class:`EntityKind`: assignments are coerced, so a
+    loaded file or a legacy call site passing a plain string still yields a
+    member, and an unknown kind degrades to a plain polyline.
+    """
 
     points: list[Point]
     id: EntityId = field(default_factory=new_entity_id)
-    kind: str = "polyline"
+    kind: EntityKind = EntityKind.POLYLINE
     meta: dict[str, Any] | None = None
     construction: bool = False
     hidden: bool = False
     locked: bool = False
     group: int | None = None
     layer: str | None = None
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "kind":
+            value = EntityKind.coerce(value)
+        object.__setattr__(self, name, value)
 
 
 @dataclass

@@ -43,6 +43,7 @@ from simple_stipple.core.document.geometry import (
     transform_entity_metadata,
     update_entity_parameter,
 )
+from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import (
     Document,
     EntityRecord,
@@ -125,7 +126,7 @@ def _split_geometry_with_line(
         record = EntityRecord(
             points=item.points,
             id=identifier,
-            kind="polyline" if item.changed else source.kind,
+            kind=EntityKind.POLYLINE if item.changed else source.kind,
             meta=None if item.changed else deepcopy(source.meta),
             construction=source.construction,
             hidden=source.hidden,
@@ -247,7 +248,7 @@ class EditingService:
                 record = EntityRecord(
                     points=ring,
                     id=source.id if ring_index == 0 else new_entity_id(),
-                    kind="polyline",
+                    kind=EntityKind.POLYLINE,
                     construction=source.construction,
                     hidden=source.hidden,
                     locked=source.locked,
@@ -998,7 +999,7 @@ class EditingService:
 
     @staticmethod
     def _display_shape_info(entity: EntityRecord) -> tuple[str, dict[str, Any]]:
-        display_kind = entity.kind
+        display_kind: str = entity.kind
         display_meta = deepcopy(entity.meta) if entity.meta else {}
         if entity.kind != "polyline":
             return display_kind, display_meta
@@ -1980,7 +1981,10 @@ class SelectionService:
         new_idx: int | None = None
         if not consume_cutter:
             rec = EntityRecord(
-                points=list(poly), kind=kind, meta=meta, layer=self._host._active_layer
+                points=list(poly),
+                kind=EntityKind.coerce(kind),
+                meta=meta,
+                layer=self._host._active_layer,
             )
             self._host._entities.append(rec)
             new_idx = len(self._host._entities) - 1
@@ -2057,7 +2061,7 @@ class SelectionService:
             # here created an extra zero-handle node and made later editing
             # disagree with what was drawn.
             points=list(self._host._pen_pts),
-            kind="bezier",
+            kind=EntityKind.BEZIER,
             meta={
                 "tangents": list(self._host._pen_tangents),
                 "handles_out": list(self._host._pen_tangents),
@@ -2815,7 +2819,7 @@ class ConstructionService:
         entities = [
             EntityRecord(
                 points=points,
-                kind=kind,
+                kind=EntityKind.coerce(kind),
                 meta=metadata,
                 construction=True,
                 layer=self._host._active_layer,
@@ -2859,7 +2863,7 @@ class ConstructionService:
             return
         entity = EntityRecord(
             points=list(poly),
-            kind=kind,
+            kind=EntityKind.coerce(kind),
             meta=meta,
             construction=self._host._draw_construction_mode,
             layer=self._host._active_layer,

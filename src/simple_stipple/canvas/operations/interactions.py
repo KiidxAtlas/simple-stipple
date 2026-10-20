@@ -13,6 +13,7 @@ from shiboken6 import isValid
 
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.core.document.commands import MoveEntityCommand
+from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import EntityRecord
 
 _SHARED_CLIPBOARD: list[dict[str, Any]] = []
@@ -69,7 +70,7 @@ class ClipboardService:
             entities.append(
                 EntityRecord(
                     points=points,
-                    kind=kind,
+                    kind=EntityKind.coerce(kind),
                     meta=meta,
                     construction=bool(record.get("construction")),
                     group=group,

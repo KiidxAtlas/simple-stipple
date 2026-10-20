@@ -31,6 +31,7 @@ from simple_stipple.core.cad.geometry import (
     shape_rect,
     shape_slot_for_bounds,
 )
+from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import normalize_draw_sidebar_shape_tools, user_data_dir
 from simple_stipple.ui.components.feedback import refresh_style, reject_input
@@ -330,7 +331,7 @@ class DrawOpsService:
                 entities = [
                     EntityRecord(
                         points=points,
-                        kind=kind,
+                        kind=EntityKind.coerce(kind),
                         meta=meta,
                         group=group,
                         layer=self._host._active_layer,
@@ -357,7 +358,7 @@ class DrawOpsService:
                     self._host._entities.append(
                         EntityRecord(
                             points=list(poly),
-                            kind=kind,
+                            kind=EntityKind.coerce(kind),
                             meta=meta,
                             layer=self._host._active_layer,
                         )

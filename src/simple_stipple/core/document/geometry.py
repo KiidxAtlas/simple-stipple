@@ -10,6 +10,12 @@ from typing import Any, Protocol, runtime_checkable
 from simple_stipple.core.cad.shape_base import Shape
 from simple_stipple.core.cad.shape_factory import ShapeFactory
 from simple_stipple.core.cad.snapping import polygon_centroid
+from simple_stipple.core.document.kinds import (
+    CONTROL_POINT_KINDS,
+    HANDLELESS_KINDS,
+    PARAMETRIC_KINDS,
+    EntityKind,
+)
 from simple_stipple.core.editing import transform as editing_transform
 
 Point = tuple[float, float]
@@ -79,22 +85,9 @@ def geometry_for_entity(entity: Any) -> CanvasGeometry:
     Generic imported paths remain lightweight polylines. Parametric records
     use Shape subclasses, eliminating tessellation switches at call sites.
     """
-    kind = str(getattr(entity, "kind", "polyline"))
+    kind = EntityKind.coerce(getattr(entity, "kind", EntityKind.POLYLINE))
     points = list(getattr(entity, "points", []))
-    if kind not in {
-        "line",
-        "arc",
-        "elliptical_arc",
-        "circle",
-        "ellipse",
-        "rectangle",
-        "rounded_rectangle",
-        "polygon",
-        "star",
-        "spline",
-        "bezier",
-        "slot",
-    }:
+    if kind not in PARAMETRIC_KINDS:
         return PolylineGeometry(points)
     metadata = deepcopy(getattr(entity, "meta", None)) or {}
     if kind == "arc" and "radius" in metadata:
@@ -141,9 +134,7 @@ def entity_shows_point_handles(entity: Any) -> bool:
     """Whether the entity exposes its stored points as draggable handles."""
     geometry = geometry_for_entity(entity)
     return not (
-        isinstance(geometry, ShapeGeometry)
-        and geometry.shape.shape_type
-        in {"arc", "elliptical_arc", "circle", "ellipse", "slot", "rounded_rectangle", "star"}
+        isinstance(geometry, ShapeGeometry) and geometry.shape.shape_type in HANDLELESS_KINDS
     )
 
 
@@ -172,7 +163,7 @@ def _write_shape_to_entity(entity: Any, shape: Shape) -> None:
     kind, metadata = shape.to_meta_dict()
     entity.kind = kind
     entity.meta = metadata
-    if kind in {"line", "spline", "bezier", "polyline"}:
+    if kind in CONTROL_POINT_KINDS:
         entity.points = list(shape.control_points)
     else:
         entity.points = list(shape.points)

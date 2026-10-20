@@ -10,6 +10,7 @@ from PySide6.QtCore import QEasingCurve, QEvent, Qt, QVariantAnimation
 from PySide6.QtWidgets import QApplication, QWidget
 
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
+from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import EntityRecord
 
 _MAX_SCALE = 20000.0  # px per mm — deep zoom for tiny features; mirrors view/main.py
@@ -98,7 +99,7 @@ def set_entity_records(self, records: list[dict[str, Any]], *, fit: bool = False
             EntityRecord(
                 points=pts,
                 id=str(r.get("id") or ""),
-                kind=str(r.get("kind", "polyline")),
+                kind=EntityKind.coerce(r.get("kind", "polyline")),
                 meta=meta,
                 construction=bool(r.get("construction", False)),
                 hidden=bool(r.get("hidden", False)),

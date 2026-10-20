@@ -30,6 +30,7 @@ from simple_stipple.core.document.geometry import (
     geometry_for_entity,
     transform_entity_metadata,
 )
+from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import (
     CanvasDocument,
     EntityRecord,
@@ -72,7 +73,7 @@ def _entity(snapshot: EntitySnapshot) -> EntityRecord:
     return EntityRecord(
         id=snapshot.id,
         points=[tuple(point) for point in data["points"]],
-        kind=snapshot.kind,
+        kind=EntityKind.coerce(snapshot.kind),
         meta=deepcopy(data["meta"]),
         construction=snapshot.construction,
         hidden=snapshot.hidden,
@@ -246,7 +247,7 @@ class DocumentService:
                         EntityRecord(
                             id=source_entity.id if count == 0 else new_entity_id(),
                             points=path.points,
-                            kind="polyline" if path.changed else source_entity.kind,
+                            kind=EntityKind.POLYLINE if path.changed else source_entity.kind,
                             meta=None if path.changed else deepcopy(source_entity.meta),
                             construction=source_entity.construction,
                             hidden=source_entity.hidden,
@@ -301,7 +302,7 @@ class DocumentService:
                     EntityRecord(
                         points=item.points,
                         id=sources[0].id if index == 0 else new_entity_id(),
-                        kind="polyline",
+                        kind=EntityKind.POLYLINE,
                         construction=item.construction,
                         hidden=sources[0].hidden,
                         locked=sources[0].locked,
@@ -316,7 +317,7 @@ class DocumentService:
                 _snapshot(
                     EntityRecord(
                         points=segment,
-                        kind="line",
+                        kind=EntityKind.LINE,
                         construction=entity.construction,
                         hidden=entity.hidden,
                         locked=entity.locked,

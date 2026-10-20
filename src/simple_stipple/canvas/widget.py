@@ -17,6 +17,7 @@ from simple_stipple.canvas.operations import drawing, interactions
 from simple_stipple.canvas.tools.radial_menu import RadialMenuService
 from simple_stipple.canvas.tools.selection import SelectTool
 from simple_stipple.canvas.view.main import CanvasView
+from simple_stipple.core.document.kinds import PROCEDURAL_KINDS, EntityKind
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import (
     CONTEXT_MENU_TRANSFORM_ITEMS,
@@ -198,21 +199,7 @@ class DxfCanvas(CanvasView):
     quickShapeChanged = Signal(str)
     quickShapeEnabledChanged = Signal(bool)
 
-    _PROCEDURAL_QUICK_SHAPES = frozenset(
-        {
-            "ring",
-            "gear",
-            "spiral",
-            "teardrop",
-            "keyhole",
-            "superellipse",
-            "rounded_star",
-            "chamfered_star",
-            "finger_joint_box",
-            "dovetail_box",
-            "tabbed_panel",
-        }
-    )
+    _PROCEDURAL_QUICK_SHAPES = frozenset(kind.value for kind in PROCEDURAL_KINDS)
     _VALID_QUICK_SHAPES = (
         frozenset({"rectangle", "circle", "slot", "hexagon"}) | _PROCEDURAL_QUICK_SHAPES
     )
@@ -1081,7 +1068,7 @@ class DxfCanvas(CanvasView):
                 if carved:
                     new_entity = EntityRecord(
                         points=list(poly),
-                        kind=kind,
+                        kind=EntityKind.coerce(kind),
                         meta=meta,
                         layer=self._active_layer,
                     )
@@ -1097,7 +1084,7 @@ class DxfCanvas(CanvasView):
                 entities = [
                     EntityRecord(
                         points=points,
-                        kind=self._shape_drag_mode,
+                        kind=EntityKind.coerce(self._shape_drag_mode),
                         meta={
                             "generator": self._shape_drag_mode,
                             "center": (cx, cy),
