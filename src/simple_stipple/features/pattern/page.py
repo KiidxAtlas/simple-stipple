@@ -17,18 +17,29 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
+    QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from simple_stipple.canvas.constants import DIM
 from simple_stipple.canvas.layers.logic import flatten_shape_keys
+from simple_stipple.canvas.runtime import ExplodeMergeButtons
+from simple_stipple.canvas.widget import DxfCanvas
+from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.core.cad.production import machine_profile_from_settings, order_for_cut
 from simple_stipple.core.formats.service import (
     load_dxf_polylines_by_layer_with_report,
@@ -47,6 +58,7 @@ from simple_stipple.core.patterns.processing import (
     load_generator_entry_points,
 )
 from simple_stipple.features.base import BasePage, ModelField
+from simple_stipple.features.canvas_runtime import PatternCanvasPageRuntime
 from simple_stipple.features.pattern.custom_tiles import (
     apply_custom_tile,
     delete_tile_motif,
@@ -85,6 +97,7 @@ from simple_stipple.features.pattern.form import (
     restore_form_state,
 )
 from simple_stipple.features.pattern.layout import (
+    ZoneListWidget,
     build_left,
     build_right,
     refresh_pattern_properties_panel,
@@ -162,6 +175,7 @@ from simple_stipple.ui.components.feedback import (
 from simple_stipple.ui.components.focus import EscapeBlurFilter, blocked_signals
 from simple_stipple.ui.components.layout import (
     CollapsibleSection,
+    ResponsiveContentSplitter,
     content_splitter,
     surface_frame,
 )
@@ -183,6 +197,83 @@ class PatternPage(BasePage):
 
     _export_format: str
     _auto_export_format: str | None
+    # Widgets created by ``features/pattern/layout.py`` builders.
+    _advanced_mode_cb: QCheckBox
+    _border_fade: QLineEdit
+    _cancel_preview_btn: QToolButton
+    _canvas: DxfCanvas
+    _canvas_runtime: PatternCanvasPageRuntime
+    _canvas_splitter: ResponsiveContentSplitter
+    _canvas_status: CanvasStatusStrip
+    _dxf_edit: QLineEdit
+    _engrave_canvas_edit: QCheckBox
+    _engrave_center_btn: QPushButton
+    _engrave_choose_btn: QPushButton
+    _engrave_dither: QComboBox
+    _engrave_edit_btn: QPushButton
+    _engrave_export_btn: QPushButton
+    _engrave_fit_btn: QPushButton
+    _engrave_gamma: QDoubleSpinBox
+    _engrave_h: QDoubleSpinBox
+    _engrave_interval: QDoubleSpinBox
+    _engrave_invert: QCheckBox
+    _engrave_material: QComboBox
+    _engrave_max_power: QDoubleSpinBox
+    _engrave_min_power: QDoubleSpinBox
+    _engrave_passes: QSpinBox
+    _engrave_remove_btn: QPushButton
+    _engrave_rotation: QDoubleSpinBox
+    _engrave_speed: QDoubleSpinBox
+    _engrave_w: QDoubleSpinBox
+    _engrave_x: QDoubleSpinBox
+    _engrave_y: QDoubleSpinBox
+    _engraving_image_label: QLabel
+    _engraving_process_error: QLabel
+    _engraving_process_section: CollapsibleSection
+    _engraving_section: CollapsibleSection
+    _export_open_paths_cb: QCheckBox
+    _export_summary: QLabel
+    _fill_angle: QLineEdit
+    _fill_inset: QLineEdit
+    _fill_keep_outline_cb: QCheckBox
+    _fill_mode_combo: QComboBox
+    _fill_params_container: QWidget
+    _fill_section: CollapsibleSection
+    _fill_spacing: QLineEdit
+    _fill_target_outline_cb: QCheckBox
+    _fill_target_pattern_cb: QCheckBox
+    _gen_btn: QPushButton
+    _geometry_findings: QListWidget
+    _geometry_markers_cb: QCheckBox
+    _lattice_origin_x: QLineEdit
+    _lattice_origin_y: QLineEdit
+    _lattice_seed: QLineEdit
+    _min_density_edit: QLineEdit
+    _modifiers_section: CollapsibleSection
+    _operator_notes_btn: QPushButton
+    _optimize_paths_cb: QCheckBox
+    _orig_dims_label: QLabel
+    _output_down_btn: QPushButton
+    _output_list: QListWidget
+    _output_preflight: QLabel
+    _output_section: CollapsibleSection
+    _output_up_btn: QPushButton
+    _pattern_combo: QComboBox
+    _pattern_section: CollapsibleSection
+    _pattern_widgets: dict[str, QWidget]
+    _preview_quality_combo: QComboBox
+    _preview_status: QLabel
+    _progress: QProgressBar
+    _reveal_btn: QPushButton
+    _scale_h: QLineEdit
+    _scale_w: QLineEdit
+    _segment_buttons: ExplodeMergeButtons
+    _shape_section: CollapsibleSection
+    _status: QLabel
+    _tile_library_widget: QWidget
+    _undo_transfer_btn: QPushButton
+    _zone_list: ZoneListWidget
+    _zone_scroll: CollapsibleSection
     _orig_polys = ModelField("original_polys")
     _edit_polys = ModelField("editable_polys")
     _orig_w = ModelField("original_width")
@@ -501,7 +592,7 @@ class PatternPage(BasePage):
         polys = self._canvas._result_polys
         if not 0 <= result_index < len(polys):
             return
-        poly = [tuple(point) for point in polys[result_index]]
+        poly = [(float(point[0]), float(point[1])) for point in polys[result_index]]
         if len(poly) < 2:
             return
         new_id = self._fresh_outline_ids(1)[0]
@@ -2610,8 +2701,6 @@ class PatternPage(BasePage):
         # belong behind the advanced toggle.
         if hasattr(self, "_zone_scroll"):
             self._zone_scroll.setVisible(True)
-        if hasattr(self, "_pattern_properties_scroll"):
-            self._pattern_properties_scroll.setVisible(True)
 
     def _update_zone_actions(self) -> None:
         return update_zone_actions(self)
