@@ -11,6 +11,22 @@ from typing import Literal
 Point = tuple[float, float]
 
 
+@dataclass(frozen=True)
+class LocalExtent:
+    """A shape's size along its own axes and the parameters that drive it.
+
+    ``x_key``/``y_key`` name the ``set_parameter`` keys that resize each
+    axis (a circle's two axes share ``radius``).
+    """
+
+    center: Point
+    rotation: float
+    width: float
+    height: float
+    x_key: str
+    y_key: str
+
+
 def _finite(*vals: object) -> bool:
     try:
         return all(math.isfinite(float(v)) for v in vals)  # type: ignore[arg-type]
@@ -173,6 +189,10 @@ class Shape(ABC):
     def move_control_point(self, index: int, point: Point) -> bool:
         """Move one editable control point when this shape exposes it."""
         return False
+
+    def local_extent(self) -> LocalExtent | None:
+        """Return the shape's box in its own rotated frame, when it has one."""
+        return None
 
     # ── Interop ──────────────────────────────────────────────────────────
 

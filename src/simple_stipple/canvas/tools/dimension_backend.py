@@ -19,6 +19,8 @@ from shapely.ops import nearest_points
 from simple_stipple.canvas.tools.base import CanvasTool
 from simple_stipple.core.document.geometry import (
     angle_between_rays,
+    demote_to_path,
+    synchronize_entity_control_points,
     transform_entity_metadata,
 )
 from simple_stipple.core.editing.transform import rotate, translate
@@ -267,10 +269,9 @@ class DimensionBackend(CanvasTool):
             if closed and end_index == len(entity.points) - 1:
                 entity.points[0] = new_end
             if entity.kind == "line" and len(entity.points) == 2:
-                entity.meta = {"start": entity.points[0], "end": entity.points[1]}
+                synchronize_entity_control_points(entity)
             else:
-                entity.kind = "polyline"
-                entity.meta = None
+                demote_to_path(entity)
             result = v._canvas_service.update_entities([entity])
         elif kind in {"spacing", "distance"} and len(segments) == 2:
             current = self.value(dimension)
@@ -305,8 +306,7 @@ class DimensionBackend(CanvasTool):
                 # original rectangle/circle procedural metadata. Keep the
                 # edited outline canonical so a later redraw cannot restore
                 # the old dimensions from stale parameters.
-                entity.kind = "polyline"
-                entity.meta = None
+                demote_to_path(entity)
             else:
                 entity.points = translate(entity.points, dx, dy)
                 transform_entity_metadata(
@@ -361,8 +361,7 @@ class DimensionBackend(CanvasTool):
                         entity.points[-1] = entity.points[0]
                     elif moving == len(entity.points) - 1:
                         entity.points[0] = entity.points[-1]
-                entity.kind = "polyline"
-                entity.meta = None
+                demote_to_path(entity)
             else:
                 entity.points = rotate(entity.points, vertex, delta)
                 transform_entity_metadata(

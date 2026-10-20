@@ -25,7 +25,7 @@ from simple_stipple.core.cad.geometry import (
     fit_polyline_to_bezier,
     minimum_clearance,
 )
-from simple_stipple.core.cad.shape_factory import transform_meta
+from simple_stipple.core.cad.shape_factory import ShapeFactory, transform_meta
 from simple_stipple.core.cad.snapping import snap_to_polyline as _snap_to_polyline_candidates
 from simple_stipple.core.document.commands import (
     BooleanOpCommand,
@@ -36,12 +36,17 @@ from simple_stipple.core.document.commands import (
     TransformCommand,
 )
 from simple_stipple.core.document.geometry import (
+    bezier_for_entity,
+    demote_to_path,
+    entity_local_extent,
     geometry_for_entity,
     move_entity_control_point,
     remove_entity_points,
     synchronize_entity_control_points,
     transform_entity_metadata,
     update_entity_parameter,
+    write_bezier_handles,
+    write_shape_to_entity,
 )
 from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import (
@@ -513,8 +518,7 @@ class EditingService:
         f = max(1e-4, min(1e4, target / extent))
         entity = deepcopy(entity)
         entity.points[1] = (ax + (bx - ax) * f, ay + (by - ay) * f)
-        if entity.kind == "line" and isinstance(entity.meta, dict):
-            entity.meta["start"], entity.meta["end"] = entity.points
+        synchronize_entity_control_points(entity)
         self._host._canvas_service.update_entities([entity])
         self._host._redraw()
         self._host._notify()
@@ -556,7 +560,7 @@ class EditingService:
             entity = deepcopy(self._host._entity_for_id(eid))
             if entity is None:
                 continue
-            entity.kind, entity.meta = "polyline", None
+            demote_to_path(entity)
             entity.points = [(cx + (x - cx) * fx, cy + (y - cy) * fy) for x, y in entity.points]
             candidates.append(entity)
         self._host._canvas_service.update_entities(candidates)
@@ -659,7 +663,7 @@ class EditingService:
             entity = deepcopy(self._host._entity_for_id(eid))
             if entity is None:
                 continue
-            entity.kind, entity.meta = "polyline", None
+            demote_to_path(entity)
             entity.points = [(cx + (x - cx) * fx, cy + (y - cy) * fy) for x, y in entity.points]
             candidates.append(entity)
         self._host._canvas_service.update_entities(candidates)
@@ -721,8 +725,7 @@ class EditingService:
         source = self._host._entities_by_id[eid]
         replacements = [deepcopy(source)]
         replacements[0].points = first
-        replacements[0].kind = "polyline"
-        replacements[0].meta = None
+        demote_to_path(replacements[0])
         replacements.extend(
             EntityRecord(
                 points=piece,
@@ -850,8 +853,7 @@ class EditingService:
             e.points = [hit] + list(pts)
         else:
             e.points = list(pts) + [hit]
-        e.kind = "polyline"
-        e.meta = None
+        demote_to_path(e)
         result = self._host._canvas_service.update_entities([e])
         if not result.changed:
             return False
@@ -981,21 +983,12 @@ class EditingService:
 
     @staticmethod
     def _apply_parametric_dimensions(info: dict[str, Any], entity: EntityRecord) -> None:
-        meta = entity.meta or {}
-        if entity.kind in {"rectangle", "rounded_rectangle"}:
-            info["w"] = float(meta.get("width", info["w"]))
-            info["h"] = float(meta.get("height", info["h"]))
-        elif entity.kind == "ellipse":
-            info["w"] = 2.0 * float(meta.get("rx", info["w"] / 2.0))
-            info["h"] = 2.0 * float(meta.get("ry", info["h"] / 2.0))
-        elif entity.kind == "circle":
-            diameter = 2.0 * float(meta.get("radius", info["w"] / 2.0))
-            info["w"] = info["h"] = diameter
-            if meta.get("radius") is not None:
-                info["diameter"] = 2.0 * float(meta["radius"])
-        elif entity.kind == "slot":
-            info["w"] = float(meta.get("length", info["w"]))
-            info["h"] = float(meta.get("width", info["h"]))
+        extent = entity_local_extent(entity)
+        if extent is None:
+            return
+        info["w"], info["h"] = extent.width, extent.height
+        if entity.kind == EntityKind.CIRCLE:
+            info["diameter"] = extent.width
 
     @staticmethod
     def _display_shape_info(entity: EntityRecord) -> tuple[str, dict[str, Any]]:
@@ -1355,8 +1348,7 @@ class EditingService:
         ux, uy = dx / cur_len, dy / cur_len
         entity = deepcopy(self._host._entities_by_id[indices[0]])
         entity.points[1] = (ax + ux * length, ay + uy * length)
-        if entity.kind == "line" and isinstance(entity.meta, dict):
-            entity.meta["start"], entity.meta["end"] = entity.points
+        synchronize_entity_control_points(entity)
         self._host._canvas_service.update_entities([entity])
         self._host._redraw()
         self._host._notify()
@@ -1383,8 +1375,7 @@ class EditingService:
             ax + cur_len * math.cos(ar),
             ay + cur_len * math.sin(ar),
         )
-        if entity.kind == "line" and isinstance(entity.meta, dict):
-            entity.meta["start"], entity.meta["end"] = entity.points
+        synchronize_entity_control_points(entity)
         self._host._canvas_service.update_entities([entity])
         self._host._redraw()
         self._host._notify()
@@ -1706,23 +1697,8 @@ class SelectionService:
     def _bezier_handles(self, entity_id: str) -> list[tuple[int, str, tuple[float, float]]]:
         """Return editable incoming/outgoing handle tips for one Bézier."""
         entity = self._host._entity_for_id(entity_id)
-        if entity is None or entity.kind != "bezier" or not entity.meta:
-            return []
-        count = len(entity.points)
-        legacy = [tuple(value) for value in entity.meta.get("tangents", [])]
-        outgoing = [tuple(value) for value in entity.meta.get("handles_out", legacy)]
-        incoming = [
-            tuple(value) for value in entity.meta.get("handles_in", [(-x, -y) for x, y in legacy])
-        ]
-        outgoing.extend([(0.0, 0.0)] * (count - len(outgoing)))
-        incoming.extend([(0.0, 0.0)] * (count - len(incoming)))
-        handles: list[tuple[int, str, tuple[float, float]]] = []
-        for index, anchor in enumerate(entity.points):
-            for side, vector in (("in", incoming[index]), ("out", outgoing[index])):
-                handles.append(
-                    (index, side, (anchor[0] + float(vector[0]), anchor[1] + float(vector[1])))
-                )
-        return handles
+        shape = bezier_for_entity(entity) if entity is not None else None
+        return [] if shape is None else shape.handle_tips()
 
     def _find_bezier_handle(self, cx: float, cy: float) -> tuple[str, int, str] | None:
         """Find the closest editable Bézier handle among selected entities.
@@ -1755,46 +1731,14 @@ class SelectionService:
         break_pair: bool = False,
     ) -> bool:
         entity = self._host._entity_for_id(entity_id)
+        shape = bezier_for_entity(entity) if entity is not None else None
         if (
             entity is None
-            or entity.kind != "bezier"
-            or not entity.meta
-            or not 0 <= anchor_index < len(entity.points)
+            or shape is None
+            or not shape.set_handle(anchor_index, side, point, break_pair=break_pair)
         ):
             return False
-        anchor = entity.points[anchor_index]
-        vector = (point[0] - anchor[0], point[1] - anchor[1])
-        count = len(entity.points)
-        legacy = [tuple(value) for value in entity.meta.get("tangents", [])]
-        outgoing = [tuple(value) for value in entity.meta.get("handles_out", legacy)]
-        incoming = [
-            tuple(value) for value in entity.meta.get("handles_in", [(-x, -y) for x, y in legacy])
-        ]
-        outgoing.extend([(0.0, 0.0)] * (count - len(outgoing)))
-        incoming.extend([(0.0, 0.0)] * (count - len(incoming)))
-        node_types = [str(value) for value in entity.meta.get("node_types", [])]
-        node_types.extend(["symmetric"] * (count - len(node_types)))
-        if break_pair:
-            node_types[anchor_index] = "corner"
-        mode = node_types[anchor_index]
-        target = incoming if side == "in" else outgoing
-        other = outgoing if side == "in" else incoming
-        target[anchor_index] = vector
-        if mode == "symmetric":
-            other[anchor_index] = (-vector[0], -vector[1])
-        elif mode == "smooth":
-            old_length = math.hypot(*other[anchor_index])
-            length = math.hypot(*vector)
-            if length > 1e-12:
-                paired_length = old_length if old_length > 1e-12 else length
-                other[anchor_index] = (
-                    -vector[0] / length * paired_length,
-                    -vector[1] / length * paired_length,
-                )
-        entity.meta["handles_in"] = incoming
-        entity.meta["handles_out"] = outgoing
-        entity.meta["node_types"] = node_types
-        entity.meta["tangents"] = outgoing
+        write_bezier_handles(entity, shape)
         self._host._sync_shape_storage_from_entities()
         return True
 
@@ -1803,30 +1747,13 @@ class SelectionService:
         if mode not in {"corner", "smooth", "symmetric"}:
             return False
         entity = self._host._entity_for_id(entity_id)
-        if (
-            entity is None
-            or entity.kind != "bezier"
-            or not entity.meta
-            or not 0 <= anchor_index < len(entity.points)
-        ):
+        shape = bezier_for_entity(entity) if entity is not None else None
+        if entity is None or shape is None or not 0 <= anchor_index < len(entity.points):
             return False
         before = self._host._canvas_service.begin_preview()
-        node_types = [str(value) for value in entity.meta.get("node_types", [])]
-        node_types.extend(["symmetric"] * (len(entity.points) - len(node_types)))
-        node_types[anchor_index] = mode
-        entity.meta["node_types"] = node_types
-        if mode != "corner":
-            handles = {
-                side: tip for vi, side, tip in self._bezier_handles(entity_id) if vi == anchor_index
-            }
-            anchor = entity.points[anchor_index]
-            out = handles.get("out") or anchor
-            vector = (out[0] - anchor[0], out[1] - anchor[1])
-            self._set_bezier_handle(entity_id, anchor_index, "out", out)
-            if math.hypot(*vector) <= 1e-12:
-                self._set_bezier_handle(
-                    entity_id, anchor_index, "out", (anchor[0] + 1.0, anchor[1])
-                )
+        shape.set_node_type(anchor_index, mode)
+        write_bezier_handles(entity, shape)
+        self._host._sync_shape_storage_from_entities()
         self._host._canvas_service.commit_preview(before)
         self._host._redraw()
         self._host._notify()
@@ -2263,8 +2190,7 @@ class SelectionService:
                 if merged is None:
                     continue
                 self._host._entities[survivor_idx].points = merged
-                self._host._entities[survivor_idx].kind = "polyline"
-                self._host._entities[survivor_idx].meta = None
+                demote_to_path(self._host._entities[survivor_idx])
                 del self._host._entities[i]
                 if i < survivor_idx:
                     survivor_idx -= 1
@@ -2391,8 +2317,8 @@ class ConstructionService:
             if entity.points == points:
                 continue
             entity.points = points
-            if entity.kind == "line" and len(points) == 2:
-                entity.meta = {"start": points[0], "end": points[1]}
+            if entity.kind == EntityKind.LINE and len(points) == 2:
+                synchronize_entity_control_points(entity)
             elif entity.kind in {
                 "arc",
                 "circle",
@@ -2408,8 +2334,7 @@ class ConstructionService:
                 # must not silently degrade the shape into a plain polyline.
                 pass
             else:
-                entity.kind = "polyline"
-                entity.meta = None
+                demote_to_path(entity)
             changed += 1
         changed += self._apply_shape_and_projection_constraints(entities_by_id)
         return changed
@@ -2910,37 +2835,15 @@ class GizmoService:
                 frac_a = (0.5, 0.5)
             indices = self._host._mutable_selected_ids()
             entity = self._host._entities_by_id[indices[0]] if len(indices) == 1 else None
-            meta = entity.meta if entity is not None and isinstance(entity.meta, dict) else None
-            dims = None
-            if entity is not None and meta is not None:
-                if entity.kind in {"rectangle", "rounded_rectangle"}:
-                    dims = (
-                        float(meta.get("width", 0)),
-                        float(meta.get("height", 0)),
-                        "width",
-                        "height",
-                    )
-                elif entity.kind == "ellipse":
-                    dims = (2 * float(meta.get("rx", 0)), 2 * float(meta.get("ry", 0)), "rx", "ry")
-                elif entity.kind == "circle":
-                    diameter = 2 * float(meta.get("radius", 0))
-                    dims = (diameter, diameter, "radius", "radius")
-                elif entity.kind == "slot":
-                    dims = (
-                        float(meta.get("length", 0)),
-                        float(meta.get("width", 0)),
-                        "length",
-                        "width",
-                    )
-            if dims is not None and min(dims[0], dims[1]) > 1e-9:
-                assert meta is not None
-                cx, cy = (float(v) for v in meta.get("center", (cx, cy)))
-                rotation = float(meta.get("rotation", 0.0))
-                angle = math.radians(rotation)
+            extent = entity_local_extent(entity) if entity is not None else None
+            if extent is not None and min(extent.width, extent.height) > 1e-9:
+                cx, cy = extent.center
+                width, height = extent.width, extent.height
+                angle = math.radians(extent.rotation)
 
                 def _world(frac: tuple[float, float]) -> tuple[float, float]:
-                    lx = (frac[0] - 0.5) * dims[0]
-                    ly = (frac[1] - 0.5) * dims[1]
+                    lx = (frac[0] - 0.5) * width
+                    ly = (frac[1] - 0.5) * height
                     return (
                         cx + lx * math.cos(angle) - ly * math.sin(angle),
                         cy + lx * math.sin(angle) + ly * math.cos(angle),
@@ -2951,11 +2854,11 @@ class GizmoService:
                 self._host._gizmo_local_shape = {
                     "entity_id": indices[0],
                     "center": (cx, cy),
-                    "rotation": rotation,
-                    "width": dims[0],
-                    "height": dims[1],
-                    "x_key": dims[2],
-                    "y_key": dims[3],
+                    "rotation": extent.rotation,
+                    "width": width,
+                    "height": height,
+                    "x_key": extent.x_key,
+                    "y_key": extent.y_key,
                     "from_center": from_center,
                 }
             else:
@@ -3129,8 +3032,7 @@ class GizmoService:
                         self._host._entities_by_id[eid].kind = new_kind
                         self._host._entities_by_id[eid].meta = new_meta
                     else:
-                        self._host._entities_by_id[eid].kind = "polyline"
-                        self._host._entities_by_id[eid].meta = None
+                        demote_to_path(self._host._entities_by_id[eid])
         self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 
@@ -3383,7 +3285,7 @@ class SmoothingService:
                 iterations=iterations,
                 closed=host._is_poly_closed(entity.points),
             )
-            entity.kind, entity.meta = "polyline", None
+            demote_to_path(entity)
             candidates.append(entity)
         host._canvas_service.update_entities(candidates)
         self._changed()
@@ -3402,7 +3304,8 @@ class SmoothingService:
             points = simplify(entity.points, tolerance, closed=host._is_poly_closed(entity.points))
             if 2 <= len(points) < len(entity.points):
                 candidate = deepcopy(entity)
-                candidate.points, candidate.kind, candidate.meta = points, "polyline", None
+                candidate.points = points
+                demote_to_path(candidate)
                 candidates.append(candidate)
         if not candidates:
             return 0
@@ -3417,22 +3320,24 @@ class SmoothingService:
             entity = host._entities_by_id[index]
             if len(entity.points) < 3:
                 continue
+            closed = host._is_poly_closed(entity.points)
             result = fit_polyline_to_bezier(
                 entity.points,
                 tolerance=tolerance,
                 corner_angle_deg=corner_angle_deg,
-                closed=host._is_poly_closed(entity.points),
+                closed=closed,
             )
             if result is not None:
-                fitted.append((index, result))
+                fitted.append((index, result, closed))
         if not fitted:
             return 0
         candidates = []
-        for index, (anchors, tangents) in fitted:
+        for index, (anchors, tangents), closed in fitted:
             entity = deepcopy(host._entities_by_id[index])
-            entity.points = anchors
-            entity.kind = "bezier"
-            entity.meta = {"control_points": tangents}
+            write_shape_to_entity(
+                entity,
+                ShapeFactory.bezier(control_points=anchors, tangents=tangents, closed=closed),
+            )
             candidates.append(entity)
         host._canvas_service.update_entities(candidates)
         self._changed()

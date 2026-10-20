@@ -21,7 +21,7 @@ from simple_stipple.canvas.tools.dragging import (
     start_bezier_handle_drag,
 )
 from simple_stipple.canvas.view.helpers import connected_entity_ids
-from simple_stipple.core.document.geometry import transform_entity_metadata
+from simple_stipple.core.document.geometry import demote_to_path, transform_entity_metadata
 
 
 class EditTool(CanvasTool):
@@ -166,8 +166,7 @@ class EditTool(CanvasTool):
                 # geometry as the canonical editable path, so the new vertex
                 # remains visible and draggable after redraw/save/export.
                 entity.points = list(visible_poly)
-                entity.kind = "polyline"
-                entity.meta = None
+                demote_to_path(entity)
             poly = entity.points
             if seg_idx + 1 > len(poly):
                 return True

@@ -7,6 +7,7 @@ import math
 
 from simple_stipple.core.cad.constants import DXF_CURVE_FLATTEN_TOL_MM
 from simple_stipple.core.cad.shape_base import (
+    LocalExtent,
     Point,
     Shape,
     _anisotropic_scale_fn,
@@ -518,6 +519,10 @@ class CircleShape(_CenterBasedShapeMixin, Shape):
         self.invalidate_cache()
         return True
 
+    def local_extent(self) -> LocalExtent:
+        diameter = 2.0 * self.radius
+        return LocalExtent(self.center, 0.0, diameter, diameter, "radius", "radius")
+
     def move_control_point(self, index: int, point: Point) -> bool:
         if index == 0:
             self.center = point
@@ -632,6 +637,9 @@ class EllipseShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):
         setattr(self, key, float(value))
         self.invalidate_cache()
         return True
+
+    def local_extent(self) -> LocalExtent:
+        return LocalExtent(self.center, self.rotation, 2.0 * self.rx, 2.0 * self.ry, "rx", "ry")
 
     def move_control_point(self, index: int, point: Point) -> bool:
         if index == 0:
@@ -754,6 +762,9 @@ class RectangleShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):
             return False
         self.invalidate_cache()
         return True
+
+    def local_extent(self) -> LocalExtent:
+        return LocalExtent(self.center, self.rotation, self.width, self.height, "width", "height")
 
     def to_meta_dict(self) -> tuple[str, dict | None]:
         return (
@@ -978,6 +989,9 @@ class SlotShape(_CenterBasedShapeMixin, _ParametricRotateMixin, Shape):
             return False
         self.invalidate_cache()
         return True
+
+    def local_extent(self) -> LocalExtent:
+        return LocalExtent(self.center, self.rotation, self.length, self.width, "length", "width")
 
     def to_meta_dict(self) -> tuple[str, dict | None]:
         return (

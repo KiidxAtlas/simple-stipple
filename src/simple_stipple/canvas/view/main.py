@@ -57,6 +57,7 @@ from simple_stipple.core.cad.constraints import GeometricConstraint
 from simple_stipple.core.cad.shape_factory import ShapeFactory
 from simple_stipple.core.document.geometry import (
     CanvasGeometry,
+    demote_to_path,
     entity_center,
     entity_shows_point_handles,
     geometry_for_entity,
@@ -2048,8 +2049,7 @@ class CanvasView(
             return False
         entity = deepcopy(self._entities_by_id[entity_id])
         entity.points = updated
-        entity.kind = "polyline"
-        entity.meta = None
+        demote_to_path(entity)
         self._canvas_service.update_entities([entity])
         self._redraw()
         self._notify()

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QLabel, QMenu
 
 from simple_stipple.canvas.constants import MIN_SCALE as _MIN_SCALE
 from simple_stipple.core.cad.constraints import GeometricConstraint
+from simple_stipple.core.document.geometry import demote_to_path
 from simple_stipple.core.editing.corners import chamfered_corner_points, rounded_corner_points
 from simple_stipple.ui.components.units import to_display as _to_display
 from simple_stipple.ui.components.units import unit_suffix as _unit_suffix
@@ -246,8 +247,7 @@ def _round_vertex(self, entity_id: str, vi: int, radius: float) -> bool:
         return False
     entity = deepcopy(self._entities_by_id[entity_id])
     entity.points = new_poly
-    entity.kind = "polyline"
-    entity.meta = None
+    demote_to_path(entity)
     self._canvas_service.update_entities([entity])
     self._redraw()
     self._notify()

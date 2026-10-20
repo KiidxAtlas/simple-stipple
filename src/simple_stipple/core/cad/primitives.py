@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 from shapely.geometry import Polygon
 
 from simple_stipple.core.cad.shape_base import Shape, _anisotropic_scale_fn, _finite
 
 Point = tuple[float, float]
+
+
+def _as_vector(value: Sequence[float]) -> Point:
+    return float(value[0]), float(value[1])
 
 
 def radial_profile(radii: list[float], *, rotation: float = -90.0) -> list[Point]:
@@ -578,6 +583,82 @@ class BezierShape(Shape):
         points = list(self._control_points)
         points[index] = point
         self.control_points = points
+        return True
+
+    def _padded_handles(self) -> tuple[list[Point], list[Point]]:
+        count = len(self._control_points)
+        self.node_types.extend(["symmetric"] * (count - len(self.node_types)))
+        incoming = [_as_vector(value) for value in self.handles_in[:count]]
+        outgoing = [_as_vector(value) for value in self.handles_out[:count]]
+        incoming.extend([(0.0, 0.0)] * (count - len(incoming)))
+        outgoing.extend([(0.0, 0.0)] * (count - len(outgoing)))
+        return incoming, outgoing
+
+    def handle_tips(self) -> list[tuple[int, str, Point]]:
+        """Return ``(anchor_index, "in" | "out", tip)`` for every anchor."""
+        incoming, outgoing = self._padded_handles()
+        tips: list[tuple[int, str, Point]] = []
+        for index, anchor in enumerate(self._control_points):
+            for side, vector in (("in", incoming[index]), ("out", outgoing[index])):
+                tips.append((index, side, (anchor[0] + vector[0], anchor[1] + vector[1])))
+        return tips
+
+    def set_handle(self, index: int, side: str, tip: Point, *, break_pair: bool = False) -> bool:
+        """Move one handle tip and keep its partner in step with the node type.
+
+        Symmetric nodes mirror the partner; smooth nodes keep the partner's
+        length but align its direction; corner nodes (or ``break_pair``)
+        leave it alone.
+        """
+        if not 0 <= index < len(self._control_points):
+            return False
+        anchor = self._control_points[index]
+        vector = (tip[0] - anchor[0], tip[1] - anchor[1])
+        incoming, outgoing = self._padded_handles()
+        if break_pair:
+            self.node_types[index] = "corner"
+        mode = self.node_types[index]
+        target = incoming if side == "in" else outgoing
+        other = outgoing if side == "in" else incoming
+        target[index] = vector
+        if mode == "symmetric":
+            other[index] = (-vector[0], -vector[1])
+        elif mode == "smooth":
+            old_length = math.hypot(*other[index])
+            length = math.hypot(*vector)
+            if length > 1e-12:
+                paired_length = old_length if old_length > 1e-12 else length
+                other[index] = (
+                    -vector[0] / length * paired_length,
+                    -vector[1] / length * paired_length,
+                )
+        self.handles_in = incoming
+        self.handles_out = outgoing
+        # ``tangents`` is the legacy single-handle field older readers use.
+        self.tangents = list(outgoing)
+        self.invalidate_cache()
+        return True
+
+    def set_node_type(self, index: int, mode: str) -> bool:
+        """Make an anchor a corner, smooth or symmetric node.
+
+        Smooth and symmetric nodes immediately re-pair their handles from the
+        outgoing one (a unit handle is made up when it has zero length).
+        """
+        if mode not in {"corner", "smooth", "symmetric"}:
+            return False
+        if not 0 <= index < len(self._control_points):
+            return False
+        self.node_types[index] = mode
+        if mode != "corner":
+            anchor = self._control_points[index]
+            out_tip = next(
+                tip for vi, side, tip in self.handle_tips() if vi == index and side == "out"
+            )
+            self.set_handle(index, "out", out_tip)
+            if math.hypot(out_tip[0] - anchor[0], out_tip[1] - anchor[1]) <= 1e-12:
+                self.set_handle(index, "out", (anchor[0] + 1.0, anchor[1]))
+        self.invalidate_cache()
         return True
 
     def to_meta_dict(self) -> tuple[str, dict | None]:

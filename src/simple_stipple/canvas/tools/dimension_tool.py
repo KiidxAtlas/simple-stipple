@@ -12,6 +12,7 @@ from shapely.geometry import LineString
 from shapely.ops import nearest_points
 
 from simple_stipple.canvas.tools.dimension_backend import DimensionBackend
+from simple_stipple.core.document.geometry import demote_to_path
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.ui.components.units import format_length as _format_length
 
@@ -330,8 +331,7 @@ class DimensionTool(DimensionBackend):
             # Moving one vertex generally invalidates rectangle/ellipse/etc.
             # procedural parameters. Preserve the edited points as canonical
             # geometry so properties and export cannot resurrect the old shape.
-            entity.kind = "polyline"
-            entity.meta = None
+            demote_to_path(entity)
         result = self.v._canvas_service.update_entities([entity])
         if not result.changed:
             return False

@@ -7,7 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from simple_stipple.core.cad.shape_base import Shape
+from simple_stipple.core.cad.primitives import BezierShape
+from simple_stipple.core.cad.shape_base import LocalExtent, Shape
 from simple_stipple.core.cad.shape_factory import ShapeFactory
 from simple_stipple.core.cad.snapping import polygon_centroid
 from simple_stipple.core.document.kinds import (
@@ -159,7 +160,8 @@ def entity_center(entity: Any) -> Point | None:
     return polygon_centroid(points)
 
 
-def _write_shape_to_entity(entity: Any, shape: Shape) -> None:
+def write_shape_to_entity(entity: Any, shape: Shape) -> None:
+    """Store ``shape`` as the entity's kind, metadata and points."""
     kind, metadata = shape.to_meta_dict()
     entity.kind = kind
     entity.meta = metadata
@@ -169,12 +171,51 @@ def _write_shape_to_entity(entity: Any, shape: Shape) -> None:
         entity.points = list(shape.points)
 
 
+def demote_to_path(entity: Any) -> None:
+    """Forget the entity's parametric definition; its points become the shape.
+
+    Used when an edit (smoothing, free scaling, extending, …) produces
+    geometry the old kind's metadata can no longer describe.
+    """
+    entity.kind = EntityKind.POLYLINE
+    entity.meta = None
+
+
+def entity_local_extent(entity: Any) -> LocalExtent | None:
+    """Return the box a rectangle/ellipse/circle/slot spans in its own frame."""
+    geometry = geometry_for_entity(entity)
+    if not isinstance(geometry, ShapeGeometry):
+        return None
+    return geometry.shape.local_extent()
+
+
+def bezier_for_entity(entity: Any) -> BezierShape | None:
+    """Return the entity's editable Bézier, or None when it has no handles."""
+    if getattr(entity, "kind", None) != EntityKind.BEZIER or not getattr(entity, "meta", None):
+        return None
+    shape = geometry_for_entity(entity)
+    if isinstance(shape, ShapeGeometry) and isinstance(shape.shape, BezierShape):
+        return shape.shape
+    return None
+
+
+def write_bezier_handles(entity: Any, shape: BezierShape) -> None:
+    """Persist handle edits made on ``bezier_for_entity``'s shape."""
+    entity.meta = {
+        **(getattr(entity, "meta", None) or {}),
+        "handles_in": list(shape.handles_in),
+        "handles_out": list(shape.handles_out),
+        "node_types": list(shape.node_types),
+        "tangents": list(shape.tangents),
+    }
+
+
 def update_entity_parameter(entity: Any, key: str, value: float) -> bool:
     """Update a parametric record without exposing kind switches to the view."""
     geometry = geometry_for_entity(entity)
     if not isinstance(geometry, ShapeGeometry) or not geometry.shape.set_parameter(key, value):
         return False
-    _write_shape_to_entity(entity, geometry.shape)
+    write_shape_to_entity(entity, geometry.shape)
     return True
 
 
@@ -209,7 +250,7 @@ def move_entity_control_point(
         control_index = int(round(fraction * 4.0)) % 4 + 1
     if not shape.move_control_point(control_index, point):
         return False
-    _write_shape_to_entity(entity, shape)
+    write_shape_to_entity(entity, shape)
     return True
 
 
@@ -256,8 +297,7 @@ def remove_entity_points(entity: Any, indices: set[int]) -> None:
     elif kind in {"line", "spline"}:
         synchronize_entity_control_points(entity)
     else:
-        entity.kind = "polyline"
-        entity.meta = None
+        demote_to_path(entity)
 
 
 def transform_entity_metadata(
