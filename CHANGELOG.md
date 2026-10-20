@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.31 — 2026-10-20
 
 ### Fixed
 
@@ -37,7 +37,6 @@
 - **PNG export** — a lossless image-only export format that writes the placed,
   clipped engraving image plus its placement JSON. It becomes the default when
   an image is added, unless you have picked a format yourself.
-
 - Repository controls show the current branch or detached HEAD, let you switch
   to local/remote branches or create a local branch, and provide a Git command
   field for diagnostics such as checking the current upstream. Commands run as
@@ -96,7 +95,7 @@
   and the manual list all five pages (including Repository) with their
   current keys, and mark canvas-only keys. View ▸ Fit View shows its real key.
 - **Saved vs. recovery status** — hovering the workspace name shows "Saved to
-  <workspace> <time>" and "Recovery snapshot <time>" separately. The unsaved
+  <workspace></workspace> <time></time>" and "Recovery snapshot <time></time>" separately. The unsaved
   changes prompt explains what Discard Changes keeps.
 - **Draft export labels** — the primary button reads "Export DXF…", the
   Format menu button says "Choose export format", and toolbar tool tooltips
@@ -147,16 +146,14 @@
   "Show Issues" selects and frames the flagged outlines.
 - **Pattern wording** — "Region"/"Treatment" replace the remaining "zone"
   text; the side drawers are labelled "Settings" and "Inspector"; switching to
-  a saved custom tile says "Loaded saved settings for <tile>".
+  a saved custom tile says "Loaded saved settings for <tile></tile>".
 - **Pattern manual** — Pattern Types documents only the ten built-in
   generators and custom tiles, with their real parameters and defaults, and
   lists which retired patterns open as which replacement. The common-tasks
   guide explains auto-preview versus Export instead of a Generate step.
-
 - **Installed version shown in the app** — the header and About read the
   running package version. The release gate checks it against package metadata,
   and the Windows installer uses that same version for its installed-app entry.
-
 - **One transform hierarchy in Draft** — the inspector identifies the selected
   layer/group and remains the exact-value editor; canvas size badges are
   smaller quick edits with the same correctable validation. The move grip is
@@ -194,7 +191,6 @@
 - Fill spacing, angle, and inset, and the fade width, are now validated like
   other Pattern fields instead of silently falling back to defaults, and an
   export waiting on a region solve that fails no longer stays "Solving" forever.
-
 - Spline offset preview and output now follow the displayed curve rather than
   offsetting its sparse control points into visibly jagged linework.
 
@@ -249,7 +245,6 @@
   could not start (an invalid field) or was cancelled, the export stayed
   pending with no message. It now reports "Export blocked — …" or "Export
   cancelled."
-
 - **Pattern solve hung with "Outline space" fill on overlapping elements** —
   grains or dots that overlap (Grip Stipple, dense Stipple Dots) were cut out
   of the outline with mixed winding, so overlaps cancelled: the solve ran for
@@ -258,7 +253,6 @@
   in batches, so the same solve takes a fraction of a second, Cancel and newer
   edits take effect between batches and between filled cells, and the safety
   estimate counts repeat tiles for Voronoi, Stipple Dots, and Grip Stipple.
-
 - **Delete key ignored after clicking a toolbar button** — toolbar buttons no
   longer take keyboard focus from the canvas when clicked, so Delete, arrow
   nudges, and tool shortcuts keep working. Delete also removes the selection
@@ -404,14 +398,12 @@
   PyInstaller onedir mode so the installer can relaunch it without the
   one-file parent-process security validation failure.
 
-
 ## 0.3.19 — 2026-09-02
 
 ### Changed
 
 - **Test release** — publishes another native Windows installer to verify
   the `.18 → .19` update flow.
-
 
 ## 0.3.18 — 2026-09-01
 
@@ -421,7 +413,6 @@
   Inno Setup instead of replacing the running executable from a temporary
   directory. This preserves rollback and restart behavior in the installer.
 
-
 ## 0.3.17 — 2026-09-01
 
 ### Fixed
@@ -429,13 +420,11 @@
 - **SciPy modules in Windows bundle** — collect SciPy’s complete package so
   Trace no longer fails on `RigidTransform` or `_decomp_update` imports.
 
-
 ### Fixed
 
 - **Windows update relaunch** — startup now uses the detached PowerShell updater
   instead of trying to execute a Python helper through the frozen EXE. This
   prevents the updated app from exiting before its window appears.
-
 
 ## 0.3.12 — 2026-09-01
 
@@ -463,6 +452,7 @@
 
 - **No terminal window on Windows startup** — added `--windowed` flag to PyInstaller build
   so the EXE launches as a proper GUI app without a console window.
+
 ## 0.3.10 — 2026-09-01
 
 ### Added
@@ -523,7 +513,7 @@
 
 - **"Start a drawing" hint no longer overlays shape previews** — the empty-state
   overlay now hides during arc, pen, quick-shape, and shape-preview gestures that
-  never populate ``_draw_pts``.
+  never populate `_draw_pts`.
 - **Shape-preview "Commit shape / Cancel" popup removed** — Enter and a second
   click commit the preview; Esc cancels. Keyboard focus is guaranteed on canvas
   click so Enter reliably reaches the canvas.
@@ -535,7 +525,7 @@
   document; real edits change the hash and re-arm crash protection.
 - **DXF group restoration fixed** — the legacy view-state groups map was written
   with entity IDs but read with indices, silently wiping every group on workspace
-  load; groups now restore through the per-entity ``group`` key.
+  load; groups now restore through the per-entity `group` key.
 - **Pattern ghost overlay when last outline deleted** — the solved preview now
   clears when the final outline is removed.
 - **Pattern outline file import routing** — DXF, FVI, and SVG outline files
@@ -548,28 +538,28 @@
   Select mode was misleading since vertex editing is Edit-only.
 - **Make test parametrized node IDs** — the pytest collection recipe was splitting
   node IDs on whitespace, truncating 17 parametrized IDs containing spaces (e.g.
-  ``[Half drop-Honeycomb]``) into nonexistent selectors; nodes are now quoted.
+  `[Half drop-Honeycomb]`) into nonexistent selectors; nodes are now quoted.
 - **Numeric-control size test order-independence** — widget min-heights come from
   the QSS theme; the test now applies the theme itself so it passes regardless
   of test execution order.
-- **Orphaned ResampleCommand chain removed** — ``ResampleCommand``, its two
-  ``DocumentService`` branches, ``resample_by_count``/``resample_by_spacing``,
-  and ``geometry.resample_path`` were unreachable (zero construction sites) and
+- **Orphaned ResampleCommand chain removed** — `ResampleCommand`, its two
+  `DocumentService` branches, `resample_by_count`/`resample_by_spacing`,
+  and `geometry.resample_path` were unreachable (zero construction sites) and
   have been deleted.
-- **Canvas operations consolidated** — ``canvas/operations/`` merged from 12
-  modules into ``editing.py``, ``drawing.py``, and ``interactions.py``.
-- **View preferences consolidated** — ``canvas/view/preferences.py`` absorbed
-  into ``canvas/view/config.py``.
-- **Pattern/Trace canvas runtimes co-located** — ``features/pattern/canvas_runtime.py``
-  and ``features/trace/canvas_runtime.py`` merged into ``features/canvas_runtime.py``.
-- **Help content consolidated** — ``features/help/content.py`` absorbed into
-  ``features/help/dialog.py``.
-- **DXF formats consolidated** — ``dxf_write.py`` absorbed into ``dxf.py``;
-  ``dxf_backend.py`` service/repair logic moved into ``formats/service.py``.
+- **Canvas operations consolidated** — `canvas/operations/` merged from 12
+  modules into `editing.py`, `drawing.py`, and `interactions.py`.
+- **View preferences consolidated** — `canvas/view/preferences.py` absorbed
+  into `canvas/view/config.py`.
+- **Pattern/Trace canvas runtimes co-located** — `features/pattern/canvas_runtime.py`
+  and `features/trace/canvas_runtime.py` merged into `features/canvas_runtime.py`.
+- **Help content consolidated** — `features/help/content.py` absorbed into
+  `features/help/dialog.py`.
+- **DXF formats consolidated** — `dxf_write.py` absorbed into `dxf.py`;
+  `dxf_backend.py` service/repair logic moved into `formats/service.py`.
 
 ### Verification
 
-- Full offscreen suite: 406 tests pass. ``ruff check src tests`` and ``mypy``
+- Full offscreen suite: 406 tests pass. `ruff check src tests` and `mypy`
   clean. Circular-import check clean. Module-home and dependency-boundary
   suites pass.
 
@@ -605,8 +595,7 @@
   command palette, Save, Support, and Settings actions.
 - Added a compact precision bar mode that folds pan and precision controls into a single
   contextual menu for canvas-heavy workflows in Draft and Pattern.
-- Reordered the Pattern inspector into a numbered top-down flow — 1. Outline,
-  2. Pattern, 3. Regions (optional) — so the everyday path reads before advanced steps.
+- Reordered the Pattern inspector into a numbered top-down flow — 1. Outline, 2. Pattern, 3. Regions (optional) — so the everyday path reads before advanced steps.
 - Hid the Draft editing toolbar until a drawing exists so first-time makers see only
   Import, Draw, and Trace on the empty canvas.
 
@@ -1048,9 +1037,9 @@ Help, Settings, layout, precision, and updater improvements described below.
   - Failed replacements restore the previous executable and write an installation log.
   - Development/source runs are prevented from accidentally replacing the Python
     interpreter.
+
 - Executable architecture contracts covering dependency direction, Qt isolation,
   feature-to-feature boundaries, canonical module homes, and removed compatibility paths.
-
 - Focused regression coverage for Help search, Settings navigation, sidebar scrollbar
   clearance, two-decimal dimension displays, update-dialog state transitions, staging-path
   safety, and Windows updater handoff behavior.
