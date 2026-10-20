@@ -106,7 +106,9 @@ def _trace_command(argv: list[str]) -> int:
     if args.width_mm <= 0 or not 0 <= args.threshold <= 255:
         parser.error("--width-mm must be positive and --threshold must be from 0 to 255")
     try:
-        sources = _source_files(args.input, (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"), args.recursive)
+        sources = _source_files(
+            args.input, (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"), args.recursive
+        )
     except ValueError as exc:
         parser.error(str(exc))
     failed = False

@@ -75,8 +75,6 @@ def test_convert_to_outline_promotes_a_generated_cell(app: QApplication) -> None
     page.close()
 
 
-
-
 def test_deleting_the_last_outline_drops_the_solved_overlay(app: QApplication) -> None:
     """Regression: deleting every outline used to leave the last-good solve
     rendered as a ghost — the keep-last-good overlay only makes sense while a

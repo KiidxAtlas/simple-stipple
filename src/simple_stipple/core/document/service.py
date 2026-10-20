@@ -266,7 +266,8 @@ class DocumentService:
             snapshots = tuple(
                 _snapshot(EntityRecord(points=ring))
                 for ring in boolean_polylines(
-                    [geometry_for_entity(entity).tessellate() for entity in sources], command.operation
+                    [geometry_for_entity(entity).tessellate() for entity in sources],
+                    command.operation,
                 )
             )
         elif isinstance(command, MergeCommand):

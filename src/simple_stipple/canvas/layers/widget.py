@@ -701,8 +701,10 @@ class DxfLayersTree(QFrame):
         if item is None:
             return
         kind = self._item_kind(item)
-        if kind in {"layer", "shape"} and self._editable and bool(
-            item.data(0, self._ROLE_EDITABLE)
+        if (
+            kind in {"layer", "shape"}
+            and self._editable
+            and bool(item.data(0, self._ROLE_EDITABLE))
         ):
             was_expanded = item.isExpanded()
             self._tree.editItem(item, 0)

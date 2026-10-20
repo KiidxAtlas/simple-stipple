@@ -88,6 +88,7 @@ def _node_open_paths_at_intersections(paths: list[PathInput]) -> list[PathInput]
     or when any path is closed, since opening a ring just to node it would
     silently destroy closure.
     """
+
     def _is_closed(points: list[PointTuple]) -> bool:
         return len(points) >= 3 and math.dist(points[0], points[-1]) < PATH_CLOSURE_TOLERANCE
 
@@ -113,17 +114,13 @@ def _node_open_paths_at_intersections(paths: list[PathInput]) -> list[PathInput]
     for branch in branches:
         pts = [(float(x), float(y)) for x, y in branch.coords]
         deduped = [pts[0]]
-        deduped.extend(
-            p for p in pts[1:] if math.dist(deduped[-1], p) >= PATH_DEGENERACY_TOLERANCE
-        )
+        deduped.extend(p for p in pts[1:] if math.dist(deduped[-1], p) >= PATH_DEGENERACY_TOLERANCE)
         if len(deduped) >= 2:
             out.append(PathInput(deduped, construction))
     return out or paths
 
 
-def _walk_branches_into_chains(
-    branches: list[PathInput], tolerance: float
-) -> list[PathInput]:
+def _walk_branches_into_chains(branches: list[PathInput], tolerance: float) -> list[PathInput]:
     """Chain junction-sharing branches into one polyline per connected
     component, backtracking through junctions of degree 3+.
 
@@ -147,18 +144,14 @@ def _walk_branches_into_chains(
     used = [False] * len(edges)
     output: list[PathInput] = []
 
-    def visit(
-        node_key: tuple[int, int], node_pt: PointTuple, chain: list[PointTuple]
-    ) -> None:
+    def visit(node_key: tuple[int, int], node_pt: PointTuple, chain: list[PointTuple]) -> None:
         for edge_index in adjacency.get(node_key, []):
             if used[edge_index]:
                 continue
             used[edge_index] = True
             edge = edges[edge_index]
             oriented = (
-                edge
-                if _points_equal_within(edge[0], node_pt, tolerance)
-                else list(reversed(edge))
+                edge if _points_equal_within(edge[0], node_pt, tolerance) else list(reversed(edge))
             )
             # oriented[0] == node_pt; append the far side, recurse, then
             # backtrack to this junction while arms remain unvisited.

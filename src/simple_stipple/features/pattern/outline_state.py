@@ -141,7 +141,9 @@ def read_outline_vector(
                 converted = Path(folder) / "outline.dxf"
                 convert_svg(path, converted)
                 polylines, _report = read_dxf(str(converted))
-            return VectorOutlineImport([list(poly) for poly in polylines], list(read_svg_artwork(path)))
+            return VectorOutlineImport(
+                [list(poly) for poly in polylines], list(read_svg_artwork(path))
+            )
         except ET.ParseError as exc:
             raise ValueError(f"Could not parse {Path(path).name} as SVG: {exc}") from exc
     raise ValueError("Choose an FVI or SVG vector file.")
