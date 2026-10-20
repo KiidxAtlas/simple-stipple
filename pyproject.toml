@@ -58,10 +58,6 @@ telemetry = [
 cad = [
     "python-solvespace>=3.0.8",
 ]
-dist = [
-    "pyarmor>=8.7",       # Bytecode obfuscation for PyInstaller bundles
-    "pyinstaller>=6.0",
-]
 
 [project.scripts]
 simple-stipple = "simple_stipple.app.launcher:main"
