@@ -21,7 +21,10 @@ from simple_stipple.features.pattern.form import (
     retired_pattern_notice,
 )
 from simple_stipple.features.pattern.outline_state import smallest_containing_outline
-from simple_stipple.features.pattern.regions.treatments import migrate_workspace_zones
+from simple_stipple.features.pattern.regions.treatments import (
+    load_stored_treatments,
+    migrate_workspace_zones,
+)
 from simple_stipple.ui.style import STATUS_WARN
 
 LOGGER = logging.getLogger(__name__)
@@ -135,16 +138,18 @@ def apply_pattern_workspace_state(page: Any, state: dict | None) -> None:
     # cutout ids; both map onto treatments, so a pre-Phase-1 file opens with
     # the same output and nothing to reassign.
     stored = pattern_state.treatments
+    param_issues: list[str] = []
     if stored:
-        page._treatments = {
-            str(key): dict(value) for key, value in stored.items() if isinstance(value, dict)
-        }
+        page._treatments = load_stored_treatments(dict(stored), param_issues)
     else:
         page._treatments = migrate_workspace_zones(
             page._outline_ids,
             [dict(zone) for zone in pattern_state.zones],
             [str(v) for v in pattern_state.exclusion_ids],
+            param_issues,
         )
+    for issue in param_issues:
+        LOGGER.warning("Workspace pattern parameter %s", issue)
     page._refresh_zone_list()
     page._custom_tile_polys = [list(poly) for poly in pattern_state.custom_tile_polys]
     page._engraving_image_path = pattern_state.engraving_image_path

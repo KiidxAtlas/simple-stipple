@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.core.patterns.fill import NULL_PATTERN
 from simple_stipple.core.patterns.geometry import NO_REPEAT, REPEAT_MODES
+from simple_stipple.core.patterns.params import ParamKind, ParamSpec
 from simple_stipple.core.patterns.processing import RETIRED_PATTERNS
 from simple_stipple.features.pattern.defaults import (
     DEFAULT_BORDER_FADE,
@@ -549,6 +550,32 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
         ),
         *_scatter_repeat_fields("vor"),
     ],
+}
+
+
+def _param_kind(kind: str) -> ParamKind:
+    if kind in ("float", "int", "checkbox", "combobox"):
+        return cast(ParamKind, kind)
+    raise ValueError(f"Unknown parameter field kind {kind!r}")
+
+
+def param_schema(spec: ParamField) -> ParamSpec:
+    """The Qt-free generator-parameter contract described by a form field."""
+    return ParamSpec.from_text_default(
+        spec.param_key or spec.attr[1:],
+        _param_kind(spec.kind),
+        spec.default,
+        minimum=spec.minimum,
+        maximum=spec.maximum,
+        items=spec.items,
+    )
+
+
+# Generator parameter schemas, derived from the form specs so the two cannot
+# drift: what the form collects is exactly what stored treatments are checked
+# against.
+PATTERN_PARAM_SCHEMAS: dict[str, tuple[ParamSpec, ...]] = {
+    name: tuple(param_schema(spec) for spec in specs) for name, specs in PARAM_SPECS.items()
 }
 
 

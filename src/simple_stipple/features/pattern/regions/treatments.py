@@ -19,8 +19,10 @@ from copy import deepcopy
 from typing import Any
 
 from simple_stipple.core.patterns.fill import NULL_PATTERN
+from simple_stipple.core.patterns.params import normalize_pattern_params
 from simple_stipple.core.patterns.processing import RETIRED_PATTERNS, migrate_pattern_name
 from simple_stipple.core.patterns.tiling import Region, build_region_tree
+from simple_stipple.features.pattern.form import PATTERN_PARAM_SCHEMAS
 
 TREATMENT_KINDS = ("none", "pattern", "fill", "pattern_fill", "engrave", "cut")
 
@@ -300,10 +302,47 @@ def engraving_mask_polys(page: Any) -> list[list[tuple[float, float]]]:
     return masks or generation_polys(page)
 
 
+def normalize_treatment_params(
+    pattern: object, params: object, issues: list[str] | None = None
+) -> dict:
+    """Validate stored generator parameters against the pattern's schema.
+
+    Shared by every path that reads treatments from a workspace. Problems are
+    appended to ``issues`` with the pattern name; see
+    :func:`simple_stipple.core.patterns.params.normalize_pattern_params` for
+    which values are coerced, replaced, or kept.
+    """
+    raw = dict(params) if isinstance(params, dict) else {}
+    name = migrate_pattern_name(str(pattern or NULL_PATTERN))
+    specs = PATTERN_PARAM_SCHEMAS.get(name)
+    if specs is None:
+        return raw
+    normalized, problems = normalize_pattern_params(specs, raw)
+    if issues is not None:
+        issues.extend(f"{name} {problem}" for problem in problems)
+    return normalized
+
+
+def load_stored_treatments(stored: dict, issues: list[str] | None = None) -> dict[str, dict]:
+    """Read the current-format treatment map from a workspace."""
+    treatments: dict[str, dict] = {}
+    for key, value in stored.items():
+        if not isinstance(value, dict):
+            continue
+        treatment = dict(value)
+        if "params" in treatment:
+            treatment["params"] = normalize_treatment_params(
+                treatment.get("pattern"), treatment["params"], issues
+            )
+        treatments[str(key)] = treatment
+    return treatments
+
+
 def migrate_workspace_zones(
     outline_ids: list[str],
     raw_zones: list[dict],
     exclusion_ids: list[str],
+    issues: list[str] | None = None,
 ) -> dict[str, dict]:
     """Map a pre-Phase-1 workspace onto region treatments.
 
@@ -324,7 +363,7 @@ def migrate_workspace_zones(
             "kind": kind,
             "pattern": pattern,
             "pattern_label": str(raw.get("pattern_label") or pattern),
-            "params": dict(raw.get("params") or {}),
+            "params": normalize_treatment_params(pattern, raw.get("params"), issues),
             "scale": tuple(raw.get("scale") or ()) or None,
             "fill": raw.get("fill"),
             "form_state": raw.get("form_state") or {},
