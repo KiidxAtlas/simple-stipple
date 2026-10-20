@@ -874,13 +874,14 @@ class CanvasView(
         self._hover_vert = None
 
     def _invalidate_snap_shapes(self) -> None:
-        """Drop the lazily-built snap-shape cache.
+        """Drop the lazily-built snap-shape cache and hit-test indexes.
 
         Committed document changes do this automatically through
         ``CanvasModel.geometry_changed``; call it only after mutating entity
         records in place (live drag previews, raw list appends).
         """
         self._snap_shapes_cache = None
+        self._hit_test.invalidate()
 
     def _snap_shapes(self) -> dict[str, Any]:
         """Shape objects for the snap engine, keyed by entity ID, rebuilt on demand."""

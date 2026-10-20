@@ -5,6 +5,10 @@ from __future__ import annotations
 import math
 from typing import Any, Protocol, cast
 
+import numpy as np
+import shapely
+from shapely.strtree import STRtree
+
 from simple_stipple.canvas.constants import EDGE_HIT, SNAP_DIST, VERT_HIT
 from simple_stipple.canvas.objects import CanvasFrameState
 from simple_stipple.core.document.model import EntityId, EntityRecord
@@ -37,17 +41,51 @@ class HitTestHost(Protocol):
     def frame_state(self) -> CanvasFrameState: ...
 
 
+# Relative slack on spatial-index query radii so float rounding never drops
+# an entity whose exact distance test would accept it.
+_QUERY_MARGIN = 0.01
+
+
+class _EntityBoundsIndex:
+    """STRtree over entity bounding boxes, returning document indices."""
+
+    def __init__(self, entities: list[EntityRecord]) -> None:
+        owners: list[int] = []
+        bounds: list[tuple[float, float, float, float]] = []
+        for index, entity in enumerate(entities):
+            if len(entity.points) < 2:
+                continue  # pointer queries measure segments; points never hit
+            coords = np.asarray(entity.points, dtype=float)
+            low = coords.min(axis=0)
+            high = coords.max(axis=0)
+            owners.append(index)
+            bounds.append((float(low[0]), float(low[1]), float(high[0]), float(high[1])))
+        self._owners = np.asarray(owners, dtype=np.int64)
+        self._tree: STRtree | None = None
+        if bounds:
+            table = np.asarray(bounds, dtype=float)
+            self._tree = STRtree(shapely.box(table[:, 0], table[:, 1], table[:, 2], table[:, 3]))
+
+    def query(self, wx: float, wy: float, radius: float) -> list[int]:
+        if self._tree is None:
+            return []
+        hits = self._tree.query(shapely.box(wx - radius, wy - radius, wx + radius, wy + radius))
+        return sorted(int(i) for i in self._owners[hits])
+
+
 class HitTestService:
     def __init__(self, host: HitTestHost) -> None:
         self._host = host
-        # Cached KD-tree over all vertices, plus the identity of the entity
-        # list it was built from. ``_document`` is replaced with a fresh object
-        # on every committed edit (see CanvasService._document_changed), so an
-        # identity mismatch is a sufficient and cheap invalidation signal;
-        # in-place point mutations only occur mid-drag, when hover hit-testing
-        # is not running.
+        # Spatial indexes over the current entities: a KD-tree over vertices
+        # and an STRtree over entity bounding boxes. Both are dropped by
+        # ``invalidate()``, which the view calls on every geometry change
+        # (CanvasModel.geometry_changed) and after in-place preview edits. The
+        # entity list identity/length key is a second guard for hosts that do
+        # not call ``invalidate()``.
         self._vertex_index: VertexIndex | None = None
         self._vertex_index_key: tuple[int, int] | None = None
+        self._bounds_index: _EntityBoundsIndex | None = None
+        self._bounds_index_key: tuple[int, int] | None = None
 
     @staticmethod
     def segment_intersection(a1: Point, a2: Point, b1: Point, b2: Point) -> Point | None:
@@ -104,6 +142,13 @@ class HitTestService:
                     best_distance, best = distance, point
         return best
 
+    def invalidate(self) -> None:
+        """Drop spatial indexes after entity geometry changed."""
+        self._vertex_index = None
+        self._vertex_index_key = None
+        self._bounds_index = None
+        self._bounds_index_key = None
+
     def _current_vertex_index(self) -> VertexIndex | None:
         """Return a KD-tree over all vertices, rebuilt only when entities change."""
         entities = self._host.frame_state().document.entities
@@ -112,6 +157,26 @@ class HitTestService:
             self._vertex_index = build_vertex_index([entity.points for entity in entities])
             self._vertex_index_key = key
         return self._vertex_index
+
+    def _entities_near(self, wx: float, wy: float, radius_px: float) -> list[EntityRecord]:
+        """Entities whose bounds lie within ``radius_px`` screen pixels of a
+        world point, in document order.
+
+        Screen distance is world distance times the uniform view scale, so a
+        bounding-box query with radius ``radius_px / scale`` keeps every entity
+        the callers' exact distance tests could accept; document order keeps
+        their first-wins tie-breaking unchanged.
+        """
+        entities = self._host._entities
+        scale = getattr(self._host, "_scale", None)
+        if not isinstance(scale, (int, float)) or scale <= 0:
+            return list(entities)
+        key = (id(entities), len(entities))
+        if key != self._bounds_index_key or self._bounds_index is None:
+            self._bounds_index = _EntityBoundsIndex(entities)
+            self._bounds_index_key = key
+        radius = radius_px / scale * (1.0 + _QUERY_MARGIN)
+        return [entities[i] for i in self._bounds_index.query(wx, wy, radius)]
 
     def nearest_vertex(self, cx: float, cy: float) -> tuple[EntityId, int] | None:
         host = self._host
@@ -199,7 +264,7 @@ class HitTestService:
         wx, wy = host._c2w(cx, cy)
         best_distance: float = float(EDGE_HIT)
         best: tuple[EntityId, int, Point] | None = None
-        for entity in host._entities:
+        for entity in self._entities_near(wx, wy, best_distance):
             if not host._entity_selectable(entity.id):
                 continue
             distance, result = cast(
@@ -216,7 +281,7 @@ class HitTestService:
         wx, wy = host._c2w(cx, cy)
         best_distance: float = 8.0
         best: EntityId | None = None
-        for entity in host._entities:
+        for entity in self._entities_near(wx, wy, best_distance):
             if not host._entity_selectable(entity.id):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
@@ -229,7 +294,7 @@ class HitTestService:
         host = self._host
         wx, wy = host._c2w(cx, cy)
         hits: list[tuple[float, EntityId]] = []
-        for entity in host._entities:
+        for entity in self._entities_near(wx, wy, 8.0):
             if not host._entity_selectable(entity.id):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
@@ -317,7 +382,7 @@ class HitTestService:
             return None
         wx, wy = host._c2w(cx, cy)
         best, best_distance = None, 8.0
-        for entity in host._entities:
+        for entity in self._entities_near(wx, wy, 8.0):
             if entity.hidden or host._layer_service.on_active(entity):
                 continue
             distance = self.closest_point(entity.points, wx, wy, cx, cy)
