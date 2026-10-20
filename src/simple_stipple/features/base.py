@@ -8,6 +8,30 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget
 
 
+class ModelField:
+    """Expose one page-model attribute as a page attribute.
+
+    Pages kept their historical ``self._name`` spelling when their state
+    moved into a model object; declaring each alias as a ``ModelField`` keeps
+    that spelling explicit and visible to tools, instead of routing every
+    attribute lookup through ``__getattr__``/``__setattr__``.
+    """
+
+    def __init__(self, field: str) -> None:
+        self.field = field
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    def __get__(self, page: Any, owner: type | None = None) -> Any:
+        if page is None:
+            return self
+        return getattr(page._model, self.field)
+
+    def __set__(self, page: Any, value: Any) -> None:
+        setattr(page._model, self.field, value)
+
+
 class BasePage(QWidget):
     """Common base for all top-level workspace pages.
 
@@ -19,22 +43,6 @@ class BasePage(QWidget):
     """
 
     stateChanged = Signal()
-    _MODEL_STATE_FIELDS: dict[str, str] = {}
-
-    def __getattr__(self, name: str) -> Any:
-        field = type(self)._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            return getattr(model, field)
-        raise AttributeError(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        field = type(self)._MODEL_STATE_FIELDS.get(name)
-        model = self.__dict__.get("_model")
-        if field is not None and model is not None:
-            setattr(model, field, value)
-            return
-        super().__setattr__(name, value)
 
     def run(self) -> None:
         """Start the page's primary operation."""
@@ -76,4 +84,4 @@ class BasePage(QWidget):
         pass
 
 
-__all__ = ["BasePage"]
+__all__ = ["BasePage", "ModelField"]

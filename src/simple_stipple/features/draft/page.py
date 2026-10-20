@@ -43,7 +43,7 @@ from simple_stipple.core.cad.detection import (
 from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.core.formats.service import DxfService, summarize_dxf_import_report
-from simple_stipple.features.base import BasePage
+from simple_stipple.features.base import BasePage, ModelField
 from simple_stipple.features.draft.detection_dialog import ShapeDetectionDialog
 from simple_stipple.features.draft.model import DraftModel
 from simple_stipple.features.draft.session import (
@@ -91,18 +91,16 @@ class DraftPage(BasePage):
     openPageRequested = Signal(str)
     customTileRequested = Signal(object)
 
-    _MODEL_STATE_FIELDS = {
-        "_last_out_path": "last_output_path",
-        "_last_in_path": "last_input_path",
-        "_import_note": "import_note",
-    }
+    _last_out_path = ModelField("last_output_path")
+    _last_in_path = ModelField("last_input_path")
+    _import_note = ModelField("import_note")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
         self._model = DraftModel()
-        self._last_out_path: str | None = None
-        self._last_in_path: str | None = None
-        self._import_note: str = ""
+        self._last_out_path = None
+        self._last_in_path = None
+        self._import_note = ""
         self._runtime: CanvasRuntime | None = None
 
         root = QVBoxLayout(self)

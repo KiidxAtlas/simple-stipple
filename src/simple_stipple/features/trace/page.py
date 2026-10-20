@@ -43,7 +43,7 @@ from simple_stipple.canvas.widgets.toolbar import CanvasStatusStrip
 from simple_stipple.core.cad.preflight import analyze_geometry
 from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.imaging import RasterEngravingSpec, export_raster_job, image_to_outlines
-from simple_stipple.features.base import BasePage
+from simple_stipple.features.base import BasePage, ModelField
 from simple_stipple.features.canvas_runtime import TraceCanvasPageRuntime
 from simple_stipple.features.trace.form import (
     TRACE_FIELD_LIMITS,
@@ -136,36 +136,34 @@ class TracePage(BasePage):
     sendSelectedToPatternRequested = Signal(object)
     customTileRequested = Signal(object)
 
-    _MODEL_STATE_FIELDS = {
-        "_img_path": "image_path",
-        "_running": "running",
-        "_trace_pending": "trace_pending",
-        "_active_trace_token": "active_trace_token",
-        "_cancel_event": "cancel_event",
-        "_shutting_down": "shutting_down",
-        "_last_out": "last_output",
-        "_last_display_img": "last_display_image",
-        "_last_width_mm": "last_width_mm",
-        "_last_height_mm": "last_height_mm",
-        "_img_w_px": "image_width_px",
-        "_img_h_px": "image_height_px",
-        "_img_aspect": "image_aspect",
-        "_aspect_locked": "aspect_locked",
-        "_image_x_mm": "image_x_mm",
-        "_image_y_mm": "image_y_mm",
-        "_image_rotation_deg": "image_rotation_deg",
-        "_trace_revision": "trace_revision",
-        "_needs_view_fit": "needs_view_fit",
-        "_trace_result_stale": "trace_result_stale",
-    }
+    _img_path = ModelField("image_path")
+    _running = ModelField("running")
+    _trace_pending = ModelField("trace_pending")
+    _active_trace_token = ModelField("active_trace_token")
+    _cancel_event = ModelField("cancel_event")
+    _shutting_down = ModelField("shutting_down")
+    _last_out = ModelField("last_output")
+    _last_display_img = ModelField("last_display_image")
+    _last_width_mm = ModelField("last_width_mm")
+    _last_height_mm = ModelField("last_height_mm")
+    _img_w_px = ModelField("image_width_px")
+    _img_h_px = ModelField("image_height_px")
+    _img_aspect = ModelField("image_aspect")
+    _aspect_locked = ModelField("aspect_locked")
+    _image_x_mm = ModelField("image_x_mm")
+    _image_y_mm = ModelField("image_y_mm")
+    _image_rotation_deg = ModelField("image_rotation_deg")
+    _trace_revision = ModelField("trace_revision")
+    _needs_view_fit = ModelField("needs_view_fit")
+    _trace_result_stale = ModelField("trace_result_stale")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
         self._model = TraceModel()
-        self._img_path: str | None = None
-        self._running: bool = False
-        self._trace_pending: bool = False
-        self._active_trace_token: int | None = None
+        self._img_path = None
+        self._running = False
+        self._trace_pending = False
+        self._active_trace_token = None
         self._cancel_event = threading.Event()
         self._shutting_down = False
         self._jobs = JobRunner(self)
@@ -175,20 +173,20 @@ class TracePage(BasePage):
         self._preview_timer.timeout.connect(self._start_trace)
 
         self._trace_progress.connect(self._on_trace_progress)
-        self._last_out: str | None = None
-        self._last_display_img: Image.Image | None = None
-        self._last_width_mm: float = 0.0
-        self._last_height_mm: float = 0.0
-        self._img_w_px: int = 0
-        self._img_h_px: int = 0
-        self._img_aspect: float = 1.0
-        self._aspect_locked: bool = True
-        self._trace_revision: int = 0
+        self._last_out = None
+        self._last_display_img = None
+        self._last_width_mm = 0.0
+        self._last_height_mm = 0.0
+        self._img_w_px = 0
+        self._img_h_px = 0
+        self._img_aspect = 1.0
+        self._aspect_locked = True
+        self._trace_revision = 0
         # Only the trace right after a *new* image is chosen should
         # re-frame the view — every later retrace while tweaking sliders
         # must leave the user's current zoom/pan alone.
-        self._needs_view_fit: bool = True
-        self._trace_result_stale: bool = False
+        self._needs_view_fit = True
+        self._trace_result_stale = False
         # Contour count of the last completed trace of the current image, so
         # a retrace can report what a settings change did.
         self._last_contour_count: int | None = None

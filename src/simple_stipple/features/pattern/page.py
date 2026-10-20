@@ -46,7 +46,7 @@ from simple_stipple.core.patterns.processing import (
     available_patterns,
     load_generator_entry_points,
 )
-from simple_stipple.features.base import BasePage
+from simple_stipple.features.base import BasePage, ModelField
 from simple_stipple.features.pattern.custom_tiles import (
     apply_custom_tile,
     delete_tile_motif,
@@ -183,91 +183,89 @@ class PatternPage(BasePage):
 
     _export_format: str
     _auto_export_format: str | None
-    _MODEL_STATE_FIELDS = {
-        "_orig_polys": "original_polys",
-        "_edit_polys": "editable_polys",
-        "_orig_w": "original_width",
-        "_orig_h": "original_height",
-        "_updating_dims": "updating_dimensions",
-        "_shutting_down": "shutting_down",
-        "_last_out_path": "last_output_path",
-        "_export_is_current": "export_is_current",
-        "_preview_is_stale": "preview_is_stale",
-        "_output_order": "output_order",
-        "_output_disabled": "output_disabled",
-        "_force_export_quality": "force_export_quality",
-        "_pending_export_after_preview": "pending_export_after_preview",
-        "_presets": "presets",
-        "_base_patterns": "base_patterns",
-        "_preview_polys_cache": "preview_polys_cache",
-        "_preview_categories": "preview_categories",
-        "_preview_zone_owners": "preview_zone_owners",
-        "_outline_ids": "outline_ids",
-        "_outline_layers": "outline_layers",
-        "_pattern_cell_cutouts": "pattern_cell_cutouts",
-        "_pattern_cell_instance_cutouts": "pattern_cell_instance_cutouts",
-        "_preview_revision": "preview_revision",
-        "_pattern_service": "pattern_service",
-        "_treatments": "treatments",
-        "_treatment_undo": "treatment_undo",
-        "_treatment_redo": "treatment_redo",
-        "_loading_zone": "loading_zone",
-        "_engraving_image_path": "engraving_image_path",
-    }
+    _orig_polys = ModelField("original_polys")
+    _edit_polys = ModelField("editable_polys")
+    _orig_w = ModelField("original_width")
+    _orig_h = ModelField("original_height")
+    _updating_dims = ModelField("updating_dimensions")
+    _shutting_down = ModelField("shutting_down")
+    _last_out_path = ModelField("last_output_path")
+    _export_is_current = ModelField("export_is_current")
+    _preview_is_stale = ModelField("preview_is_stale")
+    _output_order = ModelField("output_order")
+    _output_disabled = ModelField("output_disabled")
+    _force_export_quality = ModelField("force_export_quality")
+    _pending_export_after_preview = ModelField("pending_export_after_preview")
+    _presets = ModelField("presets")
+    _base_patterns = ModelField("base_patterns")
+    _preview_polys_cache = ModelField("preview_polys_cache")
+    _preview_categories = ModelField("preview_categories")
+    _preview_zone_owners = ModelField("preview_zone_owners")
+    _outline_ids = ModelField("outline_ids")
+    _outline_layers = ModelField("outline_layers")
+    _pattern_cell_cutouts = ModelField("pattern_cell_cutouts")
+    _pattern_cell_instance_cutouts = ModelField("pattern_cell_instance_cutouts")
+    _preview_revision = ModelField("preview_revision")
+    _pattern_service = ModelField("pattern_service")
+    _treatments = ModelField("treatments")
+    _treatment_undo = ModelField("treatment_undo")
+    _treatment_redo = ModelField("treatment_redo")
+    _loading_zone = ModelField("loading_zone")
+    _engraving_image_path = ModelField("engraving_image_path")
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)  # BasePage sets _settings and _suspend_state
         self._model = PatternModel()
 
         # Runtime state
-        self._orig_polys: list[list[tuple[float, float]]] = []
-        self._edit_polys: list[list[tuple[float, float]]] = []
-        self._orig_w: float = 0.0
-        self._orig_h: float = 0.0
-        self._updating_dims: bool = False
+        self._orig_polys = []
+        self._edit_polys = []
+        self._orig_w = 0.0
+        self._orig_h = 0.0
+        self._updating_dims = False
         self._jobs = JobRunner(self)
         self._shutting_down = False
-        self._last_out_path: str | None = None
-        self._export_is_current: bool = False
-        self._preview_is_stale: bool = False
+        self._last_out_path = None
+        self._export_is_current = False
+        self._preview_is_stale = False
         # Output-panel state: run order and the rows the user has switched off.
-        self._output_order: list[str] = []
-        self._output_disabled: set[str] = set()
+        self._output_order = []
+        self._output_disabled = set()
         # Preflight findings on the editable outlines, shown beside Export.
         self._preflight_finding_count: int = 0
         # Set for the one solve that feeds an export, so the written geometry
         # is never the fast preview approximation.
-        self._force_export_quality: bool = False
-        self._pending_export_after_preview: Any | None = None
+        self._force_export_quality = False
+        self._pending_export_after_preview = None
         self._zones_section: CollapsibleSection
         self._zone_output_combo: QComboBox
-        self._presets: dict[str, dict] = dict(self._settings.get("pattern_presets", {}))
+        self._presets = dict(self._settings.get("pattern_presets", {}))
         load_generator_entry_points()
-        self._base_patterns: list[str] = list(available_patterns())
+        self._base_patterns = list(available_patterns())
         self._load_state()
 
-        self._preview_polys_cache: list[list[tuple[float, float]]] = []
-        self._preview_categories: dict[str, list[list[tuple[float, float]]]] = {
+        self._preview_polys_cache = []
+        self._preview_categories = {
             "outline": [],
             "pattern": [],
             "fill": [],
         }
-        self._preview_zone_owners: list[int | None] = []
-        self._outline_ids: list[str] = []
-        self._outline_layers: dict[str, str] = {}
-        self._pattern_cell_cutouts: list[list[tuple[float, float]]] = []
-        self._pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = []
-        self._preview_revision: int = 0
+        self._preview_zone_owners = []
+        self._outline_ids = []
+        self._outline_layers = {}
+        self._pattern_cell_cutouts = []
+        self._pattern_cell_instance_cutouts = []
+        self._preview_revision = 0
         self._pattern_service = PatternProcessor()
         # One treatment per region, keyed by the owning outline's id. Regions
         # themselves are derived from geometry, so nothing here declares
         # containment — see features/pattern/treatments.py.
-        self._treatments: dict[str, dict] = {}
+        self._treatments = {}
         # Treatment history, interleaved with canvas undo by canvas depth.
-        self._treatment_undo: list[tuple[int, str | None, dict]] = []
-        self._treatment_redo: list[tuple[int, str | None, dict]] = []
-        self._loading_zone: bool = False
-        self._engraving_image_path: str = ""
+        self._treatment_undo = []
+        self._treatment_redo = []
+        self._loading_zone = False
+        self._engraving_image_path = ""
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
