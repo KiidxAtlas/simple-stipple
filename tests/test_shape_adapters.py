@@ -22,7 +22,8 @@ from simple_stipple.core.document.model import EntityRecord
 
 @pytest.fixture(scope="module")
 def app() -> QApplication:
-    return QApplication.instance() or QApplication([])
+    instance = QApplication.instance()
+    return instance if isinstance(instance, QApplication) else QApplication([])
 
 
 def _bezier_record(node_types: list[str]) -> EntityRecord:
@@ -107,7 +108,7 @@ def test_local_extent_reads_the_shape_definition(shape, expected) -> None:
 def test_demoted_records_have_no_extent() -> None:
     shape = ShapeFactory.circle(center=(0.0, 0.0), radius=5.0)
     kind, meta = shape.to_meta_dict()
-    record = EntityRecord(points=list(shape.points), kind=kind, meta=meta)
+    record = EntityRecord(points=list(shape.points), kind=EntityKind.coerce(kind), meta=meta)
     demote_to_path(record)
     assert record.kind is EntityKind.POLYLINE and record.meta is None
     assert entity_local_extent(record) is None
