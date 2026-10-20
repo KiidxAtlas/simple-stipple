@@ -117,7 +117,6 @@ def set_entity_records(self, records: list[dict[str, Any]], *, fit: bool = False
             self._group_labels[int(g)] = str(lbl)
     self._next_group_id = max(self._next_group_id, max_gid + 1)
     self._sel = set()
-    self._sync_shape_storage_from_entities()
     if fit:
         self._needs_fit = True
         self._fit()
@@ -549,7 +548,6 @@ def add_polylines_state(self, polys: list[list[tuple[float, float]]], fit: bool 
         if len(points) >= 2
     ]
     self._canvas_service.create_entities(entities)
-    self._sync_shape_storage_from_entities()
 
     if fit:
         self._needs_fit = True

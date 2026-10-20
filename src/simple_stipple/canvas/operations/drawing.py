@@ -1525,7 +1525,6 @@ class TextService:
             # The contour replacement already owns this user-visible undo step.
             self.attach_text_to_path(new_ids[0], attached_path_id, record_undo=False)
         self._host._sel = set(new_ids)
-        self._host._sync_shape_storage_from_entities()
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()

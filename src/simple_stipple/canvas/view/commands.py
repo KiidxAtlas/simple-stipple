@@ -497,7 +497,6 @@ def _find_dimension_at(self, cx: float, cy: float) -> int | None:
 
 
 def get_export_dxf_state(self, *, include_hidden: bool = False) -> list[dict[str, Any]]:
-    self._sync_shape_storage_from_entities()
     result: list[dict[str, Any]] = []
     for entity_id, entity in self._entities_by_id.items():
         if entity.construction or (entity.hidden and not include_hidden):

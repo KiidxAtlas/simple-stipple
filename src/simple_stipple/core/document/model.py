@@ -169,7 +169,14 @@ class Document:
             seen.add(entity.id)
         self._entity_cache_key = None
 
-    def _by_id_map(self) -> dict[EntityId, EntityRecord]:
+    def entities_by_id(self) -> dict[EntityId, EntityRecord]:
+        """Return the id → entity index, rebuilt when the entity list changes.
+
+        The index is keyed by the list's identity and length, so wholesale
+        replacement, appends and deletes all invalidate it. Code that renames
+        ids in place must call :meth:`ensure_unique_ids` afterwards. Treat the
+        returned mapping as read-only.
+        """
         key = (id(self.entities), len(self.entities))
         if key != self._entity_cache_key:
             self._entity_cache = {entity.id: entity for entity in self.entities}
@@ -177,7 +184,7 @@ class Document:
         return self._entity_cache
 
     def entity_for_id(self, entity_id: EntityId) -> EntityRecord | None:
-        return self._by_id_map().get(entity_id)
+        return self.entities_by_id().get(entity_id)
 
     def entity_ids(self) -> list[EntityId]:
         return [entity.id for entity in self.entities]

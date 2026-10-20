@@ -411,7 +411,7 @@ class EditingService:
     def _fire_poly_change(self) -> None:
         """Notify the on_poly_change callback when polylines are structurally modified."""
         self._host._construction_service._solve_geometric_constraints()
-        self._host._sync_shape_storage_from_entities()
+        self._host._invalidate_snap_shapes()
         self._host._model.notify_geometry_changed()
         if callable(self._host._on_poly_change):
             self._host._on_poly_change()
@@ -857,7 +857,6 @@ class EditingService:
         result = self._host._canvas_service.update_entities([e])
         if not result.changed:
             return False
-        self._host._sync_shape_storage_from_entities()
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
@@ -1047,7 +1046,6 @@ class EditingService:
         result = self._host._canvas_service.update_entities([candidate])
         if not result.changed:
             return False
-        self._host._sync_shape_storage_from_entities()
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
@@ -1537,7 +1535,6 @@ class EditingService:
         if result.selected_ids:
             self._host._sel = set(result.selected_ids)
         if result.changed:
-            self._host._sync_shape_storage_from_entities()
             self._host._redraw()
             self._host._notify()
             self._host._fire_poly_change()
@@ -1739,7 +1736,7 @@ class SelectionService:
         ):
             return False
         write_bezier_handles(entity, shape)
-        self._host._sync_shape_storage_from_entities()
+        self._host._invalidate_snap_shapes()
         return True
 
     def set_bezier_node_type(self, entity_id: str, anchor_index: int, mode: str) -> bool:
@@ -1753,7 +1750,6 @@ class SelectionService:
         before = self._host._canvas_service.begin_preview()
         shape.set_node_type(anchor_index, mode)
         write_bezier_handles(entity, shape)
-        self._host._sync_shape_storage_from_entities()
         self._host._canvas_service.commit_preview(before)
         self._host._redraw()
         self._host._notify()
@@ -2481,7 +2477,6 @@ class ConstructionService:
             self._host._constraints.extend(additions)
             self._host._canvas_service.commit_preview(before)
             self._host.set_selection(projected_ids)
-            self._host._sync_shape_storage_from_entities()
             self._host._redraw()
             self._host._notify()
             self._host._fire_poly_change()
@@ -2706,7 +2701,6 @@ class ConstructionService:
         self._host._constraints.extend(additions)
         self._solve_geometric_constraints()
         self._host._canvas_service.commit_preview(before)
-        self._host._sync_shape_storage_from_entities()
         self._host._redraw()
         self._host._notify()
         self._host._fire_poly_change()
@@ -3101,7 +3095,7 @@ class GizmoService:
         if candidate.meta is not None:
             live.meta = deepcopy(candidate.meta)
         self._host._gizmo_drag_moved = True
-        self._host._sync_shape_storage_from_entities()
+        self._host._invalidate_snap_shapes()
         self._host._refresh_driving_dimensions()
         self._host.geometryChanged.emit()
 

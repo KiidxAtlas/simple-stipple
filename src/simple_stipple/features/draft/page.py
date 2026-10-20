@@ -392,7 +392,6 @@ class DraftPage(BasePage):
                 ]
 
             self._canvas._canvas_service.update_document(mutate)
-            self._canvas._sync_shape_storage_from_entities()
             self._canvas._redraw()
             self._canvas._notify()
             self._canvas._show_flash(f"Converted {len(selected_by_id)} parametric shape(s)", 1400)
@@ -1052,7 +1051,6 @@ class DraftPage(BasePage):
                 document.select_ids(created_ids)
 
             canvas._canvas_service.update_document(mutate)
-            canvas._sync_shape_storage_from_entities()
             canvas._redraw()
             canvas._notify()
             canvas._fire_poly_change()

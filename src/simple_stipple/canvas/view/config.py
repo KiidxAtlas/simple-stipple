@@ -90,12 +90,6 @@ def _initialize_view(
     # any structural/geometry change).
     self._snap_shapes_cache = None
 
-    # Cached entity lookup by ID. The view's document service replaces the
-    # entity list for committed edits, while bulk preview loads append to it
-    # directly, so the accessor keys the cache by list identity and length.
-    self._CanvasView__entities_by_id = {}
-    self._CanvasView__entities_by_id_key = None
-
     # construction/hidden/locked/group flags live on EntityRecord.
     self._accent_polys = {}  # entity_id → color hex for role overlays
     self._region_tint = cast(dict[str, str], {})  # entity_id → color hex, filled translucently
@@ -217,11 +211,13 @@ def _initialize_view(
     self._construction_service = ConstructionService(self)
     self._selection_service = SelectionService(self)
     self._renderer = CanvasRenderer(self)
-    # The renderer retains dense preview geometry in world coordinates. The
-    # reactive model is the canonical invalidation boundary for document and
-    # selection changes, so the cache can never outlive rendered state.
+    # The renderer's dense preview geometry and the snap-shape cache are both
+    # derived from the document. The reactive model is the canonical
+    # invalidation boundary for committed document and selection changes, so
+    # neither cache can outlive the state it was built from.
     self._model.geometry_changed.connect(self._renderer.invalidate_dense_preview_cache)
     self._model.selection_changed.connect(self._renderer.invalidate_dense_preview_cache)
+    self._model.geometry_changed.connect(self._invalidate_snap_shapes)
     self._editing = EditingService(self)
 
     # Fit scale for zoom-% display

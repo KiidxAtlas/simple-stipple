@@ -154,13 +154,8 @@ class CanvasView(
 
     @property
     def _entities_by_id(self) -> dict[str, EntityRecord]:
-        """Cached O(1) entity lookup, rebuilt only when the entity list changes."""
-        entities = self._entities
-        cache_key = (id(entities), len(entities))
-        if cache_key != self.__entities_by_id_key:
-            self.__entities_by_id = {entity.id: entity for entity in entities}
-            self.__entities_by_id_key = cache_key
-        return self.__entities_by_id
+        """O(1) entity lookup; the document owns the index."""
+        return self._document.entities_by_id()
 
     def _entity_for_id(self, entity_id: str) -> EntityRecord | None:
         """Return the entity record for ``entity_id``, or ``None`` if not found."""
@@ -795,7 +790,7 @@ class CanvasView(
             self._entities.append(entity)
         self._sel = set()
         self._group_labels.clear()
-        self._sync_shape_storage_from_entities()
+        self._invalidate_snap_shapes()
 
     def load(
         self,
@@ -887,8 +882,13 @@ class CanvasView(
         self._edit_drag_targets = set()
         self._hover_vert = None
 
-    def _sync_shape_storage_from_entities(self) -> None:
-        """Invalidate the lazily-built snap-shape cache."""
+    def _invalidate_snap_shapes(self) -> None:
+        """Drop the lazily-built snap-shape cache.
+
+        Committed document changes do this automatically through
+        ``CanvasModel.geometry_changed``; call it only after mutating entity
+        records in place (live drag previews, raw list appends).
+        """
         self._snap_shapes_cache = None
 
     def _snap_shapes(self) -> dict[str, Any]:
