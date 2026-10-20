@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Every Pattern export keeps the outline and the pattern apart: DXF (single
+  file and LaserStar package) writes `outline` and `pattern` layers, SVG writes
+  named Outline/Pattern layers, and FVI labels each path with its layer.
+  Generated fill strokes ride on the pattern layer, and closed Honeycomb cells
+  stay closed contours for CAM fill operations.
+- FVI export drew every segment relative to the path's start instead of the
+  previous point, distorting shapes and failing on closed outlines away from
+  the origin.
+- Ctrl-clicking shapes in Pattern now tints every selected region orange, and
+  a plain click clears the tint from the previously selected one.
+- Importing a DXF into Pattern keeps its layers; each shape appears as its own
+  row under its source layer in the layer tree.
+
 ## 0.3.30 — 2026-09-30
 
 ### Fixed

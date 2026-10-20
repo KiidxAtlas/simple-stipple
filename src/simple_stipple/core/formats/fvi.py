@@ -462,7 +462,9 @@ def _render_polyline_segments(
     new_cursor = cursor
     line_count = 0
     for target in points[1:]:
-        delta = (target[0] - cursor[0], target[1] - cursor[1])
+        # DRAWLINE is relative to the current point, which is where the last
+        # quantized segment actually ended — not the path's start.
+        delta = (target[0] - new_cursor[0], target[1] - new_cursor[1])
         if math.hypot(*delta) <= 1e-9:
             continue
         dx_text, dx_actual = _quantized_delta(delta[0], precision)

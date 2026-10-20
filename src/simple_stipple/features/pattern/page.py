@@ -31,6 +31,7 @@ from simple_stipple.canvas.constants import DIM
 from simple_stipple.canvas.layers.logic import flatten_shape_keys
 from simple_stipple.core.cad.production import machine_profile_from_settings, order_for_cut
 from simple_stipple.core.formats.service import (
+    load_dxf_polylines_by_layer_with_report,
     load_dxf_polylines_with_report,
     read_fvi,
     summarize_dxf_import_report,
@@ -71,6 +72,7 @@ from simple_stipple.features.pattern.export import (
     export_document_file,
     export_format_suffix,
     export_laserstar_job,
+    export_layers_from_preview,
     export_summary,
 )
 from simple_stipple.features.pattern.form import (
@@ -1647,20 +1649,26 @@ class PatternPage(BasePage):
             show_error(self, "Export", exc, message="Could not prepare the pattern export.")
             return
         vectors = list(self._preview_polys_cache) if wants_vectors else []
+        layers = (
+            export_layers_from_preview(self._preview_categories, vectors) if wants_vectors else {}
+        )
         # Output order is a production choice, not a renderer detail.  Apply
-        # the existing checkbox consistently before every vector writer,
-        # including SVG/DXF packages that previously ignored it.
+        # the existing checkbox consistently before every vector writer.
         if vectors and self._optimize_paths_cb.isChecked():
             vectors = order_for_cut(vectors)
+            layers = {name: order_for_cut(polys) for name, polys in layers.items() if polys}
+        vector_layers = layers or None
         if self._export_format == "laserstar":
             self._write_laserstar_package(
-                operations, vectors, raster_source, engraving_job, raster_mask
+                operations, vectors, vector_layers, raster_source, engraving_job, raster_mask
             )
             return
-        self._write_single_file(operations, vectors, raster_source, engraving_job, raster_mask)
+        self._write_single_file(
+            operations, vectors, vector_layers, raster_source, engraving_job, raster_mask
+        )
 
     def _write_single_file(
-        self, operations, vectors, raster_source, engraving_job, raster_mask
+        self, operations, vectors, vector_layers, raster_source, engraving_job, raster_mask
     ) -> None:
         suffix = export_format_suffix(self._export_format)
         source_name = (
@@ -1682,6 +1690,7 @@ class PatternPage(BasePage):
                 out_path,
                 self._export_format,
                 vectors,
+                vector_layers=vector_layers,
                 engraving_source=raster_source,
                 engraving_job=engraving_job,
                 engraving_mask=raster_mask,
@@ -1708,7 +1717,7 @@ class PatternPage(BasePage):
         self._update_preview_controls()
 
     def _write_laserstar_package(
-        self, operations, vectors, raster_source, engraving_job, raster_mask
+        self, operations, vectors, vector_layers, raster_source, engraving_job, raster_mask
     ) -> None:
         source_name = (
             Path(self._dxf_edit.text()).stem if self._dxf_edit.text().strip() else "stipple-job"
@@ -1736,6 +1745,7 @@ class PatternPage(BasePage):
                 values["destination"],
                 values["job_name"],
                 vectors,
+                vector_layers=vector_layers,
                 engraving_source=raster_source,
                 engraving_job=engraving_job,
                 engraving_mask=raster_mask,
@@ -2241,14 +2251,18 @@ class PatternPage(BasePage):
 
     def _load_dxf(self, path: str) -> None:
         try:
-            polys, report = load_dxf_polylines_with_report(path)
+            by_layer, report = load_dxf_polylines_by_layer_with_report(path)
+            polys = [poly for layer_polys in by_layer.values() for poly in layer_polys]
+            layers = [name for name, layer_polys in by_layer.items() for _poly in layer_polys]
             self._show_outline_path(path)
             self._orig_polys = polys
             self._edit_polys = list(polys)
             self._outline_ids = self._fresh_outline_ids(len(self._edit_polys))
+            # Keep each source layer, with every shape on it as its own row.
+            self._outline_layers = dict(zip(self._outline_ids, layers, strict=True))
             self._treatments = {}
             self._refresh_zone_list()
-            self._canvas.load(polys, entity_ids=list(self._outline_ids))
+            self._load_outline_canvas(fit=True)
             self._update_dims_from_polys(polys)
             self._set_status(f"Loaded {len(polys)} polylines from {Path(path).name}")
             record_recent(self._settings, KIND_DXF, path)
@@ -2262,6 +2276,7 @@ class PatternPage(BasePage):
                     )
             self._update_preview_controls()
             self._update_zone_actions()
+            self._refresh_canvas_panels()
             self._schedule_preview()
             self._emit_state_changed()
         except (OSError, ValueError, RuntimeError) as exc:

@@ -105,11 +105,25 @@ def export_positioned_engraving(
     return png
 
 
+def export_layers_from_preview(
+    categories: dict[str, list[list[tuple[float, float]]]],
+    fallback: list[list[tuple[float, float]]],
+) -> dict[str, list[list[tuple[float, float]]]]:
+    """Return the Pattern page's two vector layers from its preview payload."""
+    outline = list(categories.get("outline", []))
+    pattern = list(categories.get("pattern", []))
+    pattern.extend(categories.get("fill", []))
+    if not outline and not pattern:
+        pattern = list(fallback)
+    return {"outline": outline, "pattern": pattern}
+
+
 def export_laserstar_job(
     destination: str,
     job_name: str,
     pattern_polys: list[list[tuple[float, float]]],
     *,
+    vector_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
     engraving_source: str | None = None,
     engraving_job: EngravingJob | None = None,
     engraving_mask: list[list[tuple[float, float]]] | None = None,
@@ -120,6 +134,7 @@ def export_laserstar_job(
         destination,
         job_name,
         pattern_polys,
+        vector_layers=vector_layers,
         raster_source=engraving_source,
         raster_spec=engraving_job.raster_spec() if engraving_job else None,
         raster_mask=engraving_mask,
@@ -174,6 +189,7 @@ def export_document_file(
     export_format: str,
     vector_polys: list[list[tuple[float, float]]],
     *,
+    vector_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
     engraving_source: str | None = None,
     engraving_job: EngravingJob | None = None,
     engraving_mask: list[list[tuple[float, float]]] | None = None,
@@ -188,6 +204,7 @@ def export_document_file(
             str(staging / target.name),
             export_format,
             vector_polys,
+            vector_layers=vector_layers,
             engraving_source=engraving_source,
             engraving_job=engraving_job,
             engraving_mask=engraving_mask,
@@ -234,16 +251,12 @@ def _write_document_files(
     export_format: str,
     vector_polys: list[list[tuple[float, float]]],
     *,
+    vector_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
     engraving_source: str | None = None,
     engraving_job: EngravingJob | None = None,
     engraving_mask: list[list[tuple[float, float]]] | None = None,
 ) -> list[Path]:
-    """Write one single-file export, plus a raster sidecar when needed.
-
-    Returns every path written, first one first. SVG embeds the image; DXF
-    and FVI have nowhere to put a raster, so it lands beside them as the
-    positioned PNG + placement JSON the machine setup already expects.
-    """
+    """Write one file, plus raster sidecars when the vector format needs them."""
     from simple_stipple.core.formats.dxf import write_polylines_dxf
     from simple_stipple.core.formats.fvi import FviExportOptions, write_fvi
     from simple_stipple.core.formats.svg import SvgImagePlacement, write_document_svg
@@ -251,6 +264,10 @@ def _write_document_files(
     target = Path(output_path)
     written: list[Path] = [target]
     spec = engraving_job.raster_spec() if engraving_job else None
+    layers = vector_layers or {"pattern": vector_polys}
+    flat_vectors = [poly for layer in layers.values() for poly in layer]
+    pattern_polys = list(layers.get("pattern", []))
+    outline_polys = list(layers.get("outline", []))
 
     if export_format == "svg":
         placements: list[SvgImagePlacement] = []
@@ -275,7 +292,7 @@ def _write_document_files(
                     rotation_deg=spec.rotation_deg,
                 )
             )
-        write_document_svg(vector_polys, target, images=placements)
+        write_document_svg(flat_vectors, target, images=placements, layer_polys=layers)
         return written
 
     if export_format == "png":
@@ -288,13 +305,29 @@ def _write_document_files(
         return [png, metadata]
 
     if export_format == "fvi":
+        records = [
+            {
+                "polyline": list(poly),
+                "kind": "polyline",
+                "meta": None,
+                "layer": layer_name,
+            }
+            for layer_name, layer_polys in layers.items()
+            for poly in layer_polys
+        ]
         write_fvi(
-            [{"polyline": list(poly), "kind": "polyline", "meta": None} for poly in vector_polys],
+            records,
             target,
             FviExportOptions(origin="preserve", optimize_travel=True, include_comments=True),
         )
     else:
-        write_polylines_dxf(vector_polys, str(target))
+        write_polylines_dxf(
+            pattern_polys,
+            str(target),
+            border_polys=outline_polys,
+            pattern_layer="pattern",
+            border_layer_prefix="outline",
+        )
 
     if engraving_source and spec is not None:
         png, metadata, positioned_svg = export_raster_job(

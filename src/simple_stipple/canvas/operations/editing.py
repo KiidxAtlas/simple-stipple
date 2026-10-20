@@ -36,6 +36,7 @@ from simple_stipple.core.document.commands import (
     TransformCommand,
 )
 from simple_stipple.core.document.geometry import (
+    geometry_for_entity,
     move_entity_control_point,
     remove_entity_points,
     synchronize_entity_control_points,
@@ -218,15 +219,16 @@ class EditingService:
         changed_source_ids: set[str] = set()
         carved = 0
         for source in self._host._entities_by_id.values():
+            points = geometry_for_entity(source).tessellate()
             if (
-                not self._is_poly_closed(source.points)
+                not self._is_poly_closed(points)
                 or source.hidden
                 or source.locked
                 or source.construction
             ):
                 entities.append(source)
                 continue
-            source_shape = Polygon(source.points).buffer(0)
+            source_shape = Polygon(points).buffer(0)
             if source_shape.is_empty or source_shape.intersection(cutter_shape).area <= 1e-9:
                 entities.append(source)
                 continue
@@ -872,8 +874,8 @@ class EditingService:
             i
             for i in self._host._mutable_selected_ids()
             if (ent := self._host._entity_for_id(i)) is not None
-            and len(ent.points) >= 4
-            and self._host._is_poly_closed(ent.points)
+            and len(points := geometry_for_entity(ent).tessellate()) >= 4
+            and self._host._is_poly_closed(points)
         ]
         if len(indices) < 2:
             self._host._apply_operation_result(OperationResult.unchanged("Select 2+ closed shapes"))

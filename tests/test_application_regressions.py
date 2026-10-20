@@ -26,6 +26,8 @@ from simple_stipple.app.window import App
 from simple_stipple.canvas.operations.drawing import DrawOpsService
 from simple_stipple.canvas.view.helpers import _animate_view_to
 from simple_stipple.canvas.widget import DxfCanvas
+from simple_stipple.core.document.geometry import geometry_for_entity
+from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.core.editing.boolean import offset_polyline
 from simple_stipple.core.formats.dxf import load_dxf_polylines, write_polylines_dxf
 from simple_stipple.core.formats.laserstar import export_laserstar_package
@@ -419,6 +421,66 @@ def test_draw_shapes_do_not_carve_by_default(app: QApplication) -> None:
     assert canvas._draw_split_enabled is False
     assert canvas._commit_shape_preview()
     assert len(canvas._entities) == 2
+    canvas.close()
+
+
+@pytest.mark.parametrize("operation", ["union", "subtract", "intersect", "divide"])
+def test_boolean_metadata_only_circles(app: QApplication, operation: str) -> None:
+    from shapely.geometry import Polygon
+
+    canvas = DxfCanvas()
+    sources = [
+        EntityRecord(points=[], kind="circle", meta={"center": [x, 0], "radius": 10})
+        for x in (0, 5)
+    ]
+    canvas._canvas_service.create_entities(sources)
+    canvas.set_selection([entity.id for entity in sources])
+    left, right = [Polygon(geometry_for_entity(entity).tessellate()) for entity in sources]
+    expected = {
+        "union": left.union(right).area,
+        "subtract": left.difference(right).area,
+        "intersect": left.intersection(right).area,
+        "divide": left.union(right).area,
+    }[operation]
+
+    assert canvas.boolean_selected(operation) > 0
+    assert all(entity.kind == "polyline" for entity in canvas._entities)
+    assert sum(Polygon(entity.points).area for entity in canvas._entities) == pytest.approx(
+        expected, abs=0.01
+    )
+    assert canvas.undo()
+    assert [(entity.kind, entity.points, entity.meta) for entity in canvas._entities] == [
+        (entity.kind, entity.points, entity.meta) for entity in sources
+    ]
+    assert canvas.redo()
+    canvas.close()
+
+
+def test_split_drawing_carves_metadata_only_circle(app: QApplication) -> None:
+    from shapely.geometry import Polygon
+
+    canvas = DxfCanvas()
+    source = EntityRecord(points=[], kind="circle", meta={"center": (0, 0), "radius": 10})
+    canvas._canvas_service.create_entities([source])
+    outline = Polygon(geometry_for_entity(source).tessellate())
+    canvas._draw_split_enabled = True
+    canvas._draw_primitive = "rectangle"
+    canvas._draw_shape_anchor_w = (0.0, -2.0)
+    canvas._draw_shape_cursor_w = (12.0, 2.0)
+    canvas._draw_shape_preview_active = True
+
+    assert canvas._commit_shape_preview()
+    carved = [entity for entity in canvas._entities if entity.kind == "polyline"]
+    assert carved
+    cutter = Polygon([(0, -2), (12, -2), (12, 2), (0, 2)])
+    assert sum(Polygon(entity.points).area for entity in carved) == pytest.approx(
+        outline.difference(cutter).area
+    )
+    assert canvas.undo()
+    assert len(canvas._entities) == 1
+    assert canvas._entities[0].kind == "circle"
+    assert canvas._entities[0].points == []
+    assert canvas.redo()
     canvas.close()
 
 

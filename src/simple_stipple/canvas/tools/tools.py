@@ -375,7 +375,7 @@ class DrawTool(CanvasTool):
                 eff_x, eff_y = v._angle_snap(last_wx, last_wy, eff_x, eff_y)
                 v._draw_snap = (eff_x, eff_y)
                 v._angle_snap_active = True
-            else:
+            elif v._snap_strength > 0.0:
                 seg_dx = eff_x - last_wx
                 seg_dy = eff_y - last_wy
                 seg_dist = math.hypot(seg_dx, seg_dy)

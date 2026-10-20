@@ -22,8 +22,10 @@ class LaserStarProfile:
     frequency_khz: float = 50.0
 
 
-def _records(polys):
-    return [{"polyline": list(poly), "kind": "polyline", "meta": None} for poly in polys]
+def _records(polys, layer: str | None = None):
+    return [
+        {"polyline": list(poly), "kind": "polyline", "meta": None, "layer": layer} for poly in polys
+    ]
 
 
 def export_laserstar_package(
@@ -31,6 +33,7 @@ def export_laserstar_package(
     job_name: str,
     vector_polys: list[list[tuple[float, float]]],
     *,
+    vector_layers: dict[str, list[list[tuple[float, float]]]] | None = None,
     raster_source: str | Path | None = None,
     raster_spec: RasterEngravingSpec | None = None,
     raster_mask: list[list[tuple[float, float]]] | None = None,
@@ -49,16 +52,23 @@ def export_laserstar_package(
     safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", job_name).strip(" .") or "LaserStar Job"
     folder = Path(destination) / safe_name
     folder.mkdir(parents=True, exist_ok=False)
+    layers = vector_layers or {"pattern": vector_polys}
     if str(vector_format).lower() == "dxf":
         from simple_stipple.core.formats.dxf import write_polylines_dxf
 
         vector_path = folder / "01_pattern-and-outline.dxf"
-        write_polylines_dxf(vector_polys, str(vector_path))
+        write_polylines_dxf(
+            list(layers.get("pattern", [])),
+            str(vector_path),
+            border_polys=list(layers.get("outline", [])),
+            pattern_layer="pattern",
+            border_layer_prefix="outline",
+        )
         report = None
     else:
         vector_path = folder / "01_pattern-and-outline.fvi"
         report = write_fvi(
-            _records(vector_polys),
+            [record for name, polys in layers.items() for record in _records(polys, name)],
             vector_path,
             FviExportOptions(origin="preserve", optimize_travel=True, include_comments=True),
         )

@@ -254,9 +254,9 @@ PARAM_SPECS: dict[str, list[ParamField]] = {
     "Honeycomb": [
         ParamField(
             "_hex_r",
-            "Hex size (mm)",
+            "Hex radius (mm)",
             "1.75",
-            "Radius of each hexagonal cell",
+            "Radius of each hexagonal cell; point-to-point size is twice this value",
             param_key="r",
             minimum=0.001,
             maximum=1000,

@@ -230,19 +230,9 @@ def write_document_svg(
     stroke_width: float = 0.5,
     padding: float = 2.0,
     entity_groups: list[int | None] | None = None,
+    layer_polys: dict[str, list[list[tuple[float, float]]]] | None = None,
 ) -> dict:
-    """Write outlines *and* placed images into one SVG, in one mm space.
-
-    This is the single-file answer to "export the outline with the image on
-    it": every other format needs the raster as a sidecar, because DXF and FVI
-    have nowhere to put one. Images are embedded as base64 PNG, so the file
-    stands alone.
-
-    Coordinates are millimetres, y-up in the document. SVG's y axis points
-    down, so both paths and images are emitted through the same
-    ``y_svg = y_total - y_world`` flip rather than a group transform, which
-    would mirror the rasters.
-    """
+    """Write outlines, placed images, and optional named vector layers."""
     import base64
 
     from simple_stipple.platform.storage import atomic_write_via
@@ -255,7 +245,13 @@ def write_document_svg(
         ]
         for image in placements
     ]
-    extent = [poly for poly in polys if poly] + boxes
+    drawable_layers = layer_polys or {}
+    extent_polys = (
+        [poly for values in drawable_layers.values() for poly in values if poly]
+        if layer_polys is not None
+        else [poly for poly in polys if poly]
+    )
+    extent = extent_polys + boxes
     if not extent:
         raise ValueError("Nothing to export — the document has no geometry or images.")
 
@@ -269,6 +265,7 @@ def write_document_svg(
         {
             "xmlns": "http://www.w3.org/2000/svg",
             "xmlns:xlink": "http://www.w3.org/1999/xlink",
+            "xmlns:inkscape": "http://www.inkscape.org/namespaces/inkscape",
             "xmlns:stipple": STIPPLE_NS,
             "viewBox": f"{x0 - padding:.4f} 0 {vw:.4f} {vh:.4f}",
             "width": f"{vw:.4f}mm",
@@ -300,18 +297,45 @@ def write_document_svg(
             attrs["transform"] = f"rotate({-image.rotation_deg:.4f} {centre_x:.4f} {centre_y:.4f})"
         ET.SubElement(root, "image", attrs)
 
-    group = ET.SubElement(
-        root,
-        "g",
-        {"fill": "none", "stroke": stroke, "stroke-width": f"{stroke_width:.4f}"},
-    )
-    for index, points in enumerate(polys):
-        if points:
-            ET.SubElement(
-                group,
-                "path",
-                {"d": _poly_to_svg_d(points, y_total), **_group_attribute(entity_groups, index)},
+    if layer_polys is not None:
+        for layer_name, layer_geometry in drawable_layers.items():
+            if not layer_geometry:
+                continue
+            group = ET.SubElement(
+                root,
+                "g",
+                {
+                    "id": re.sub(r"[^A-Za-z0-9_.-]+", "-", layer_name.lower()),
+                    "inkscape:groupmode": "layer",
+                    "inkscape:label": layer_name.title(),
+                    "fill": "none",
+                    "stroke": stroke,
+                    "stroke-width": f"{stroke_width:.4f}",
+                },
             )
+            for points in layer_geometry:
+                if points:
+                    ET.SubElement(
+                        group,
+                        "path",
+                        {"d": _poly_to_svg_d(points, y_total)},
+                    )
+    else:
+        group = ET.SubElement(
+            root,
+            "g",
+            {"fill": "none", "stroke": stroke, "stroke-width": f"{stroke_width:.4f}"},
+        )
+        for index, points in enumerate(polys):
+            if points:
+                ET.SubElement(
+                    group,
+                    "path",
+                    {
+                        "d": _poly_to_svg_d(points, y_total),
+                        **_group_attribute(entity_groups, index),
+                    },
+                )
 
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")

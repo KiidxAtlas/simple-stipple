@@ -68,6 +68,7 @@ __all__ = [
     "FviNoGeometryError",
     "OutlinePreflight",
     "fix_dxf",
+    "load_dxf_polylines_by_layer_with_report",
     "load_dxf_polylines_with_report",
     "read_fvi",
     "summarize_dxf_import_report",

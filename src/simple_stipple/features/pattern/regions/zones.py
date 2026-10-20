@@ -76,17 +76,18 @@ def selected_region_ids(page: Any) -> list[str]:
 
 
 def highlight_zone_on_canvas(page: Any, row: int) -> None:
-    """Highlight a region without changing canvas/layer-tree selection."""
-    region_id = region_id_for_row(page, row)
-    if region_id is None:
-        page._canvas.set_accent_polys({})
-        page._canvas.set_region_tint({})
-        return
-    indices = [
-        index for index, outline_id in enumerate(page._outline_ids) if outline_id == region_id
-    ]
+    """Highlight every selected region without changing canvas selection."""
+    highlighted_regions = set(selected_region_ids(page))
+    if not highlighted_regions:
+        region_id = region_id_for_row(page, row)
+        if region_id is not None:
+            highlighted_regions.add(region_id)
     entity_ids = page._canvas.get_entity_ids()
-    highlighted = {entity_ids[index]: "#f5a623" for index in indices if index < len(entity_ids)}
+    highlighted = {
+        entity_ids[index]: "#f5a623"
+        for index, outline_id in enumerate(page._outline_ids)
+        if outline_id in highlighted_regions and index < len(entity_ids)
+    }
     page._canvas.set_accent_polys(highlighted)
     page._canvas.set_region_tint(highlighted)
 
@@ -124,6 +125,10 @@ def select_zone_for_canvas_selection(page: Any) -> None:
             item.setSelected(row in rows)
     page._zone_list.blockSignals(False)
     page._zone_list.scrollToItem(page._zone_list.currentItem())
+    # Changing the current row above highlights while the list still holds the
+    # previous selection, and a Ctrl-click that keeps the current row does not
+    # highlight at all. Paint once more from the now-mirrored selection.
+    highlight_zone_on_canvas(page, page._zone_list.currentRow())
 
 
 # ── Snapshot for the engine ───────────────────────────────────────────────

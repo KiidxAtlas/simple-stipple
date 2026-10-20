@@ -1478,12 +1478,71 @@ def test_pattern_zone_highlight_and_preview_selection_use_canvas_entity_ids(
     }
     page._refresh_zone_list()
 
+    page._zone_list.item(0).setSelected(True)
+    page._zone_list.item(1).setSelected(True)
     highlight_zone_on_canvas(page, 1)
-    assert page._canvas._accent_polys == {entity_ids[1]: "#f5a623"}
+    assert page._canvas._accent_polys == {
+        entity_ids[0]: "#f5a623",
+        entity_ids[1]: "#f5a623",
+    }
 
     page._canvas.set_selection([entity_ids[1]])
     select_zone_for_canvas_selection(page)
     assert page._zone_list.currentRow() == 1
+    page.shutdown()
+    page.close()
+
+
+def test_pattern_region_tint_follows_each_canvas_selection_change(app: QApplication) -> None:
+    """Ctrl-click adds a tint; a plain click drops the previous region's tint."""
+    page = PatternPage(settings={})
+    page.load_outline_polys(
+        [
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+            [(20.0, 0.0), (30.0, 0.0), (30.0, 10.0), (20.0, 10.0), (20.0, 0.0)],
+            [(40.0, 0.0), (50.0, 0.0), (50.0, 10.0), (40.0, 10.0), (40.0, 0.0)],
+        ]
+    )
+    a, b, c = page._canvas.get_entity_ids()
+
+    def tint_after(selection: list[str]) -> set[str]:
+        page._canvas.set_selection(selection)
+        select_zone_for_canvas_selection(page)
+        return set(page._canvas._region_tint)
+
+    assert tint_after([a]) == {a}
+    assert tint_after([a, b]) == {a, b}
+    assert tint_after([b]) == {b}
+    assert tint_after([c]) == {c}
+    assert tint_after([a, c]) == {a, c}
+    page.shutdown()
+    page.close()
+
+
+def test_pattern_dxf_import_lists_each_shape_under_its_source_layer(
+    app: QApplication, tmp_path
+) -> None:
+    import ezdxf
+
+    path = tmp_path / "layers.dxf"
+    doc = ezdxf.new("R2010")
+    for x in (0, 20, 40):
+        doc.modelspace().add_lwpolyline(
+            [(x, 0), (x + 10, 0), (x + 10, 10), (x, 10)], close=True, dxfattribs={"layer": "Logo"}
+        )
+    doc.modelspace().add_lwpolyline(
+        [(-5, -5), (60, -5), (60, 20), (-5, 20)], close=True, dxfattribs={"layer": "Cut"}
+    )
+    doc.saveas(path)
+
+    page = PatternPage(settings={})
+    page._load_outline_file(str(path))
+    tree = page._layers_tree._tree
+    layers = {
+        tree.topLevelItem(i).text(0).split("  ")[0]: tree.topLevelItem(i).childCount()
+        for i in range(tree.topLevelItemCount())
+    }
+    assert layers == {"Logo": 3, "Cut": 1}
     page.shutdown()
     page.close()
 

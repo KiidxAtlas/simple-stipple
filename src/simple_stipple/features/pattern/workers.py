@@ -151,14 +151,14 @@ def run_generate(
             return
         polys = prepare_output(polys, fabrication_options)
         fill_polys = prepare_output(fill_polys, fabrication_options)
-        close = pattern_service.should_close_pattern(pattern)
-        extra: dict[str, list] = {}
-        if fill_polys:
-            extra["fill"] = fill_polys
-        # Always emit the outline as its own layer so the DXF reliably ships
-        # with the documented three-layer split (outline / pattern / fill).
-        # This holds whether or not the caller supplied border polylines and
-        # whether the polygonize step produced any fill strokes.
+        close = pattern_service.should_close_pattern(pattern) and not open_paths
+        if close:
+            for poly in polys:
+                if len(poly) >= 3 and poly[0] != poly[-1]:
+                    poly.append(poly[0])
+        # Keep generated pattern cells and optional fill geometry together:
+        # CAM tools expect just the outline and pattern layers.
+        polys.extend(fill_polys)
         effective_border = border_polys
         if not effective_border:
             effective_border = pattern_service.apply_scale(
@@ -167,16 +167,15 @@ def run_generate(
         DxfService.write_polylines_dxf(
             polys,
             out_path,
-            close=close,
+            close=False,
             open_paths=open_paths,
             border_polys=effective_border,
             pattern_layer="pattern",
             border_layer_prefix="outline",
-            extra_layers=extra or None,
         )
-        count = len(polys) + len(fill_polys)
+        count = len(polys)
         name = Path(out_path).name
-        on_done((generation_token, count, name, out_path, polys + fill_polys))
+        on_done((generation_token, count, name, out_path, polys))
     except Exception as exc:  # noqa: BLE001 - any failure must still clear
         # `running` via on_error, or Generate/Preview stay disabled forever.
         if cancel_event and cancel_event.is_set():
