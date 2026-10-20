@@ -12,7 +12,7 @@ from simple_stipple.features.pattern.export import (
     export_document_file,
     export_layers_from_preview,
 )
-from simple_stipple.features.pattern.workers import run_generate
+from simple_stipple.features.pattern.workers import PreviewRequest, solve_preview
 
 OUTLINE = [(0.0, 0.0), (30.0, 0.0), (30.0, 20.0), (0.0, 20.0), (0.0, 0.0)]
 CELL_A = [(5.0, 5.0), (10.0, 5.0), (10.0, 10.0), (5.0, 10.0), (5.0, 5.0)]
@@ -77,26 +77,24 @@ def test_laserstar_package_keeps_the_layers(tmp_path, vector_format: str) -> Non
 def test_honeycomb_export_keeps_closed_cells_and_outline_on_two_layers(tmp_path) -> None:
     outline = [[(0.0, 0.0), (24.0, 0.0), (24.0, 20.0), (0.0, 20.0), (0.0, 0.0)]]
     path = tmp_path / "honeycomb.dxf"
-    completed: list[tuple] = []
-    failures: list[tuple] = []
-
-    run_generate(
-        outline,
-        str(path),
-        "Honeycomb",
-        {"r": 2.0, "gap": 0.3},
-        (24.0, 20.0),
-        outline,
-        pattern_service=PatternProcessor(),
-        orig_w=24.0,
-        orig_h=20.0,
-        on_done=completed.append,
-        on_error=failures.append,
-        fill_options={"mode": "lines", "spacing": 2.0, "target_pattern": True},
+    preview = solve_preview(
+        PreviewRequest(
+            all_polys=outline,
+            pattern="Honeycomb",
+            params={"r": 2.0, "gap": 0.3, "quality": "high"},
+            scale=(24.0, 20.0),
+            border_fade=0.0,
+            orig_w=24.0,
+            orig_h=20.0,
+            fill_options={"mode": "lines", "spacing": 2.0, "target_pattern": True},
+        ),
+        PatternProcessor(),
     )
 
-    assert not failures
-    assert len(completed) == 1
+    export_document_file(
+        str(path), "dxf", [], vector_layers=export_layers_from_preview(preview, [])
+    )
+
     doc = ezdxf.readfile(path)
     entities = list(doc.modelspace())
     assert {entity.dxf.layer for entity in entities} == {"pattern", "outline"}

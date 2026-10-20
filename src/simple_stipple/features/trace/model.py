@@ -21,7 +21,6 @@ class TraceModel:
     trace_pending: bool = False
     active_trace_token: int | None = None
     cancel_event: threading.Event = field(default_factory=threading.Event)
-    trace_thread: threading.Thread | None = None
     shutting_down: bool = False
     last_output: str | None = None
     last_display_image: Any | None = None

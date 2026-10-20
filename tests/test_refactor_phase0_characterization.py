@@ -19,7 +19,6 @@ from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication
 
 import simple_stipple.canvas.view.main as canvas_view_main
-import simple_stipple.features.trace.page as trace_page_module
 from simple_stipple.canvas.renderer import CanvasRenderer
 from simple_stipple.canvas.tools import radial_menu
 from simple_stipple.canvas.tools import tools as canvas_tools_module
@@ -30,12 +29,11 @@ from simple_stipple.canvas.view.main import CanvasView
 from simple_stipple.canvas.widget import DxfCanvas
 from simple_stipple.features.draft.session import build_dxf_export_plan
 from simple_stipple.features.pattern import export as export_jobs
-from simple_stipple.features.pattern import workers as pattern_workers
 from simple_stipple.features.pattern.outline_state import read_outline_vector
-from simple_stipple.features.pattern.session import build_preview_worker_call
-from simple_stipple.features.pattern.workers import run_generate
+from simple_stipple.features.pattern.workers import PreviewRequest, solve_preview
 from simple_stipple.features.trace.page import TracePage
 from simple_stipple.features.trace.session import run_trace_job
+from simple_stipple.platform.jobs import JobCancelled
 
 
 @pytest.fixture(scope="module")
@@ -233,57 +231,6 @@ def test_dimension_backend_keeps_geometry_and_driver_contract() -> None:
     assert backend.value({"p1": (0.0, 0.0), "p2": (3.0, 4.0)}) == 5.0
 
 
-def test_pattern_export_job_builds_then_writes_and_reports_complete_result(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Pattern export keeps its pure-worker protocol during extraction."""
-    calls: list[tuple[str, object]] = []
-    completed: list[tuple] = []
-    failures: list[tuple] = []
-
-    class PatternService:
-        def build_pattern_polys(self, *_args, **_kwargs):
-            calls.append(("build", _kwargs["pattern"]))
-            _kwargs["fill_polys_out"].append([(0.0, 1.0), (1.0, 1.0)])
-            return [[(0.0, 0.0), (1.0, 0.0)]]
-
-        def should_close_pattern(self, _pattern: str) -> bool:
-            return True
-
-    def write(polys, path, **kwargs) -> None:
-        calls.append(("write", (polys, path, kwargs)))
-
-    monkeypatch.setattr(pattern_workers, "prepare_output", lambda polys, _options: polys)
-    monkeypatch.setattr(pattern_workers.DxfService, "write_polylines_dxf", write)
-
-    run_generate(
-        [[(0.0, 0.0), (1.0, 0.0)]],
-        "/tmp/characterized-pattern.dxf",
-        "lines",
-        {},
-        (1.0, 1.0),
-        [[(0.0, 0.0), (1.0, 0.0)]],
-        generation_token=23,
-        pattern_service=PatternService(),
-        orig_w=1.0,
-        orig_h=1.0,
-        on_done=completed.append,
-        on_error=failures.append,
-    )
-
-    assert [name for name, _payload in calls] == ["build", "write"]
-    assert completed == [
-        (
-            23,
-            2,
-            "characterized-pattern.dxf",
-            "/tmp/characterized-pattern.dxf",
-            [[(0.0, 0.0), (1.0, 0.0)], [(0.0, 1.0), (1.0, 1.0)]],
-        )
-    ]
-    assert failures == []
-
-
 def test_pattern_export_jobs_keep_engraving_and_laserstar_payloads_together(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -335,28 +282,28 @@ def test_pattern_export_jobs_keep_engraving_and_laserstar_payloads_together(
     assert calls[1][1]["raster_spec"].rotation_deg == 15.0
 
 
-def test_trace_job_emits_success_or_cancellation_without_touching_page_widgets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Trace extraction can move out of the page without changing its signals."""
+def test_trace_outcomes_route_to_success_error_or_cancellation_handlers() -> None:
+    """The page routes each finished trace job to exactly one handler."""
     done: list[tuple] = []
     errors: list[tuple] = []
     cancelled: list[int] = []
     page = SimpleNamespace(
-        _trace_done=SimpleNamespace(emit=done.append),
-        _trace_error=SimpleNamespace(emit=errors.append),
-        _trace_cancelled=SimpleNamespace(emit=cancelled.append),
+        _handle_trace_done=done.append,
+        _handle_trace_error=errors.append,
+        _handle_trace_cancelled=cancelled.append,
     )
     image_result = ("display", [[(0.0, 0.0), (1.0, 1.0)]], 200, 100)
-    monkeypatch.setattr(
-        trace_page_module, "image_to_outlines", lambda *_args, **_kwargs: image_result
-    )
 
-    TracePage._run_trace(page, "source.png", {"width_mm": 40.0}, 31, threading.Event())
-    TracePage._run_trace(page, "source.png", {"width_mm": 40.0}, 32, _set_event())
+    def pipeline(*_args, **_kwargs):
+        return image_result
+
+    for token, event in ((31, threading.Event()), (32, _set_event())):
+        outcome = run_trace_job("source.png", {}, token, event, trace_pipeline=pipeline)
+        TracePage._apply_trace_outcome(page, outcome, 40.0)
+    TracePage._apply_trace_outcome(page, run_trace_job(None, {}, 33), 40.0)
 
     assert done == [(31, *image_result, 40.0)]
-    assert errors == []
+    assert errors == [(33, "No image selected.")]
     assert cancelled == [32]
 
 
@@ -369,7 +316,7 @@ def test_trace_force_reload_restarts_stalled_worker(
     page._active_trace_token = 7
     old_event = page._cancel_event
     starts: list[bool] = []
-    monkeypatch.setattr(page, "_start_trace_thread", lambda: starts.append(True))
+    monkeypatch.setattr(page, "_start_trace", lambda: starts.append(True))
 
     page._force_reload_trace()
 
@@ -428,77 +375,67 @@ def test_pattern_fvi_outline_reader_is_ui_independent() -> None:
     assert imported.images == []
 
 
-def test_pattern_preview_dispatch_preserves_worker_payload(app: QApplication, monkeypatch) -> None:
-    """The later payload extraction must not alter the page's worker contract."""
-    from simple_stipple.features.pattern import page as pattern_page_module
+def test_pattern_preview_dispatch_snapshots_the_page_into_one_request(
+    app: QApplication, monkeypatch
+) -> None:
+    """The page hands the solve a frozen snapshot, never itself."""
     from simple_stipple.features.pattern.page import PatternPage
-    from simple_stipple.features.pattern.workers import compute_preview
-
-    captured: dict = {}
-
-    class CapturingThread:
-        def __init__(self, *, target, args, kwargs, daemon):
-            captured.update(target=target, args=args, kwargs=kwargs, daemon=daemon)
-
-        def start(self) -> None:
-            return None
-
-        def is_alive(self) -> bool:
-            return False
 
     page = PatternPage(settings={})
     page.load_outline_polys([[(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0), (0.0, 0.0)]])
     page._preview_timer.stop()
-    page._preview_task.running = False
-    page._preview_task.pending = False
-    monkeypatch.setattr(pattern_page_module.threading, "Thread", CapturingThread)
+    captured: list = []
+    monkeypatch.setattr(
+        page._jobs, "submit", lambda key, work, **_kwargs: captured.append((key, work))
+    )
 
-    page._start_preview_thread()
+    page._start_preview()
 
-    assert captured["target"] is compute_preview
-    assert captured["daemon"] is True
-    assert captured["args"][0] == page._generation_polys()
-    assert captured["args"][2]["quality"] == page._preview_quality_combo.currentData()
-    assert captured["kwargs"]["pattern_service"] is page._pattern_service
-    assert captured["kwargs"]["orig_w"] == page._orig_w
-    assert captured["kwargs"]["orig_h"] == page._orig_h
+    key, work = captured[-1]
+    request, service = work.args
+    assert key == "preview" and work.func is solve_preview
+    assert service is page._pattern_service
+    assert request.all_polys == page._generation_polys()
+    assert request.params["quality"] == page._preview_quality_combo.currentData()
+    assert (request.orig_w, request.orig_h) == (page._orig_w, page._orig_h)
+    assert request.zones == ()
     page.shutdown()
     page.close()
 
 
-def test_pattern_preview_worker_call_selects_zone_worker() -> None:
-    def preview(*_args, **_kwargs) -> None:
-        return None
+def test_pattern_preview_solve_selects_zone_or_outline_service_and_honours_cancel() -> None:
+    calls: list[tuple[str, dict]] = []
 
-    def zones(*_args, **_kwargs) -> None:
-        return None
+    class Service:
+        def build_preview_polys(self, _polys, **kwargs):
+            calls.append(("outline", kwargs))
+            return {"display": [], "count": 0}
 
-    def done(_payload) -> None:
-        return None
+        def build_preview_zone_polys(self, zones, _polys, **kwargs):
+            calls.append(("zones", {"zones": zones, **kwargs}))
+            return {"display": [], "count": 0}
 
-    call = build_preview_worker_call(
-        zones=[{"region_id": "outer"}],
+    base = PreviewRequest(
         all_polys=[[(0.0, 0.0)]],
         pattern="Grid",
         params={},
         scale=(1.0, 1.0),
         border_fade=0.2,
-        preview_token=7,
-        cancel_event=threading.Event(),
-        pattern_service=object(),
         orig_w=10.0,
         orig_h=5.0,
-        on_done=done,
-        on_error=done,
         fill_options={"spacing": 1.0},
-        compute_preview=preview,
-        compute_preview_zones=zones,
     )
+    zoned = PreviewRequest(**{**base.__dict__, "zones": ({"region_id": "outer"},)})
 
-    assert call.target is zones
-    assert call.args[0] == [{"region_id": "outer"}]
-    assert call.args[5] == 0.2
-    assert call.kwargs["fill_options"] == {"spacing": 1.0}
+    solve_preview(base, Service(), threading.Event())
+    solve_preview(zoned, Service(), threading.Event())
+
+    assert [name for name, _kwargs in calls] == ["outline", "zones"]
+    assert calls[0][1]["border_fade"] == 0.2
+    assert calls[1][1]["zones"] == [{"region_id": "outer"}]
+    assert calls[1][1]["fill_options"] == {"spacing": 1.0}
+    with pytest.raises(JobCancelled):
+        solve_preview(base, Service(), _set_event())
 
 
 def _set_event() -> threading.Event:

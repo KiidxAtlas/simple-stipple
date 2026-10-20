@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.core.formats.service import DxfService, FviNoGeometryError, fix_dxf
+from simple_stipple.platform.jobs import JobRunner
 from simple_stipple.ui.components.feedback import refresh_style, show_error
 from simple_stipple.ui.components.inputs import browse_row
 from simple_stipple.ui.components.workflow import set_status_label
@@ -94,7 +95,7 @@ class _ConversionSubTab(QWidget):
         self._results: dict[Path, ConversionResult] = {}
         self._result_ready.connect(self._receive_result)
         self._running = False
-        self._thread: threading.Thread | None = None
+        self._jobs = JobRunner(self)
         self._cancel_event = threading.Event()
         self._job_completed = 0
         self._job_total = 0
@@ -135,10 +136,7 @@ class _ConversionSubTab(QWidget):
             return
         cancel_event = self._start_job(preserve_results=True)
         self._refresh_readiness()
-        self._thread = threading.Thread(
-            target=self._retry_results, args=(failed, cancel_event), daemon=True
-        )
-        self._thread.start()
+        self._start_worker(self._retry_results, failed, cancel_event)
 
     def _retry_results(self, failed: list[ConversionResult], cancel_event: threading.Event) -> None:
         self._begin_batch(len(failed))
@@ -169,7 +167,6 @@ class _ConversionSubTab(QWidget):
     _readiness_requested = Signal()
     _source_changed = Signal()
     _status: QLabel
-    _thread: threading.Thread | None = None
     _mode_single: QPushButton
     _mode_batch: QPushButton
     _include_subfolders: QCheckBox
@@ -321,17 +318,13 @@ class _ConversionSubTab(QWidget):
 
     def shutdown(self) -> None:
         """Called by ``ConvertPage.shutdown()`` (in turn called by
-        ``App.closeEvent``) before the window tears down. These conversions
-        have no cooperative-cancellation support, so this is a best-effort
-        wait for an in-flight one to finish rather than abandoning it
-        outright — the thread is daemon=True either way, so a timeout here
-        never blocks the app from actually closing."""
+        ``App.closeEvent``) before the window tears down. Batch conversions
+        stop between files; a single in-flight conversion cannot be
+        interrupted, so this is a bounded wait rather than a hard guarantee."""
         self._shutting_down = True
         self.cancel()
         self.blockSignals(True)
-        thread = getattr(self, "_thread", None)
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=2.0)
+        self._jobs.shutdown()
 
     def _set_status(self, text: str, color: str = STATUS_NEUTRAL) -> None:
         set_status_label(self._status, text, color)
@@ -376,9 +369,8 @@ class _ConversionSubTab(QWidget):
         return self._mode_batch.property("active") is True
 
     def _start_worker(self, target: Callable[..., None], *args: object) -> None:
-        """Run one conversion worker with the shared daemon lifecycle."""
-        self._thread = threading.Thread(target=target, args=args, daemon=True)
-        self._thread.start()
+        """Run one conversion worker on this tab's job runner."""
+        self._jobs.submit("convert", lambda _cancel: target(*args))
 
     def _build_output_row(
         self,

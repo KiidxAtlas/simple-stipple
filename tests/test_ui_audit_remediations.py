@@ -48,7 +48,7 @@ from simple_stipple.features.pattern.regions.zones import (
     highlight_zone_on_canvas,
     select_zone_for_canvas_selection,
 )
-from simple_stipple.features.pattern.workers import compute_preview
+from simple_stipple.features.pattern.workers import PreviewRequest, solve_preview
 from simple_stipple.features.trace.page import TracePage
 from simple_stipple.platform.settings import (
     DEFAULT_CONTEXT_MENU_ACTION_OVERFLOW_ITEMS,
@@ -1863,26 +1863,22 @@ def test_preview_fill_row_budget_bounds_dense_hatching_without_changing_export()
 
 def test_canvas_preview_keeps_every_fill_stroke(app: QApplication) -> None:
     outline = [(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0), (0.0, 0.0)]
-    completed: list[tuple] = []
-    errors: list[tuple] = []
 
-    compute_preview(
-        [outline],
-        "— None —",
-        {},
-        (100.0, 100.0),
-        None,
-        pattern_service=PatternProcessor(),
-        orig_w=100.0,
-        orig_h=100.0,
-        on_done=completed.append,
-        on_error=errors.append,
-        fill_options={"mode": "lines", "spacing": 0.1, "target_outline": True},
+    categories = solve_preview(
+        PreviewRequest(
+            all_polys=[outline],
+            pattern="— None —",
+            params={},
+            scale=(100.0, 100.0),
+            border_fade=0.0,
+            orig_w=100.0,
+            orig_h=100.0,
+            fill_options={"mode": "lines", "spacing": 0.1, "target_outline": True},
+        ),
+        PatternProcessor(),
     )
 
-    assert errors == []
-    assert len(completed) == 1
-    _token, display, _count, categories = completed[0]
+    display = categories["display"]
     assert len(categories["fill"]) > 900
     assert display == categories["display"]
     assert len(display) == sum(len(categories[name]) for name in ("outline", "pattern", "fill"))

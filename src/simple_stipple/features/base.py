@@ -43,37 +43,6 @@ class BasePage(QWidget):
     def _run(self) -> None:
         raise NotImplementedError
 
-    def _shutdown_thread(
-        self,
-        thread,
-        cancel=None,
-        *,
-        timeout: float = 2.0,
-    ) -> None:
-        """Cancel and join one feature worker before widget teardown."""
-        self._shutting_down = True
-        if cancel is not None:
-            cancel()
-        self.blockSignals(True)
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=timeout)
-
-    def _shutdown_threads(
-        self,
-        threads,
-        cancel=None,
-        *,
-        timeout: float = 2.0,
-    ) -> None:
-        """Cancel and join a group of feature workers before teardown."""
-        self._shutting_down = True
-        if cancel is not None:
-            cancel()
-        self.blockSignals(True)
-        for thread in threads:
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=timeout)
-
     def __init__(
         self,
         parent: QWidget | None = None,

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import platform
-import threading
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -136,11 +136,11 @@ from simple_stipple.features.pattern.regions.zones import (
 )
 from simple_stipple.features.pattern.session import (
     apply_pattern_workspace_state,
-    build_preview_worker_call,
     clear_pattern_workspace_state,
     get_pattern_workspace_state,
 )
-from simple_stipple.features.pattern.workers import CancellableTaskState
+from simple_stipple.features.pattern.workers import PreviewRequest, solve_preview
+from simple_stipple.platform.jobs import JobRunner
 
 # save_settings is otherwise unused at module scope here (the seeded-preset
 # path in __init__ re-imports it locally) — kept as a module attribute
@@ -176,10 +176,6 @@ LOGGER = logging.getLogger(__name__)
 
 
 class PatternPage(BasePage):
-    _gen_done = Signal(object)  # (count, name, polys)
-    _gen_error = Signal(object)
-    _preview_done = Signal(object)  # (display_polys, count)
-    _preview_error = Signal(object)
     sendSelectedToDraftRequested = Signal(object)
     # Emitted by the empty-state buttons; the window routes it to that page.
     openPageRequested = Signal(str)
@@ -193,10 +189,6 @@ class PatternPage(BasePage):
         "_orig_w": "original_width",
         "_orig_h": "original_height",
         "_updating_dims": "updating_dimensions",
-        "_preview_task": "preview_task",
-        "_generate_task": "generate_task",
-        "_preview_thread": "preview_thread",
-        "_generate_thread": "generate_thread",
         "_shutting_down": "shutting_down",
         "_last_out_path": "last_output_path",
         "_export_is_current": "export_is_current",
@@ -215,7 +207,6 @@ class PatternPage(BasePage):
         "_pattern_cell_cutouts": "pattern_cell_cutouts",
         "_pattern_cell_instance_cutouts": "pattern_cell_instance_cutouts",
         "_preview_revision": "preview_revision",
-        "_generation_revision": "generation_revision",
         "_pattern_service": "pattern_service",
         "_treatments": "treatments",
         "_treatment_undo": "treatment_undo",
@@ -234,10 +225,7 @@ class PatternPage(BasePage):
         self._orig_w: float = 0.0
         self._orig_h: float = 0.0
         self._updating_dims: bool = False
-        self._preview_task = CancellableTaskState()
-        self._generate_task = CancellableTaskState()
-        self._preview_thread: threading.Thread | None = None
-        self._generate_thread: threading.Thread | None = None
+        self._jobs = JobRunner(self)
         self._shutting_down = False
         self._last_out_path: str | None = None
         self._export_is_current: bool = False
@@ -270,7 +258,6 @@ class PatternPage(BasePage):
         self._pattern_cell_cutouts: list[list[tuple[float, float]]] = []
         self._pattern_cell_instance_cutouts: list[list[tuple[float, float]]] = []
         self._preview_revision: int = 0
-        self._generation_revision: int = 0
         self._pattern_service = PatternProcessor()
         # One treatment per region, keyed by the owning outline's id. Regions
         # themselves are derived from geometry, so nothing here declares
@@ -284,12 +271,7 @@ class PatternPage(BasePage):
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
-        self._preview_timer.timeout.connect(self._start_preview_thread)
-
-        self._gen_done.connect(self._handle_gen_done)
-        self._gen_error.connect(self._handle_gen_error)
-        self._preview_done.connect(self._handle_preview_done)
-        self._preview_error.connect(self._handle_preview_error)
+        self._preview_timer.timeout.connect(self._start_preview)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
@@ -462,10 +444,8 @@ class PatternPage(BasePage):
 
     def _cancel_solve(self) -> None:
         """Stop the solve in flight; the last completed result stays on screen."""
-        if not self._preview_task.running:
+        if not self._jobs.cancel("preview"):
             return
-        self._preview_task.cancel()
-        self._preview_task.pending = False
         self._set_preview_status("Cancelled — showing the last completed result.")
 
     def _set_result_visible(self, visible: bool) -> None:
@@ -707,10 +687,6 @@ class PatternPage(BasePage):
         self._presets = {name: dict(payload) for name, payload in presets.items()}
         self._refresh_preset_combo()
 
-    def _cancel_pattern_workers(self) -> None:
-        self._preview_task.cancel()
-        self._generate_task.cancel()
-
     def showEvent(self, event) -> None:
         super().showEvent(event)
         # Sizes given at construction are scaled against a not-yet-laid-out
@@ -725,19 +701,15 @@ class PatternPage(BasePage):
     def shutdown(self) -> None:
         """Called by ``App.closeEvent`` before the window tears down.
 
-        Signal any in-flight preview/generate worker to stop and give it a
-        short window to actually exit, instead of leaving it to run to
-        completion (or crash) against a page that's already being destroyed.
-        Threads are daemon=True so the process can still exit even if a join
-        times out — this is a best-effort head start, not a hard guarantee.
+        Cancel any in-flight solve and give it a short window to exit,
+        instead of leaving it to run to completion (or crash) against a page
+        that's already being destroyed.
         """
         self._preview_timer.stop()
         self._preview_revision += 1
-        self._generation_revision += 1
-        self._shutdown_threads(
-            (self._preview_thread, self._generate_thread),
-            self._cancel_pattern_workers,
-        )
+        self._shutting_down = True
+        self.blockSignals(True)
+        self._jobs.shutdown()
 
     def get_workspace_state(self) -> dict:
         return get_pattern_workspace_state(self)
@@ -2373,8 +2345,6 @@ class PatternPage(BasePage):
             return
         self._preview_revision += 1
         self._invalidate_preview_cache()
-        if self._preview_task.running:
-            self._preview_task.pending = True
         self._preview_timer.start(PREVIEW_DEBOUNCE_MS)
 
     def has_workspace_content(self) -> bool:
@@ -2388,16 +2358,10 @@ class PatternPage(BasePage):
             or self._pattern_cell_instance_cutouts
         )
 
-    def _start_preview_thread(self) -> None:
+    def _start_preview(self) -> None:
         if self._shutting_down:
             return
-        from simple_stipple.features.pattern.workers import compute_preview, compute_preview_zones
-
-        can_start, cancel_event = self._preview_task.request_start()
-        if not can_start:
-            return
         if not self._zones and not self._edit_polys:
-            self._preview_task.finish_run()
             return
         # Hidden pattern + no pending export: skip the solve entirely so
         # editing heavy patterns doesn't tax the machine for invisible output.
@@ -2406,12 +2370,11 @@ class PatternPage(BasePage):
             and not self._force_export_quality
             and getattr(self, "_pending_export_after_preview", None) is None
         ):
-            self._preview_task.finish_run()
+            self._jobs.cancel("preview")
             self._preview_deferred = True
             self._set_preview_status("Pattern hidden — outlines only")
             self._update_preview_controls()
             return
-        self._update_preview_controls()
         preview_token = self._preview_revision
         pattern = self._current_pattern_key()
         try:
@@ -2431,7 +2394,6 @@ class PatternPage(BasePage):
                 raise ValueError("Fade is required.")
             fill_options = self._collect_fill_options()
         except ValueError as exc:
-            self._preview_task.finish_run()
             self._set_preview_status(str(exc), "error")
             self._abandon_pending_export(f"Export blocked — {exc}", STATUS_ERR)
             self._update_preview_controls()
@@ -2443,42 +2405,35 @@ class PatternPage(BasePage):
             try:
                 zones_snap = self._snapshot_zone_jobs()
             except ValueError as exc:
-                self._preview_task.finish_run()
                 self._set_preview_status(str(exc), "error")
                 self._abandon_pending_export(f"Export blocked — {exc}", STATUS_ERR)
                 self._update_preview_controls()
                 return
-            all_polys_snap = self._generation_polys()
         else:
             zones_snap = []
-            all_polys_snap = self._generation_polys()
-        worker_call = build_preview_worker_call(
-            zones=zones_snap,
-            all_polys=all_polys_snap,
+        request = PreviewRequest(
+            all_polys=self._generation_polys(),
             pattern=pattern,
             params=params,
             scale=scale,
             border_fade=border_fade,
-            preview_token=preview_token,
-            cancel_event=cancel_event,
-            pattern_service=self._pattern_service,
             orig_w=self._orig_w,
             orig_h=self._orig_h,
-            on_done=self._preview_done.emit,
-            on_error=self._preview_error.emit,
             fill_options=fill_options,
-            compute_preview=compute_preview,
-            compute_preview_zones=compute_preview_zones,
+            zones=tuple(zones_snap),
         )
-        self._preview_thread = threading.Thread(
-            target=worker_call.target,
-            args=worker_call.args,
-            kwargs=worker_call.kwargs,
-            daemon=True,
+        # Latest request wins: a newer solve cancels this one and its result
+        # never reaches the page.
+        self._jobs.submit(
+            "preview",
+            functools.partial(solve_preview, request, self._pattern_service),
+            on_done=lambda preview: self._handle_preview_done(preview_token, preview),
+            on_error=lambda exc: self._handle_preview_failed(preview_token, str(exc)),
+            on_cancelled=lambda: self._handle_preview_cancelled(preview_token),
         )
-        self._preview_thread.start()
+        self._update_preview_controls()
 
-    def _handle_preview_done(self, payload: tuple) -> None:
+    def _handle_preview_done(self, preview_token: int, preview: dict) -> None:
         if self._shutting_down:
             return
         # Reloading the canvas and rebuilding the layer tree can pull keyboard
@@ -2486,29 +2441,19 @@ class PatternPage(BasePage):
         # work; it must never take the caret away mid-edit.
         focused = QApplication.focusWidget()
         try:
-            self._handle_preview_done_inner(payload)
+            self._handle_preview_done_inner(preview_token, preview)
         finally:
             if focused is not None and focused.isVisible():
                 focused.setFocus(Qt.FocusReason.OtherFocusReason)
 
-    def _handle_preview_done_inner(self, payload: tuple) -> None:
-        if len(payload) == 4:
-            preview_token, display_polys, count, categories = payload
-        else:
-            preview_token, display_polys, count = payload
-            categories = None
-        restart = self._preview_task.finish_run()
+    def _handle_preview_done_inner(self, preview_token: int, preview: dict) -> None:
+        display_polys, count = preview["display"], preview["count"]
         if preview_token != self._preview_revision:
-            if restart and (self._edit_polys or self._zones):
-                self._preview_timer.start(0)
+            self._update_preview_controls()
             return
         self._preview_polys_cache = list(display_polys)
         self._preview_is_stale = False
-        self._preview_categories = categories or {
-            "outline": [],
-            "pattern": list(display_polys),
-            "fill": [],
-        }
+        self._preview_categories = preview
         owners = self._preview_categories.get("zone_owners", [])
         self._preview_zone_owners = (
             [owner if isinstance(owner, int) else None for owner in owners]
@@ -2567,30 +2512,23 @@ class PatternPage(BasePage):
         self._refresh_section_subtitles()
         self._update_preview_controls()
         self._refresh_canvas_panels()
-        if restart and (self._edit_polys or self._zones):
-            self._preview_timer.start(0)
-        else:
-            pending_export = self._pending_export_after_preview
-            self._pending_export_after_preview = None
-            if pending_export is not None:
-                QTimer.singleShot(0, pending_export)
+        pending_export = self._pending_export_after_preview
+        self._pending_export_after_preview = None
+        if pending_export is not None:
+            QTimer.singleShot(0, pending_export)
 
-    def _handle_preview_error(self, payload: tuple) -> None:
+    def _handle_preview_cancelled(self, preview_token: int) -> None:
         if self._shutting_down:
             return
-        from simple_stipple.features.pattern.workers import CANCELLED_MESSAGE
-
-        preview_token, msg = payload
-        restart = self._preview_task.finish_run()
-        if preview_token != self._preview_revision:
-            if restart and (self._edit_polys or self._zones):
-                self._preview_timer.start(0)
-            return
-        if msg == CANCELLED_MESSAGE:
+        if preview_token == self._preview_revision:
             self._abandon_pending_export("Export cancelled.", STATUS_WARN)
+        self._update_preview_controls()
+
+    def _handle_preview_failed(self, preview_token: int, msg: str) -> None:
+        if self._shutting_down:
+            return
+        if preview_token != self._preview_revision:
             self._update_preview_controls()
-            if restart and (self._edit_polys or self._zones):
-                self._preview_timer.start(0)
             return
         self._set_preview_status(f"Solve failed: {msg}", "error")
         self._abandon_pending_export(
@@ -2599,8 +2537,6 @@ class PatternPage(BasePage):
         self._canvas.setToolTip("Solve failed; showing the last completed result.")
         self._update_preview_controls()
         self._refresh_canvas_panels()
-        if restart and (self._edit_polys or self._zones):
-            self._preview_timer.start(0)
 
     def _abandon_pending_export(self, message: str, tone: str) -> None:
         """A solve ended without a result: drop the waiting export and say so,
@@ -2614,7 +2550,7 @@ class PatternPage(BasePage):
 
     def _hide_export_progress(self) -> None:
         """Stop the busy indicator shown while an export waits on its solve."""
-        if hasattr(self, "_progress") and not self._generate_task.running:
+        if hasattr(self, "_progress"):
             self._progress.setVisible(False)
             self._progress.setRange(0, 100)
 
@@ -2648,17 +2584,15 @@ class PatternPage(BasePage):
         return invalidate_zones_for_geometry_change(self, valid_outline_ids)
 
     def _update_preview_controls(self) -> None:
-        is_computing = self._preview_task.running
+        is_computing = self._jobs.is_busy("preview")
         self._cancel_preview_btn.setVisible(is_computing)
         if hasattr(self, "_gen_btn"):
             can_export = bool(self._edit_polys or self._zones)
             # Do not leave the user with a disabled primary action. Clicking
             # without an outline gives the existing clear recovery message;
             # “None” exports fill-only or outline-only geometry.
-            self._gen_btn.setEnabled(not self._generate_task.running)
-            if self._generate_task.running:
-                export_tip = "Stop the current pattern export"
-            elif can_export:
+            self._gen_btn.setEnabled(True)
+            if can_export:
                 export_tip = (
                     "Export the current outline, pattern, and/or fill in the chosen format  "
                     f"({self._pattern_shortcut_text('E')})"
@@ -2698,62 +2632,5 @@ class PatternPage(BasePage):
         self._set_status(
             "Laser process settings shown" if enabled else "Laser process settings hidden"
         )
-
-    # ── Generation ────────────────────────────────────────────────────────────
-
-    def _handle_gen_done(self, payload: tuple) -> None:
-        if self._shutting_down:
-            return
-        generation_token, count, name, out_path, polys = payload
-        self._generate_task.finish_run()
-        if generation_token != self._generation_revision:
-            return
-        self._progress.setVisible(False)
-        self._progress.setRange(0, 100)
-        self._progress.setValue(100)
-        self._update_preview_controls()
-        self._cancel_generate_btn.setVisible(False)
-        self._set_status(f"Done — {count} shapes → {name}", STATUS_OK)
-        self._last_out_path = out_path
-        self._export_is_current = True
-        self._reveal_btn.setVisible(True)
-        self._preview_polys_cache = list(polys)
-        self._preview_is_stale = False
-        self._canvas.set_result_polylines(polys)
-        self._set_preview_status(f"{count} shapes exported", "success")
-        self._update_preview_controls()
-        self._refresh_canvas_panels()
-
-    def _handle_gen_error(self, payload: tuple) -> None:
-        if self._shutting_down:
-            return
-        from simple_stipple.features.pattern.workers import CANCELLED_MESSAGE
-
-        generation_token, msg = payload
-        self._generate_task.finish_run()
-        if generation_token != self._generation_revision:
-            return
-        self._progress.setVisible(False)
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        self._gen_btn.setEnabled(True)
-        self._cancel_generate_btn.setVisible(False)
-        # Refresh the workflow strip / preview controls so a failed run doesn't
-        # leave them looking mid-flight, and clear any stale success summary.
-        self._update_preview_controls()
-        if msg == CANCELLED_MESSAGE:
-            self._set_status("Generation cancelled", STATUS_WARN)
-        else:
-            self._set_status(f"Error: {msg}", STATUS_ERR)
-
-    def _cancel_generation(self) -> None:
-        if not self._generate_task.running:
-            return
-        self._generate_task.cancel()
-        self._cancel_generate_btn.setEnabled(False)
-        self._set_status("Cancelling generation…", STATUS_WARN)
-        if self._preview_task.has_pending() and (self._edit_polys or self._zones):
-            self._preview_task.pending = False
-            self._preview_timer.start(0)
 
     # ── Zones ─────────────────────────────────────────────────────────────────

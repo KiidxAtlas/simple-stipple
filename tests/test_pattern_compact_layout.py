@@ -28,7 +28,7 @@ def compact_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(settings_module, "_SETTINGS_FILE", tmp_path / "settings.json")
     monkeypatch.setattr(TaskController, "startup", lambda self, **kwargs: None)
     monkeypatch.setattr(App, "_confirm_discard_if_dirty", lambda self, **kwargs: True)
-    monkeypatch.setattr(PatternPage, "_start_preview_thread", lambda self: None)
+    monkeypatch.setattr(PatternPage, "_start_preview", lambda self: None)
     windows = []
 
     def create(scale: float, width: int, height: int) -> App:

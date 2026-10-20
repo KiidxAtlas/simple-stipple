@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 from simple_stipple.core.patterns.processing import PatternProcessor
-from simple_stipple.features.pattern.workers import CancellableTaskState
 
 Point = tuple[float, float]
 Polyline = list[Point]
@@ -26,10 +24,6 @@ class PatternModel:
     original_width: float = 0.0
     original_height: float = 0.0
     updating_dimensions: bool = False
-    preview_task: CancellableTaskState = field(default_factory=CancellableTaskState)
-    generate_task: CancellableTaskState = field(default_factory=CancellableTaskState)
-    preview_thread: threading.Thread | None = None
-    generate_thread: threading.Thread | None = None
     shutting_down: bool = False
     last_output_path: str | None = None
     export_is_current: bool = False
@@ -50,7 +44,6 @@ class PatternModel:
     pattern_cell_cutouts: list[Polyline] = field(default_factory=list)
     pattern_cell_instance_cutouts: list[Polyline] = field(default_factory=list)
     preview_revision: int = 0
-    generation_revision: int = 0
     pattern_service: PatternProcessor = field(default_factory=PatternProcessor)
     treatments: dict[str, dict] = field(default_factory=dict)
     treatment_undo: list[tuple[int, str | None, dict]] = field(default_factory=list)

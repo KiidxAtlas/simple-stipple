@@ -25,7 +25,7 @@ ruff check src tests
 | Home | Owns | Never put here |
 |---|---|---|
 | `core/` | Qt-free logic: document state, CAD, geometry, editing, patterns, imaging, formats | Qt imports or application state |
-| `platform/` | settings, paths, storage, updates, reporting, bootstrap | product or canvas behavior |
+| `platform/` | settings, paths, storage, updates, reporting, bootstrap, background jobs | product or canvas behavior |
 | `canvas/` | the vector editor: rendering, tools, selection, layers, canvas UI | page-specific Pattern/Trace rules |
 | `ui/` | shared Qt controls, dialogs, theme and icons | canvas-specific configuration |
 | `features/` | Draft, Pattern, Trace, Convert, Repository, Help workflows | cross-feature utility dumping grounds |
@@ -175,6 +175,7 @@ split at `build_preview_worker_call()`: `PatternPage` prepares state,
 | a page-visible workflow | `features/<workflow>/` | the feature’s `*Page` |
 | shared Qt control or visual token | `ui/` | components/dialogs or `theme.qss` |
 | settings, OS paths, storage, update/reporting | `platform/` | `platform.settings` |
+| background work (solves, trace, conversion, git, autosave) | `platform/jobs.py` | `JobRunner` (keyed, latest-wins, GUI-thread callbacks) |
 
 ## Working conventions
 

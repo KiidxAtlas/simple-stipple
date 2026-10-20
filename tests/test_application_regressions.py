@@ -38,10 +38,6 @@ from simple_stipple.core.imaging import (
 )
 from simple_stipple.core.patterns.fill import FillSpec, apply_fill, build_fill_region
 from simple_stipple.features.help import HelpDialog
-from simple_stipple.features.pattern.workers import (
-    CancellableTaskState,
-    TaskPhase,
-)
 from simple_stipple.features.repository import RepoPage
 from simple_stipple.ui.components import feedback
 from simple_stipple.ui.components.layout import CollapsibleSection
@@ -301,25 +297,6 @@ def test_accessible_status_event_hook_distinguishes_alerts(
     label = QLabel()
     set_status_label(label, "Invalid", "#f85149")
     assert label.property("role") == "status-err"
-
-
-def test_rapid_retrigger_coalesces_and_cancels_only_current_token() -> None:
-    state = CancellableTaskState()
-    can_start, first_token = state.request_start()
-    assert can_start and state.phase is TaskPhase.RUNNING
-    for _ in range(100):
-        can_start, token = state.request_start()
-        assert not can_start
-        assert token is first_token
-    assert first_token.is_set()
-    assert state.phase is TaskPhase.CANCELLING
-    assert state.finish_run()
-    can_start, replacement_token = state.request_start()
-    assert can_start
-    assert replacement_token is not first_token
-    assert not replacement_token.is_set()
-    assert not state.finish_run()
-    assert state.phase is TaskPhase.IDLE
 
 
 def test_recent_and_remembered_directory_flows_without_native_modals(

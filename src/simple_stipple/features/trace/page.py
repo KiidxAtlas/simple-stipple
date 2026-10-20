@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import threading
 from pathlib import Path
@@ -57,6 +58,7 @@ from simple_stipple.features.trace.form import (
 from simple_stipple.features.trace.model import TraceModel
 from simple_stipple.features.trace.placement import ImagePlacement
 from simple_stipple.features.trace.session import (
+    TraceJobOutcome,
     apply_trace_workspace_state,
     clear_trace_workspace_state,
     get_trace_workspace_state,
@@ -71,6 +73,7 @@ from simple_stipple.features.trace.session import (
 from simple_stipple.features.trace.session import (
     get_save_path as _get_save_path,
 )
+from simple_stipple.platform.jobs import JobRunner, Policy
 from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import clear_line_edit_error, reject_input, show_error
 from simple_stipple.ui.components.inputs import make_resettable_line_edit
@@ -128,10 +131,7 @@ LOGGER = logging.getLogger(__name__)
 class TracePage(BasePage):
     """Image → outline tracing page."""
 
-    _trace_done = Signal(object)  # (display_img, polys, img_w_px, img_h_px, width_mm)
-    _trace_error = Signal(object)
     _trace_progress = Signal(int, int, str)  # (revision, percent, label)
-    _trace_cancelled = Signal(int)  # (trace_token)
     sendSelectedToDraftRequested = Signal(object)
     sendSelectedToPatternRequested = Signal(object)
     customTileRequested = Signal(object)
@@ -142,7 +142,6 @@ class TracePage(BasePage):
         "_trace_pending": "trace_pending",
         "_active_trace_token": "active_trace_token",
         "_cancel_event": "cancel_event",
-        "_trace_thread": "trace_thread",
         "_shutting_down": "shutting_down",
         "_last_out": "last_output",
         "_last_display_img": "last_display_image",
@@ -168,17 +167,14 @@ class TracePage(BasePage):
         self._trace_pending: bool = False
         self._active_trace_token: int | None = None
         self._cancel_event = threading.Event()
-        self._trace_thread: threading.Thread | None = None
         self._shutting_down = False
+        self._jobs = JobRunner(self)
 
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
-        self._preview_timer.timeout.connect(self._start_trace_thread)
+        self._preview_timer.timeout.connect(self._start_trace)
 
-        self._trace_done.connect(self._handle_trace_done)
-        self._trace_error.connect(self._handle_trace_error)
         self._trace_progress.connect(self._on_trace_progress)
-        self._trace_cancelled.connect(self._handle_trace_cancelled)
         self._last_out: str | None = None
         self._last_display_img: Image.Image | None = None
         self._last_width_mm: float = 0.0
@@ -1192,7 +1188,7 @@ class TracePage(BasePage):
         # worker are ignored instead of changing the new run's UI state.
         self._running = False
         self._active_trace_token = None
-        self._start_trace_thread()
+        self._start_trace()
 
     def _smooth_traced_curves(self) -> None:
         """Fit every traced outline to a smooth bezier curve, on demand.
@@ -1228,7 +1224,7 @@ class TracePage(BasePage):
             maximum=10.0,
         )
 
-    def _start_trace_thread(self) -> None:
+    def _start_trace(self) -> None:
         if self._shutting_down:
             return
         if not self._img_path:
@@ -1266,13 +1262,6 @@ class TracePage(BasePage):
 
         self._running = True
         self._trace_pending = False
-        # Cancel any in-flight worker BEFORE swapping out the event so its
-        # reference (captured by the worker thread) is signalled. The new
-        # event is freshly unset and only the new worker thread observes it.
-        old_event = self._cancel_event
-        cancel_event = threading.Event()
-        self._cancel_event = cancel_event
-        old_event.set()
         self._active_trace_token = trace_token
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)  # indeterminate
@@ -1282,41 +1271,28 @@ class TracePage(BasePage):
         )
         self._reload_btn.setText("Restart Trace")
         self._reload_btn.setToolTip("Abandon the current trace and start a fresh one")
-        self._trace_thread = threading.Thread(
-            target=self._run_trace,
-            args=(self._img_path, kwargs, trace_token, cancel_event),
-            daemon=True,
+        width_mm = kwargs["width_mm"]
+        # REPLACE: when Restart Trace abandons a stalled worker the new run
+        # must start now; the runner cancels the old one and drops its result.
+        self._cancel_event.set()
+        self._cancel_event = self._jobs.submit(
+            "trace",
+            functools.partial(
+                run_trace_job, self._img_path, kwargs, trace_token, trace_pipeline=image_to_outlines
+            ),
+            on_done=lambda outcome: self._apply_trace_outcome(outcome, width_mm),
+            on_cancelled=lambda: self._handle_trace_cancelled(trace_token),
+            policy=Policy.REPLACE,
         )
-        self._trace_thread.start()
 
-    def _run_trace(
-        self,
-        img_path: str | None,
-        kwargs: dict,
-        trace_token: int,
-        cancel_event: threading.Event | None = None,
-    ) -> None:
-        def emit(signal, payload) -> bool:
-            """Ignore a late worker result after Qt has destroyed the page."""
-            try:
-                signal.emit(payload)
-            except RuntimeError:
-                return False
-            return True
-
-        outcome = run_trace_job(
-            img_path,
-            kwargs,
-            trace_token,
-            cancel_event,
-            trace_pipeline=image_to_outlines,
-        )
+    def _apply_trace_outcome(self, outcome: TraceJobOutcome, width_mm: float) -> None:
+        """Route one finished trace job to its result, error, or cancel handler."""
         if outcome.cancelled:
-            emit(self._trace_cancelled, trace_token)
+            self._handle_trace_cancelled(outcome.trace_token)
         elif outcome.error is not None:
-            emit(self._trace_error, (trace_token, outcome.error))
+            self._handle_trace_error((outcome.trace_token, outcome.error))
         elif outcome.result is not None:
-            emit(self._trace_done, (trace_token, *outcome.result, kwargs["width_mm"]))
+            self._handle_trace_done((outcome.trace_token, *outcome.result, width_mm))
 
     def _handle_trace_done(self, payload: tuple) -> None:
         if self._shutting_down:
@@ -1901,13 +1877,16 @@ class TracePage(BasePage):
     def shutdown(self) -> None:
         """Called by ``App.closeEvent`` before the window tears down.
 
-        Signal the in-flight trace worker (if any) to stop and give it a
-        short window to actually exit, instead of leaving it to run to
-        completion (or crash) against a page that's already being destroyed.
+        Cancel the in-flight trace worker (if any) and give it a short window
+        to exit, instead of leaving it to run to completion (or crash)
+        against a page that's already being destroyed.
         """
         self._preview_timer.stop()
         self._trace_revision += 1
-        self._shutdown_thread(self._trace_thread, self._cancel_event.set)
+        self._shutting_down = True
+        self._cancel_event.set()
+        self.blockSignals(True)
+        self._jobs.shutdown()
 
     def get_workspace_state(self) -> dict:
         return get_trace_workspace_state(self)

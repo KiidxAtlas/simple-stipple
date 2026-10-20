@@ -258,7 +258,7 @@ def build_right(page: Any, layout: QVBoxLayout) -> None:
         canvas_status=page._canvas_status,
         precision_bar=page._precision_bar,
         get_orig_polys=lambda: page._edit_polys,
-        is_preview_running=lambda: page._preview_task.running,
+        is_preview_running=lambda: page._jobs.is_busy("preview"),
         has_preview_cache=lambda: bool(page._preview_polys_cache),
         has_zones=lambda: bool(page._zones),
         get_preview_categories=lambda: page._preview_categories,
@@ -1094,13 +1094,6 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
         page._export_actions[key] = action
     page._export_more.setMenu(page._export_menu)
     export_action_row.addWidget(page._export_more)
-    page._cancel_generate_btn = QToolButton()
-    page._cancel_generate_btn.setText("Cancel")
-    page._cancel_generate_btn.setToolTip("Cancel the current export")
-    page._cancel_generate_btn.setAccessibleName("Cancel pattern export")
-    page._cancel_generate_btn.setVisible(False)
-    page._cancel_generate_btn.clicked.connect(page._cancel_generation)
-    export_action_row.addWidget(page._cancel_generate_btn)
     # Always visible beside the action: what Export will write, in what order,
     # and whether preflight has anything to say — the detail stays collapsible.
     page._export_summary = QLabel("")

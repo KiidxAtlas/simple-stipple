@@ -18,6 +18,7 @@ from simple_stipple.platform.git import (
     find_git,
     sync_repository,
 )
+from simple_stipple.platform.jobs import JobRunner
 from simple_stipple.platform.settings import save_settings, user_data_dir
 from simple_stipple.platform.storage import (
     MAX_WORKSPACE_FILE_BYTES,
@@ -60,8 +61,9 @@ class AutosaveController(QObject):
         self._app = app
         self._recovery_offered = False
         self._shutting_down = False
-        self._recovery_write_thread: threading.Thread | None = None
-        self._regular_write_thread: threading.Thread | None = None
+        # Writers ignore cancellation: a half-written autosave is worse than a
+        # late one, so shutdown waits for them instead.
+        self._jobs = JobRunner(self)
         self._regular_saved.connect(self._on_regular_saved)
         self._regular_failed.connect(self._on_regular_failed)
         self._recovery_saved.connect(self._on_recovery_saved)
@@ -91,7 +93,7 @@ class AutosaveController(QObject):
             return
         if not self._app._has_workspace_content() or not self._app._workspace_dirty:
             return
-        if self._recovery_write_thread is not None and self._recovery_write_thread.is_alive():
+        if self._jobs.is_busy("recovery"):
             return
         path = self._app._autosave_path()
         document = self._app._collect_workspace_document()
@@ -102,7 +104,7 @@ class AutosaveController(QObject):
         workspace_path = str(self._app._workspace_path or "")
         recovery_id = self._app._recovery_id
 
-        def write_recovery() -> None:
+        def write_recovery(_cancel: threading.Event) -> None:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 # Preserve the previous distinct state before replacing the
@@ -146,8 +148,7 @@ class AutosaveController(QObject):
                 LOGGER.warning("Workspace autosave failed: %s", exc)
                 self._recovery_failed.emit(str(exc))
 
-        self._recovery_write_thread = threading.Thread(target=write_recovery, daemon=True)
-        self._recovery_write_thread.start()
+        self._jobs.submit("recovery", write_recovery)
 
     def _autosave(self) -> None:
         """Auto-save workspace if it has a path and is dirty."""
@@ -155,20 +156,19 @@ class AutosaveController(QObject):
             return
         if not self._app._workspace_path or not self._app._workspace_dirty:
             return
-        if self._regular_write_thread is not None and self._regular_write_thread.is_alive():
+        if self._jobs.is_busy("regular"):
             return
         path = self._app._workspace_path
         document = self._app._collect_workspace_document()
 
-        def write_regular() -> None:
+        def write_regular(_cancel: threading.Event) -> None:
             try:
                 write_json_file_atomic(path, document)
                 self._regular_saved.emit(document)
             except (OSError, TypeError, ValueError) as exc:
                 self._regular_failed.emit(str(exc))
 
-        self._regular_write_thread = threading.Thread(target=write_regular, daemon=True)
-        self._regular_write_thread.start()
+        self._jobs.submit("regular", write_regular)
 
     def _on_regular_saved(self, document: object) -> None:
         if self._shutting_down or not isinstance(document, dict):
@@ -292,9 +292,7 @@ class AutosaveController(QObject):
         self._shutting_down = True
         self._recovery_timer.stop()
         self._regular_timer.stop()
-        for thread in (self._recovery_write_thread, self._regular_write_thread):
-            if thread is not None and thread.is_alive():
-                thread.join(timeout=5.0)
+        self._jobs.shutdown(timeout=10.0)
 
 
 class UpdateChecker:
@@ -398,13 +396,12 @@ class AutoSyncController(QObject):
     statusChanged = Signal(str)
     # [(git args, ok, output)] for a run worth showing in the Git output.
     logged = Signal(object)
-    _job_done = Signal(object)
 
     def __init__(self, app: App) -> None:
         super().__init__(app)
         self._app = app
         self._shutting_down = False
-        self._running = False
+        self._jobs = JobRunner(self)
         self._paused = False
         self._proc: subprocess.Popen[str] | None = None
         # Porcelain output already committed (or already failed to commit):
@@ -412,7 +409,6 @@ class AutoSyncController(QObject):
         self._pending_status = ""
         self._attempted_status = ""
         self._last_problem = ""
-        self._job_done.connect(self._on_job_done)
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(self._POLL_INTERVAL_MS)
@@ -471,8 +467,8 @@ class AutoSyncController(QObject):
         self._start("sync", commit=False)
 
     def _start(self, kind: str, *, commit: bool = False) -> bool:
-        """Run one git job on a daemon thread; False when the tick was skipped."""
-        if self._running or self._shutting_down or self._paused:
+        """Run one git job in the background; False when the tick was skipped."""
+        if self._jobs.is_busy("sync") or self._shutting_down or self._paused:
             return False
         repo = self._repo()
         if repo is None:
@@ -484,33 +480,26 @@ class AutoSyncController(QObject):
         if git is None:
             self._report_problem(GIT_NOT_FOUND_MESSAGE)
             return False
-        self._running = True
         if kind == "sync":
             self.statusChanged.emit("Syncing…")
         runner = GitRunner(git, repo, on_process=self._track_process)
         message = f"Auto-sync {datetime.now():%Y-%m-%d %H:%M:%S}" if commit else None
 
-        def work() -> None:
+        def work(_cancel: threading.Event) -> object:
             if kind == "status":
                 step = runner.run("status", "--porcelain")
-                payload: object = ("status", step.output if step.ok else "")
-            else:
-                result = sync_repository(runner, commit_message=message)
-                steps = [(list(step.args), step.ok, step.output) for step in runner.steps]
-                payload = ("sync", (result, steps))
-            if self._shutting_down:
-                self._running = False
-            else:
-                self._job_done.emit(payload)
+                return ("status", step.output if step.ok else "")
+            result = sync_repository(runner, commit_message=message)
+            steps = [(list(step.args), step.ok, step.output) for step in runner.steps]
+            return ("sync", (result, steps))
 
-        threading.Thread(target=work, daemon=True).start()
+        self._jobs.submit("sync", work, on_done=self._on_job_done)
         return True
 
     def _track_process(self, proc: subprocess.Popen[str] | None) -> None:
         self._proc = proc
 
     def _on_job_done(self, payload: object) -> None:
-        self._running = False
         if self._shutting_down or self._paused or not self.enabled():
             return
         kind, value = cast("tuple[str, Any]", payload)
@@ -586,6 +575,8 @@ class AutoSyncController(QObject):
                 proc.terminate()
             except OSError:
                 pass
+        # Git steps time out on their own; never block window close on them.
+        self._jobs.shutdown(timeout=0.0)
 
 
 class TaskController:

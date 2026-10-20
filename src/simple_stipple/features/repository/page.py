@@ -36,6 +36,7 @@ from simple_stipple.platform.git import (
     GitRunner,
     find_git,
 )
+from simple_stipple.platform.jobs import JobRunner
 from simple_stipple.platform.settings import save_settings
 from simple_stipple.ui.components.feedback import show_error
 from simple_stipple.ui.components.focus import blocked_signals
@@ -189,7 +190,6 @@ def branch_switch_commands(
 
 
 class RepoPage(BasePage):
-    _git_op_done = Signal(object)
     autoSyncToggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
@@ -198,8 +198,9 @@ class RepoPage(BasePage):
         self._shutting_down = False
         self._git_cancel = threading.Event()
         self._git_process: subprocess.Popen[str] | None = None
-        self._git_thread: threading.Thread | None = None
-        self._git_op_done.connect(self._on_git_op_done)
+        # Cancellation stays on _git_cancel (not the runner's token) so a
+        # cancelled run still reports the steps it completed.
+        self._jobs = JobRunner(self)
         self._workflow_repo_key: str | None = None
         self._branch_repo_key: str | None = None
         self._local_branches: set[str] = set()
@@ -681,7 +682,7 @@ class RepoPage(BasePage):
         self._git_cancel.clear()
         self._refresh_repo_state()
 
-        def work() -> None:
+        def work(_runner_cancel: threading.Event) -> tuple:
             git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
             results: list[tuple[list[str], bool, str]] = []
             for args in commands:
@@ -720,11 +721,9 @@ class RepoPage(BasePage):
                 results.append((args, ok, out.strip()))
                 if not ok:
                     break
-            if not self._shutting_down:
-                self._git_op_done.emit((results, on_done))
+            return results, on_done
 
-        self._git_thread = threading.Thread(target=work, daemon=True)
-        self._git_thread.start()
+        self._jobs.submit("git", work, on_done=self._on_git_op_done)
         return True
 
     def _on_git_op_done(self, payload: tuple) -> None:
@@ -1024,4 +1023,7 @@ class RepoPage(BasePage):
             process.terminate()
 
     def shutdown(self) -> None:
-        self._shutdown_thread(self._git_thread, self._terminate_git_process)
+        self._shutting_down = True
+        self._terminate_git_process()
+        self.blockSignals(True)
+        self._jobs.shutdown()

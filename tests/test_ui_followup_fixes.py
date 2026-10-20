@@ -125,8 +125,7 @@ def test_deleted_recovery_snapshot_is_not_rewritten(
     # A real edit re-arms crash protection.
     monkeypatch.setattr(window, "_collect_workspace_document", lambda: {"changed": True})
     ctrl._autosave_workspace()
-    if ctrl._recovery_write_thread is not None:
-        ctrl._recovery_write_thread.join(timeout=5)
+    assert ctrl._jobs.wait("recovery", timeout=5)
     assert window._autosave_path().exists(), "new edits must still be protected"
     window.close()
 

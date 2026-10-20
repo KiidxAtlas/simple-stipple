@@ -108,6 +108,7 @@ def test_shared_ui_and_platform_homes_have_no_root_level_facades() -> None:
         "__init__.py",
         "error_reporting.py",
         "git.py",
+        "jobs.py",
         "launcher.py",
         "settings.py",
         "storage.py",

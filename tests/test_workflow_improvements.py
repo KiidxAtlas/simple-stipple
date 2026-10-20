@@ -16,7 +16,6 @@ from simple_stipple.features.convert import tasks
 from simple_stipple.features.convert.page import ConvertPage
 from simple_stipple.features.pattern import export as export_module
 from simple_stipple.features.pattern.page import PatternPage
-from simple_stipple.features.trace import page as trace_module
 from simple_stipple.features.trace.page import TracePage
 from simple_stipple.ui.style import _render_app_qss, load_app_qss
 
@@ -113,20 +112,22 @@ def _assert_theme_updates(app, monkeypatch):
 
 
 def test_old_trace_progress_cannot_overwrite_a_restarted_or_finished_job(app, monkeypatch):
+    import threading
+
     captured = []
-
-    def thread(**kwargs):
-        captured.append(kwargs)
-        return SimpleNamespace(start=lambda: None, is_alive=lambda: False)
-
-    monkeypatch.setattr(trace_module.threading, "Thread", thread)
     page = TracePage(settings={})
+
+    def submit(_key, work, **_kwargs):
+        captured.append(work)
+        return threading.Event()
+
+    monkeypatch.setattr(page._jobs, "submit", submit)
     page._img_path = "source.png"
     page._width_mm.setText("100")
-    page._start_trace_thread()
-    old_progress = captured[-1]["args"][1]["on_progress"]
+    page._start_trace()
+    old_progress = captured[-1].args[1]["on_progress"]
     page._force_reload_trace()
-    current_progress = captured[-1]["args"][1]["on_progress"]
+    current_progress = captured[-1].args[1]["on_progress"]
     current_progress(40, "Current trace")
     assert page._progress.value() == 40
     old_progress(90, "Old trace")
@@ -242,8 +243,7 @@ def test_batch_results_retry_only_failed_files_with_original_destinations(
     tab._out_edit.setText(str(tmp_path / "edited-output"))
     fail = False
     tab.retry_failed()
-    tab._thread.join(timeout=5)
-    assert not tab._thread.is_alive()
+    assert tab._jobs.wait("convert", timeout=5)
     app.processEvents()
     assert [path.stem for path, _out in calls].count("good") == 1
     assert [path.stem for path, _out in calls].count("bad") == 2

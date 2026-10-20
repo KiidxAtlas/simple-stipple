@@ -87,7 +87,7 @@ def test_export_waiting_on_a_solve_that_cannot_start_is_reported_not_left_pendin
 
     page._with_solved_pattern(lambda: exported.append(True))
     page._preview_timer.stop()
-    page._start_preview_thread()
+    page._start_preview()
     app.processEvents()
 
     assert exported == []

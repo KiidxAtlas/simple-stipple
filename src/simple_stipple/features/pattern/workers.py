@@ -1,287 +1,84 @@
-"""Thread-worker functions for pattern generation and preview.
+"""Background solve for the Pattern page's preview.
 
-All functions are pure (no Qt / self references) and designed to be
-passed as ``threading.Thread(target=…)`` targets.  Signal callbacks
-(``on_done`` / ``on_error``) are provided by the caller so the workers
-remain independent of the page class.
+The solve is a plain function of a frozen :class:`PreviewRequest`, so it runs
+on a :class:`~simple_stipple.platform.jobs.JobRunner` worker without touching
+page or Qt state. It returns the categorized preview or raises
+:class:`~simple_stipple.platform.jobs.JobCancelled` once its cancel event is
+set; any other exception is a solve failure.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
-from simple_stipple.core.formats.service import DxfService
 from simple_stipple.core.patterns.cancellation import cancellation_scope
-from simple_stipple.core.patterns.output import prepare_output
+from simple_stipple.platform.jobs import JobCancelled
 
 LOGGER = logging.getLogger(__name__)
-CANCELLED_MESSAGE = "__task_cancelled__"
-MAX_RENDER_PREVIEW_PATHS = 1_200
-MAX_RENDER_PREVIEW_POINTS = 160
+Polyline = list[tuple[float, float]]
 
 
-class TaskPhase(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    CANCELLING = "cancelling"
+@dataclass(frozen=True)
+class PreviewRequest:
+    """Snapshot of everything one preview solve reads from the page."""
+
+    all_polys: list[Polyline]
+    pattern: str
+    params: dict[str, Any]
+    scale: tuple[float, float]
+    border_fade: float
+    orig_w: float
+    orig_h: float
+    fill_options: dict[str, Any] | None = None
+    #: Per-region treatments; when present the outline pattern is ignored.
+    zones: tuple[dict[str, Any], ...] = ()
 
 
-def _report_cancel(on_error: Callable, token: int) -> None:
-    on_error((token, CANCELLED_MESSAGE))
-
-
-def _run_cancellable(cancel_event, function, *args, **kwargs):
-    check = cancel_event.is_set if cancel_event else None
-    with cancellation_scope(check):
-        return function(*args, **kwargs)
-
-
-@dataclass
-class CancellableTaskState:
-    """Track running/pending state and cancellation token for threaded tasks."""
-
-    running: bool = False
-    pending: bool = False
-    _cancel_event: threading.Event = field(default_factory=threading.Event)
-
-    @property
-    def phase(self) -> TaskPhase:
-        if self.running and self.pending:
-            return TaskPhase.CANCELLING
-        if self.running:
-            return TaskPhase.RUNNING
-        return TaskPhase.IDLE
-
-    def request_start(self) -> tuple[bool, threading.Event]:
-        """Request a new run.
-
-        Returns (can_start_now, cancel_event_for_run).
-        If already running, marks pending and returns (False, current_event).
-        """
-        if self.running:
-            self.pending = True
-            self._cancel_event.set()
-            return False, self._cancel_event
-
-        # Cancel any prior in-flight token, then mint a fresh event so the
-        # caller can pass it into the new worker thread atomically.
-        self._cancel_event.set()
-        self._cancel_event = threading.Event()
-        self.running = True
-        self.pending = False
-        return True, self._cancel_event
-
-    def finish_run(self) -> bool:
-        """Mark run complete and return whether another run is pending."""
-        self.running = False
-        if self.pending:
-            self.pending = False
-            return True
-        return False
-
-    def has_pending(self) -> bool:
-        return self.pending
-
-    def cancel(self) -> None:
-        """Signal the in-flight run's cancel event, if any.
-
-        Used on page/app shutdown so an in-flight worker notices at its next
-        checkpoint and stops, instead of running to completion against a
-        page that's already being torn down.
-        """
-        self._cancel_event.set()
-
-
-def run_generate(
-    active: list[list[tuple[float, float]]],
-    out_path: str,
-    pattern: str,
-    params: dict,
-    scale: tuple[float, float],
-    border_polys: list[list[tuple[float, float]]] | None,
-    open_paths: bool = False,
-    interlace: bool = False,
-    invert_fill: bool = False,
-    mirror_v: bool = False,
-    mirror_h: bool = False,
-    border_fade: float = 0.0,
-    exclusion_polys: list[list[tuple[float, float]]] | None = None,
-    generation_token: int = 0,
-    cancel_event: threading.Event | None = None,
-    *,
+def solve_preview(
+    request: PreviewRequest,
     pattern_service: Any,
-    orig_w: float,
-    orig_h: float,
-    on_done: Callable,
-    on_error: Callable,
-    fill_options: dict | None = None,
-    fabrication_options: dict | None = None,
-) -> None:
-    try:
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, generation_token)
-            return
-        fill_polys: list[list[tuple[float, float]]] = []
-        polys = _run_cancellable(
-            cancel_event,
-            pattern_service.build_pattern_polys,
-            active,
-            pattern=pattern,
-            params=params,
-            scale=scale,
-            orig_w=orig_w,
-            orig_h=orig_h,
-            interlace=interlace,
-            invert_fill=invert_fill,
-            mirror_v=mirror_v,
-            mirror_h=mirror_h,
-            border_fade=border_fade,
-            exclusion_polys=exclusion_polys,
-            fill_options=fill_options,
-            fill_polys_out=fill_polys,
-        )
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, generation_token)
-            return
-        polys = prepare_output(polys, fabrication_options)
-        fill_polys = prepare_output(fill_polys, fabrication_options)
-        close = pattern_service.should_close_pattern(pattern) and not open_paths
-        if close:
-            for poly in polys:
-                if len(poly) >= 3 and poly[0] != poly[-1]:
-                    poly.append(poly[0])
-        # Keep generated pattern cells and optional fill geometry together:
-        # CAM tools expect just the outline and pattern layers.
-        polys.extend(fill_polys)
-        effective_border = border_polys
-        if not effective_border:
-            effective_border = pattern_service.apply_scale(
-                active, scale[0], scale[1], orig_w=orig_w, orig_h=orig_h
-            )
-        DxfService.write_polylines_dxf(
-            polys,
-            out_path,
-            close=False,
-            open_paths=open_paths,
-            border_polys=effective_border,
-            pattern_layer="pattern",
-            border_layer_prefix="outline",
-        )
-        count = len(polys)
-        name = Path(out_path).name
-        on_done((generation_token, count, name, out_path, polys))
-    except Exception as exc:  # noqa: BLE001 - any failure must still clear
-        # `running` via on_error, or Generate/Preview stay disabled forever.
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, generation_token)
-            return
-        LOGGER.warning("Pattern generation failed: %s", exc, exc_info=True)
-        on_error((generation_token, str(exc)))
-
-
-def compute_preview(
-    outline_polys: list[list[tuple[float, float]]],
-    pattern: str,
-    params: dict,
-    scale: tuple[float, float],
-    border_polys: list[list[tuple[float, float]]] | None,
-    interlace: bool = False,
-    invert_fill: bool = False,
-    mirror_v: bool = False,
-    mirror_h: bool = False,
-    border_fade: float = 0.0,
-    exclusion_polys: list[list[tuple[float, float]]] | None = None,
-    preview_token: int = 0,
     cancel_event: threading.Event | None = None,
-    *,
-    pattern_service: Any,
-    orig_w: float,
-    orig_h: float,
-    on_done: Callable,
-    on_error: Callable,
-    fill_options: dict | None = None,
-) -> None:
-    try:
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, preview_token)
-            return
-        preview = _run_cancellable(
-            cancel_event,
-            pattern_service.build_preview_polys,
-            outline_polys,
-            pattern=pattern,
-            params=params,
-            scale=scale,
-            orig_w=orig_w,
-            orig_h=orig_h,
-            border_polys=border_polys,
-            interlace=interlace,
-            invert_fill=invert_fill,
-            mirror_v=mirror_v,
-            mirror_h=mirror_h,
-            border_fade=border_fade,
-            exclusion_polys=exclusion_polys,
-            fill_options=fill_options,
-        )
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, preview_token)
-            return
-        on_done((preview_token, preview["display"], preview["count"], preview))
-    except Exception as exc:  # noqa: BLE001 - see run_generate
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, preview_token)
-            return
-        LOGGER.warning("Preview generation failed: %s", exc, exc_info=True)
-        on_error((preview_token, str(exc)))
+) -> dict[str, Any]:
+    """Solve ``request`` and return the preview dict (``display``, ``count``, …)."""
+    check = cancel_event.is_set if cancel_event is not None else None
 
+    def cancelled() -> bool:
+        return check is not None and check()
 
-def compute_preview_zones(
-    zones: list[dict],
-    all_polys: list[list[tuple[float, float]]],
-    invert_fill: bool = False,
-    mirror_v: bool = False,
-    mirror_h: bool = False,
-    border_fade: float = 0.0,
-    exclusion_polys: list[list[tuple[float, float]]] | None = None,
-    preview_token: int = 0,
-    cancel_event: threading.Event | None = None,
-    *,
-    pattern_service: Any,
-    orig_w: float,
-    orig_h: float,
-    on_done: Callable,
-    on_error: Callable,
-    fill_options: dict | None = None,
-) -> None:
-    """Worker: generate each zone's pattern and combine for composite preview."""
+    if cancelled():
+        raise JobCancelled
     try:
-        preview = _run_cancellable(
-            cancel_event,
-            pattern_service.build_preview_zone_polys,
-            zones,
-            all_polys,
-            orig_w=orig_w,
-            orig_h=orig_h,
-            invert_fill=invert_fill,
-            mirror_v=mirror_v,
-            mirror_h=mirror_h,
-            border_fade=border_fade,
-            exclusion_polys=exclusion_polys,
-            fill_options=fill_options,
-        )
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, preview_token)
-            return
-        on_done((preview_token, preview["display"], preview["count"], preview))
-    except Exception as exc:  # noqa: BLE001 - see run_generate
-        if cancel_event and cancel_event.is_set():
-            _report_cancel(on_error, preview_token)
-            return
-        LOGGER.warning("Zone preview generation failed: %s", exc, exc_info=True)
-        on_error((preview_token, str(exc)))
+        with cancellation_scope(check):
+            if request.zones:
+                preview = pattern_service.build_preview_zone_polys(
+                    list(request.zones),
+                    request.all_polys,
+                    orig_w=request.orig_w,
+                    orig_h=request.orig_h,
+                    border_fade=request.border_fade,
+                    fill_options=request.fill_options,
+                )
+            else:
+                preview = pattern_service.build_preview_polys(
+                    request.all_polys,
+                    pattern=request.pattern,
+                    params=request.params,
+                    scale=request.scale,
+                    orig_w=request.orig_w,
+                    orig_h=request.orig_h,
+                    # The service supplies the scaled outline itself.
+                    border_polys=None,
+                    border_fade=request.border_fade,
+                    fill_options=request.fill_options,
+                )
+    except Exception:
+        if cancelled():
+            raise JobCancelled from None
+        LOGGER.warning("Preview generation failed", exc_info=True)
+        raise
+    if cancelled():
+        raise JobCancelled
+    return preview
