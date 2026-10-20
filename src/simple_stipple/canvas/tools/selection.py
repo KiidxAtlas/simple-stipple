@@ -20,6 +20,7 @@ from simple_stipple.canvas.tools.dragging import (
     release_bezier_handle_drag,
     start_bezier_handle_drag,
 )
+from simple_stipple.canvas.tools.gestures import Marquee, MoveGesture
 from simple_stipple.canvas.view.helpers import connected_entity_ids
 from simple_stipple.core.document.geometry import demote_to_path, transform_entity_metadata
 
@@ -49,9 +50,7 @@ class EditTool(CanvasTool):
             # Empty space: default drag behavior is box selection (matches
             # Select mode). Shift adds to the current vertex selection;
             # a plain drag replaces it.
-            v._shift_drag = True
-            v._band_start = pos
-            v._band_additive = shift
+            v._marquee = Marquee.box(pos, additive=shift)
             v._lmb_prev = pos
             v._lmb_press = None
             return True
@@ -88,7 +87,7 @@ class EditTool(CanvasTool):
         if apply_edit_drag(v, event):
             return True
 
-        if v._shift_drag and v._band_start:
+        if v._marquee is not None and v._marquee.is_box:
             v._lmb_prev = pos
             v._redraw()
             return True
@@ -107,14 +106,13 @@ class EditTool(CanvasTool):
         if v._bezier_handle_drag is not None:
             release_bezier_handle_drag(v)
             return True
-        if v._shift_drag and v._band_start:
-            bx, by = v._band_start.x(), v._band_start.y()
+        marquee = v._marquee
+        if marquee is not None and marquee.is_box:
+            bx, by = marquee.start.x(), marquee.start.y()
             x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
             y1c, y2c = min(by, pos.y()), max(by, pos.y())
-            v._select_edit_vertices_in_rect(x1c, y1c, x2c, y2c, additive=v._band_additive)
-            v._shift_drag = False
-            v._band_start = None
-            v._band_additive = False
+            v._select_edit_vertices_in_rect(x1c, y1c, x2c, y2c, additive=marquee.additive)
+            v._marquee = None
             v._lmb_prev = None
             v._redraw()
             return True
@@ -234,9 +232,7 @@ class SelectTool(CanvasTool):
             v._lmb_press = pos
             v._lmb_prev = pos
             v._lmb_target = None
-            v._move_origin = (wx0, wy0)
-            v._move_dragging = False
-            v._move_undo_pushed = False
+            v._move_gesture = MoveGesture(origin_w=(wx0, wy0))
             v._move_snap_exclude_vertices = set()
             v._move_snap_exclude_segments = set()
             v._show_flash("Move · Alt temporarily disables snapping", 1400)
@@ -248,9 +244,7 @@ class SelectTool(CanvasTool):
         v = self.v
         pos = event.position()
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-        v._shift_drag = False
-        v._band_start = None
-        v._band_additive = False
+        v._marquee = None
         v._lmb_press = pos
         v._lmb_prev = pos
         # A preflight marker is the fastest route from "something is wrong" to
@@ -292,17 +286,10 @@ class SelectTool(CanvasTool):
                 return True
         if v._selectable and target is None:
             if v._lasso_select_enabled:
-                v._lasso_active = True
-                v._lasso_points = [QPointF(pos.x(), pos.y())]
-                v._lasso_additive = shift
-                v._lmb_press = None
-                v._lmb_prev = pos
-                v._lmb_target = None
-                return True
-            # Default drag behavior in select mode is box selection.
-            v._shift_drag = True
-            v._band_start = pos
-            v._band_additive = shift
+                v._marquee = Marquee.lasso(pos, additive=shift)
+            else:
+                # Default drag behavior in select mode is box selection.
+                v._marquee = Marquee.box(pos, additive=shift)
             v._lmb_press = None
             v._lmb_prev = pos
             v._lmb_target = None
@@ -358,10 +345,7 @@ class SelectTool(CanvasTool):
         if target is not None and v._selection_drag_edits:
             target_entity = v._document.entity_for_id(target)
             if target_entity is not None and target_entity.id in v._sel:
-                wx, wy = v._c2w(pos.x(), pos.y())
-                v._move_origin = (wx, wy)
-                v._move_dragging = False
-                v._move_undo_pushed = False
+                v._move_gesture = MoveGesture(origin_w=v._c2w(pos.x(), pos.y()))
                 v._move_snap_exclude_vertices = set()
                 v._move_snap_exclude_segments = set()
         return True
@@ -395,39 +379,30 @@ class SelectTool(CanvasTool):
 
         # No per-vertex hover tracking in Select mode — point editing is Edit-only.
         if event.buttons() & Qt.MouseButton.LeftButton:
-            if v._lasso_active:
-                last = v._lasso_points[-1]
-                if math.hypot(pos.x() - last.x(), pos.y() - last.y()) >= 3.0:
-                    v._lasso_points.append(QPointF(pos.x(), pos.y()))
+            marquee = v._marquee
+            if marquee is not None and marquee.is_lasso:
+                marquee.extend_trail(pos)
                 v._lmb_prev = pos
                 v._redraw()
                 return True
-            if v._shift_drag and v._band_start:
+            if marquee is not None and marquee.is_box:
                 v._lmb_prev = pos
                 v._redraw()
                 return True
             # Move selected shapes. Snapping works on the selection's own
             # geometry: the shape's vertices snap to static vertices/edges/
             # grid/guides regardless of where the user grabbed it.
-            if v._move_origin is not None and v._lmb_press is not None:
+            gesture = v._move_gesture
+            if gesture is not None and v._lmb_press is not None:
                 dx_px = pos.x() - v._lmb_press.x()
                 dy_px = pos.y() - v._lmb_press.y()
-                if not v._move_dragging and (abs(dx_px) > DRAG_THRESH or abs(dy_px) > DRAG_THRESH):
-                    v._move_dragging = True
-                    v._move_anchor_w = v._move_origin
-                    v._move_applied_w = (0.0, 0.0)
+                if not gesture.dragging and (abs(dx_px) > DRAG_THRESH or abs(dy_px) > DRAG_THRESH):
                     v._move_start_pts = v._moving_sample_points()
-                if v._move_dragging:
-                    # Invariant: _move_dragging only ever becomes True right
-                    # above, together with _move_anchor_w — so it's always
-                    # set by the time we get here.
-                    assert v._move_anchor_w is not None
-                    if not v._move_undo_pushed:
-                        v._move_command_snapshot = v._canvas_service.begin_preview()
-                        v._move_undo_pushed = True
+                    gesture.begin_drag(v._canvas_service.begin_preview())
+                if gesture.dragging:
                     new_wx, new_wy = v._c2w(pos.x(), pos.y())
-                    raw_dx = new_wx - v._move_anchor_w[0]
-                    raw_dy = new_wy - v._move_anchor_w[1]
+                    raw_dx = new_wx - gesture.origin_w[0]
+                    raw_dy = new_wy - gesture.origin_w[1]
                     snap_indicators: list[tuple[tuple[float, float], str, tuple[float, float]]] = []
                     allow_snap = not bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
                     if allow_snap:
@@ -436,8 +411,8 @@ class SelectTool(CanvasTool):
                             raw_dx += adj[0]
                             raw_dy += adj[1]
                             snap_indicators = adj[2]
-                    step_dx = raw_dx - v._move_applied_w[0]
-                    step_dy = raw_dy - v._move_applied_w[1]
+                    step_dx = raw_dx - gesture.applied_w[0]
+                    step_dy = raw_dy - gesture.applied_w[1]
                     if abs(step_dx) > 1e-12 or abs(step_dy) > 1e-12:
                         for entity_id in v._sel:
                             entity = v._document.entity_for_id(entity_id)
@@ -458,7 +433,7 @@ class SelectTool(CanvasTool):
                                 dy=step_dy,
                             )
                         v._refresh_driving_dimensions()
-                        v._move_applied_w = (raw_dx, raw_dy)
+                        gesture.applied_w = (raw_dx, raw_dy)
                     v._cursor_wx, v._cursor_wy = new_wx, new_wy
                     v._hover_snap_multi = snap_indicators
                     if snap_indicators:
@@ -538,8 +513,9 @@ class SelectTool(CanvasTool):
         if v._bezier_handle_drag is not None:
             release_bezier_handle_drag(v)
             return True
-        if v._lasso_active:
-            points = [(p.x(), p.y()) for p in v._lasso_points]
+        marquee = v._marquee
+        if marquee is not None and marquee.is_lasso:
+            points = [(p.x(), p.y()) for p in marquee.trail]
             if not points or math.dist(points[-1], (pos.x(), pos.y())) >= 1.0:
                 points.append((pos.x(), pos.y()))
             picked_ids: set[str] = set()
@@ -581,13 +557,11 @@ class SelectTool(CanvasTool):
                     and v._document.entity_for_id(entity_id).group in gids  # type: ignore[union-attr]
                     and v._entity_selectable_by_id(entity_id)
                 }
-            if not v._lasso_additive:
+            if not marquee.additive:
                 v._sel = set()
             v._sel |= picked
-            v._lasso_active = False
+            v._marquee = None
             v._lasso_select_enabled = False
-            v._lasso_points.clear()
-            v._lasso_additive = False
             v._lmb_prev = None
             # Lasso is a one-shot arm (like a modal tool), not a persistent
             # mode switch — say so, since the next drag silently reverts to
@@ -596,15 +570,15 @@ class SelectTool(CanvasTool):
             v._redraw()
             v._notify()
             return True
-        if v._shift_drag and v._band_start and v._selectable:
-            bx, by = v._band_start.x(), v._band_start.y()
+        if marquee is not None and marquee.is_box and v._selectable:
+            bx, by = marquee.start.x(), marquee.start.y()
             x1c, x2c = min(bx, pos.x()), max(bx, pos.x())
             y1c, y2c = min(by, pos.y()), max(by, pos.y())
             # CAD marquee semantics: dragging left→right selects only fully
             # enclosed shapes (window); right→left selects anything the box
             # touches (crossing).
             window = pos.x() >= bx
-            if not v._band_additive:
+            if not marquee.additive:
                 v._sel = set()
             band_picked_ids: set[str] = set()
             for entity_id in v._document.entity_ids():
@@ -648,18 +622,13 @@ class SelectTool(CanvasTool):
             v._sel |= band_picked
             v._redraw()
             v._notify()
-            v._shift_drag = False
-            v._band_start = None
-            v._band_additive = False
+            v._marquee = None
             return True
 
-        if v._move_dragging:
+        if v._move_gesture is not None and v._move_gesture.dragging:
             # Move completed — already applied incrementally
-            v._move_dragging = False
-            v._canvas_service.commit_preview(v._move_command_snapshot)
-            v._move_command_snapshot = None
-            v._move_origin = None
-            v._move_undo_pushed = False
+            v._canvas_service.commit_preview(v._move_gesture.snapshot)
+            v._move_gesture = None
             v._move_snap_exclude_vertices = set()
             v._move_snap_exclude_segments = set()
             v._lmb_press = None

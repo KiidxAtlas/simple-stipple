@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from simple_stipple.canvas.renderer import CanvasRenderer
     from simple_stipple.canvas.snap import SnapEngine
     from simple_stipple.canvas.tools.dimension_tool import DimensionTool as SketchDimensionTool
+    from simple_stipple.canvas.tools.gestures import Marquee, MoveGesture
     from simple_stipple.canvas.tools.tools import ScaleTool
     from simple_stipple.core.document.organization import GroupingService, LayerService
 
@@ -268,8 +269,6 @@ class CanvasView(
     _lmb_prev: QPointF | None
     _cursor_wx: float | None
     _cursor_wy: float | None
-    _shift_drag: bool
-    _band_start: QPointF | None
     _edit_drag_anchor: tuple[float, float] | None
     _edit_drag_moved: bool
     _edit_undo_pushed: bool
@@ -293,7 +292,6 @@ class CanvasView(
     _grouping_service: GroupingService
     _snap_engine: SnapEngine
     _selectable: Any
-    _band_additive: bool
     _constraint_segment_refs: list[Any]
     _edit_poly: Any
     _edit_vert: Any
@@ -306,20 +304,13 @@ class CanvasView(
     _hover_poly: Any
     _hover_snap_multi: list[Any]
     _hover_vert: Any
-    _lasso_active: bool
-    _lasso_additive: bool
-    _lasso_points: list[Any]
     _lmb_press: Any
     _lmb_target: Any
-    _move_anchor_w: Any
-    _move_applied_w: tuple[float, float]
-    _move_command_snapshot: DocumentSnapshot | None
-    _move_dragging: bool
-    _move_origin: Any
+    _marquee: Marquee | None
+    _move_gesture: MoveGesture | None
     _move_snap_exclude_segments: set[Any]
     _move_snap_exclude_vertices: set[Any]
     _move_start_pts: list[Any]
-    _move_undo_pushed: bool
     _prev_cursor_display: Any
     _draw_pts: list[tuple[float, float]]
     _draw_primitive: str

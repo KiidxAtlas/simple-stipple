@@ -143,14 +143,9 @@ def _initialize_view(
     self._cursor_wx = None
     self._cursor_wy = None
 
-    # Rubber-band select
-    self._shift_drag = False
-    self._band_start = None
-    self._band_additive = False
+    # Drag-to-select region (box or lasso); see canvas/tools/gestures.py.
+    self._marquee = None
     self._lasso_select_enabled = False
-    self._lasso_active = False
-    self._lasso_points = []
-    self._lasso_additive = False
     self._context_menu_sections = set(DEFAULT_CONTEXT_MENU_SECTIONS)
     self._context_menu_section_order = list(DEFAULT_CONTEXT_MENU_SECTIONS)
     self._context_menu_overflow_sections = set(DEFAULT_CONTEXT_MENU_OVERFLOW_SECTIONS)
@@ -321,12 +316,7 @@ def _initialize_view(
     # absolute deltas from the drag anchor: the selection's own vertices
     # (sampled at drag start) snap against static vertices/edges/grid/
     # guides regardless of where the user grabbed the shape.
-    self._move_dragging = False
-    self._move_origin = None
-    self._move_undo_pushed = False
-    self._move_command_snapshot = None
-    self._move_anchor_w = None
-    self._move_applied_w = (0.0, 0.0)
+    self._move_gesture = None
     self._move_start_pts = []
     self._move_snap_exclude_vertices = set()
     self._move_snap_exclude_segments = set()

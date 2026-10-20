@@ -262,10 +262,8 @@ def _cancel_active_drag(self) -> bool:
     snapshot lazily on first movement and restore it here when cancelled.
     Returns True if a drag was cancelled.
     """
-    if self._lasso_active:
-        self._lasso_active = False
-        self._lasso_points.clear()
-        self._lasso_additive = False
+    if self._marquee is not None and self._marquee.is_lasso:
+        self._marquee = None
         self._redraw()
         return True
     if self._knife_start_w is not None:
@@ -273,10 +271,8 @@ def _cancel_active_drag(self) -> bool:
         self._knife_end_w = None
         self.set_mode("select")
         return True
-    if self._shift_drag and self._band_start is not None:
-        self._shift_drag = False
-        self._band_start = None
-        self._band_additive = False
+    if self._marquee is not None and self._marquee.is_box:
+        self._marquee = None
         self._redraw()
         return True
     if self._bg_drag is not None:
@@ -305,15 +301,9 @@ def _cancel_active_drag(self) -> bool:
         self._dimension_drag = None
         self._redraw()
         return True
-    if self._move_dragging:
-        if self._move_undo_pushed:
-            self._canvas_service.cancel_preview(self._move_command_snapshot)
-        self._move_dragging = False
-        self._move_origin = None
-        self._move_undo_pushed = False
-        self._move_command_snapshot = None
-        self._move_anchor_w = None
-        self._move_applied_w = (0.0, 0.0)
+    if self._move_gesture is not None and self._move_gesture.dragging:
+        self._canvas_service.cancel_preview(self._move_gesture.snapshot)
+        self._move_gesture = None
         self._move_start_pts = []
         self._move_snap_exclude_vertices = set()
         self._move_snap_exclude_segments = set()

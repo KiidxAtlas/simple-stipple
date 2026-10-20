@@ -2249,8 +2249,9 @@ class CanvasRenderer:
 
         # Rubber-band. Window select (left→right) draws solid blue;
         # crossing select (right→left) draws dashed green — CAD convention.
-        if self._host._shift_drag and self._host._band_start and self._host._lmb_prev:
-            bx, by = self._host._band_start.x(), self._host._band_start.y()
+        marquee = self._host._marquee
+        if marquee is not None and marquee.is_box and self._host._lmb_prev:
+            bx, by = marquee.start.x(), marquee.start.y()
             window = self._host._lmb_prev.x() >= bx
             if window:
                 pen = QPen(QColor("#2f81f7"), 1, Qt.PenStyle.SolidLine)
@@ -2268,10 +2269,10 @@ class CanvasRenderer:
             )
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        if self._host._lasso_active and len(self._host._lasso_points) >= 2:
+        if marquee is not None and marquee.is_lasso and len(marquee.trail) >= 2:
             painter.setPen(QPen(QColor("#3fb950"), 1.5, Qt.PenStyle.DashLine))
             painter.setBrush(QColor(63, 185, 80, 22))
-            painter.drawPolygon(QPolygonF(self._host._lasso_points))
+            painter.drawPolygon(QPolygonF(marquee.trail))
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
         if self._host._knife_start_w is not None and self._host._knife_end_w is not None:

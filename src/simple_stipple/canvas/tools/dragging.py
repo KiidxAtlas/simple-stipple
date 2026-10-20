@@ -53,7 +53,7 @@ def apply_edit_drag(v: CanvasView, event: QMouseEvent) -> bool:
         return False
     pos = event.position()
     wx, wy = v._c2w(pos.x(), pos.y())
-    if v._shift_drag and v._band_start:
+    if v._marquee is not None and v._marquee.is_box:
         v._lmb_prev = pos
         v._redraw()
         return True

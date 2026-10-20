@@ -736,13 +736,9 @@ def mouseReleaseEvent(self, event: QMouseEvent):
     self._lmb_press = None
     self._lmb_prev = None
     self._lmb_target = None
-    self._shift_drag = False
-    self._band_start = None
-    self._band_additive = False
-    self._move_origin = None
-    self._move_undo_pushed = False
-    self._move_anchor_w = None
-    self._move_applied_w = (0.0, 0.0)
+    # A button release ends every pointer gesture the active tool left open.
+    self._marquee = None
+    self._move_gesture = None
     self._move_start_pts = []
     self._move_snap_exclude_vertices = set()
     self._move_snap_exclude_segments = set()
