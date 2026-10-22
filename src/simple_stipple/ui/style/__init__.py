@@ -30,7 +30,7 @@ def _style_resource_root() -> Path:
     """Return a real directory containing the packaged QSS and SVG icons."""
     global _STYLE_TEMP_DIR
 
-    resource_root = resources.files(__package__)
+    resource_root = resources.files("simple_stipple.ui.style")
     # ``Traversable`` deliberately does not promise ``os.PathLike``. The
     # normal filesystem loader returns a concrete Path; archive-backed
     # loaders fall through to the persistent extraction below.
