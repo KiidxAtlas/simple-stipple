@@ -331,7 +331,7 @@ def simplify_contours(contours: list[Poly], tolerance: float = 1.0) -> list[Poly
             # fine detail (text, thin strokes) even at low tolerance settings.
             epsilon = min(epsilon, perimeter * 0.05)
         simplified = cv2.approxPolyDP(arr, epsilon, closed=True)
-        coords = [(float(p[0][0]), float(p[0][1])) for p in simplified]
+        coords = [(float(x), float(y)) for x, y in simplified.reshape(-1, 2)]
         if len(coords) >= 3:
             result.append(_close_poly(coords))
     return result

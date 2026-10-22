@@ -311,7 +311,7 @@ def order_for_cut(
             if reverse:
                 chosen = list(reversed(chosen))
             result.append(chosen)
-            cursor = np.asarray(chosen[-1], dtype=float)
+            cursor[:] = chosen[-1]
     return result
 
 
