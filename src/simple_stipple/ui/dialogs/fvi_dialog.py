@@ -1,4 +1,4 @@
-"""Configurable StarFX/FiberStar FVI export dialog."""
+"""Reusable StarFX/FiberStar FVI export options and program preview."""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ from typing import Any
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -20,11 +18,10 @@ from PySide6.QtWidgets import (
 )
 
 from simple_stipple.core.formats.service import FVI_UNIT_MM, DxfService, FviExportOptions
-from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 
 
-class FviExportDialog(QDialog):
-    """Collect export choices and show the resulting program statistics."""
+class FviExportPanel(QWidget):
+    """Edit export choices inline in the vector save dialog."""
 
     def __init__(
         self,
@@ -36,8 +33,6 @@ class FviExportDialog(QDialog):
         super().__init__(parent)
         self._records = records
         initial = initial or FviExportOptions()
-        self.setWindowTitle("Export StarFX FVI")
-        self.setMinimumWidth(470)
 
         root = QVBoxLayout(self)
         intro = QLabel(
@@ -98,13 +93,6 @@ class FviExportDialog(QDialog):
         self._summary.setProperty("role", "status-neutral")
         root.addWidget(self._summary)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
-
         self._origin.currentIndexChanged.connect(self._refresh_summary)
         self._margin.valueChanged.connect(self._refresh_summary)
         self._precision.valueChanged.connect(self._refresh_summary)
@@ -123,7 +111,6 @@ class FviExportDialog(QDialog):
         )
         self._margin.setEnabled(self._origin.currentData() == "lower_left")
         self._refresh_summary()
-        install_dialog_focus_lifecycle(self, self._origin)
 
     def options(self) -> FviExportOptions:
         return FviExportOptions(
@@ -136,6 +123,10 @@ class FviExportDialog(QDialog):
             include_comments=self._comments.isChecked(),
             flip_y=self._flip_y.isChecked(),
         )
+
+    def set_records(self, records: Sequence[dict[str, Any]]) -> None:
+        self._records = records
+        self._refresh_summary()
 
     def _refresh_summary(self, *_args) -> None:
         _text, report = DxfService.render_fvi(self._records, self.options())
@@ -153,4 +144,4 @@ class FviExportDialog(QDialog):
         self._summary.setText(summary)
 
 
-__all__ = ["FviExportDialog"]
+__all__ = ["FviExportPanel"]

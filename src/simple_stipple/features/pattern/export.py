@@ -405,17 +405,16 @@ def export_summary(
     return " · ".join(parts)
 
 
-def _region_name(page, region_id: str) -> str:
-    ids = [rid for rid in page._outline_ids if rid in page._region_tree()]
-    return f"Region {ids.index(region_id) + 1}" if region_id in ids else "Region"
-
-
 def document_operations(page) -> list[Operation]:
     """Every operation this document produces, in run order."""
     operations: list[Operation] = []
+    # Resolve geometry once for the whole refresh, not once per name/outline.
+    tree = page._region_tree()
+    region_ids = [rid for rid in page._outline_ids if rid in tree]
+    names = {rid: f"Region {index}" for index, rid in enumerate(region_ids, start=1)}
     for region_id in page._outline_ids:
         kind = treatment_kind(page, region_id)
-        name = _region_name(page, region_id)
+        name = names.get(region_id, "Region")
         if kind == "engrave":
             engraving = region_engraving(page, region_id)
             image = Path(engraving["path"]).name if engraving else "no image"
@@ -466,7 +465,6 @@ def document_operations(page) -> list[Operation]:
     # The part still has to come off the sheet. An outermost region is cut
     # whatever is done inside it, which is why the reference scenario's ring
     # is both marked and cut — the boundary is the same shape either way.
-    tree = page._region_tree()
     for region_id in page._outline_ids:
         region = tree.get(region_id)
         if region is None or region.depth != 0:
@@ -477,7 +475,7 @@ def document_operations(page) -> list[Operation]:
             Operation(
                 key=f"cut:boundary:{region_id}",
                 kind="cut",
-                subject=f"{_region_name(page, region_id)} boundary",
+                subject=f"{names.get(region_id, 'Region')} boundary",
                 target="outline",
             )
         )

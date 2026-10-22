@@ -59,8 +59,8 @@ def container_with_layout(
 
 
 def section_label(parent_layout, text: str) -> QLabel:
-    """Compact muted section header with letter-spacing."""
-    lb = QLabel(text.upper())
+    """Readable, sentence-case section header."""
+    lb = QLabel(text)
     lb.setProperty("role", "section-label")
     parent_layout.addWidget(lb)
     return lb
@@ -82,6 +82,7 @@ def info_chip(text: str, tone: str = "neutral") -> QLabel:
     chip.setProperty("role", "chip")
     chip.setProperty("tone", tone)
     chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
     return chip
 
 

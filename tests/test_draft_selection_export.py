@@ -4,7 +4,7 @@ from copy import deepcopy
 
 import ezdxf
 import pytest
-from PySide6.QtWidgets import QMenu
+from PySide6.QtWidgets import QFileDialog, QMenu
 
 from simple_stipple.canvas.operations.interactions import handle_right_click
 from simple_stipple.core.document.model import EntityRecord
@@ -87,6 +87,10 @@ def test_exported_file_contains_only_selected_rows(
         assert not dialog.has_selection()
         select_rows(dialog, scope)
         dialog._format.setCurrentIndex(dialog._format.findData(format_name))
+        if format_name == "fvi":
+            panel = dialog._fvi_panel
+            assert panel is not None
+            panel._origin.setCurrentIndex(panel._origin.findData("preserve"))
         return 1
 
     monkeypatch.setattr(VectorExportDialog, "exec", choose)
@@ -94,16 +98,7 @@ def test_exported_file_contains_only_selected_rows(
     selection = page._canvas.get_selected_ids()
     depth = page._canvas.undo_depth()
     output = tmp_path / f"selected.{format_name}"
-    monkeypatch.setattr(draft, "pick_save_file", lambda *args, **kwargs: str(output))
-    # Only accept the real options dialog; the FVI writer/reader stay real.
-    monkeypatch.setattr(draft.FviExportDialog, "exec", lambda self: 1)
-    real_options = draft.FviExportDialog.options
-
-    def options(dialog):
-        dialog._origin.setCurrentIndex(dialog._origin.findData("preserve"))
-        return real_options(dialog)
-
-    monkeypatch.setattr(draft.FviExportDialog, "options", options)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(output), ""))
     errors = []
     monkeypatch.setattr(draft, "show_error", lambda *args: errors.append(args[-1]))
     page._export()
@@ -118,8 +113,13 @@ def test_exported_file_contains_only_selected_rows(
             svg_to_dxf(output, dxf_path)
         paths = DxfService.load_dxf_polylines(str(dxf_path))
         if format_name == "dxf":
-            layers = {entity.dxf.layer for entity in ezdxf.readfile(output).modelspace()}
-            assert layers == {"Artwork"}
+            entities = list(ezdxf.readfile(output).modelspace())
+            assert {entity.dxf.layer for entity in entities} == {
+                "Engrave" if x == 10 else "Cut" for x in expected_x
+            }
+            for entity in entities:
+                x = round(entity.get_points()[0][0])
+                assert entity.dxf.layer == ("Engrave" if x == 10 else "Cut")
     assert len(paths) == len(expected_x)
     assert {round(point[0], 5) for path in paths for point in path} == expected_x
     assert page._canvas.get_entity_records() == original
@@ -134,7 +134,7 @@ def test_cancel_export_dialog_does_not_write(page, monkeypatch, method):
     def unexpected_save(*args, **kwargs):
         pytest.fail("Cancelled selection must not open a save dialog")
 
-    monkeypatch.setattr(draft, "pick_save_file", unexpected_save)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", unexpected_save)
     getattr(page, method)()
     assert page._last_out_path is None
 
@@ -154,7 +154,7 @@ def test_selected_dxf_does_not_include_unselected_dimensions(page, monkeypatch, 
         }
     )
     output = tmp_path / "selected.dxf"
-    monkeypatch.setattr(draft, "pick_save_file", lambda *args, **kwargs: str(output))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(output), ""))
     page._export()
     entities = list(ezdxf.readfile(output).modelspace())
     assert len(entities) == 1
@@ -235,19 +235,21 @@ def test_real_modal_preserves_initial_scope(page, qtbot, preselect):
     assert not dialog.exec()
 
 
-def test_named_multiline_group_and_shape_export_on_one_layer(page, monkeypatch, tmp_path):
+def test_named_multiline_group_keeps_document_layers(page, monkeypatch, tmp_path):
     from simple_stipple.core.formats.dxf import load_dxf_polylines_by_layer_with_report
 
     page._canvas.set_group_label(4, "FIRE\nSAFE")
     output = tmp_path / "artwork.dxf"
-    monkeypatch.setattr(draft, "pick_save_file", lambda *args, **kwargs: str(output))
+
     monkeypatch.setattr(VectorExportDialog, "exec", lambda self: 1)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(output), ""))
     page._export()
     document = ezdxf.readfile(output)
     assert not document.audit().has_errors
-    assert {entity.dxf.layer for entity in document.modelspace()} == {"Artwork"}
+    assert {entity.dxf.layer for entity in document.modelspace()} == {"Cut", "Engrave"}
     layers, report = load_dxf_polylines_by_layer_with_report(str(output))
-    assert len(layers["Artwork"]) == 4
+    assert len(layers["Cut"]) == 3
+    assert len(layers["Engrave"]) == 1
     assert report.group_labels == {4: "FIRE\nSAFE"}
 
 
@@ -271,3 +273,78 @@ def test_drawing_and_moving_into_grouped_layer_keeps_shapes_independent(page):
     canvas.redo()
     assert canvas._entity_for_id(new_id).group is None
     assert canvas._entity_for_id(moved_id).group is None
+
+
+@pytest.mark.parametrize("format_name", ["dxf", "svg", "fvi"])
+def test_one_options_dialog_then_native_save(page, qtbot, monkeypatch, tmp_path, format_name):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    output = tmp_path / f"native-save.{format_name}"
+    page._settings["draft_output_dir"] = str(tmp_path)
+    real_exec = VectorExportDialog.exec
+    steps = []
+
+    def execute(dialog):
+        steps.append("options")
+
+        def choose():
+            assert QApplication.activeModalWidget() is dialog
+            assert dialog.format_name() == format_name
+            dialog.accept()
+
+        QTimer.singleShot(20, choose)
+        return real_exec(dialog)
+
+    def native_save(parent, caption, seed, file_filter, **kwargs):
+        steps.append("native save")
+        assert parent is page
+        assert seed == str(tmp_path / f"draft.{format_name}")
+        assert f"*.{format_name}" in file_filter
+        assert not kwargs.get("options", QFileDialog.Option(0)) & (
+            QFileDialog.Option.DontUseNativeDialog
+        )
+        assert not any(widget.isVisible() for widget in page.findChildren(VectorExportDialog))
+        return str(output), file_filter
+
+    monkeypatch.setattr(VectorExportDialog, "exec", execute)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", native_save)
+    page._export_vector(format_name)
+    assert steps == ["options", "native save"]
+    assert output.is_file()
+    assert page._last_out_path == str(output)
+
+
+def test_format_switch_keeps_inline_fvi_options(page, qtbot):
+    dialog = VectorExportDialog(page._canvas.get_export_dxf_state())
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    dialog._format.setCurrentIndex(dialog._format.findData("fvi"))
+    assert dialog._tabs.isTabVisible(1)
+    panel = dialog._fvi_panel
+    assert panel is not None
+    panel._flip_y.setChecked(True)
+    panel._margin.setValue(7.5)
+    dialog._format.setCurrentIndex(dialog._format.findData("svg"))
+    assert not dialog._tabs.isTabVisible(1)
+    dialog._format.setCurrentIndex(dialog._format.findData("fvi"))
+    assert dialog.fvi_options().flip_y
+    assert dialog.fvi_options().margin_mm == 7.5
+    select_rows(dialog, "shape")
+    dialog._refresh_summary()
+    assert panel._records == dialog.selected_records()
+
+
+@pytest.mark.parametrize("format_name", ["dxf", "svg", "fvi"])
+def test_cancel_native_save_leaves_drawing_unchanged(page, monkeypatch, format_name):
+    original = deepcopy(page._canvas.get_entity_records())
+    selection = page._canvas.get_selected_ids()
+    depth = page._canvas.undo_depth()
+    monkeypatch.setattr(VectorExportDialog, "exec", lambda self: 1)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+    page._export_vector(format_name)
+    assert page._last_out_path is None
+    assert page._canvas.get_entity_records() == original
+    assert page._canvas.get_selected_ids() == selection
+    assert page._canvas.undo_depth() == depth

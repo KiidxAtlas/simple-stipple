@@ -191,6 +191,9 @@ def branch_switch_commands(
 
 class RepoPage(BasePage):
     autoSyncToggled = Signal(bool)
+    # Emitted from the git worker thread (queued onto the GUI thread) as each
+    # step starts: (1-based index, total steps, git arguments).
+    _git_step_started = Signal(int, int, object)
 
     def __init__(self, parent: QWidget | None = None, settings: dict | None = None):
         super().__init__(parent, settings)
@@ -198,6 +201,11 @@ class RepoPage(BasePage):
         self._shutting_down = False
         self._git_cancel = threading.Event()
         self._git_process: subprocess.Popen[str] | None = None
+        # Live description of the running operation, and how many step
+        # headers have already been echoed into the log while it ran.
+        self._git_activity = ""
+        self._streamed_steps = 0
+        self._git_step_started.connect(self._on_git_step_started)
         # Cancellation stays on _git_cancel (not the runner's token) so a
         # cancelled run still reports the steps it completed.
         self._jobs = JobRunner(self)
@@ -529,7 +537,10 @@ class RepoPage(BasePage):
         repo_key = str(repo.resolve()) if repo is not None else None
         if repo_key != self._workflow_repo_key:
             self._workflow_repo_key = repo_key
-        if repo is not None:
+        if repo is not None and self._git_busy and self._git_activity:
+            message = self._git_activity
+            color = STATUS_NEUTRAL
+        elif repo is not None:
             message = f"Ready — {repo.name} is a valid git repository."
             color = STATUS_OK
         else:
@@ -680,15 +691,20 @@ class RepoPage(BasePage):
             return False
         self._git_busy = True
         self._git_cancel.clear()
+        self._streamed_steps = 0
+        # Immediate, GUI-thread feedback: the first step is announced before
+        # the worker has even started, so the page never looks idle.
+        self._git_activity = self._describe_git_step(commands[0], 1, len(commands))
         self._refresh_repo_state()
 
         def work(_runner_cancel: threading.Event) -> tuple:
             git_env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
             results: list[tuple[list[str], bool, str]] = []
-            for args in commands:
+            for step, args in enumerate(commands, start=1):
                 if self._git_cancel.is_set():
                     results.append((args, False, "Cancelled"))
                     break
+                self._git_step_started.emit(step, len(commands), args)
                 try:
                     proc = subprocess.Popen(
                         [git, *args],
@@ -726,11 +742,30 @@ class RepoPage(BasePage):
         self._jobs.submit("git", work, on_done=self._on_git_op_done)
         return True
 
+    @staticmethod
+    def _describe_git_step(args: list[str], step: int, total: int) -> str:
+        # Name the subcommand only: arguments (commit messages, URLs) can be
+        # long or sensitive, and the log carries the full redacted command.
+        name = args[0] if args else "command"
+        suffix = f" (step {step} of {total})" if total > 1 else ""
+        return f"Running git {_redact_git_text(name)}{suffix}…"
+
+    def _on_git_step_started(self, step: int, total: int, args: object) -> None:
+        if self._shutting_down or not self._git_busy or not isinstance(args, list):
+            return
+        self._git_activity = self._describe_git_step(args, step, total)
+        self._set_step_status(self._repo_status, self._git_activity, STATUS_NEUTRAL)
+        # Echo the command now; its output follows when the step finishes.
+        self._append_log_line(_redact_git_text(f"$ git {' '.join(args)}"))
+        self._streamed_steps = max(self._streamed_steps, step)
+
     def _on_git_op_done(self, payload: tuple) -> None:
         if self._shutting_down:
             return
         results, on_done = payload
-        self._append_git_results(results)
+        self._append_git_results(results, skip_headers=self._streamed_steps)
+        self._streamed_steps = 0
+        self._git_activity = ""
         self._emit_state_changed()
         self._git_busy = False
         self._refresh_repo_state()
@@ -745,10 +780,13 @@ class RepoPage(BasePage):
             self._refresh_branch_choices(repo, preserve_selection=not prefer_current)
         on_done(results)
 
-    def _append_git_results(self, results: list[tuple[list[str], bool, str]]) -> None:
-        for args, _ok, out in results:
-            command = _redact_git_text(f"$ git {' '.join(args)}")
-            self._append_log_line(command)
+    def _append_git_results(
+        self, results: list[tuple[list[str], bool, str]], *, skip_headers: int = 0
+    ) -> None:
+        """Log each step's output; the first *skip_headers* commands were already echoed."""
+        for index, (args, _ok, out) in enumerate(results):
+            if index >= skip_headers:
+                self._append_log_line(_redact_git_text(f"$ git {' '.join(args)}"))
             for line in out.splitlines() if out else ["(done)"]:
                 self._append_log_line(_redact_git_text(line))
             self._append_log_line("")

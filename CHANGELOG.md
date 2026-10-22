@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 — 2026-10-22
+
+### Changed
+
+- Refreshed the application theme, toolbar hierarchy, workflow controls, and
+  dialogs, with palette-aware icons for light and dark appearances.
+- Draft vector export uses a compact options dialog followed by the native OS
+  Save dialog. Artwork selection and FVI options stay together in the options
+  dialog, and DXF exports retain the original layer names and separation.
+- Improved import guidance, inline settings validation, shortcut editing, and
+  feedback during repository operations. Convert's run action stays beside its
+  settings.
+
+### Fixed
+
+- Using Draft artwork as a Pattern outline no longer repeatedly rebuilds the
+  region tree for every operation label, eliminating the long UI freeze on
+  compound artwork and text.
+- Pattern outline replacement asks before discarding region treatments, and
+  transfer undo is withdrawn after later content edits would make it unsafe.
+- Transfers from Trace and Convert retain their source labels.
+
 ## 0.3.32 — 2026-10-22
 
 ### Added

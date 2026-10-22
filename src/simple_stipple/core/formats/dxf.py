@@ -1209,6 +1209,7 @@ def write_polylines_dxf(
     group_labels: dict[int, str] | None = None,
     object_names: list[str | None] | None = None,
     preserve_layer: bool = False,
+    entity_layers: list[str] | None = None,
 ) -> None:
     doc = _ezdxf_new("R2010")
     doc.header["$INSUNITS"] = 4
@@ -1223,6 +1224,12 @@ def write_polylines_dxf(
         if pattern_layer not in doc.layers:
             doc.layers.add(pattern_layer, color=_LAYER_COLORS[0])
         dxfattrs = {"layer": pattern_layer}
+    if entity_layers is not None:
+        if len(entity_layers) != len(polylines):
+            raise ValueError("Each exported path must have a layer name.")
+        for index, layer_name in enumerate(dict.fromkeys(entity_layers)):
+            if layer_name not in doc.layers:
+                doc.layers.add(layer_name, color=_LAYER_COLORS[index % len(_LAYER_COLORS)])
 
     # Pad the kind/meta lists to the polyline count — zip() truncates at the
     # shortest input, which silently dropped shapes when callers passed
@@ -1245,11 +1252,14 @@ def write_polylines_dxf(
     for i, (c, kind, meta) in enumerate(zip(polylines, kinds, metas)):
         if len(c) < 2:
             continue
-        entity_attrs = (
-            dict(dxfattrs)
-            if preserve_layer
-            else _entity_attributes(doc, dxfattrs, meta, entity_names, i)
-        )
+        if entity_layers is not None:
+            entity_attrs = {"layer": entity_layers[i]}
+        else:
+            entity_attrs = (
+                dict(dxfattrs)
+                if preserve_layer
+                else _entity_attributes(doc, dxfattrs, meta, entity_names, i)
+            )
         if kind == "dimension" and isinstance(meta, dict):
             if _write_dimension(msp, c, meta, entity_attrs) is not None:
                 continue

@@ -42,6 +42,12 @@ from simple_stipple.platform.settings import (
     custom_tiles_dir,
     save_settings,
 )
+from simple_stipple.ui.components.feedback import (
+    announce_accessible,
+    clear_line_edit_error,
+    parse_float_field,
+    reject_input,
+)
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.icons import tool_icon
 from simple_stipple.ui.components.layout import (
@@ -69,6 +75,9 @@ class _ScalarField:
     width: int
     decimals: int = 0
     tooltip: str = ""
+
+
+_MACHINE_MAX = 1_000_000.0
 
 
 class SettingsDialog(QDialog):
@@ -256,6 +265,7 @@ class SettingsDialog(QDialog):
         self._toggles: dict[str, QCheckBox] = {}
         self._trace_default_entries: dict[str, QLineEdit] = {}
         self._production_entries: dict[str, QLineEdit] = {}
+        self._production_labels: dict[str, str] = {}
         self._unit_combo: QComboBox | None = None
         self._smoothing_combo: QComboBox | None = None
         self._smooth_iterations_edit: QLineEdit | None = None
@@ -350,7 +360,9 @@ class SettingsDialog(QDialog):
                 width=100,
             )
             entry.setToolTip("Use 0 when this machine assumption is not configured.")
+            entry.setAccessibleName(label)
             self._production_entries[key] = entry
+            self._production_labels[key] = label
 
         _, form = self._form_card(content_layout, "Repository")
         for key, label in self._REPO_FIELDS:
@@ -456,8 +468,21 @@ class SettingsDialog(QDialog):
         self._search_edit.textChanged.connect(self._filter_settings)
         sep(layout)
 
+        # Inline validation result (no extra modal); focus moves to the field.
+        self._error_label = QLabel()
+        self._error_label.setProperty("role", "status-err")
+        self._error_label.setWordWrap(True)
+        self._error_label.setAccessibleName("Settings validation error")
+        self._error_label.hide()
+        layout.addWidget(self._error_label)
+        for numeric_entry in (
+            *(e for e in self._scalar_entries.values() if e is not None),
+            *(e for k, e in self._production_entries.items() if k != "machine_profile_name"),
+        ):
+            numeric_entry.textEdited.connect(lambda _text: self._clear_error())
+
         btn_row = QHBoxLayout()
-        reset_btn = QPushButton("Reset")
+        reset_btn = QPushButton("Reset All…")
         reset_btn.setToolTip("Reset every setting on every page to application defaults")
         reset_btn.setAutoDefault(False)
         reset_btn.clicked.connect(self._confirm_reset_fields)
@@ -735,6 +760,24 @@ class SettingsDialog(QDialog):
         if d:
             self._entries[key].setText(d)
 
+    def _show_field_error(self, entry: QLineEdit, message: str) -> None:
+        """Mark *entry* invalid, explain why inline, and put focus on it."""
+        reject_input(entry, message)
+        self._error_label.setText(message)
+        self._error_label.setAccessibleDescription(message)
+        self._error_label.show()
+        announce_accessible(self._error_label, urgent=True)
+        # The field may sit in a card hidden by the section filter or search.
+        if not entry.isVisibleTo(self):
+            self._search_edit.clear()
+            self._category_combo.setCurrentText(self._CATEGORIES[0])
+        self._scroll.ensureWidgetVisible(entry)
+        entry.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _clear_error(self) -> None:
+        self._error_label.clear()
+        self._error_label.hide()
+
     def _validated_scalar_values(self) -> dict[str, float | int] | None:
         values: dict[str, float | int] = {}
         for field in self._SCALAR_FIELDS:
@@ -746,23 +789,43 @@ class SettingsDialog(QDialog):
                 if not math.isfinite(float(value)) or not field.minimum <= value <= field.maximum:
                     raise ValueError
             except (TypeError, ValueError):
-                message = f"{field.label} must be between {field.minimum:g} and {field.maximum:g}."
-                entry.setProperty("error", True)
-                entry.setToolTip(message)
-                entry.style().unpolish(entry)
-                entry.style().polish(entry)
-                QMessageBox.warning(self, "Invalid setting", message)
-                entry.setFocus()
+                self._show_field_error(
+                    entry,
+                    f"{field.label} must be between {field.minimum:g} and {field.maximum:g}.",
+                )
                 return None
-            entry.setProperty("error", False)
-            entry.setToolTip("")
+            clear_line_edit_error(entry)
             values[field.key] = value
+        return values
+
+    def _validated_production_values(self) -> dict[str, float] | None:
+        """Parse machine numbers; blank means 0 (not configured), junk is an error."""
+        values: dict[str, float] = {}
+        for key, entry in self._production_entries.items():
+            if key == "machine_profile_name":
+                continue
+            label = self._production_labels.get(key, key)
+            try:
+                value = parse_float_field(
+                    entry.text(), minimum=0.0, maximum=_MACHINE_MAX, allow_empty=True
+                )
+            except ValueError:
+                self._show_field_error(
+                    entry, f"{label} must be a number from 0 to {_MACHINE_MAX:,.0f}."
+                )
+                return None
+            clear_line_edit_error(entry)
+            values[key] = 0.0 if value is None else value
         return values
 
     def _save(self, _checked: bool = False, *, close: bool = True) -> None:
         """Save all settings to disk."""
+        self._clear_error()
         scalar_values = self._validated_scalar_values()
         if scalar_values is None:
+            return
+        production_values = self._validated_production_values()
+        if production_values is None:
             return
         for key, entry in self._entries.items():
             v = entry.text().strip()
@@ -777,11 +840,8 @@ class SettingsDialog(QDialog):
         for key, entry in self._production_entries.items():
             if key == "machine_profile_name":
                 self._settings[key] = entry.text().strip() or "No machine selected"
-                continue
-            try:
-                self._settings[key] = float(entry.text() or 0.0)
-            except ValueError:
-                self._settings[key] = 0.0
+            else:
+                self._settings[key] = production_values[key]
 
         trace_defaults = dict(self._settings.get("trace_defaults") or {})
         for key, entry in self._trace_default_entries.items():
@@ -817,8 +877,9 @@ class SettingsDialog(QDialog):
     def _confirm_reset_fields(self) -> None:
         answer = QMessageBox.question(
             self,
-            "Reset Settings",
-            "Reset every setting on every page to its default value? This cannot be undone.",
+            "Reset All Settings",
+            "Reset every setting on every page to its default value? "
+            "The fields change now, but nothing is saved until you choose Save or Apply.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )

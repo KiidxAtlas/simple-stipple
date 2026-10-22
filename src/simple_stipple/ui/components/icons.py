@@ -10,17 +10,65 @@ from PySide6.QtCore import (
     QRectF,
     Qt,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QIconEngine,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import QApplication
+
+
+class _PaletteIconEngine(QIconEngine):
+    """Resolve foreground at paint time so existing icons survive theme changes."""
+
+    def __init__(self, draw_fn: Callable[[QPainter, float, QColor], None]) -> None:
+        super().__init__()
+        self._draw_fn = draw_fn
+
+    def clone(self) -> QIconEngine:
+        return _PaletteIconEngine(self._draw_fn)
+
+    def paint(self, painter, rect, mode, state) -> None:
+        palette = QApplication.palette()
+        group = (
+            QPalette.ColorGroup.Disabled
+            if mode == QIcon.Mode.Disabled
+            else QPalette.ColorGroup.Active
+        )
+        color = palette.color(group, QPalette.ColorRole.ButtonText)
+        side = min(rect.width(), rect.height())
+        painter.save()
+        painter.translate(
+            rect.x() + (rect.width() - side) / 2, rect.y() + (rect.height() - side) / 2
+        )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._draw_fn(painter, float(side), color)
+        painter.restore()
+
+    def pixmap(self, size, mode, state) -> QPixmap:
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        self.paint(painter, pixmap.rect(), mode, state)
+        painter.end()
+        return pixmap
 
 
 def icon_from_painter(
     draw_fn: Callable[[QPainter, float, QColor], None],
     *,
     size: int = 18,
-    color: str = "#e6edf3",
+    color: str | None = None,
 ) -> QIcon:
     """Render ``draw_fn(painter, size, color)`` onto a transparent pixmap
     and wrap it as a QIcon."""
+    if color is None:
+        return QIcon(_PaletteIconEngine(draw_fn))
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -93,12 +141,12 @@ def _draw_download(painter: QPainter, size: float, color: QColor) -> None:
     painter.drawLine(QPointF(size * 0.24, tray_y), QPointF(size * 0.76, tray_y))
 
 
-def gear_icon(*, size: int = 18, color: str = "#e6edf3") -> QIcon:
+def gear_icon(*, size: int = 18, color: str | None = None) -> QIcon:
     """Settings gear."""
     return icon_from_painter(_draw_gear, size=size, color=color)
 
 
-def download_icon(*, size: int = 18, color: str = "#e6edf3") -> QIcon:
+def download_icon(*, size: int = 18, color: str | None = None) -> QIcon:
     """Download/"check for updates" arrow-into-tray."""
     return icon_from_painter(_draw_download, size=size, color=color)
 
@@ -593,7 +641,7 @@ _ICON_FACTORIES: dict[str, Callable[[QPainter, float, QColor], None]] = {
 }
 
 
-def tool_icon(name: str, *, size: int = 20, color: str = "#c9d1d9") -> QIcon:
+def tool_icon(name: str, *, size: int = 20, color: str | None = None) -> QIcon:
     """Look up one of the draw-sidebar icons by name (see `_ICON_FACTORIES`)."""
     draw_fn = _ICON_FACTORIES[name]
     return icon_from_painter(draw_fn, size=size, color=color)

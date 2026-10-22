@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
@@ -34,6 +35,12 @@ from PySide6.QtWidgets import (
 
 from simple_stipple.canvas import commands as canvas_commands
 from simple_stipple.platform.settings import DEFAULT_KEYBINDINGS
+from simple_stipple.ui.components.feedback import (
+    announce_accessible,
+    clear_line_edit_error,
+    confirm,
+    reject_input,
+)
 from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
 from simple_stipple.ui.components.layout import (
     section_label,
@@ -114,6 +121,22 @@ def _command_rows() -> list[tuple[str, str, str, str]]:
 
 def _build_fields() -> list[tuple[str, str, str, str]]:
     return _app_rows() + _command_rows()
+
+
+def is_valid_shortcut(text: str) -> bool:
+    """True for blank (disabled) or a Qt shortcut whose every chord is recognised.
+
+    ``QKeySequence`` silently accepts garbage such as "Ctrl+Shft+K" (an
+    unknown key chord that can never fire), so check each chord explicitly.
+    """
+    text = text.strip()
+    if not text:
+        return True
+    sequence = QKeySequence(text)
+    # Qt serializes an unknown chord as an empty component. Split on its
+    # canonical chord separator, not a bare comma (which is itself a key).
+    portable = sequence.toString(QKeySequence.SequenceFormat.PortableText)
+    return sequence.count() > 0 and all(chord.strip() for chord in portable.split(", "))
 
 
 _KEYBINDING_FIELDS: list[tuple[str, str, str, str]] = _build_fields()
@@ -203,10 +226,17 @@ class KeybindingsDialog(QDialog):
         layout.addWidget(scroll, stretch=1)
         sep(layout)
 
+        self._status = QLabel()
+        self._status.setProperty("role", "status-err")
+        self._status.setWordWrap(True)
+        self._status.setAccessibleName("Shortcut validation error")
+        self._status.hide()
+        layout.addWidget(self._status)
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        save_btn = QPushButton("Save")
-        save_btn.setMinimumWidth(100)
+        save_btn = QPushButton("Save Shortcuts")
+        save_btn.setMinimumWidth(130)
         save_btn.setProperty("role", "primary")
         save_btn.clicked.connect(self._apply)
         cancel_btn = QPushButton("Cancel")
@@ -241,6 +271,8 @@ class KeybindingsDialog(QDialog):
             native = QKeySequence(default).toString(QKeySequence.SequenceFormat.NativeText)
             tip_parts.append(f"default: {native}")
         entry.setToolTip(" · ".join(tip_parts))
+        entry.setAccessibleName(f"{label} shortcut")
+        entry.textEdited.connect(lambda _text, w=entry: self._on_entry_edited(w))
 
         row.addWidget(entry, stretch=1)
         self._entries[key] = entry
@@ -258,9 +290,47 @@ class KeybindingsDialog(QDialog):
             haystack = f"{key} {label} {current}"
             row_widget.setVisible(query in haystack)
 
+    def _on_entry_edited(self, entry: QLineEdit) -> None:
+        clear_line_edit_error(entry)
+        self._clear_status()
+
+    def _clear_status(self) -> None:
+        self._status.clear()
+        self._status.hide()
+
+    def _show_problem(self, message: str, bad_keys: list[str]) -> None:
+        """Show *message* inline, mark the offending fields, and focus the first."""
+        for key in bad_keys:
+            reject_input(self._entries[key], message.splitlines()[0])
+        self._status.setText(message)
+        self._status.setAccessibleDescription(message)
+        self._status.show()
+        announce_accessible(self._status, urgent=True)
+        if bad_keys:
+            if self._filter.text():
+                self._filter.clear()  # a filtered-out row cannot take focus
+            self._entries[bad_keys[0]].setFocus(Qt.FocusReason.OtherFocusReason)
+
     def _reset_all(self) -> None:
+        changed = [
+            key
+            for key, entry in self._entries.items()
+            if entry.text().strip() != self._defaults.get(key, "")
+        ]
+        if not changed:
+            return
+        if not confirm(
+            self,
+            "Reset Shortcuts",
+            f"Reset {len(changed)} shortcut(s) to their defaults? "
+            "Nothing is saved until you choose Save Shortcuts.",
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        ):
+            return
         for key, entry in self._entries.items():
+            clear_line_edit_error(entry)
             entry.setText(self._defaults.get(key, ""))
+        self._clear_status()
 
     def _find_duplicate_shortcuts(self, bindings: dict[str, str]) -> dict[str, list[str]]:
         """Group keys by canonicalized shortcut text (so "ctrl+s" and
@@ -328,31 +398,43 @@ class KeybindingsDialog(QDialog):
             value = entry.text().strip()
             result[key] = value
 
+        malformed = [key for key, value in result.items() if not is_valid_shortcut(value)]
+        if malformed:
+            names = ", ".join(self._labels.get(k, k) for k in malformed[:5])
+            more = f" and {len(malformed) - 5} more" if len(malformed) > 5 else ""
+            self._show_problem(
+                f"Not a valid shortcut: {names}{more}. "
+                "Use keys such as Ctrl+K or Ctrl+Shift+D, or leave blank to disable.",
+                malformed,
+            )
+            return
+
         conflicts = self._find_duplicate_shortcuts(result)
         if conflicts:
             lines = [
-                f"  • {norm} — " + ", ".join(self._labels.get(k, k) for k in keys)
+                f"{norm} is used by " + ", ".join(self._labels.get(k, k) for k in keys)
                 for norm, keys in conflicts.items()
             ]
-            QMessageBox.warning(
-                self,
-                "Duplicate Shortcuts",
-                "The same shortcut is assigned to more than one action:\n\n"
-                + "\n".join(lines)
-                + "\n\nGive each action a unique shortcut before applying.",
+            self._show_problem(
+                "Each shortcut can belong to only one action. " + "; ".join(lines) + ".",
+                [key for keys in conflicts.values() for key in keys],
             )
             return
 
         missing_essential = self._missing_essential_bindings(result)
         if missing_essential:
-            QMessageBox.warning(
-                self,
-                "Essential Shortcuts Required",
-                "Keep a keyboard route to these recovery commands:\n\n"
-                + "\n".join(f"  • {label}" for label in missing_essential),
+            essential_keys = [
+                key for key in _ESSENTIAL_BINDINGS if not str(result.get(key, "")).strip()
+            ]
+            self._show_problem(
+                "Keep a keyboard route to these recovery commands: "
+                + ", ".join(missing_essential)
+                + ".",
+                essential_keys,
             )
             return
 
+        self._clear_status()
         self._keybindings = result
         self.accept()
 

@@ -60,6 +60,8 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_GRID_VISIBLE = True
 DEFAULT_GRID_SPACING_MM = 1.0
 LOG_PANEL_MAX_HEIGHT = 260
+# StarFX jobs are imported by Draft; Convert only handles plain vector files.
+STARFX_JOB_SUFFIXES = (".fmp", ".fmb", ".sfx")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -210,6 +212,8 @@ class ConvertPage(BasePage):
         _scroll.setWidget(left_w)
         sidebar_outer.addWidget(_scroll, stretch=1)
 
+        # The run button, status and progress belong with the settings they
+        # act on (this sidebar), not under the unrelated preview pane.
         _sep = QFrame()
         _sep.setFrameShape(QFrame.Shape.HLine)
         _sep.setMaximumHeight(1)
@@ -255,6 +259,7 @@ class ConvertPage(BasePage):
         self._footer_progress.setVisible(False)
         footer_layout.addWidget(self._footer_progress)
 
+        sidebar_outer.addWidget(footer_w)
         self._footer_widget = footer_w
         self._left_panel = sidebar_frame
 
@@ -262,6 +267,13 @@ class ConvertPage(BasePage):
         right_w = surface_frame("canvas")
         right_w.setObjectName("conversion-preview")
         right_w.setProperty("role", "preview-surface")
+        # The results/preview pane reports a ~900px minimum (file list plus the
+        # canvas toolbar). Left alone it squeezes the settings sidebar — and
+        # the Run button that lives in it — to nothing in compact windows.
+        right_policy = right_w.sizePolicy()
+        right_policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        right_w.setSizePolicy(right_policy)
+        right_w.setMinimumWidth(0)
         right = QVBoxLayout(right_w)
         right.setContentsMargins(8, 8, 8, 8)
         right.setSpacing(8)
@@ -367,7 +379,6 @@ class ConvertPage(BasePage):
 
         self._right_stack.addWidget(self._results_panel)
         self._right_stack.setCurrentIndex(0)
-        right.addWidget(self._footer_widget)
 
         result_actions = QHBoxLayout()
         self._open_draft_btn = QPushButton("Open in Draft")
@@ -552,14 +563,24 @@ class ConvertPage(BasePage):
             self._set_shared_source(value)
 
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasUrls() and any(
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if any(
             Path(url.toLocalFile()).is_dir()
             or Path(url.toLocalFile()).suffix.casefold() in {".fvi", ".dxf", ".svg"}
-            for url in event.mimeData().urls()
+            for url in urls
         ):
             event.acceptProposedAction()
-        else:
-            event.ignore()
+            return
+        # Qt withholds dropEvent once dragEnterEvent rejects, so this is the
+        # only place to explain why — and to point StarFX jobs at Draft.
+        if any(Path(url.toLocalFile()).suffix.casefold() in STARFX_JOB_SUFFIXES for url in urls):
+            self._set_footer_status(
+                "StarFX FMP/FMB/SFX jobs open in Draft. Convert accepts DXF, FVI or SVG.",
+                STATUS_WARN,
+            )
+        elif urls:
+            self._set_footer_status("Convert accepts DXF, FVI or SVG files.", STATUS_WARN)
+        event.ignore()
 
     def dropEvent(self, event) -> None:
         paths = [url.toLocalFile() for url in event.mimeData().urls() if url.toLocalFile()]

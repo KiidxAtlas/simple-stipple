@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import functools
 import logging
 import platform
@@ -473,6 +474,7 @@ class PatternPage(BasePage):
 
     IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
     OUTLINE_SUFFIXES = (".dxf", ".fvi", ".svg")
+    STARFX_JOB_SUFFIXES = (".fmp", ".fmb", ".sfx")
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -484,9 +486,17 @@ class PatternPage(BasePage):
         # Qt withholds dropEvent entirely once dragEnterEvent rejects, so
         # this is the only chance to say why.
         if event.mimeData().hasUrls():
-            self._set_status(
-                "Pattern accepts DXF, FVI or SVG outlines, and images to engrave", STATUS_WARN
-            )
+            if any(
+                url.toLocalFile().lower().endswith(self.STARFX_JOB_SUFFIXES)
+                for url in event.mimeData().urls()
+            ):
+                message = (
+                    "StarFX FMP/FMB/SFX jobs open in Draft. "
+                    "Pattern accepts DXF, FVI or SVG outlines, and images to engrave"
+                )
+            else:
+                message = "Pattern accepts DXF, FVI or SVG outlines, and images to engrave"
+            self._set_status(message, STATUS_WARN)
         event.ignore()
 
     def dropEvent(self, event):
@@ -516,7 +526,7 @@ class PatternPage(BasePage):
                         event.ignore()
                         return
                 self._show_outline_path(path)
-                self._load_outline_file(path)
+                self._load_outline_file(path, confirmed=True)
                 event.acceptProposedAction()
                 return
         event.ignore()
@@ -805,6 +815,7 @@ class PatternPage(BasePage):
         return get_pattern_workspace_state(self)
 
     def apply_workspace_state(self, state: dict | None) -> None:
+        self._discard_transfer_undo()
         apply_pattern_workspace_state(self, state)
 
     def clear_workspace_state(self) -> None:
@@ -2129,6 +2140,34 @@ class PatternPage(BasePage):
         self._dxf_edit.setText(path)
         self._dxf_edit.setCursorPosition(0)
         self._dxf_edit.setToolTip(path or "Path to the current outline file")
+        self._shown_outline_text = self._dxf_edit.text()
+
+    def _commit_outline_path_edit(self) -> None:
+        """Reload only when the user actually typed a different path.
+
+        ``editingFinished`` also fires when the field merely loses focus, and
+        the field shows ``[Draft selection]`` for transferred geometry. Neither
+        is a request to re-read a file (which would reset region treatments).
+        """
+        text = self._dxf_edit.text().strip()
+        if not text or (text.startswith("[") and text.endswith("]")):
+            return
+        if text == getattr(self, "_shown_outline_text", None):
+            return
+        self._load_outline_file(text)
+
+    def _confirm_discard_treatments(self, path: str) -> bool:
+        """Ask before a (re)load throws away the treatments painted on regions."""
+        if not self._treatments:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Replace Outline",
+            f"Load {Path(path).name}? Region treatments on the current outline will be reset.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def _browse_dxf(self) -> None:
         path = pick_open_file(
@@ -2142,10 +2181,13 @@ class PatternPage(BasePage):
             fallback_dir=self._settings.get("outline_dxf_dir", ""),
         )
         if path:
-            self._show_outline_path(path)
             self._load_outline_file(path)
 
-    def _load_outline_file(self, path: str) -> None:
+    def _load_outline_file(self, path: str, *, confirmed: bool = False) -> None:
+        if not confirmed and not self._confirm_discard_treatments(path):
+            # Put the field back so it keeps naming the outline on screen.
+            self._show_outline_path(getattr(self, "_shown_outline_text", ""))
+            return
         suffix = Path(path).suffix.lower()
         if suffix == ".dxf":
             self._load_dxf(path)
@@ -2224,6 +2266,7 @@ class PatternPage(BasePage):
     ) -> None:
         if not polys:
             return
+        self._transfer_signature = None
         self._pre_transfer_state = self.get_workspace_state() if offer_undo else None
         normalized = normalize_outline_items(polys)
         incoming, layers = normalized.polylines, normalized.layers
@@ -2249,6 +2292,7 @@ class PatternPage(BasePage):
         self._canvas.deselect_all()
         self._update_dims_from_polys(self._orig_polys)
         self._dxf_edit.setText(f"[{source_label}]")
+        self._shown_outline_text = self._dxf_edit.text()
         self._set_status(
             f"Loaded {len(self._edit_polys)} outline(s) from {source_label}", STATUS_OK
         )
@@ -2259,6 +2303,33 @@ class PatternPage(BasePage):
         self._refresh_canvas_panels()
         self._schedule_preview()
         self._emit_state_changed()
+        # Only after the load has settled: later content edits make the
+        # pre-transfer snapshot stale, and restoring it would erase them.
+        self._transfer_signature = self._content_signature() if offer_undo else None
+        if not offer_undo:
+            self._pre_transfer_state = None
+
+    def _content_signature(self) -> dict:
+        """Workspace content without view-only state (zoom, pan, previews)."""
+        state = self.get_workspace_state()
+        for view_key in ("canvas_view", "preview_polys", "showing_preview"):
+            state.pop(view_key, None)
+        return copy.deepcopy(state)
+
+    def _discard_transfer_undo(self) -> None:
+        self._transfer_signature = None
+        self._pre_transfer_state = None
+        undo_button = getattr(self, "_undo_transfer_btn", None)
+        if undo_button is not None:
+            undo_button.hide()
+
+    def _emit_state_changed(self) -> None:
+        super()._emit_state_changed()
+        signature = getattr(self, "_transfer_signature", None)
+        if signature is None or self._suspend_state or self._shutting_down:
+            return
+        if self._content_signature() != signature:
+            self._discard_transfer_undo()
 
     def _load_outline_canvas(
         self,
@@ -2289,9 +2360,8 @@ class PatternPage(BasePage):
         previous = getattr(self, "_pre_transfer_state", None)
         if not isinstance(previous, dict):
             return
+        self._discard_transfer_undo()
         self.apply_workspace_state(previous)
-        self._pre_transfer_state = None
-        self._undo_transfer_btn.hide()
         self._set_status("Transfer undone; previous Pattern outline restored", STATUS_OK)
         self._emit_state_changed()
 
@@ -2349,6 +2419,8 @@ class PatternPage(BasePage):
             show_error(self, "Load failed", exc, message="Could not load the selected outline.")
 
     def _quick_load(self, path: str) -> None:
+        if not self._confirm_discard_treatments(path):
+            return
         self._show_outline_path(path)
         self._load_dxf(path)
 

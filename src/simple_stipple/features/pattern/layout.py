@@ -284,7 +284,8 @@ def refresh_pattern_properties_panel(page: Any) -> None:
     from simple_stipple.features.pattern.regions.treatments import TREATMENT_LABELS, treatment_kind
 
     row = page._zone_list.currentRow() if hasattr(page, "_zone_list") else -1
-    region_ids = [rid for rid in page._outline_ids if rid in page._region_tree()]
+    tree = page._region_tree()
+    region_ids = [rid for rid in page._outline_ids if rid in tree]
     editing = 0 <= row < len(region_ids)
     if editing:
         kind = treatment_kind(page, region_ids[row])
@@ -394,7 +395,7 @@ def build_shape_section(page: Any, layout: QVBoxLayout) -> None:
     page._dxf_edit.setPlaceholderText("Select DXF, FVI, or SVG…")
     page._dxf_edit.setCursorPosition(0)
     page._dxf_edit.setToolTip("Path to a DXF, FVI, or SVG outline (drag-and-drop supported)")
-    page._dxf_edit.editingFinished.connect(page._reload_dxf)
+    page._dxf_edit.editingFinished.connect(page._commit_outline_path_edit)
 
     # Keep the source path readable on a narrow sidebar: reload rides beside
     # the path, and Recent/Browse share the next row. All four on one row

@@ -42,7 +42,11 @@ from simple_stipple.core.cad.detection import (
 )
 from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.document.model import EntityRecord
-from simple_stipple.core.formats.service import DxfService, summarize_dxf_import_report
+from simple_stipple.core.formats.service import (
+    DxfService,
+    FviExportOptions,
+    summarize_dxf_import_report,
+)
 from simple_stipple.core.formats.starfx import read_starfx
 from simple_stipple.features.base import BasePage, ModelField
 from simple_stipple.features.draft.detection_dialog import ShapeDetectionDialog
@@ -75,7 +79,6 @@ from simple_stipple.ui.dialogs.files import (
     pick_open_file,
     pick_save_file,
 )
-from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
 from simple_stipple.ui.dialogs.vector_export import VectorExportDialog
 
 LOGGER = logging.getLogger(__name__)
@@ -596,14 +599,28 @@ class DraftPage(BasePage):
         if not dialog.exec():
             return
         chosen = dialog.selected_records()
+        format_name = dialog.format_name()
+        out_path = pick_save_file(
+            self,
+            self._settings,
+            "draft_output_fvi" if format_name == "fvi" else "draft_output",
+            f"Export {format_name.upper()}",
+            f"draft.{format_name}",
+            f"{format_name.upper()} files (*.{format_name});;All files (*)",
+            fallback_dir=self._settings.get("draft_output_dir", ""),
+        )
+        if not out_path:
+            return
         if dialog.format_name() == "svg":
-            self._write_svg(chosen)
+            self._write_svg(chosen, out_path)
         elif dialog.format_name() == "fvi":
-            self._write_fvi(chosen)
+            self._write_fvi(chosen, out_path, dialog.fvi_options())
         else:
-            self._write_dxf(chosen, include_dimensions=not dialog.has_selection())
+            self._write_dxf(chosen, out_path, include_dimensions=not dialog.has_selection())
 
-    def _write_dxf(self, records: list[dict[str, Any]], *, include_dimensions: bool) -> None:
+    def _write_dxf(
+        self, records: list[dict[str, Any]], out_path: str, *, include_dimensions: bool
+    ) -> None:
         active_name = self._rt().current_layer_name()
         export_plan = build_dxf_export_plan(
             records,
@@ -640,28 +657,14 @@ class DraftPage(BasePage):
                 self._show_export_issues(export_plan.records, flagged)
             return
 
-        out_path = pick_save_file(
-            self,
-            self._settings,
-            "draft_output",
-            "Export DXF",
-            "draft.dxf",
-            "DXF files (*.dxf);;All files (*)",
-            fallback_dir=self._settings.get("draft_output_dir", ""),
-        )
-        if not out_path:
-            return
-
         try:
-            # Export scope is independent of document organization. Keep
-            # groups/names in metadata, never turn them into extra CAM layers.
+            # Preserve document layers; group and shape names stay metadata.
             exported = export_plan.records
             DxfService.write_polylines_dxf(
                 [list(record["polyline"]) for record in exported],
                 out_path,
                 close=False,
-                pattern_layer="Artwork",
-                preserve_layer=True,
+                entity_layers=[str(record.get("layer") or active_name) for record in exported],
                 entity_kinds=[str(record.get("kind", "polyline")) for record in exported],
                 entity_meta=[record.get("meta") for record in exported],
                 entity_groups=[record.get("group") for record in exported],
@@ -783,7 +786,9 @@ class DraftPage(BasePage):
         # this is the only chance to say why — otherwise the OS "no drop"
         # cursor is the only feedback the user gets.
         if event.mimeData().hasUrls():
-            self._canvas._show_flash("Draft accepts DXF, FVI, or SVG files", 1400)
+            self._canvas._show_flash(
+                "Draft accepts DXF, FVI, SVG, or StarFX FMP/FMB/SFX files", 1400
+            )
         event.ignore()
 
     def dropEvent(self, event) -> None:
@@ -880,18 +885,7 @@ class DraftPage(BasePage):
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import DXF Failed", exc)
 
-    def _write_svg(self, records: list[dict[str, Any]]) -> None:
-        out_path = pick_save_file(
-            self,
-            self._settings,
-            "draft_output",
-            "Export SVG",
-            "draft.svg",
-            "SVG files (*.svg);;All files (*)",
-            fallback_dir=self._settings.get("draft_output_dir", ""),
-        )
-        if not out_path:
-            return
+    def _write_svg(self, records: list[dict[str, Any]], out_path: str) -> None:
         try:
             stats = DxfService.write_polylines_svg([list(r["polyline"]) for r in records], out_path)
             self._last_out_path = out_path
@@ -902,23 +896,11 @@ class DraftPage(BasePage):
         except (OSError, ValueError) as exc:
             show_error(self, "Export Failed", exc)
 
-    def _write_fvi(self, records: list[dict[str, Any]]) -> None:
-        dialog = FviExportDialog(records, self)
-        if not dialog.exec():
-            return
-        out_path = pick_save_file(
-            self,
-            self._settings,
-            "draft_output_fvi",
-            "Export StarFX FVI",
-            "draft.fvi",
-            "StarFX FVI programs (*.fvi *.FVI);;All files (*)",
-            fallback_dir=self._settings.get("draft_output_dir", ""),
-        )
-        if not out_path:
-            return
+    def _write_fvi(
+        self, records: list[dict[str, Any]], out_path: str, options: FviExportOptions
+    ) -> None:
         try:
-            report = DxfService.write_fvi(records, out_path, dialog.options())
+            report = DxfService.write_fvi(records, out_path, options)
             self._last_out_path = out_path
             message = (
                 f"Exported FVI: {Path(out_path).name} "

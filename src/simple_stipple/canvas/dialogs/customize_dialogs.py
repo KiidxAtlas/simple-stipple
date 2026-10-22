@@ -61,7 +61,7 @@ _POOL: dict[str, tuple[str, str]] = {
 
 class RadialMenuDialog(QDialog):
     """Check which commands show up in the "Q" quick menu; drag to reorder.
-    At least 3 must stay checked or Apply falls back to the defaults."""
+    At least 3 must stay checked; Save stays disabled until they are."""
 
     _MIN_TOOLS = 3
 
@@ -133,11 +133,11 @@ class RadialMenuDialog(QDialog):
         self._validate()
         install_dialog_focus_lifecycle(self, self._filter)
 
-    def _validate(self) -> None:
+    def _validate(self) -> bool:
         """Disable Save and explain why, instead of silently falling back
         to defaults when too few commands stay checked."""
         if not hasattr(self, "_apply_btn"):
-            return  # items are still being populated; nothing to validate yet
+            return False  # items are still being populated; nothing to validate yet
         count = len(self._checked_tools())
         short = self._MIN_TOOLS - count
         self._apply_btn.setEnabled(count >= self._MIN_TOOLS)
@@ -147,6 +147,7 @@ class RadialMenuDialog(QDialog):
             if short > 0
             else f"{count} commands selected."
         )
+        return short <= 0
 
     def _populate(self, checked: list[str]) -> None:
         self._list.clear()
@@ -191,10 +192,12 @@ class RadialMenuDialog(QDialog):
         return tools
 
     def _apply(self) -> None:
-        checked = self._checked_tools()
-        self._result = (
-            checked if len(checked) >= self._MIN_TOOLS else list(DEFAULT_RADIAL_MENU_TOOLS)
-        )
+        # Never substitute defaults for an invalid selection: keep the dialog
+        # open, with the hint explaining what to fix.
+        if not self._validate():
+            self._list.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+        self._result = self._checked_tools()
         self.accept()
 
     def get_tools(self) -> list[str]:
@@ -268,7 +271,7 @@ def _ordered_keys(widget: QListWidget) -> list[str]:
 class DrawSidebarCustomizeDialog(QDialog):
     """Check which Draw-sidebar sections show; drag to reorder. At least
     Path and Shapes must stay checked — a draw sidebar with no way to pick
-    a tool isn't useful — or Apply falls back to the defaults.
+    a tool isn't useful — and Save stays disabled until they are.
 
     Also lets individual Path/Shapes tool icons be hidden/reordered within
     those two sections, independent of the section-level toggle above; each
@@ -381,11 +384,11 @@ class DrawSidebarCustomizeDialog(QDialog):
     def _checked_sections(self) -> list[str]:
         return _checked_keys(self._list)
 
-    def _validate(self) -> None:
+    def _validate(self) -> bool:
         """Disable Save and explain why, instead of silently falling back
         to defaults when a required section/tool list is left empty."""
         if not hasattr(self, "_apply_btn"):
-            return  # items are still being populated; nothing to validate yet
+            return False  # items are still being populated; nothing to validate yet
         missing_required = self._REQUIRED - set(self._checked_sections())
         path_empty = not _checked_keys(self._path_list)
         shape_empty = not _checked_keys(self._shape_list)
@@ -399,16 +402,20 @@ class DrawSidebarCustomizeDialog(QDialog):
             problems.append("at least one Shape tool must stay checked")
         self._apply_btn.setEnabled(not problems)
         self._hint.setText("; ".join(problems).capitalize() + "." if problems else "")
+        return not problems
 
     def _apply(self) -> None:
-        checked = self._checked_sections()
-        self._result = (
-            checked if self._REQUIRED.issubset(checked) else list(DEFAULT_DRAW_SIDEBAR_SECTIONS)
-        )
-        path_checked = _checked_keys(self._path_list)
-        self._path_result = path_checked or list(DEFAULT_DRAW_SIDEBAR_PATH_TOOLS)
-        shape_checked = _checked_keys(self._shape_list)
-        self._shape_result = shape_checked or list(DEFAULT_DRAW_SIDEBAR_SHAPE_TOOLS)
+        # Never substitute defaults for an invalid selection: keep the dialog
+        # open, with the hint explaining what to fix.
+        if not self._validate():
+            target = self._list
+            if self._REQUIRED.issubset(self._checked_sections()):
+                target = self._path_list if not _checked_keys(self._path_list) else self._shape_list
+            target.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+        self._result = self._checked_sections()
+        self._path_result = _checked_keys(self._path_list)
+        self._shape_result = _checked_keys(self._shape_list)
         self.accept()
 
     def get_sections(self) -> list[str]:

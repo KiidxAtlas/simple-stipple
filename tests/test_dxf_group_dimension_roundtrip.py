@@ -180,8 +180,9 @@ def test_draft_page_dxf_round_trip_restores_groups_labels_and_dimensions(
     canvas._append_dimension(page_dimension)
 
     target = tmp_path / "draft.dxf"
-    monkeypatch.setattr(draft_page_module, "pick_save_file", lambda *a, **k: str(target))
+
     monkeypatch.setattr(draft_page_module.VectorExportDialog, "exec", lambda self: 1)
+    monkeypatch.setattr(draft_page_module, "pick_save_file", lambda *a, **k: str(target))
     page._export()
     assert target.exists()
 

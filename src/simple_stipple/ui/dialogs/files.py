@@ -171,7 +171,7 @@ class DxfImportPreviewDialog(BaseDialog):
         self._report = report
         self._has_existing_geometry = has_existing_geometry
         self._default_append = default_append
-        super().__init__(parent, title="Import DXF")
+        super().__init__(parent, title="Import DXF", ok_text="Import")
         self.setMinimumSize(640, 520)
         self.resize(720, 600)
 
@@ -210,6 +210,7 @@ class DxfImportPreviewDialog(BaseDialog):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked)
             self._layers.addItem(item)
+        self._layers.itemChanged.connect(lambda _item: self.clear_error_message())
         layers_layout.addWidget(self._layers)
         root.addWidget(layers_frame)
 
@@ -243,6 +244,9 @@ class DxfImportPreviewDialog(BaseDialog):
             return "Select at least one layer to import."
         return None
 
+    def invalid_widget(self) -> QWidget | None:
+        return self._layers
+
     def selected_layers(self) -> list[str]:
         return [
             str(item.data(Qt.ItemDataRole.UserRole))
@@ -274,7 +278,7 @@ class VectorImportModeDialog(BaseDialog):
         self._path = path
         self._format_name = format_name
         self._has_existing_geometry = has_existing_geometry
-        super().__init__(parent, title=f"Import {format_name}")
+        super().__init__(parent, title=f"Import {format_name}", ok_text="Import")
         self.setMinimumWidth(460)
 
     def create_content(self, layout: QVBoxLayout) -> None:

@@ -377,7 +377,11 @@ class App(QMainWindow):
             ),
             ("pattern", "sendSelectedToDraftRequested", self._send_pattern_selection_to_draft),
             ("pattern", "repairTileRequested", self._repair_pattern_tile),
-            ("trace", "sendSelectedToDraftRequested", self._send_pattern_selection_to_draft),
+            (
+                "trace",
+                "sendSelectedToDraftRequested",
+                lambda polys: self._send_pattern_selection_to_draft(polys, source_label="Trace"),
+            ),
             (
                 "trace",
                 "sendSelectedToPatternRequested",
@@ -385,7 +389,11 @@ class App(QMainWindow):
             ),
             ("pattern", "openPageRequested", self._switch_to_page),
             ("draft", "openPageRequested", self._switch_to_page),
-            ("convert", "openInDraftRequested", self._send_pattern_selection_to_draft),
+            (
+                "convert",
+                "openInDraftRequested",
+                lambda polys: self._send_pattern_selection_to_draft(polys, source_label="Convert"),
+            ),
             (
                 "convert",
                 "openInPatternRequested",
@@ -441,10 +449,12 @@ class App(QMainWindow):
     def _send_pattern_selection_to_draft(
         self,
         polys: list[list[tuple[float, float]]],
+        *,
+        source_label: str = "Pattern",
     ) -> None:
         if not polys:
             return
-        self._draft_page.load_outline_polys(polys, source_label="Pattern selection")
+        self._draft_page.load_outline_polys(polys, source_label=f"{source_label} selection")
         self._tabs.setCurrentWidget(self._draft_page)
         self._schedule_workspace_dirty_check()
 

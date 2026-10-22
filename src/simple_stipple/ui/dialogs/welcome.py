@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from simple_stipple.ui.components.focus import install_dialog_focus_lifecycle
+
 # (choice id, button text, what the page does). Page choices use page ids.
 WELCOME_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("draft", "Draw or import", "Draft — draw shapes, or import DXF/SVG geometry to edit."),
@@ -48,9 +50,13 @@ class WelcomeDialog(QDialog):
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
+        first_choice: QPushButton | None = None
         for row, (choice, text, description) in enumerate(WELCOME_CHOICES):
             button = QPushButton(text)
-            button.setAutoDefault(row == 0)
+            # Enter activates whichever choice has focus; none is a hidden default.
+            button.setAutoDefault(True)
+            if first_choice is None:
+                first_choice = button
             button.setAccessibleDescription(description)
             button.clicked.connect(lambda _checked=False, value=choice: self._choose(value))
             grid.addWidget(button, row, 0)
@@ -70,6 +76,8 @@ class WelcomeDialog(QDialog):
         close.setToolTip("Close; reopen any time from Help → Welcome…")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        # Deliberate initial focus: the first task, not whatever Qt tabs to first.
+        install_dialog_focus_lifecycle(self, first_choice)
 
     def _choose(self, choice: str) -> None:
         self.choice = choice

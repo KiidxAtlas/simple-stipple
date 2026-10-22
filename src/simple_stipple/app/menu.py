@@ -365,7 +365,7 @@ class MenuController:
         # This is application chrome, not a landing-page hero. A compact
         # header preserves space for the drawing and keeps the workspace
         # controls visually secondary to the active tool.
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setContentsMargins(12, 6, 12, 6)
         layout.setSpacing(8)
 
         # App identity — compact single line
@@ -424,10 +424,13 @@ class MenuController:
         workspace_btn.setMenu(workspace_menu)
         layout.addWidget(workspace_btn)
 
-        # Von Restorff: the single filled button in the whole shell. Its job
-        # is to be the thing you see without looking for it.
+        # Saving is a workspace action, not a competing primary workflow CTA.
         save_btn = QPushButton("Save")
-        save_btn.setProperty("role", "primary")
+        save_btn.setAccessibleName("Save workspace")
+        save_btn.setEnabled(self._app._save_workspace_action.isEnabled())
+        self._app._save_workspace_action.changed.connect(
+            lambda: save_btn.setEnabled(self._app._save_workspace_action.isEnabled())
+        )
         save_btn.clicked.connect(self._app._save_workspace)
         self._app._shortcut_tooltip_specs.append((save_btn, "Save Workspace", "workspace.save"))
         layout.addWidget(save_btn)
@@ -439,9 +442,8 @@ class MenuController:
 
         # The command palette reaches everything else, so it keeps its own
         # affordance rather than hiding inside the overflow it duplicates.
-        palette_btn = QPushButton(
-            _native_keys(self._app._shortcut("app.command_palette")) or "Commands"
-        )
+        palette_btn = QPushButton("Commands")
+        palette_btn.setAccessibleName("Search commands")
         # Let the shared control contract determine the height. A fixed 30px
         # exception made the ⌘K affordance visibly misalign with Workspace,
         # Save, and Settings in the same header.

@@ -56,8 +56,7 @@ def test_dxf_round_trip_restores_editable_text_and_exact_outlines(
         records = [record for record in records if record["entity_id"] in first_ids]
     before = deepcopy(canvas.get_entity_records())
     output = tmp_path / "text.dxf"
-    monkeypatch.setattr(draft, "pick_save_file", lambda *a, **k: str(output))
-    source._write_dxf(records, include_dimensions=False)
+    source._write_dxf(records, str(output), include_dimensions=False)
     assert not ezdxf.readfile(output).audit().has_errors
     assert canvas.get_entity_records() == before
     monkeypatch.setattr(

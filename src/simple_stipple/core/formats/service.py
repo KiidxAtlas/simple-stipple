@@ -136,6 +136,7 @@ class DxfService:
         group_labels: Mapping[int, str] | None = None,
         object_names: Sequence[str | None] | None = None,
         preserve_layer: bool = False,
+        entity_layers: Sequence[str] | None = None,
     ) -> None:
         """Write polylines to a DXF file. Returns None."""
         write_polylines_dxf(
@@ -159,6 +160,7 @@ class DxfService:
             group_labels=dict(group_labels) if group_labels else None,
             object_names=list(object_names) if object_names is not None else None,
             preserve_layer=preserve_layer,
+            entity_layers=list(entity_layers) if entity_layers is not None else None,
         )
 
     @staticmethod

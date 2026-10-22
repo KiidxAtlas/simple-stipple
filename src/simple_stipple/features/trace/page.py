@@ -1035,6 +1035,7 @@ class TracePage(BasePage):
             recent_kind=KIND_IMAGE,
         )
         if path:
+            clear_line_edit_error(self._img_edit)
             self._img_edit.setText(path)
             self._img_path = path
             self._needs_view_fit = True
@@ -1043,6 +1044,7 @@ class TracePage(BasePage):
             self._emit_state_changed()
 
     def _load_image_from_recent(self, path: str) -> None:
+        clear_line_edit_error(self._img_edit)
         self._img_edit.setText(path)
         self._img_path = path
         self._needs_view_fit = True
@@ -1065,7 +1067,11 @@ class TracePage(BasePage):
             return
         candidate = Path(path).expanduser()
         if not candidate.is_file() or candidate.suffix.casefold() not in self._IMAGE_EXTENSIONS:
-            self._set_status("Choose an existing supported image file.", STATUS_ERR)
+            message = "Choose an existing supported image file."
+            # Same invalid-entry treatment as numeric fields: keep the typed
+            # text, mark it, and let the next edit clear the mark.
+            reject_input(self._img_edit, message)
+            self._set_status(message, STATUS_ERR)
             return
         self._load_image_from_recent(str(candidate))
 

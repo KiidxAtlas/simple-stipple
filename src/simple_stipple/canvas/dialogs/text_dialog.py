@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QWidget,
 )
 
@@ -51,7 +52,8 @@ class AddTextDialog(QDialog):
         self._text_edit = QPlainTextEdit()
         self._text_edit.setPlaceholderText("Text to place… (Enter for a new line)")
         self._text_edit.setTabChangesFocus(True)
-        self._text_edit.setFixedHeight(70)
+        self._text_edit.setMinimumHeight(70)
+        self._text_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         form.addRow("Text", self._text_edit)
         # (see set_values for prefilled editing of existing text)
 
@@ -99,6 +101,7 @@ class AddTextDialog(QDialog):
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
         self._ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self._ok_btn.setText("Add Text")
 
         for signal in (
             self._text_edit.textChanged,
@@ -132,6 +135,7 @@ class AddTextDialog(QDialog):
     def set_values(self, values: dict) -> None:
         """Prefill the dialog for editing an existing text entity."""
         self.setWindowTitle("Edit Text")
+        self._ok_btn.setText("Update Text")
         self._text_edit.setPlainText(str(values.get("text", "")))
         family = str(values.get("family", ""))
         if family:

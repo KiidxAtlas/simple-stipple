@@ -77,10 +77,10 @@ QTabBar::tab {
     background: transparent;
     border: none;
     border-bottom: 3px solid transparent;
-    padding: 9px 16px 8px;
+    padding: 9px 18px 8px;
     margin-right: 4px;
     font-size: $font_sm;
-    font-weight: $weight_semibold;
+    font-weight: $weight_medium;
 }
 QTabBar::tab:hover:!selected {
     color: $text;
@@ -93,10 +93,11 @@ QTabBar::tab:selected {
     background: transparent;
     border-bottom-color: $accent;
 }
-/* The underline already identifies the active tab; a focus rectangle around
-   the whole strip on top of it is noise. */
-QTabBar:focus {
-    border: none;
+/* Focus must remain visible even when the selected tab has an underline. */
+QTabBar::tab:focus {
+    background: $accent_soft;
+    color: $accent_text;
+    border-bottom-color: $focus;
 }
 
 /* ══ Surfaces ════════════════════════════════════════════════════════════ */
@@ -223,10 +224,9 @@ QLabel[role="collapsible-toggle-static"] {
 }
 QLabel[role="section-label"], QLabel[role="eyebrow"], QLabel[role="shell-eyebrow"],
 QLabel[role="input-header"] {
-    color: $text_subtle;
-    font-size: $font_2xs;
-    font-weight: $weight_bold;
-    letter-spacing: 1.1px;
+    color: $text_muted;
+    font-size: $font_xs;
+    font-weight: $weight_semibold;
     padding: 8px 0 4px 0;
 }
 QLabel[role="page-subtitle"], QLabel[role="shell-subtitle"], QLabel[role="dialog-subtitle"],
@@ -266,7 +266,7 @@ QLabel[role="shell-meta"] {
    "what do I do next" never needs a second look. */
 
 QPushButton, QToolButton {
-    min-height: 34px;
+    min-height: 24px;
     min-width: 24px;
     padding: 4px 10px;
     border: 1px solid $border;
@@ -280,7 +280,7 @@ QPushButton, QToolButton {
    one vertical rhythm. Specialized editor controls opt into the compact role
    below instead of inventing a page-local height. */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-    min-height: 34px;
+    min-height: 24px;
 }
 QPushButton:hover, QToolButton:hover {
     background: $bg_surface_alt;
@@ -299,9 +299,9 @@ QPushButton[role="primary"] {
     background: $accent;
     border: 1px solid $accent;
     color: $on_accent;
-    min-height: 34px;
-    padding: 5px 14px;
-    font-weight: $weight_bold;
+    min-height: 24px;
+    padding: 4px 14px;
+    font-weight: $weight_semibold;
 }
 QPushButton[role="primary"]:hover {
     background: $accent_hover;
@@ -384,21 +384,21 @@ QPushButton[role="browse-btn"] {
    inherit the large general-purpose horizontal padding that caused labels to
    run beneath a menu indicator at compact widths. */
 QPushButton[role="precision-control"], QToolButton[role="precision-control"] {
-    min-height: 30px;
+    min-height: 24px;
     padding: 4px 8px;
 }
 QPushButton[role="cycle-icon"] {
     background: $bg_input;
     border: 1px solid $border;
-    min-height: 40px;
+    min-height: 30px;
 }
 QPushButton[role="cycle-icon"]:hover {
     border-color: $accent_border;
 }
 QToolButton[role="drawer-toggle"] {
     background: $overlay;
-    border: 1px solid $accent;
-    color: $accent_text;
+    border: 1px solid $border_strong;
+    color: $text;
     font-weight: $weight_semibold;
 }
 QToolButton[role="drawer-toggle"]:hover {
@@ -433,7 +433,7 @@ QPushButton:focus, QToolButton:focus, QLineEdit:focus, QComboBox:focus,
 QSpinBox:focus, QDoubleSpinBox:focus, QCheckBox:focus, QRadioButton:focus,
 QSlider:focus, QListWidget:focus, QTreeView:focus, QTreeWidget:focus,
 QPlainTextEdit:focus, QTextEdit:focus {
-    border: 2px solid $focus;
+    border: 1px solid $focus;
     border-radius: $radius_md;
 }
 
@@ -454,7 +454,7 @@ QListWidget {
    numeric inputs collapsed to thin, partially clipped strips after loading
    an outline. */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
-    min-height: 34px;
+    min-height: 24px;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
     border-color: $border_strong;
@@ -539,9 +539,16 @@ QRadioButton::indicator {
 QCheckBox::indicator:hover, QRadioButton::indicator:hover {
     border-color: $accent_border;
 }
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+QCheckBox::indicator:checked {
     background: $accent;
     border-color: $accent;
+    image: url({ICONS_DIR}/$check_icon);
+}
+QRadioButton::indicator:checked {
+    background: $accent;
+    border: 4px solid $bg_input;
+    width: 11px;
+    height: 11px;
 }
 
 QSlider {
@@ -834,7 +841,7 @@ QTreeView::indicator {
 QTreeView::indicator:checked {
     background: $accent;
     border-color: $accent;
-    image: url({ICONS_DIR}/check.svg);
+    image: url({ICONS_DIR}/$check_icon);
 }
 QTreeView::indicator:unchecked:hover {
     border-color: $accent_border;
