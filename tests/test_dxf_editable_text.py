@@ -5,7 +5,7 @@ from copy import deepcopy
 import ezdxf
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFontDatabase, QFontInfo
 
 from simple_stipple.canvas.dialogs.text_dialog import AddTextDialog
 from simple_stipple.canvas.operations import drawing
@@ -32,7 +32,7 @@ def test_dxf_round_trip_restores_editable_text_and_exact_outlines(
         pytest.fail("Unexpected message box during text round trip")
 
     monkeypatch.setattr(draft.QMessageBox, "exec", approve_export_warning)
-    family = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+    family = QFontInfo(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)).family()
     params = dict(text="FIRE", family=family, height_mm=4.0, bold=True, italic=True)
     canvas = source._canvas
     if cached:

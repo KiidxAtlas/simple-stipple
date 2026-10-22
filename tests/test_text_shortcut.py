@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFontDatabase, QFontInfo
 
 from simple_stipple.canvas.dialogs.text_dialog import AddTextDialog
 from simple_stipple.canvas.operations import drawing
@@ -22,7 +22,7 @@ def canvas(qtbot):
 
 
 def _import_text(canvas):
-    family = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+    family = QFontInfo(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)).family()
     params = {"text": "FIRE", "family": family, "height_mm": 4.07321,
               "bold": True, "italic": True, "edit_notice": "Cached StarFX artwork"}
     paths: list[list[tuple[float, float]]] = [[(0, 0), (2, 0), (2, 4), (0, 0)],
@@ -40,7 +40,7 @@ def test_t_edits_selected_text_with_original_font(canvas, qtbot, monkeypatch, im
     if imported:
         params = _import_text(canvas)
     else:
-        family = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+        family = QFontInfo(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)).family()
         params = {"text": "FIRE", "family": family, "height_mm": 4.0,
                   "bold": True, "italic": True}
         canvas.add_text_at(0, 0, **params)
