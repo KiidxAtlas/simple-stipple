@@ -243,6 +243,7 @@ class PatternPage(BasePage):
     _fill_target_outline_cb: QCheckBox
     _fill_target_pattern_cb: QCheckBox
     _gen_btn: QPushButton
+    _auto_fix_geometry_btn: QPushButton
     _geometry_findings: QListWidget
     _geometry_markers_cb: QCheckBox
     _lattice_origin_x: QLineEdit
@@ -1101,6 +1102,10 @@ class PatternPage(BasePage):
         self._geometry_markers_cb.setChecked(True)
         self._canvas.set_geometry_health_visible(True)
         self._refresh_preflight_markers()
+
+    def _auto_fix_geometry(self) -> None:
+        self._canvas.auto_fix_geometry(list(self._outline_ids))
+        self._check_geometry()
 
     def _select_geometry_finding(self, item, _previous=None) -> None:
         if item is not None:

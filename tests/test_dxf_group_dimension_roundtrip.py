@@ -181,6 +181,7 @@ def test_draft_page_dxf_round_trip_restores_groups_labels_and_dimensions(
 
     target = tmp_path / "draft.dxf"
     monkeypatch.setattr(draft_page_module, "pick_save_file", lambda *a, **k: str(target))
+    monkeypatch.setattr(draft_page_module.VectorExportDialog, "exec", lambda self: 1)
     page._export()
     assert target.exists()
 
@@ -250,3 +251,36 @@ def test_draft_page_dxf_append_import_restores_groups(tmp_path, app, monkeypatch
     assert len(restored_ids) == 1
     assert canvas._group_labels.get(restored_ids.pop()) == "pair"
     page.close()
+
+
+@pytest.mark.parametrize("label", ["first\nsecond", "first\r\nsecond", "火線" * 300])
+def test_group_labels_are_safe_dxf_strings_and_round_trip(tmp_path, label):
+    target = tmp_path / "label.dxf"
+    write_polylines_dxf(
+        [SQUARE_A, SQUARE_B],
+        str(target),
+        entity_groups=[7, 7],
+        group_labels={7: label},
+    )
+    document = ezdxf.readfile(target)
+    assert not document.audit().has_errors
+    for entity in document.modelspace():
+        for tag in entity.get_xdata("SSTP"):
+            if tag.code == 1000:
+                assert "\n" not in tag.value and "\r" not in tag.value
+                assert len(tag.value.encode("ascii")) <= 255
+    by_layer, report = load_dxf_polylines_by_layer_with_report(str(target))
+    assert len(by_layer["0"]) == 2
+    assert report.group_labels == {7: label}
+
+
+def test_legacy_unencoded_group_label_still_imports(tmp_path):
+    target = tmp_path / "legacy.dxf"
+    document = ezdxf.new("R2010")
+    document.appids.add("SSTP")
+    for points in [SQUARE_A, SQUARE_B]:
+        entity = document.modelspace().add_lwpolyline(points)
+        entity.set_xdata("SSTP", [(1071, 7), (1000, "Original group")])
+    document.saveas(target)
+    _, report = load_dxf_polylines_by_layer_with_report(str(target))
+    assert report.group_labels == {7: "Original group"}

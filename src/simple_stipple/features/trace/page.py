@@ -56,6 +56,7 @@ from simple_stipple.features.trace.form import (
     trace_default,
 )
 from simple_stipple.features.trace.model import TraceModel
+from simple_stipple.features.trace.phone_upload import PhoneUploadDialog
 from simple_stipple.features.trace.placement import ImagePlacement
 from simple_stipple.features.trace.session import (
     TraceJobOutcome,
@@ -319,6 +320,10 @@ class TracePage(BasePage):
         # recent file as the alternate path.
         source_layout.addWidget(self._source_field)
         source_layout.addWidget(self._recent_btn)
+        self._phone_upload_btn = QPushButton("Upload from phone…")
+        self._phone_upload_btn.setToolTip("Scan a QR code to send an image over your local Wi-Fi")
+        self._phone_upload_btn.clicked.connect(self._upload_from_phone)
+        source_layout.addWidget(self._phone_upload_btn)
         self._thumb_lbl = QLabel()
         self._thumb_lbl.setMaximumHeight(120)
         self._thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -1045,6 +1050,14 @@ class TracePage(BasePage):
         record_recent(self._settings, KIND_IMAGE, path)
         self._schedule_trace()
         self._emit_state_changed()
+
+    def _upload_from_phone(self) -> None:
+        dialog = PhoneUploadDialog(self)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.image_path:
+                self._load_image_from_recent(dialog.image_path)
+        finally:
+            dialog.deleteLater()
 
     def _commit_typed_image_path(self) -> None:
         path = self._img_edit.text().strip()

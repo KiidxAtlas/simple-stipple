@@ -43,6 +43,14 @@ class LayerService:
                 names.append(entity.layer)
         return names
 
+    def unique_name(self, base: str) -> str:
+        """Return the first unused numbered name ``"<base> N"`` (N from 1)."""
+        used = set(self.names())
+        number = 1
+        while f"{base} {number}" in used:
+            number += 1
+        return f"{base} {number}"
+
     def set_model(self, order: list[str], active: str | None) -> None:
         host = self._host
         host._layer_order = [str(name) for name in order if str(name)]
@@ -288,7 +296,9 @@ class GroupingService:
         if len(valid) < 2:
             host._show_flash("Select 2+ shapes to group", 1000)
             return 0
-        group_id = host._next_group_id
+        used_groups = (entity.group for entity in host._entities if entity.group is not None)
+        group_id = max(host._next_group_id, max(used_groups, default=-1) + 1)
+        host._next_group_id = group_id + 1
         candidates = [deepcopy(host._document.entity_for_id(eid)) for eid in valid]
         for entity in candidates:
             if entity is not None:

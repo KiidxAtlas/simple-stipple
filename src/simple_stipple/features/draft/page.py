@@ -43,6 +43,7 @@ from simple_stipple.core.cad.detection import (
 from simple_stipple.core.cad.production import machine_profile_from_settings
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.core.formats.service import DxfService, summarize_dxf_import_report
+from simple_stipple.core.formats.starfx import read_starfx
 from simple_stipple.features.base import BasePage, ModelField
 from simple_stipple.features.draft.detection_dialog import ShapeDetectionDialog
 from simple_stipple.features.draft.model import DraftModel
@@ -75,11 +76,13 @@ from simple_stipple.ui.dialogs.files import (
     pick_save_file,
 )
 from simple_stipple.ui.dialogs.fvi_dialog import FviExportDialog
+from simple_stipple.ui.dialogs.vector_export import VectorExportDialog
 
 LOGGER = logging.getLogger(__name__)
 
 # ── Page default settings ────────────────────────────────────────────────
-VECTOR_IMPORT_EXTENSIONS = (".dxf", ".fvi", ".svg")
+STARFX_IMPORT_EXTENSIONS = (".fmp", ".fmb", ".sfx")
+VECTOR_IMPORT_EXTENSIONS = (".dxf", ".fvi", ".svg", *STARFX_IMPORT_EXTENSIONS)
 
 
 class DraftPage(BasePage):
@@ -136,7 +139,7 @@ class DraftPage(BasePage):
         open_btn = QToolButton()
         open_btn.setText("Import…")
         open_btn.setToolTip(
-            "Choose a DXF, FVI, or SVG file. If the drawing has content, "
+            "Choose a DXF, FVI, SVG, or StarFX FMP/FMB/SFX job. If the drawing has content, "
             "choose whether to replace it or add the imported geometry."
         )
         open_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
@@ -195,6 +198,9 @@ class DraftPage(BasePage):
             draft_profile=True,
         )
         self._canvas.set_context_menu_profile("draft")
+        self._canvas.exportSelectedRequested.connect(
+            lambda ids: self._export_vector(selected_ids=set(ids))
+        )
         self._canvas.set_context_menu_profiles(self._settings.get("context_menu_profiles", {}))
         profile = machine_profile_from_settings(self._settings)
         self._canvas.set_machine_bed(profile.bed_width_mm, profile.bed_height_mm)
@@ -284,16 +290,14 @@ class DraftPage(BasePage):
         row.setSpacing(4)
         self._export_btn = QPushButton("Export DXF…")
         self._export_btn.setProperty("role", "primary")
-        self._export_btn.setToolTip(
-            "Export as DXF; grouped shapes share a layer so a laser runs each group as one job"
-        )
+        self._export_btn.setToolTip("Choose layers and shapes in the export dialog")
         self._export_btn.clicked.connect(self._export)
         row.addWidget(self._export_btn, stretch=1)
         overflow = QToolButton()
         overflow.setText("Format")
         overflow.setProperty("role", "overflow")
         overflow.setMinimumWidth(72)
-        overflow.setToolTip("Choose export format")
+        overflow.setToolTip("Choose vector export format, layers and shapes")
         overflow.setAccessibleName("Choose export format")
         overflow.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(overflow)
@@ -564,10 +568,46 @@ class DraftPage(BasePage):
     # ── Export ─────────────────────────────────────────────────────────────
 
     def _export(self) -> None:
+        self._export_vector()
+
+    def _export_svg(self) -> None:
+        self._export_vector("svg")
+
+    def _export_fvi(self) -> None:
+        self._export_vector("fvi")
+
+    def _export_vector(
+        self, format_name: str = "dxf", *, selected_ids: set[str] | None = None
+    ) -> None:
+        records = self._canvas.get_export_dxf_state()
+        if not records or (
+            selected_ids is not None
+            and not any(record["entity_id"] in selected_ids for record in records)
+        ):
+            QMessageBox.information(self, "Nothing to Export", "No exportable shapes.")
+            return
+        dialog = VectorExportDialog(
+            records,
+            self,
+            format_name=format_name,
+            group_labels=self._canvas._group_labels,
+            selected_ids=selected_ids,
+        )
+        if not dialog.exec():
+            return
+        chosen = dialog.selected_records()
+        if dialog.format_name() == "svg":
+            self._write_svg(chosen)
+        elif dialog.format_name() == "fvi":
+            self._write_fvi(chosen)
+        else:
+            self._write_dxf(chosen, include_dimensions=not dialog.has_selection())
+
+    def _write_dxf(self, records: list[dict[str, Any]], *, include_dimensions: bool) -> None:
         active_name = self._rt().current_layer_name()
         export_plan = build_dxf_export_plan(
-            self._canvas.get_export_dxf_state(),
-            self._canvas._dimensions,
+            records,
+            self._canvas._dimensions if include_dimensions else [],
             active_layer_name=active_name,
             layer_names=self._canvas.layer_names(),
             group_labels=self._canvas._group_labels,
@@ -576,7 +616,8 @@ class DraftPage(BasePage):
             QMessageBox.information(
                 self,
                 "Nothing to Export",
-                "The canvas is empty — draw or drag-create shapes first.",
+                "No exportable shapes. Select visible, non-construction shapes, "
+                "or clear the selection to export all visible artwork.",
             )
             return
         flagged: list[int] = []
@@ -612,34 +653,20 @@ class DraftPage(BasePage):
             return
 
         try:
-            # The first layer becomes the main entity stream so it can carry
-            # kind/meta info (lines, circles, ellipses, arcs); remaining
-            # layers are emitted as additional DXF layers. Emit onto a named
-            # layer (instead of the AutoCAD default "0") so downstream CAM
-            # tools assign it a real color and can fill it.
-            for record in [
-                *export_plan.first_layer_records,
-                *(r for recs in (export_plan.extra_layer_records or {}).values() for r in recs),
-            ]:
-                name = (record.get("meta") or {}).get("name")
-                if name:
-                    record["object_name"] = str(name)
+            # Export scope is independent of document organization. Keep
+            # groups/names in metadata, never turn them into extra CAM layers.
+            exported = export_plan.records
             DxfService.write_polylines_dxf(
-                [list(record["polyline"]) for record in export_plan.first_layer_records],
+                [list(record["polyline"]) for record in exported],
                 out_path,
                 close=False,
-                pattern_layer=export_plan.first_layer_name,
-                entity_kinds=[
-                    str(record.get("kind", "polyline"))
-                    for record in export_plan.first_layer_records
-                ],
-                entity_meta=[record.get("meta") for record in export_plan.first_layer_records],
-                extra_layer_records=export_plan.extra_layer_records,
-                entity_groups=[record.get("group") for record in export_plan.first_layer_records],
+                pattern_layer="Artwork",
+                preserve_layer=True,
+                entity_kinds=[str(record.get("kind", "polyline")) for record in exported],
+                entity_meta=[record.get("meta") for record in exported],
+                entity_groups=[record.get("group") for record in exported],
                 group_labels=export_plan.group_labels,
-                object_names=[
-                    record.get("object_name") for record in export_plan.first_layer_records
-                ],
+                object_names=[(record.get("meta") or {}).get("name") for record in exported],
             )
             self._last_out_path = out_path
             self._canvas._show_flash(f"Exported: {Path(out_path).name}", 1200)
@@ -780,7 +807,8 @@ class DraftPage(BasePage):
             self._settings,
             "draft_input_vector",
             "Import Vector",
-            "Vector files (*.dxf *.DXF *.fvi *.FVI *.svg *.SVG);;"
+            "Vector files (*.dxf *.DXF *.fvi *.FVI *.svg *.SVG *.fmp *.Fmp *.FMP *.fmb *.Fmb *.FMB *.sfx *.Sfx *.SFX);;"
+            "StarFX jobs (*.fmp *.Fmp *.FMP *.fmb *.Fmb *.FMB *.sfx *.Sfx *.SFX);;"
             "DXF files (*.dxf *.DXF);;StarFX FVI programs (*.fvi *.FVI);;"
             "SVG files (*.svg *.SVG);;All files (*)",
             fallback_dir=self._settings.get("draft_input_dxf_dir", ""),
@@ -793,7 +821,11 @@ class DraftPage(BasePage):
         suffix = Path(path).suffix.lower()
         # Every format must make the same destructive-state decision. DXF
         # includes it in its layer review; FVI/SVG use the compact equivalent.
-        if suffix in (".fvi", ".svg") and not append and self._canvas._entities:
+        if (
+            suffix in (".fvi", ".svg", *STARFX_IMPORT_EXTENSIONS)
+            and not append
+            and self._canvas._entities
+        ):
             choice = self._review_vector_import(path, suffix)
             if choice is None:
                 return
@@ -805,18 +837,24 @@ class DraftPage(BasePage):
                 self._load_dxf(path)
         elif suffix == ".fvi":
             self._load_fvi(path, append=append)
+        elif suffix in STARFX_IMPORT_EXTENSIONS:
+            self._load_starfx(path, append=append)
         elif suffix == ".svg":
             self._load_svg(path, append=append)
         else:
             QMessageBox.warning(
                 self,
                 "Unsupported Vector File",
-                "Choose a DXF, FVI, or SVG vector file.",
+                "Choose a DXF, FVI, SVG, or StarFX FMP/FMB/SFX job file.",
             )
 
     def _review_vector_import(self, path: str, suffix: str) -> bool | None:
         """Return the selected Add/Replace mode, or ``None`` when cancelled."""
-        format_name = {".fvi": "StarFX FVI", ".svg": "SVG"}.get(suffix, "vector")
+        format_name = (
+            "StarFX job"
+            if suffix in STARFX_IMPORT_EXTENSIONS
+            else {".fvi": "StarFX FVI", ".svg": "SVG"}.get(suffix, "vector")
+        )
         dialog = VectorImportModeDialog(
             path,
             format_name=format_name,
@@ -842,15 +880,7 @@ class DraftPage(BasePage):
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Import DXF Failed", exc)
 
-    def _export_svg(self) -> None:
-        records = self._canvas.get_export_dxf_state()
-        if not records:
-            QMessageBox.information(
-                self,
-                "Nothing to Export",
-                "The canvas is empty — draw or drag-create shapes first.",
-            )
-            return
+    def _write_svg(self, records: list[dict[str, Any]]) -> None:
         out_path = pick_save_file(
             self,
             self._settings,
@@ -872,15 +902,7 @@ class DraftPage(BasePage):
         except (OSError, ValueError) as exc:
             show_error(self, "Export Failed", exc)
 
-    def _export_fvi(self) -> None:
-        records = self._canvas.get_export_dxf_state()
-        if not records:
-            QMessageBox.information(
-                self,
-                "Nothing to Export",
-                "The canvas is empty — draw or import geometry first.",
-            )
-            return
+    def _write_fvi(self, records: list[dict[str, Any]]) -> None:
         dialog = FviExportDialog(records, self)
         if not dialog.exec():
             return
@@ -926,6 +948,42 @@ class DraftPage(BasePage):
                 self._set_import_note(summarize_dxf_import_report(report) or "")
         except (OSError, ValueError, RuntimeError) as exc:
             show_error(self, "Open DXF Failed", exc)
+
+    def _load_starfx(self, path: str, *, append: bool = False) -> None:
+        from PySide6.QtGui import QFontDatabase
+
+        from simple_stipple.canvas.operations.drawing import text_to_polylines
+        from simple_stipple.features.draft.starfx_import import import_starfx_objects
+
+        font_warnings: list[str] = []
+
+        def render(text: str, family: str, height: float) -> list[list[tuple[float, float]]]:
+            if family.casefold() not in {f.casefold() for f in QFontDatabase.families()}:
+                font_warnings.append(f"Font {family} is unavailable; a substitute font was used.")
+            return text_to_polylines(text, family=family, height_mm=height)
+
+        try:
+            document = read_starfx(path, render)
+            notes = "\n".join(dict.fromkeys((*document.warnings, *font_warnings)))
+            if not confirm(self, "Review StarFX Import", notes + "\n\nImport recovered artwork?"):
+                return
+            canvas = self._canvas
+            canvas._canvas_service.update_document(
+                lambda target: import_starfx_objects(target, document, append=append)
+            )
+            canvas.set_mode("select")
+            canvas._needs_fit = True
+            canvas._fit()
+            canvas._notify()
+            canvas._fire_poly_change()
+            self._last_in_path = path
+            record_recent(self._settings, KIND_VECTOR, path)
+            self._set_import_note(notes)
+            self._canvas._show_flash(f"Imported StarFX job: {document.object_count} objects", 2000)
+            self._refresh_status()
+            self._emit_state_changed()
+        except (OSError, ValueError, RuntimeError) as exc:
+            show_error(self, "Import StarFX Failed", exc)
 
     def _load_fvi(self, path: str, *, append: bool = False) -> None:
         try:
@@ -1081,7 +1139,8 @@ class DraftPage(BasePage):
         groups = getattr(report, "groups", None) or []
         group_labels = getattr(report, "group_labels", None) or {}
         object_names = getattr(report, "object_names", None) or []
-        if not dimensions and not groups and not object_names:
+        texts = getattr(report, "texts", None) or []
+        if not dimensions and not groups and not object_names and not texts:
             return
         canvas = self._canvas
         id_by_layer_index: dict[tuple[str, int], str] = {}
@@ -1119,6 +1178,16 @@ class DraftPage(BasePage):
                 name = entry.get("name")
                 if entity_id is not None and name:
                     runtime.rename_shape(str(entry.get("layer")), entity_id, str(name))
+        if texts:
+
+            def restore_text(document) -> None:
+                for entry in texts:
+                    entity_id = id_by_layer_index.get((str(entry.get("layer")), entry.get("index")))
+                    entity = document.entity_for_id(entity_id) if entity_id is not None else None
+                    if entity is not None:
+                        entity.meta = {**(entity.meta or {}), "text_params": dict(entry["params"])}
+
+            canvas._canvas_service.update_document(restore_text)
 
     def load_outline_polys(
         self,

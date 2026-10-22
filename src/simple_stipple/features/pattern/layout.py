@@ -1043,13 +1043,22 @@ def build_export_section(page: Any, layout: QVBoxLayout, *, options_layout: QVBo
     page._check_geometry_btn = QPushButton("Check geometry")
     page._check_geometry_btn.clicked.connect(page._check_geometry)
     check_row.addWidget(page._check_geometry_btn)
+    page._auto_fix_geometry_btn = QPushButton("Auto-fix geometry")
+    page._auto_fix_geometry_btn.setToolTip(
+        "Repair outline duplicates, repeated vertices, tiny endpoint gaps and "
+        "self-crossings; remove fragments flagged as tiny by Geometry Health. "
+        "Locked/hidden shapes are skipped. Undo restores the original. "
+        "Normal open paths are kept."
+    )
+    page._auto_fix_geometry_btn.clicked.connect(page._auto_fix_geometry)
+    check_row.addWidget(page._auto_fix_geometry_btn)
     page._geometry_markers_cb = QCheckBox("Show markers")
     page._geometry_markers_cb.setChecked(
         bool(page._canvas.get_view_state()["geometry_health_visible"])
     )
     page._geometry_markers_cb.toggled.connect(page._canvas.set_geometry_health_visible)
-    check_row.addWidget(page._geometry_markers_cb)
     output_layout.addLayout(check_row)
+    output_layout.addWidget(page._geometry_markers_cb)
     page._geometry_findings = QListWidget()
     page._geometry_findings.setAccessibleName("Geometry findings")
     page._geometry_findings.setMaximumHeight(140)

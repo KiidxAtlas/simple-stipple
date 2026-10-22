@@ -34,7 +34,7 @@ from simple_stipple.core.cad.geometry import (
 from simple_stipple.core.document.kinds import EntityKind
 from simple_stipple.core.document.model import EntityRecord
 from simple_stipple.platform.settings import normalize_draw_sidebar_shape_tools, user_data_dir
-from simple_stipple.ui.components.feedback import refresh_style, reject_input
+from simple_stipple.ui.components.feedback import confirm, refresh_style, reject_input
 from simple_stipple.ui.components.units import (
     parse_numeric_expression as _parse_expression,
 )
@@ -1450,7 +1450,9 @@ class TextService:
         group_id: int | None = None,
     ) -> list[EntityRecord]:
         if len(polys) > 1 and group_id is None:
-            group_id = self._host._next_group_id
+            used_groups = (e.group for e in self._host._entities if e.group is not None)
+            group_id = max(self._host._next_group_id, max(used_groups, default=-1) + 1)
+            self._host._next_group_id = group_id + 1
         return [
             EntityRecord(
                 points=[(x + wx, y + wy) for x, y in poly],
@@ -1609,12 +1611,21 @@ class TextService:
             return
         from simple_stipple.canvas.dialogs.text_dialog import AddTextDialog
 
+        notice = params.get("edit_notice")
+        if isinstance(notice, str) and notice:
+            family = str(params.get("family", ""))
+            if family and family not in QFontDatabase.families():
+                notice += f" '{family}' is not installed here, so a substitute font will be used."
+            if not confirm(self._host, "Edit imported text", notice + "\n\nEdit anyway?"):
+                return
+
         dlg = AddTextDialog(self._host, unit=self._host._unit_system)
         dlg.set_values(params)
+        initial_values = dlg.values()
         if dlg.exec() != AddTextDialog.DialogCode.Accepted:
             return
         vals = dlg.values()
-        if not vals["text"].strip():
+        if not vals["text"].strip() or vals == initial_values:
             return
         self.rebuild_text(entity_id, vals)
 

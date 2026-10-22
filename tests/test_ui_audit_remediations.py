@@ -2973,7 +2973,8 @@ def test_significant_status_outcomes_enter_notification_history(
     before = len(notification_history())
     label = QLabel()
     set_status_label(label, "Export completed", STATUS_OK)
-    assert len(notification_history()) == before + 1
+    # Notification history is bounded; a full buffer evicts its oldest entry.
+    assert len(notification_history()) == min(before + 1, 200)
     assert notification_history()[-1][1] == "Export completed"
 
 

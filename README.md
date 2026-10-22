@@ -43,6 +43,34 @@ Simple Stipple is a local-first desktop tool for makers, laser operators, and ve
 
 Included pattern generators cover Honeycomb, Basketweave, Brick, Knurling, Mesh, Seigaiha, Stipple Dots, Truchet, Voronoi, and custom tiles.
 
+### StarFX jobs
+
+Draft imports `.sfx` artwork directly, `.Fmp` jobs, and `.Fmb` files with a
+same-named `.Fmp` companion. For FMP/FMB, keep referenced `.Fvi` files in the
+same folder. Standalone encoded FMB files are not supported.
+
+Imports recover static drawing objects only: laser settings, pass loops, events,
+variables and other job logic are **never executed**. SFX is read as bounded,
+inert data, not through .NET deserialization. Only the current job objects are
+imported, not undo history. Hidden SFX artwork is included for recovery and called
+out in the review. SFX supports cached vectors/text, line-based polylines and
+rectangles, and circles. Unsupported or malformed SFX geometry fails before
+changing the drawing instead of silently dropping an object.
+
+Each text/vector object gets its own named contour group, independent of circles
+and rectangles. Circles and rectangles retain editable shape parameters; imports
+support add/replace, undo/redo and start deselected. SFX text keeps its cached
+outlines on import (original font shapes, spacing and any baked-in hatch lines)
+and is also recognised as native text, so it opens in the normal Edit Text
+dialog with its string, font, bold/italic and height. Editing asks first, then
+re-renders with local fonts (a substitute if the font is missing), replacing the
+cached outlines, hatch lines, character spacing, stretch, rotation and line
+layout; undo restores the original. Only the text controls are mapped, not full
+StarFX text styling. FMP/FMB text is rendered using local fonts; unavailable
+fonts are substituted with a warning.
+FMP image height, justification, text scaling and rotation are applied. Review
+the warnings and compare dimensions and placement with the original job before use.
+
 ## Download the desktop app
 
 Prebuilt installers are published on the [Releases page](https://github.com/KiidxAtlas/simple-stipple/releases):

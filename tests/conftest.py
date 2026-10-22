@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 
 # A test module that imports any of these drives Qt widgets (directly or via
@@ -70,5 +71,5 @@ def close_qt_top_levels():
     for widget in list(app.topLevelWidgets()):
         widget.close()
         widget.deleteLater()
-    app.sendPostedEvents()
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()

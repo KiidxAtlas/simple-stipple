@@ -110,6 +110,7 @@ def test_shared_ui_and_platform_homes_have_no_root_level_facades() -> None:
         "git.py",
         "jobs.py",
         "launcher.py",
+        "phone_upload.py",
         "settings.py",
         "storage.py",
         "updates.py",

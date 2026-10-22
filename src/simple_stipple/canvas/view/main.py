@@ -1156,6 +1156,15 @@ class CanvasView(
     def _ctx_select(self, *args, **kwargs):
         return self._editing._ctx_select(*args, **kwargs)
 
+    def reference_target_ids(self, *args, **kwargs):
+        return self._editing.reference_target_ids(*args, **kwargs)
+
+    def add_reference_box(self, *args, **kwargs):
+        return self._editing.add_reference_box(*args, **kwargs)
+
+    def auto_fix_geometry(self, entity_ids: list[str] | None = None) -> int:
+        return self._editing.auto_fix_geometry(entity_ids)
+
     def _distribute_selected(self, *args, **kwargs):
         return self._editing._distribute_selected(*args, **kwargs)
 

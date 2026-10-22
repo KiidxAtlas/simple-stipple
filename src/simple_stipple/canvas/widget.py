@@ -51,6 +51,8 @@ _CONTEXT_STATIC_ACTION_IDS = {
     "Every matching tile": "context.pattern_cell.repeat",
     "Move to Coordinate…": "context.selection.move",
     "Frame selection": "context.selection.fit",
+    "Add Reference": "context.selection.add_reference",
+    "Export selected shapes…": "context.selection.export",
     "Smooth": "context.selection.smooth",
     "Simplify…": "context.selection.simplify",
     "Apply treatment to selection": "context.selection.create_zone",
@@ -198,6 +200,7 @@ class DxfCanvas(CanvasView):
 
     quickShapeChanged = Signal(str)
     quickShapeEnabledChanged = Signal(bool)
+    exportSelectedRequested = Signal(object)
 
     _PROCEDURAL_QUICK_SHAPES = frozenset(kind.value for kind in PROCEDURAL_KINDS)
     _VALID_QUICK_SHAPES = (
@@ -504,6 +507,19 @@ class DxfCanvas(CanvasView):
                 label = f"Close path (join {len(self._sel)} into one)"
             menu.addAction(label, self.close_selection_as_path)
         menu.addAction("Frame selection", self.fit_selection)
+        if self._draft_profile:
+            export_ids = tuple(self.get_selected_ids())
+            export_action = menu.addAction(
+                "Export selected shapes…",
+                lambda _checked=False, ids=export_ids: self.exportSelectedRequested.emit(list(ids)),
+            )
+            export_action.setEnabled(bool(export_ids))
+        reference_ids = self.reference_target_ids(cx, cy)
+        reference_action = menu.addAction(
+            "Add Reference",
+            lambda _checked=False, ids=tuple(reference_ids): self.add_reference_box(list(ids)),
+        )
+        reference_action.setEnabled(bool(reference_ids))
         menu.addAction("Smooth", lambda: _run_transform(self.smooth_selected))
         menu.addAction(
             "Simplify…",
@@ -830,6 +846,8 @@ class DxfCanvas(CanvasView):
     def _build_view_actions(self, menu) -> None:
         menu.addSeparator()
         menu.addAction(canvas_commands.menu_text("view.fit"), self.fit)
+        repair_action = menu.addAction("Auto-fix geometry", lambda: self.auto_fix_geometry())
+        repair_action.setProperty("context_item_id", "path.auto_fix_geometry")
         grid_action = menu.addAction("Show grid")
         grid_action.setCheckable(True)
         grid_action.setChecked(self._grid_visible)

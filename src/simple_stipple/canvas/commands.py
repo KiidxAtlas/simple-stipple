@@ -249,6 +249,14 @@ def _toggle_pen(v: Any) -> None:
 
 
 def _add_text_at_cursor(v: Any) -> None:
+    objects = _selected_objects(v)
+    text_objects = [eid for eid in objects if v.text_params_at(eid) is not None]
+    if text_objects:
+        if len(objects) == 1:
+            v.prompt_edit_text(text_objects[0])
+        else:
+            v._show_flash("Select one text object to edit", 1200)
+        return
     wx, wy = v._cursor_wx, v._cursor_wy
     if wx is None or wy is None:
         wx, wy = v._c2w(v.width() / 2.0, v.height() / 2.0)
@@ -500,6 +508,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     # ── Path ────────────────────────────────────────────────────────────────
     Command(
+        "path.auto_fix_geometry",
+        "Auto-fix Geometry",
+        lambda v: v.auto_fix_geometry(),
+        category="Path",
+    ),
+    Command(
         "path.close",
         "Close Polyline(s)",
         _close_paths,
@@ -568,7 +582,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         "text.add",
-        "Add Text…",
+        "Add or Edit Text…",
         _add_text_at_cursor,
         "T",
         category="Path",

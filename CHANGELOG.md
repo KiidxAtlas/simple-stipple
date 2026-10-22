@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.32 — 2026-10-22
+
+### Added
+
+- Import StarFX FMP, FMB (with its matching FMP), and SFX jobs as static
+  artwork, without executing job instructions. Imported SFX text retains
+  cached outlines and can be edited using locally available fonts.
+- Send an image from a phone to Trace using a temporary same-Wi-Fi QR link,
+  with image validation and review before loading.
+- Add Reference creates a reference rectangle on a new layer in one undo step.
+- Geometry Health and the canvas context menu offer undoable Auto-fix Geometry
+  to repair common path defects and remove tiny fragments.
+- The vector export dialog selects layers, groups, or individual shapes;
+  an empty dialog selection exports all visible artwork. Right-click
+  Export selected shapes opens the dialog with the canvas selection preselected.
+
+### Fixed
+
+- New DXF exports preserve editable text metadata alongside exact outlines.
+  Reopening in Simple Stipple restores text content, font, height and style;
+  select one text object and press T to edit. Other CAD programs still see
+  outlines. Older outline-only exports need re-exporting from the original.
+- Draft DXF exports place artwork on one Artwork layer while preserving names
+  and groups as metadata. Multiline and Unicode group labels no longer produce
+  invalid DXF group codes.
+- Restored groups allocate distinct IDs, preventing text edits from replacing
+  unrelated words. Drawing or moving independent shapes does not join a group.
+- Pressing T edits one selected text object instead of adding another; accepting
+  unchanged imported text preserves its cached artwork.
+
 ## 0.3.31 — 2026-10-20
 
 ### Fixed

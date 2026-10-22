@@ -56,6 +56,7 @@ from simple_stipple.core.document.model import (
     new_entity_id,
 )
 from simple_stipple.core.editing.boolean import offset_polyline
+from simple_stipple.core.editing.repair import repair_geometry
 from simple_stipple.core.editing.smoothing import simplify, smooth
 from simple_stipple.core.editing.topology import (
     extension_point,
@@ -435,6 +436,143 @@ class EditingService:
         self._host._sel = self._host._sel | {entity_id}
         self._host._redraw()
         self._host._notify()
+
+    def reference_target_ids(self, cx: float, cy: float) -> list[str]:
+        """Objects an *Add Reference* gesture at ``(cx, cy)`` applies to.
+
+        An existing selection wins (matching every other context action). With
+        none, the right-clicked shape is used, widened to its whole group so a
+        grouped hit is framed as the unit the user sees.
+        """
+        host = self._host
+        selected = host._selected_ids()
+        if selected:
+            return selected
+        hit = host._hit_test.entity_at(cx, cy)
+        entity = host._entity_for_id(hit) if hit is not None else None
+        if entity is None:
+            return []
+        if entity.group is None:
+            return [entity.id]
+        return [e.id for e in host._entities if e.group == entity.group and not e.hidden]
+
+    def add_reference_box(self, entity_ids: list[str]) -> str | None:
+        """Add a tight bounding rectangle of ``entity_ids`` on a new layer.
+
+        The rectangle is new geometry: the source objects (locked or not) are
+        never touched. The layer and rectangle are one undo step. Returns the
+        new layer name, or ``None`` (document unchanged) when the objects have
+        no extent to frame.
+        """
+        host = self._host
+        ids = [
+            eid
+            for eid in dict.fromkeys(entity_ids)
+            if (entity := host._entities_by_id.get(eid)) is not None and not entity.hidden
+        ]
+        bounds = host._selection_bounds(ids) if ids else None
+        if bounds is None:
+            host._show_flash("Select shape(s) first", 1000)
+            return None
+        x0, y0, x1, y1 = bounds
+        width, height = x1 - x0, y1 - y0
+        if width < 1e-6 or height < 1e-6:
+            host._show_flash("Reference needs a selection with both width and height", 1800)
+            return None
+
+        layer = host._layer_service.unique_name("Reference")
+        reference = EntityRecord(
+            points=[(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+            kind=EntityKind.RECTANGLE,
+            meta={
+                "center": ((x0 + x1) / 2.0, (y0 + y1) / 2.0),
+                "width": width,
+                "height": height,
+                "rotation": 0.0,
+            },
+            layer=layer,
+        )
+        known_layers = host._layer_service.names()
+
+        def mutate(document: Document) -> None:
+            if not document.layer_order:
+                document.layer_order = list(known_layers)
+            document.layer_order.append(layer)
+            document.append(reference)
+
+        host._canvas_service.update_document(mutate)
+        host._show_flash(f"Added {layer}", 1200)
+        host._redraw()
+        host._notify()
+        self._fire_poly_change()
+        return layer
+
+    def auto_fix_geometry(self, entity_ids: list[str] | None = None) -> int:
+        """Repair selected (or all visible) linework as one undoable edit."""
+        from simple_stipple.core.cad.preflight import analyze_geometry
+
+        host = self._host
+        wanted = set(entity_ids) if entity_ids is not None else set(host._sel)
+        buckets: dict[tuple[str | None, bool], list[EntityRecord]] = {}
+        for entity in host._entities:
+            if entity.hidden or entity.locked or (wanted and entity.id not in wanted):
+                continue
+            if entity_ids is not None and entity.id not in wanted:
+                continue
+            buckets.setdefault((entity.layer, entity.construction), []).append(entity)
+        replacements: dict[str, list[EntityRecord]] = {}
+        for entities in buckets.values():
+            repairs = repair_geometry(
+                [list(entity.points) for entity in entities], remove_tiny=True
+            )
+            for entity, paths in zip(entities, repairs):
+                if paths == [entity.points]:
+                    continue
+                records = []
+                for index, points in enumerate(paths):
+                    record = deepcopy(entity)
+                    record.points = points
+                    if index:
+                        record.id = new_entity_id()
+                    if record.kind not in {EntityKind.POLYLINE, EntityKind.LINE}:
+                        demote_to_path(record)
+                    records.append(record)
+                replacements[entity.id] = records
+
+        if replacements:
+
+            def mutate(document: Document) -> None:
+                document.entities = [
+                    record
+                    for entity in document.entities
+                    for record in replacements.get(entity.id, [entity])
+                ]
+
+            host._canvas_service.update_document(mutate)
+            self._fire_poly_change()
+            host._notify()
+        host.set_geometry_health_visible(True)
+        visible = [list(entity.points) for entity in host._entities if not entity.hidden]
+        finite = [
+            path
+            for path in visible
+            if all(math.isfinite(value) for point in path for value in point)
+        ]
+        report = analyze_geometry(finite)
+        remaining = sum(issue.severity != "info" for issue in report.issues)
+        remaining += len(visible) - len(finite)
+        message = f"Auto-fix: {len(replacements)} path(s) repaired"
+        removed = sum(not records for records in replacements.values())
+        if removed:
+            message += f" ({removed} removed)"
+        message += (
+            f" · {remaining} finding(s) need review"
+            if remaining
+            else " · no remaining geometry warnings"
+        )
+        host._show_flash(message, 3500)
+        host._redraw()
+        return len(replacements)
 
     def _distribute_selected(self, axis: str, spacing: float, *, mode: str = "gap") -> bool:
         """Distribute selected shapes along ``axis`` at fixed ``spacing``.

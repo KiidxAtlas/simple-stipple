@@ -150,6 +150,8 @@ class DxfImportReport(NamedTuple):
     group_labels: dict[int, str] = {}
     # {"layer", "index", "name"} — object (shape) names from "SSTPN" XDATA.
     object_names: list[dict[str, Any]] = []
+    # Text editing parameters keyed by imported outline (layer, index).
+    texts: list[dict[str, Any]] = []
 
     @property
     def ignored_entities(self) -> int:
@@ -204,7 +206,12 @@ def _attach_group_xdata(entity: Any, group_id: int, label: str | None) -> None:
     _register_sstp_appid(entity.doc)
     tags: list[tuple[int, Any]] = [(1071, int(group_id))]
     if label:
-        tags.append((1000, str(label)))
+        payload = json.dumps(str(label))
+        tags.append((1070, 1))  # Versioned JSON, unlike legacy raw labels.
+        tags.extend(
+            (1000, payload[offset : offset + _XDATA_TEXT_CHUNK])
+            for offset in range(0, len(payload), _XDATA_TEXT_CHUNK)
+        )
     entity.set_xdata(_SSTP_APPID, tags)
 
 
@@ -255,6 +262,55 @@ def _name_from_xdata(entity: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _attach_text_xdata(entity: Any, meta: dict[str, Any] | None) -> None:
+    params = (meta or {}).get("text_params")
+    if not isinstance(params, dict):
+        return
+    payload = json.dumps(params, separators=(",", ":"), allow_nan=False)
+    if "SSTPT" not in entity.doc.appids:
+        entity.doc.appids.add("SSTPT")
+    entity.set_xdata(
+        "SSTPT",
+        [
+            (1000, payload[offset : offset + _XDATA_TEXT_CHUNK])
+            for offset in range(0, len(payload), _XDATA_TEXT_CHUNK)
+        ],
+    )
+
+
+def _text_params_from_xdata(entity: Any) -> dict[str, Any] | None:
+    try:
+        if not entity.has_xdata("SSTPT"):
+            return None
+        params = json.loads(
+            "".join(str(tag.value) for tag in entity.get_xdata("SSTPT") if tag.code == 1000)
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not isinstance(params, dict):
+        return None
+    height = params.get("height_mm")
+    if (
+        not isinstance(params.get("text"), str)
+        or not isinstance(params.get("family"), str)
+        or not isinstance(height, (int, float))
+        or isinstance(height, bool)
+    ):
+        return None
+    try:
+        height = float(height)
+    except OverflowError:
+        return None
+    if not math.isfinite(height) or height <= 0:
+        return None
+    result = {"text": params["text"], "family": params["family"], "height_mm": height}
+    for key in ("bold", "italic"):
+        result[key] = params.get(key) is True
+    if isinstance(params.get("edit_notice"), str):
+        result["edit_notice"] = params["edit_notice"]
+    return result
+
+
 def _read_sstp_xdata(entity: Any) -> list[Any]:
     try:
         if not entity.has_xdata(_SSTP_APPID):
@@ -275,6 +331,14 @@ def _group_from_xdata(tags: list[Any]) -> tuple[int | None, str | None]:
                 group_id = None
         elif tag.code == 1000 and label is None:
             label = str(tag.value)
+    if any(tag.code == 1070 and tag.value == 1 for tag in tags):
+        payload = "".join(str(tag.value) for tag in tags if tag.code == 1000)
+        try:
+            decoded = json.loads(payload)
+        except ValueError:
+            label = None
+        else:
+            label = decoded if isinstance(decoded, str) else None
     return group_id, label
 
 
@@ -598,6 +662,7 @@ def _load_dxf_polylines_by_layer_with_report(
     groups: list[dict[str, Any]] = []
     group_labels: dict[int, str] = {}
     object_names: list[dict[str, Any]] = []
+    texts: list[dict[str, Any]] = []
 
     def _append(
         layer: str, pts: list[tuple[float, float]], closed: bool, source: Any = None
@@ -624,6 +689,10 @@ def _load_dxf_polylines_by_layer_with_report(
             object_name = _name_from_xdata(source)
             if object_name:
                 object_names.append({"layer": layer, "index": len(bucket) - 1, "name": object_name})
+            text_params = _text_params_from_xdata(source)
+            if text_params is not None:
+                text_params["height_mm"] *= mm_per_unit
+                texts.append({"layer": layer, "index": len(bucket) - 1, "params": text_params})
 
     import_entities = _expand_insert_entities(msp, flattened_entities, invalid_polylines, path)
 
@@ -731,6 +800,7 @@ def _load_dxf_polylines_by_layer_with_report(
             groups=groups,
             group_labels=dict(sorted(group_labels.items())),
             object_names=object_names,
+            texts=texts,
         ),
     )
 
@@ -1138,6 +1208,7 @@ def write_polylines_dxf(
     entity_groups: list[int | None] | None = None,
     group_labels: dict[int, str] | None = None,
     object_names: list[str | None] | None = None,
+    preserve_layer: bool = False,
 ) -> None:
     doc = _ezdxf_new("R2010")
     doc.header["$INSUNITS"] = 4
@@ -1174,7 +1245,11 @@ def write_polylines_dxf(
     for i, (c, kind, meta) in enumerate(zip(polylines, kinds, metas)):
         if len(c) < 2:
             continue
-        entity_attrs = _entity_attributes(doc, dxfattrs, meta, entity_names, i)
+        entity_attrs = (
+            dict(dxfattrs)
+            if preserve_layer
+            else _entity_attributes(doc, dxfattrs, meta, entity_names, i)
+        )
         if kind == "dimension" and isinstance(meta, dict):
             if _write_dimension(msp, c, meta, entity_attrs) is not None:
                 continue
@@ -1190,6 +1265,8 @@ def write_polylines_dxf(
             )
         if created is not None and names_list[i]:
             _attach_name_xdata(created, str(names_list[i]))
+        if created is not None:
+            _attach_text_xdata(created, meta)
 
     if border_polys:
         # Every outline is its own entity, but they all share one layer —
@@ -1260,6 +1337,8 @@ def write_polylines_dxf(
                 object_name = record.get("object_name") if record is not None else None
                 if object_name:
                     _attach_name_xdata(created, str(object_name))
+                if created is not None and record is not None:
+                    _attach_text_xdata(created, record.get("meta"))
 
     # Audit the document before persisting. Never write a malformed DXF —
     # a file that crashes or silently misbehaves in downstream CAD/CAM tools

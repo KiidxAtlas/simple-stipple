@@ -246,6 +246,7 @@ def _export_and_wait(page, done, *, timeout_ms: int = 8000) -> None:
     while not done() and timeout_ms > 0:
         QTest.qWait(50)
         timeout_ms -= 50
+    assert done(), f"Export did not finish: {page._status.text()}"
 
 
 @pytest.mark.parametrize(
